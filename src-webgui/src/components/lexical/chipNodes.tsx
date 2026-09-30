@@ -77,8 +77,11 @@ function ComposerChipView({ label, tone, nodeKey }: { label: string; tone: ChipT
   return (
     <span
       draggable
+      contentEditable={false}
       title="Drag to move"
       className={`cursor-grab rounded px-0.5 active:cursor-grabbing ${tone === 'attach' ? 'bg-koma-warn/20 text-koma-fg' : 'bg-koma-accent/15 text-koma-fg'}`}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
       onDragStart={(event) => {
         event.stopPropagation()
         event.dataTransfer.setData(COMPOSER_CHIP_MIME, nodeKey)

@@ -32,7 +32,7 @@ function sameMarks(a: Marks, b: Marks): boolean {
 
 /** Keep literal characters from being read as markdown once the style markers are added. */
 export function escapeMarkdownText(text: string): string {
-  return text.replace(/[\\`*_~\[]/g, '\\$&')
+  return text.replace(/[\\`*~\[]/g, '\\$&')
 }
 
 export function codeSpan(text: string): string {

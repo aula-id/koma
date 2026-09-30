@@ -998,7 +998,16 @@ export function Composer() {
               {attachments.filter((item) => showAttachmentChip(input, item, localPastes)).map((a) => (
                 <span
                   key={`${a.kind}:${a.markerN}`}
-                  className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
+                  draggable={a.kind === 'image' || a.kind === 'pasted_text'}
+                  title={a.kind === 'image' || a.kind === 'pasted_text' ? 'Drag into the message' : undefined}
+                  onDragStart={(event) => {
+                    if (a.kind !== 'image' && a.kind !== 'pasted_text') return
+                    const label = a.kind === 'image' ? imageMarker(a.markerN) : pasteMarker(a.markerN)
+                    event.dataTransfer.setData('application/x-koma-chip', 'marker')
+                    event.dataTransfer.setData('text/plain', `koma-marker:${label}`)
+                    event.dataTransfer.effectAllowed = 'copy'
+                  }}
+                  className="flex cursor-grab items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90 active:cursor-grabbing"
                 >
                   {a.kind === 'pasted_text' ? (
                     <button

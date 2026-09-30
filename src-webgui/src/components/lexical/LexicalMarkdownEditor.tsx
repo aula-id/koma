@@ -185,21 +185,30 @@ function $chipKnownTokens(tokens: readonly string[]) {
   }
 }
 
-function $insertPiece(text: string, tokens: readonly string[]) {
-  const selection = $getSelection()
-  if (!$isRangeSelection(selection)) {
-    $getRoot().selectEnd()
+function $prepareInsert(atEnd: boolean) {
+  const root = $getRoot()
+  if (root.getChildrenSize() === 0) {
+    const paragraph = $createParagraphNode()
+    root.append(paragraph)
+    paragraph.select()
+    return
   }
+  if (atEnd || !$isRangeSelection($getSelection())) root.selectEnd()
+}
+
+function $insertPiece(text: string, tokens: readonly string[], atEnd = false) {
+  $prepareInsert(atEnd)
   const active = $getSelection()
   if (!$isRangeSelection(active)) return
   const trimmed = text.trim()
-  if (MARKER.test(trimmed) && trimmed === text.trim()) {
+  const marker = trimmed.match(/^\[(?:Image|Pasted Text) #\d+\]$/)
+  if (marker) {
     active.insertNodes([$createComposerChipNode(trimmed, 'attach')])
     if (text.endsWith(' ')) active.insertNodes([$createTextNode(' ')])
     return
   }
-  const token = tokens.find((item) => text === item || text === `${item} ` || text.endsWith(item) || text.includes(item))
-  if (token && (text === token || text === `${token} ` || text.trim() === token)) {
+  const token = [...tokens].sort((a, b) => b.length - a.length).find((item) => item.length > 0 && text.includes(item))
+  if (token && text.trim() === token) {
     active.insertNodes([$createComposerChipNode(token, 'file')])
     if (text.endsWith(' ')) active.insertNodes([$createTextNode(' ')])
     return
@@ -275,13 +284,12 @@ function EditorPlugins({
       focus: () => editor.focus(),
       insertText: (text) => {
         editor.update(() => {
-          $insertPiece(text, tokensRef.current)
+          $insertPiece(text, tokensRef.current, false)
         })
       },
       appendText: (text) => {
         editor.update(() => {
-          $getRoot().selectEnd()
-          $insertPiece(text, tokensRef.current)
+          $insertPiece(text, tokensRef.current, true)
         })
       },
       setMarkdown: applyMarkdown,
@@ -396,10 +404,17 @@ function EditorPlugins({
     }
     const onNativePaste = (event: ClipboardEvent) => {
       const files = imageFilesFrom(event.clipboardData)
-      if (!files.length) return
+      if (files.length) {
+        event.preventDefault()
+        event.stopPropagation()
+        deliverImages(files)
+        return
+      }
+      const types = event.clipboardData ? Array.from(event.clipboardData.types) : []
+      if (!types.some((type) => type.startsWith('image/'))) return
       event.preventDefault()
-      event.stopImmediatePropagation()
-      deliverImages(files)
+      event.stopPropagation()
+      void readClipboardImages().then(deliverImages)
     }
     const root = editor.getRootElement()
     root?.addEventListener('paste', onNativePaste, true)
@@ -414,7 +429,7 @@ function EditorPlugins({
           return true
         }
         const types = data ? Array.from(data.types) : []
-        if (types.some((type) => type.startsWith('image/'))) {
+        if (types.some((type) => type.startsWith('image/')) && !types.includes('text/plain')) {
           event.preventDefault()
           void readClipboardImages().then(deliverImages)
           return true
@@ -427,9 +442,10 @@ function EditorPlugins({
     const unregisterOver = editor.registerCommand(
       DRAGOVER_COMMAND,
       (event) => {
-        if (!event.dataTransfer?.types.includes(COMPOSER_CHIP_MIME)) return false
+        const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
+        if (!types.includes(COMPOSER_CHIP_MIME)) return false
         event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
         return true
       },
       COMMAND_PRIORITY_HIGH,
@@ -439,26 +455,36 @@ function EditorPlugins({
       (event) => {
         const plain = event.dataTransfer?.getData('text/plain') ?? ''
         const key = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) || (plain.startsWith('koma-chip:') ? plain.slice('koma-chip:'.length) : '')
-        if (!key) return false
+        const marker = plain.startsWith('koma-marker:') ? plain.slice('koma-marker:'.length) : ''
+        if (!key && !marker) return false
         event.preventDefault()
         const range = document.caretRangeFromPoint(event.clientX, event.clientY)
         editor.update(() => {
-          const chip = $getNodeByKey(key)
-          if (!$isComposerChipNode(chip)) return
-          const created = $createComposerChipNode(chip.getTextContent(), chip.getTone())
+          const existing = key ? $getNodeByKey(key) : null
+          const chip = existing && $isComposerChipNode(existing) ? existing : null
+          const label = chip ? chip.getTextContent() : marker
+          const tone = chip ? chip.getTone() : 'attach'
+          if (!label) return
+          const created = $createComposerChipNode(label, tone)
           const dom = range?.startContainer
           const el = dom instanceof Element ? dom : dom?.parentElement ?? null
           const nearest = el ? $getNearestNodeFromDOMNode(el) : null
-          if ($isTextNode(nearest) && dom instanceof Text && range) {
-            nearest.select(Math.min(range.startOffset, nearest.getTextContentSize()), Math.min(range.startOffset, nearest.getTextContentSize()))
+          if ($isTextNode(nearest) && range) {
+            const offset = Math.min(range.startOffset, nearest.getTextContentSize())
+            nearest.select(offset, offset)
             const selection = $getSelection()
             if ($isRangeSelection(selection)) selection.insertNodes([created])
-          } else if (nearest && nearest.getKey() !== chip.getKey()) {
+            else nearest.insertAfter(created)
+          } else if (nearest && nearest.getKey() !== chip?.getKey()) {
             nearest.insertAfter(created)
-          } else {
+          } else if (chip) {
             chip.insertAfter(created)
+          } else {
+            $prepareInsert(true)
+            const selection = $getSelection()
+            if ($isRangeSelection(selection)) selection.insertNodes([created])
           }
-          chip.remove()
+          if (chip && chip.getKey() !== created.getKey()) chip.remove()
         })
         return true
       },

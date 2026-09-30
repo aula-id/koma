@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { codeSpan, escapeMarkdownText, wrapMarks } from './lexicalMarkdown.ts'
 
 assert.equal(escapeMarkdownText('a * b ` c'), 'a \\* b \\` c')
+assert.equal(escapeMarkdownText('@foo_bar.md'), '@foo_bar.md')
 assert.equal(wrapMarks('bold', { bold: true, italic: false, strike: false, code: false }), '**bold**')
 assert.equal(wrapMarks('slant', { bold: false, italic: true, strike: false, code: false }), '*slant*')
 assert.equal(wrapMarks('both', { bold: true, italic: true, strike: false, code: false }), '***both***')
