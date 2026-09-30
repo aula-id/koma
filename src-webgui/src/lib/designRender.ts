@@ -59,7 +59,17 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
   if (node.kind === 'instance') {
     const visual = resolveInstanceTree(doc, node)
     if (!visual) return
-    drawNode(ctx, doc, { ...visual, x: node.x, y: node.y, rotation: node.rotation ?? visual.rotation, flipX: node.flipX ?? visual.flipX, flipY: node.flipY ?? visual.flipY, clip: node.clip ?? visual.clip })
+    drawNode(ctx, doc, {
+      ...visual,
+      x: node.x,
+      y: node.y,
+      w: node.w,
+      h: node.h,
+      rotation: node.rotation ?? visual.rotation,
+      flipX: node.flipX ?? visual.flipX,
+      flipY: node.flipY ?? visual.flipY,
+      clip: node.clip ?? visual.clip,
+    })
     return
   }
   ctx.save()

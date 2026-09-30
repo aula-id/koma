@@ -44,6 +44,7 @@ import {
   hitGroupChild,
   dropDesignToken,
   layoutDesign,
+  makeInstance,
   measureTextBox,
   mergeDesignOverride,
   reorderDesignNode,
@@ -1084,4 +1085,46 @@ function sample(): DesignDoc {
   const laid = layoutDesign({ ...emptyDesign(), screens: [flowRow] })
   assert.equal(laid.screens[0].children?.[0].x, 4)
   assert.equal(laid.screens[0].children?.[0].y, 4)
+}
+
+{
+  const master = createNode('frame', 'btn', 0, 0)
+  master.w = 80
+  master.h = 40
+  master.layout = 'row'
+  master.wMode = 'hug'
+  const oval = createNode('ellipse', 'dot', 60, -10)
+  oval.w = 40
+  oval.h = 40
+  master.children = [oval]
+  const component: DesignComponent = { id: 'btn', name: 'Btn', variants: [{ props: {}, node: master }] }
+  const placed = makeInstance({ ...emptyDesign(), components: [component] }, 'btn', 'inst', 0, 0)
+  assert.ok(placed)
+  assert.equal(placed.w, 80)
+  assert.equal(placed.h, 40)
+  assert.equal(placed.wMode, 'fixed')
+  assert.equal(placed.hMode, 'fixed')
+  const visual = resolveInstanceTree({ ...emptyDesign(), components: [component] }, placed)
+  assert.equal(visual?.w, 80)
+  assert.equal(visual?.h, 40)
+  const host = createNode('frame', 'host', 0, 0)
+  host.layout = 'column'
+  host.align = 'stretch'
+  host.w = 240
+  host.h = 180
+  host.children = [placed]
+  const grown = layoutDesign({ ...emptyDesign(), components: [component], screens: [host] }).screens[0]
+  assert.equal(grown.children?.[0].w, 80)
+  assert.equal(grown.children?.[0].h, 40)
+  const filling = { ...placed, wMode: 'fill' as const, hMode: 'fill' as const }
+  host.children = [filling]
+  const filled = layoutDesign({ ...emptyDesign(), components: [component], screens: [host] }).screens[0]
+  assert.equal(filled.children?.[0].w, 240)
+  assert.equal(filled.children?.[0].h, 180)
+  const page = createNode('frame', 'page', 0, 0)
+  page.w = 200
+  page.h = 200
+  const afterPage = layoutDesign({ ...emptyDesign(), components: [component], screens: [page] })
+  assert.equal(afterPage.components[0].variants[0].node.w, 80)
+  assert.equal(afterPage.components[0].variants[0].node.h, 40)
 }

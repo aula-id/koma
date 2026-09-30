@@ -857,19 +857,7 @@ export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
     if (next !== screen) changed = true
     return next
   })
-  const components = doc.components.map((component) => {
-    let variantChanged = false
-    const variants = component.variants.map((variant) => {
-      const node = layoutNode(variant.node, frozenId)
-      if (node === variant.node) return variant
-      variantChanged = true
-      return { ...variant, node }
-    })
-    if (!variantChanged) return component
-    changed = true
-    return { ...component, variants }
-  })
-  return changed ? { ...doc, screens, components } : doc
+  return changed ? { ...doc, screens } : doc
 }
 
 const BOARD_GAP = 80
@@ -931,6 +919,8 @@ export function createComponentFromFrame(doc: DesignDoc, frameId: string, compon
   const source = copyTree(located.node, mint)
   source.x = 0
   source.y = 0
+  if (source.wMode !== 'hug' && source.wMode !== 'fill') source.wMode = 'fixed'
+  if (source.hMode !== 'hug' && source.hMode !== 'fill') source.hMode = 'fixed'
   const component: DesignComponent = {
     id: componentId,
     name: located.node.name?.trim() || 'Component',
@@ -945,8 +935,11 @@ export function createComponentFromFrame(doc: DesignDoc, frameId: string, compon
     y: located.node.y,
     w: located.node.w,
     h: located.node.h,
+    wMode: 'fixed',
+    hMode: 'fixed',
     component: componentId,
   }
+  if (located.node.clip === false) instance.clip = false
   return updateDesignNode(next, located.parentId, (parent) => ({
     ...parent,
     children: (parent.children ?? []).map((child) => (child.id === frameId ? instance : child)),
@@ -1006,7 +999,21 @@ export function makeInstance(doc: DesignDoc, componentId: string, id: string, x:
   if (!component) return null
   const variant = pickVariant(component)
   if (!variant) return null
-  return { id, kind: 'instance', x, y, w: variant.node.w, h: variant.node.h, component: componentId }
+  const w = Number.isFinite(variant.node?.w) ? variant.node.w : 1
+  const h = Number.isFinite(variant.node?.h) ? variant.node.h : 1
+  const instance: DesignNode = {
+    id,
+    kind: 'instance',
+    x,
+    y,
+    w: Math.max(1, w),
+    h: Math.max(1, h),
+    wMode: 'fixed',
+    hMode: 'fixed',
+    component: componentId,
+  }
+  if (variant.node?.clip === false) instance.clip = false
+  return instance
 }
 
 export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<string, string>): DesignDoc | null {
@@ -1018,7 +1025,13 @@ export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<str
   const picked = pickVariant(component, clean)
   if (!picked) return null
   return updateDesignNode(doc, id, (node) => {
-    const next: DesignNode = { ...node, w: picked.node.w, h: picked.node.h }
+    const next: DesignNode = {
+      ...node,
+      w: Math.max(1, picked.node?.w ?? node.w),
+      h: Math.max(1, picked.node?.h ?? node.h),
+      wMode: node.wMode === 'fill' ? 'fill' : 'fixed',
+      hMode: node.hMode === 'fill' ? 'fill' : 'fixed',
+    }
     if (Object.keys(clean).length) next.variant = clean
     else delete next.variant
     return next
@@ -1044,7 +1057,18 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
   const variant = pickVariant(component, node.variant)
   if (!variant) return null
   const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill, overrides: node.overrides })
-  return layoutDesign({ ...doc, screens: [zeroRoot(overridden)] }).screens[0] ?? null
+  const width = Number.isFinite(node.w) && node.w > 0 ? node.w : overridden.w
+  const height = Number.isFinite(node.h) && node.h > 0 ? node.h : overridden.h
+  const pinned: DesignNode = {
+    ...overridden,
+    x: 0,
+    y: 0,
+    w: Math.max(1, width),
+    h: Math.max(1, height),
+    wMode: 'fixed',
+    hMode: 'fixed',
+  }
+  return layoutNode(pinned)
 }
 
 /** Variant frames placed side by side so the canvas can edit them like screens. */
@@ -1358,19 +1382,25 @@ export function selectDesignRect(
       let toCanvas = (px: number, py: number) => ({ x: px, y: py })
       for (let index = 0; index < path.length - 1; index++) {
         const node = path[index]
-        const outer = toCanvas
-        toCanvas = (px, py) => outer(spinToParent(node, px, py))
+        const parentSpace = toCanvas
+        toCanvas = (px, py) => {
+          const parent = spinToParent(node, px, py)
+          return parentSpace(parent.x, parent.y)
+        }
       }
       walk(scope, path.slice(0, -1).map((node) => node.id), toCanvas)
     }
   } else {
     for (const screen of doc.screens) walk(screen, [], (px, py) => ({ x: px, y: py }))
   }
-  const full = new Set(hits.filter((hit) => hit.full).map((hit) => hit.id))
-  return hits
+  const scoped = enteredContainerId
+    ? hits.filter((hit) => hit.ancestors[hit.ancestors.length - 1] === enteredContainerId)
+    : hits
+  const full = new Set(scoped.filter((hit) => hit.full).map((hit) => hit.id))
+  return scoped
     .filter((hit) => {
       if (hit.ancestors.some((id) => full.has(id))) return false
-      const hasChild = hits.some((other) => other.ancestors.includes(hit.id))
+      const hasChild = scoped.some((other) => other.ancestors.includes(hit.id))
       return !(hasChild && !hit.full)
     })
     .map((hit) => hit.id)
@@ -2241,6 +2271,7 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   const innerCross = Math.max(0, (horizontal ? height : width) - crossStart - crossEnd)
   const stretches = (child: DesignNode) => {
     const mode = crossMode(child)
+    if (child.kind === 'instance' && mode !== 'fill') return false
     return mode !== 'hug' && mode !== 'fixed' && (mode === 'fill' || align === 'stretch') && !hugsCross
   }
   const finish = (size: number, min?: number, max?: number) => {
