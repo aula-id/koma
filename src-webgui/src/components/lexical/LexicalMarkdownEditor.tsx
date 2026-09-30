@@ -14,7 +14,6 @@ import { LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
 import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, ListItemNode, ListNode } from '@lexical/list'
 import {
   $convertFromMarkdownString,
-  $convertToMarkdownString,
   BOLD_STAR,
   BOLD_UNDERSCORE,
   CODE,
@@ -46,6 +45,7 @@ import {
   type LexicalEditor,
 } from 'lexical'
 import { $createComposerChipNode, $isComposerChipNode, ComposerChipNode } from './chipNodes'
+import { $exportLexicalMarkdown } from './lexicalMarkdown'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
 export type LexicalProfile = 'composer' | 'inline' | 'note'
@@ -108,7 +108,7 @@ const imageTransformer: TextMatchTransformer = {
 }
 
 const INLINE: Transformer[] = [INLINE_CODE, BOLD_STAR, BOLD_UNDERSCORE, ITALIC_STAR, ITALIC_UNDERSCORE, STRIKETHROUGH, LINK]
-const COMPOSER: Transformer[] = [...INLINE, markerTransformer, fileTransformer]
+const COMPOSER: Transformer[] = [CODE, ...INLINE, markerTransformer, fileTransformer]
 const NOTE: Transformer[] = [CODE, HEADING, QUOTE, UNORDERED_LIST, ORDERED_LIST, ...INLINE, imageTransformer]
 
 function transformersFor(profile: LexicalProfile): Transformer[] {
@@ -117,10 +117,6 @@ function transformersFor(profile: LexicalProfile): Transformer[] {
   return INLINE
 }
 
-function normalizeMarkdown(markdown: string): string {
-  if (markdown === '\n' || markdown === '\n\n') return ''
-  return markdown
-}
 
 function $chipKnownTokens(tokens: readonly string[]) {
   const sorted = [...tokens].filter((token) => token.length > 0).sort((a, b) => b.length - a.length)
@@ -167,10 +163,10 @@ function $insertPiece(text: string, tokens: readonly string[]) {
   active.insertText(text)
 }
 
-function readMarkdown(editor: LexicalEditor, transformers: Transformer[]): string {
+function readMarkdown(editor: LexicalEditor, _transformers: Transformer[]): string {
   let markdown = ''
   editor.getEditorState().read(() => {
-    markdown = normalizeMarkdown($convertToMarkdownString(transformers, undefined, true))
+    markdown = $exportLexicalMarkdown()
   })
   return markdown
 }
@@ -214,7 +210,7 @@ function EditorPlugins({
   const applyMarkdown = (next: string, edge?: 'start' | 'end') => {
     suppress.current = true
     editor.update(() => {
-      $convertFromMarkdownString(next, transformers, undefined, true)
+      $convertFromMarkdownString(next, transformers, undefined, false)
       if (profile === 'composer') $chipKnownTokens(tokensRef.current)
       if (edge === 'end') $getRoot().selectEnd()
       else if (edge === 'start') $getRoot().selectStart()
@@ -448,7 +444,7 @@ export function LexicalMarkdownEditor({
           code: 'my-1 block overflow-x-auto rounded bg-koma-bg px-2 py-1 font-mono text-[11px]',
         },
         editorState: () => {
-          $convertFromMarkdownString(initial.current, transformersFor(profile), undefined, true)
+          $convertFromMarkdownString(initial.current, transformersFor(profile), undefined, false)
           if (profile === 'composer') $chipKnownTokens(tokens)
         },
         onError: (error) => {

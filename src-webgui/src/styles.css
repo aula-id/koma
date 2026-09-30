@@ -207,6 +207,12 @@ html, body, #root {
      double-strike) bold or oblique. Inherits to every descendant. */
   font-synthesis: none;
 }
+/* KomaMono ships roman faces only. Italic emphasis still needs a slant;
+   allow style synthesis on those nodes without faking bold weights. */
+em, i, .italic {
+  font-style: italic;
+  font-synthesis: style;
+}
 
 /* Custom window chrome (frameless titlebar + resize handles). The Rust host
    makes the window transparent, so #app supplies the visible rounded canvas.
