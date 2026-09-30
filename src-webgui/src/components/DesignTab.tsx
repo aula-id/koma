@@ -1279,9 +1279,48 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       return
     }
-    setEnteredContainerId(null)
-    setSelection([])
-    dragRef.current = { kind: 'marquee', x0: point.x, y0: point.y, x1: point.x, y1: point.y }
+    const storedNow = useKoma.getState().design.docs[key]?.doc
+    const current = storedNow ? editingDoc(storedNow, focusRef.current) : null
+    if (!current) return
+    const resolved = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
+    if (resolved.kind === 'exit-and-hit') setEnteredContainerId(resolved.enteredContainerId)
+    const target = resolved.kind === 'hit' ? resolved.id : resolved.kind === 'exit-and-hit' ? resolved.id : null
+    if (!target) {
+      if (resolved.kind === 'clear' && !enteredContainerRef.current) {
+        setSelection([])
+        dragRef.current = { kind: 'marquee', x0: point.x, y0: point.y, x1: point.x, y1: point.y }
+      } else if (resolved.kind === 'clear' || resolved.kind === 'exit-and-hit') {
+        setSelection([])
+      }
+      return
+    }
+    const previous = selectionRef.current
+    const ids = event.shiftKey
+      ? previous.includes(target) ? previous.filter((item) => item !== target) : [...previous, target]
+      : previous.includes(target) ? previous : [target]
+    const moveIds = designRoots(current, ids)
+    selectionRef.current = ids
+    setSelection(ids)
+    setPropsOpen(true)
+    if (event.shiftKey || locateDesign(current, target)?.node.locked) return
+    const origins: Record<string, { x: number; y: number }> = {}
+    for (const item of moveIds) {
+      const row = locateDesign(current, item)
+      if (row) origins[item] = { x: row.node.x, y: row.node.y }
+    }
+    dragRef.current = {
+      kind: 'move',
+      ids: moveIds,
+      startX: event.clientX,
+      startY: event.clientY,
+      origins,
+      remembered: false,
+      moved: false,
+      broke: false,
+      alt: event.altKey,
+      scene: null,
+    }
+    setDragCursor('grabbing')
   }
 
   const placeInstance = (componentId: string, point: { x: number; y: number }) => {

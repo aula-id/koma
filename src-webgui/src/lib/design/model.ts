@@ -653,7 +653,6 @@ export function hitDesignInScope(doc: DesignDoc, scopeId: string, x: number, y: 
     const found = hitIn(children[i], local.x, local.y, deep)
     if (found) return found
   }
-  if (scope.kind === 'group' && insideNode(scope, local, 0)) return scope
   return null
 }
 

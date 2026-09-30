@@ -75,9 +75,9 @@ export function DesignNodeView({
   const flipX = node.flipX ? -1 : 1
   const flipY = node.flipY ? -1 : 1
   const transform = rotation || node.flipX || node.flipY ? `rotate(${rotation}deg) scale(${flipX}, ${flipY})` : undefined
-  const drillParent = node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance'
+  const opaqueUntilEnter = node.kind === 'group' || node.kind === 'instance'
   const enteredHere = enteredContainerId === node.id
-  const lockChildren = locked || node.locked || (drillParent && !enteredHere)
+  const lockChildren = locked || !!node.locked || (opaqueUntilEnter && !enteredHere)
   const childIds = lockChildren ? [] : selectedIds
   const hitHere = !locked
   return (
