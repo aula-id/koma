@@ -16,6 +16,8 @@ import {
 import { diagramViewForMermaid, mermaidTitle, splitDiagramMessage } from '../lib/diagramMermaid'
 import {
   assignFreshMarkerInserts,
+  attachmentMarkersRemoved,
+  attachmentQueueStillPending,
   findAttachmentMarkerRanges,
   imageMarker,
   insertMarkerAt,
@@ -958,15 +960,18 @@ export function Composer() {
   // self-cancels here. A user edit also resets any in-progress history walk.
   const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value
+    const removed = attachmentMarkersRemoved(input, val)
     setInput(val)
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
     resetHistory()
     if (skipAttachmentReconcile.current) return
-    const present = markerKeysInText(val)
+    const queue = markerInsertQueue.current
     for (const att of useKoma.getState().session.attachments) {
       if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
       const key = `${att.kind}:${att.markerN}`
-      if (!present.has(key)) req({ r: 'RemoveAttachment', markerN: att.markerN, kind: att.kind })
+      if (!removed.has(key)) continue
+      if (attachmentQueueStillPending(queue, att.kind, att.markerN)) continue
+      req({ r: 'RemoveAttachment', markerN: att.markerN, kind: att.kind })
     }
   }
 
@@ -1084,7 +1089,13 @@ export function Composer() {
     if (next.length === 0 && diagramChips.length === 0 && input.trim() === '' && pendingRewindIndex !== null) clearRewind()
   }
 
-  const canSend = (input.trim() !== '' || diagramChips.length > 0 || designChips.length > 0 || localPastes.length > 0 || attachments.some((item) => item.kind === 'pasted_text')) && !atSteerCap
+  const canSend =
+    (input.trim() !== '' ||
+      diagramChips.length > 0 ||
+      designChips.length > 0 ||
+      localPastes.length > 0 ||
+      attachments.some((item) => item.kind === 'pasted_text' || item.kind === 'image')) &&
+    !atSteerCap
   const pileTokens = listComposerTokens(input, pickedTokensRef.current)
 
   const applyMarkdownWrap = (before: string, after: string) => {

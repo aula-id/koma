@@ -40,6 +40,26 @@ export function markerKeysInText(text: string): Set<string> {
   return keys
 }
 
+/** Marker keys present in `prev` but removed from `next` (user edited the draft). */
+export function attachmentMarkersRemoved(prevText: string, nextText: string): Set<string> {
+  const prev = markerKeysInText(prevText)
+  const next = markerKeysInText(nextText)
+  const removed = new Set<string>()
+  for (const key of prev) {
+    if (!next.has(key)) removed.add(key)
+  }
+  return removed
+}
+
+/** True while a paste/image row is still waiting on the daemon marker number. */
+export function attachmentQueueStillPending(
+  queue: readonly { kind: 'image' | 'pasted_text'; markerN: number | null; cancelled: boolean }[],
+  kind: 'image' | 'pasted_text',
+  markerN: number,
+): boolean {
+  return queue.some((row) => row.kind === kind && !row.cancelled && (row.markerN == null || row.markerN === markerN))
+}
+
 /** Insert `marker` at `index` in `text`; returns new text and caret after the marker. */
 export function insertMarkerAt(text: string, index: number, marker: string): { text: string; caret: number } {
   const at = Math.max(0, Math.min(index, text.length))
