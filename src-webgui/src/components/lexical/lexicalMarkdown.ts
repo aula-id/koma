@@ -83,7 +83,13 @@ function exportInlines(nodes: LexicalNode[]): string {
     }
     flush()
     marks = NONE
-    if ($isComposerChipNode(node) || $isNoteImageNode(node)) {
+    if ($isNoteImageNode(node)) {
+      if (out && !out.endsWith('\n')) out += '\n\n'
+      out += node.getTextContent()
+      if (nodes[nodes.indexOf(node) + 1]) out += '\n\n'
+      continue
+    }
+    if ($isComposerChipNode(node)) {
       out += node.getTextContent()
       continue
     }

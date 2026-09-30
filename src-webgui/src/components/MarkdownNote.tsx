@@ -180,6 +180,7 @@ export function MarkdownNote({
   const hostId = useKoma((s) => s.remoteState.hostId ?? 'local')
   const fileRef = useRef<HTMLInputElement>(null)
   const [editorMarkdown, setEditorMarkdown] = useState(value)
+  const sentRef = useRef(value)
   const apiRef = useRef<LexicalEditorHandle | null>(null)
   const localRef = useRef<Record<string, string>>({})
   const [link, setLink] = useState<string | null>(null)
@@ -193,9 +194,22 @@ export function MarkdownNote({
   }, [])
 
   useEffect(() => {
+    if (value === sentRef.current) {
+      setEditorMarkdown(value)
+      return
+    }
     let cancelled = false
+    const needsRepair = /\[Image #\d+\]/.test(value) || /(?<!!)\[[^\]]*\]\([A-Za-z0-9._-]+\.(?:png|jpe?g|gif|webp)\)/i.test(value)
+    if (!needsRepair) {
+      const md = normalizeDiagramNoteMarkdown(value)
+      sentRef.current = md
+      setEditorMarkdown(md)
+      return
+    }
     void prepareDiagramNoteMarkdown({ hostId, root }, assetDir, value, legacyAssetDir ?? null).then((md) => {
-      if (!cancelled) setEditorMarkdown(md)
+      if (cancelled) return
+      sentRef.current = md
+      setEditorMarkdown(md)
     })
     return () => {
       cancelled = true
@@ -217,7 +231,7 @@ export function MarkdownNote({
     writeWorkspaceBytes(req, root, `${assetDir}/${name}`, bytes)
     const url = URL.createObjectURL(file)
     setLocal((prev) => ({ ...prev, [name]: url }))
-    apiRef.current?.insertImage(file.name.replace(/\.[^.]+$/, ''), name)
+    apiRef.current?.insertImage('image', name)
     apiRef.current?.focus()
   }
 
@@ -248,6 +262,11 @@ export function MarkdownNote({
       onBlur={(event) => {
         const next = event.relatedTarget
         if (next instanceof Node && event.currentTarget.contains(next)) return
+        const canonical = normalizeDiagramNoteMarkdown(sentRef.current)
+        if (canonical !== sentRef.current) {
+          sentRef.current = canonical
+          onChange(canonical)
+        }
         onDone()
       }}
     >
@@ -293,7 +312,10 @@ export function MarkdownNote({
       <LexicalMarkdownEditor
         profile="note"
         markdown={editorMarkdown}
-        onMarkdown={(markdown) => onChange(normalizeDiagramNoteMarkdown(markdown))}
+        onMarkdown={(markdown) => {
+          sentRef.current = markdown
+          onChange(markdown)
+        }}
         controlled
         placeholder="What this is for"
         apiRef={apiRef}

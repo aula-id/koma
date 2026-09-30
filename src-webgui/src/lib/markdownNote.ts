@@ -23,8 +23,22 @@ export function parseNote(markdown: string): NoteBlock[] {
   const lines = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
   const blocks: NoteBlock[] = []
   let i = 0
-  const pushParagraph = (text: string) => {
-    if (text.trim()) blocks.push({ kind: 'p', text })
+  const pushMixed = (text: string) => {
+    EMBEDDED_IMAGE.lastIndex = 0
+    let last = 0
+    let m: RegExpExecArray | null
+    while ((m = EMBEDDED_IMAGE.exec(text))) {
+      const src = imageSrcName(m[2] ?? '')
+      const bang = m[0].startsWith('!')
+      if (!noteImageFile(src) && !bang) continue
+      const before = text.slice(last, m.index)
+      if (before.trim()) blocks.push({ kind: 'p', text: before.trim() })
+      blocks.push({ kind: 'image', alt: bang ? (m[1] ?? '') : (m[1] ?? ''), src })
+      last = (m.index ?? 0) + m[0].length
+    }
+    const rest = text.slice(last)
+    if (rest.trim()) blocks.push({ kind: 'p', text: rest.trim() })
+    else if (last === 0 && text.trim()) blocks.push({ kind: 'p', text })
   }
   while (i < lines.length) {
     const line = lines[i] ?? ''
@@ -84,9 +98,15 @@ export function parseNote(markdown: string): NoteBlock[] {
       text.push(lines[i] ?? '')
       i++
     }
-    pushParagraph(text.join('\n'))
+    pushMixed(text.join('\n'))
   }
   return blocks
+}
+
+const EMBEDDED_IMAGE = /!?\[([^\]]*)\]\(([^)\s]+)\)/g
+
+function imageSrcName(src: string): string {
+  return src.replace(/\\/g, '/').split('/').pop() ?? src
 }
 
 function fenceSize(line: string): number {
@@ -164,13 +184,20 @@ export function serializeNote(blocks: NoteBlock[]): string {
     }
     if (!isNoteText(block)) continue
     if (!block.text.trim() && block.kind === 'p') continue
-    if (block.kind === 'h1') parts.push(`# ${block.text}`)
-    else if (block.kind === 'h2') parts.push(`## ${block.text}`)
-    else if (block.kind === 'h3') parts.push(`### ${block.text}`)
-    else if (block.kind === 'quote') parts.push(block.text.split('\n').map((line) => `> ${line}`).join('\n'))
-    else parts.push(block.text)
+    if (block.kind === 'h1') parts.push(`# ${hardBreakLines(block.text)}`)
+    else if (block.kind === 'h2') parts.push(`## ${hardBreakLines(block.text)}`)
+    else if (block.kind === 'h3') parts.push(`### ${hardBreakLines(block.text)}`)
+    else if (block.kind === 'quote') parts.push(hardBreakLines(block.text).split('\n').map((line) => `> ${line}`).join('\n'))
+    else parts.push(hardBreakLines(block.text))
   }
   return parts.join('\n\n')
+}
+
+/** Keep Shift+Enter as a markdown hard break (`\` + newline), not a new paragraph. */
+function hardBreakLines(text: string): string {
+  const lines = text.split('\n')
+  if (lines.length <= 1) return text
+  return lines.map((line, index) => (index < lines.length - 1 ? `${line.replace(/\\$/, '')}\\` : line)).join('\n')
 }
 
 export function safeNoteUrl(url: string): boolean {

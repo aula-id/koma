@@ -55,3 +55,17 @@ assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
   assert.equal(norm.includes('[Image #1]'), false)
   assert.equal(norm.includes('![image](img-abc.png)'), true)
 }
+
+{
+  const broken = 'apata ini?\n\n[download](img-mnuo0zc2.png)'
+  const fixed = normalizeDiagramNoteMarkdown(broken)
+  assert.equal(fixed.includes('![download](img-mnuo0zc2.png)') || fixed.includes('![](img-mnuo0zc2.png)'), true)
+  assert.equal(/^\s*\[download\]/.test(fixed.split('\n').pop() ?? ''), false)
+}
+
+{
+  const hard = 'hello\\\nworld'
+  const kept = normalizeDiagramNoteMarkdown(hard)
+  assert.equal(kept.includes('hello\\'), true)
+  assert.equal(kept.includes('world'), true)
+}

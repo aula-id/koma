@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type JSX } from 'react'
+import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import {
   DecoratorNode,
   type LexicalNode,
@@ -22,9 +23,10 @@ export const NoteAssetsContext = createContext<NoteAssets>({ root: '', assetDir:
 
 export type SerializedNoteImageNode = Spread<{ alt: string; src: string }, SerializedLexicalNode>
 
-function NoteImageView({ alt, src }: { alt: string; src: string }) {
+function NoteImageView({ alt, src, nodeKey }: { alt: string; src: string; nodeKey: NodeKey }) {
   const assets = useContext(NoteAssetsContext)
   const req = useKoma((s) => s.req)
+  const [selected, setSelected] = useLexicalNodeSelection(nodeKey)
   const preview = assets.previews[src]
   const [url, setUrl] = useState<string | null>(preview ?? null)
   const [failed, setFailed] = useState(false)
@@ -54,10 +56,17 @@ function NoteImageView({ alt, src }: { alt: string; src: string }) {
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [assets.assetDir, assets.legacyAssetDir, assets.root, preview, req, src])
-  if (safeNoteUrl(src) && /^https?:\/\//i.test(src)) return <img src={src} alt={alt} className="max-w-full rounded" />
+  const ring = selected ? 'ring-1 ring-koma-accent' : ''
+  const pick = (event: { preventDefault: () => void }) => {
+    event.preventDefault()
+    setSelected(true)
+  }
+  if (safeNoteUrl(src) && /^https?:\/\//i.test(src)) {
+    return <img src={src} alt={alt} className={`max-w-full rounded ${ring}`} onClick={pick} />
+  }
   if (failed) return <span className="text-[11px] text-koma-dim">{alt || src}</span>
   if (!url) return <span className="text-[11px] text-koma-dim">{alt || 'Image'}</span>
-  return <img src={url} alt={alt} className="my-1 max-w-full rounded" />
+  return <img src={url} alt={alt} className={`my-1 max-w-full rounded ${ring}`} onClick={pick} />
 }
 
 export class NoteImageNode extends DecoratorNode<JSX.Element> {
@@ -96,12 +105,16 @@ export class NoteImageNode extends DecoratorNode<JSX.Element> {
     return false
   }
 
+  isInline(): boolean {
+    return true
+  }
+
   getTextContent(): string {
     return `![${this.__alt}](${this.__src})`
   }
 
   decorate(): JSX.Element {
-    return <NoteImageView alt={this.__alt} src={this.__src} />
+    return <NoteImageView alt={this.__alt} src={this.__src} nodeKey={this.getKey()} />
   }
 }
 

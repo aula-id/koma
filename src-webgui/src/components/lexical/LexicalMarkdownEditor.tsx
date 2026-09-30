@@ -9,12 +9,14 @@ import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin'
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin'
-import { $createCodeNode, CodeNode } from '@lexical/code'
-import { LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
+import { $createCodeNode, $isCodeNode, CodeNode } from '@lexical/code'
+import { $isLinkNode, LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
 import {
   INSERT_CHECK_LIST_COMMAND,
   INSERT_ORDERED_LIST_COMMAND,
   INSERT_UNORDERED_LIST_COMMAND,
+  $isListItemNode,
+  $isListNode,
   ListItemNode,
   ListNode,
 } from '@lexical/list'
@@ -83,7 +85,7 @@ import {
   looksLikeComposerMarkdown,
   markdownFromClipboardHtml,
 } from '../../lib/composerMarkdownPaste'
-import { normalizeDiagramNoteMarkdown, safeNoteUrl } from '../../lib/markdownNote'
+import { normalizeDiagramNoteMarkdown, noteImageFile, safeNoteUrl } from '../../lib/markdownNote'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
 export type LexicalProfile = 'composer' | 'inline' | 'note'
@@ -144,10 +146,27 @@ const imageTransformer: TextMatchTransformer = {
   importRegExp: /!\[([^\]]*)\]\(([^)\s]+)\)/,
   regExp: /!\[([^\]]*)\]\(([^)\s]+)\)$/,
   replace: (node, match) => {
-    node.replace($createNoteImageNode(match[1] ?? '', match[2] ?? ''))
+    const src = (match[2] ?? '').replace(/\\/g, '/').split('/').pop() ?? match[2] ?? ''
+    node.replace($createNoteImageNode(match[1] ?? '', src))
   },
   trigger: ')',
   type: 'text-match',
+}
+
+/** LINK must not steal `![alt](file)` — both matches end at the same `)`, so LINK wins otherwise. */
+const noteLinkTransformer: TextMatchTransformer = {
+  ...LINK,
+  replace: (textNode, match) => {
+    const text = textNode.getTextContent()
+    const at = match.index ?? text.indexOf(match[0])
+    if (at > 0 && text[at - 1] === '!') return
+    const src = (match[2] ?? match[3] ?? '').replace(/\\/g, '/').split('/').pop() ?? ''
+    if (noteImageFile(src)) {
+      textNode.replace($createNoteImageNode(match[1] ?? '', src))
+      return
+    }
+    LINK.replace?.(textNode, match)
+  },
 }
 
 const INLINE: Transformer[] = [
@@ -172,7 +191,7 @@ const COMPOSER: Transformer[] = [
   markerTransformer,
   fileTransformer,
 ]
-const NOTE: Transformer[] = [CODE, HEADING, QUOTE, UNORDERED_LIST, ORDERED_LIST, ...INLINE, imageTransformer]
+const NOTE: Transformer[] = [CODE, HEADING, QUOTE, UNORDERED_LIST, ORDERED_LIST, imageTransformer, ...INLINE.filter((t) => t !== LINK), noteLinkTransformer]
 
 function transformersFor(profile: LexicalProfile): Transformer[] {
   if (profile === 'note') return NOTE
@@ -217,6 +236,45 @@ async function readClipboardImages(): Promise<File[]> {
     return files
   } catch {
     return []
+  }
+}
+
+function $promoteNoteImages() {
+  for (const textNode of $getRoot().getAllTextNodes()) {
+    const text = textNode.getTextContent()
+    const match = /!?\[([^\]]*)\]\(([^)\s]+)\)/.exec(text)
+    if (!match) continue
+    const src = (match[2] ?? '').replace(/\\/g, '/').split('/').pop() ?? ''
+    if (!noteImageFile(src) && !match[0].startsWith('!')) continue
+    const image = $createNoteImageNode(match[1] ?? '', src)
+    if (text.trim() === match[0]) {
+      textNode.replace(image)
+      continue
+    }
+    const start = match.index ?? 0
+    const before = text.slice(0, start)
+    const after = text.slice(start + match[0].length)
+    const nodes: LexicalNode[] = []
+    if (before) nodes.push($createTextNode(before))
+    nodes.push(image)
+    if (after) nodes.push($createTextNode(after))
+    textNode.replace(nodes[0]!)
+    let prev = nodes[0]!
+    for (const next of nodes.slice(1)) {
+      prev.insertAfter(next)
+      prev = next
+    }
+  }
+  const links: LinkNode[] = []
+  const visit = (node: LexicalNode) => {
+    if ($isLinkNode(node)) links.push(node)
+    if ($isElementNode(node)) node.getChildren().forEach(visit)
+  }
+  $getRoot().getChildren().forEach(visit)
+  for (const link of links) {
+    const src = link.getURL().replace(/\\/g, '/').split('/').pop() ?? ''
+    if (!noteImageFile(src)) continue
+    link.replace($createNoteImageNode(link.getTextContent(), src))
   }
 }
 
@@ -413,11 +471,14 @@ function EditorPlugins({
   const onSubmitRef = useRef(onSubmit)
   onSubmitRef.current = onSubmit
 
+  const focused = useRef(false)
+
   const applyMarkdown = (next: string, edge?: 'start' | 'end') => {
     suppress.current = true
     const prepared = profile === 'note' ? normalizeDiagramNoteMarkdown(next) : next
     editor.update(() => {
       $convertFromMarkdownString(prepared, transformers, undefined, false)
+      if (profile === 'note') $promoteNoteImages()
       if (profile === 'composer') $promoteFileRefChips()
       if (edge === 'end') $getRoot().selectEnd()
       else if (edge === 'start') $getRoot().selectStart()
@@ -520,7 +581,10 @@ function EditorPlugins({
             const image = $createNoteImageNode(alt, src)
             const block = $createParagraphNode()
             block.append(image)
+            const after = $createParagraphNode()
             selection.insertNodes([block])
+            block.insertAfter(after)
+            after.selectStart()
           }
         })
       },
@@ -556,11 +620,78 @@ function EditorPlugins({
   }, [apiRef, editor, profile, transformers])
 
   useEffect(() => {
+    const root = editor.getRootElement()
+    const onFocus = () => {
+      focused.current = true
+    }
+    const onBlur = () => {
+      focused.current = false
+    }
+    root?.addEventListener('focusin', onFocus)
+    root?.addEventListener('focusout', onBlur)
+    return () => {
+      root?.removeEventListener('focusin', onFocus)
+      root?.removeEventListener('focusout', onBlur)
+    }
+  }, [editor])
+
+  useEffect(() => {
     if (!controlled) return
     if (markdown === last.current) return
+    if (profile === 'note' && focused.current) return
     applyMarkdown(markdown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlled, markdown])
+
+  useEffect(() => {
+    if (profile !== 'note') return
+    return editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        if (!event) return false
+        const shift = event.shiftKey
+        let handled = false
+        editor.update(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection)) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          if ($isCodeNode(top)) {
+            if (shift) {
+              selection.insertLineBreak()
+              handled = true
+            }
+            return
+          }
+          if ($isListNode(top) || $isListItemNode(selection.anchor.getNode().getParent())) {
+            if (shift) {
+              selection.insertLineBreak()
+              handled = true
+            }
+            return
+          }
+          if (shift) {
+            selection.insertLineBreak()
+            handled = true
+            return
+          }
+          const kids = top?.getChildren() ?? []
+          const onImage = $isNoteImageNode(selection.anchor.getNode()) || kids.some((node) => $isNoteImageNode(node))
+          if (onImage && top) {
+            const next = $createParagraphNode()
+            top.insertAfter(next)
+            next.selectStart()
+            handled = true
+            return
+          }
+          selection.insertParagraph()
+          handled = true
+        })
+        if (handled) event.preventDefault()
+        return handled
+      },
+      COMMAND_PRIORITY_HIGH,
+    )
+  }, [editor, profile])
 
   useEffect(() => {
     if (profile !== 'composer') return
@@ -810,7 +941,7 @@ export function LexicalMarkdownEditor({
         namespace: `koma-${profile}`,
         nodes,
         theme: {
-          paragraph: 'm-0',
+          paragraph: 'm-0 min-h-[1.2em]',
           heading: { h1: 'my-1 text-[15px] font-semibold', h2: 'my-1 text-[13px] font-semibold', h3: 'my-1 text-[12px] font-semibold' },
           quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
           list: {
@@ -833,6 +964,7 @@ export function LexicalMarkdownEditor({
           const seed =
             profile === 'note' ? normalizeDiagramNoteMarkdown(initial.current) : initial.current
           $convertFromMarkdownString(seed, transformersFor(profile), undefined, false)
+          if (profile === 'note') $promoteNoteImages()
           if (profile === 'composer') $promoteFileRefChips()
         },
         onError: (error) => {
