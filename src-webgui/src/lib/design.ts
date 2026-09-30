@@ -102,7 +102,7 @@ export type DesignNode = {
   flipY?: boolean
   /** Omitted means visible. */
   visible?: boolean
-  /** Omitted means unlocked. A locked node is skipped by canvas hits. */
+  /** Omitted means unlocked. A locked node is the canvas hit and does not walk its children. */
   locked?: boolean
   /** Local vector network. Required when kind is vector. */
   vector?: DesignVector
@@ -523,11 +523,6 @@ export function pointInDesign(doc: DesignDoc, id: string, x: number, y: number):
 
 export type DesignDrop = { kind: 'stay' } | { kind: 'move'; parentId: string | null; x: number; y: number }
 
-/**
- * Where a dragged node lands. A click inside the current parent stays there.
- * A release outside joins the frame under the pointer, or the canvas when there is none.
- * x/y are the border box in the new parent's space.
- */
 /** A locked ancestor keeps its descendants. A null next parent is the canvas. */
 export function canLeaveParent(doc: DesignDoc, id: string, nextParentId: string | null): boolean {
   const path = pathToNode(doc, id)
@@ -542,6 +537,12 @@ export function canLeaveParent(doc: DesignDoc, id: string, nextParentId: string 
   return true
 }
 
+/**
+ * Where a dragged node lands. x/y are the border box in the new parent's space.
+ * A locked ancestor stays. The pointer over another container joins that container.
+ * A frame child whose box is completely outside moves one level, to that frame's parent.
+ * A group child, and a frame child that still overlaps its frame, stay.
+ */
 export function designDrop(doc: DesignDoc, id: string, pointerX: number, pointerY: number): DesignDrop {
   const located = locateDesign(doc, id)
   if (!located) return { kind: 'stay' }
@@ -553,15 +554,31 @@ export function designDrop(doc: DesignDoc, id: string, pointerX: number, pointer
   if (target === located.parentId || (inside && !nested)) return { kind: 'stay' }
   const origin = nodeBoxOrigin(doc, id)
   if (!origin) return { kind: 'stay' }
-  const local = canvasToContent(doc, target, origin.x, origin.y)
+  const nextParent = target && target !== located.parentId ? target : outsideParent(doc, located)
+  if (nextParent === undefined || nextParent === located.parentId) return { kind: 'stay' }
+  const local = canvasToContent(doc, nextParent, origin.x, origin.y)
   if (!local) return { kind: 'stay' }
-  return { kind: 'move', parentId: target, x: local.x, y: local.y }
+  return { kind: 'move', parentId: nextParent, x: local.x, y: local.y }
+}
+
+/** The frame's parent when the child's border box is completely outside that frame. Undefined means stay. */
+function outsideParent(doc: DesignDoc, located: { node: DesignNode; parentId: string | null }): string | null | undefined {
+  if (!located.parentId) return undefined
+  const parent = findDesignNode(doc, located.parentId)
+  if (!parent || parent.kind !== 'frame') return undefined
+  const node = located.node
+  const clear = node.x + node.w < 0 || node.x > parent.w || node.y + node.h < 0 || node.y > parent.h
+  if (!clear) return undefined
+  const parentPath = pathToNode(doc, located.parentId)
+  if (!parentPath || parentPath.length < 2) return null
+  return parentPath[parentPath.length - 2]?.id ?? null
 }
 
 /**
  * Topmost node under a canvas point.
- * A group hit returns the group. Pass deep to step one level into that group.
+ * A group or instance hit returns that node. Pass deep to step one level into it.
  * A frame hit returns the child under the pointer. Clipped frames ignore points outside the frame.
+ * A locked node that contains the point returns itself.
  */
 export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): DesignNode | null {
   for (let i = doc.screens.length - 1; i >= 0; i--) {
@@ -572,8 +589,8 @@ export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): D
 }
 
 /**
- * The node a click should select. A selected group, or a group that contains the selection,
- * drills one level. Otherwise a group hit stays on the group, and deep steps into it once.
+ * The node a click should select. A selected group or instance, or one that contains the selection,
+ * drills one level. Otherwise that hit stays on the group or instance, and deep steps into it once.
  */
 export function selectDesignHit(doc: DesignDoc, x: number, y: number, selected: readonly string[], deep: boolean): string | null {
   const entered = enteredGroup(doc, selected, x, y)
@@ -589,7 +606,7 @@ function enteredGroup(doc: DesignDoc, selected: readonly string[], x: number, y:
     if (!path) continue
     for (let index = 0; index < path.length; index++) {
       const node = path[index]
-      if (!node || node.kind !== 'group' || !pointInDesign(doc, node.id, x, y)) continue
+      if (!node || (node.kind !== 'group' && node.kind !== 'instance') || !pointInDesign(doc, node.id, x, y)) continue
       if (index >= bestDepth) {
         bestId = node.id
         bestDepth = index
@@ -599,17 +616,72 @@ function enteredGroup(doc: DesignDoc, selected: readonly string[], x: number, y:
   return bestId
 }
 
-/** One level inside a group. A nested group is returned whole. */
+/** One level inside a group or instance. A nested group or instance is returned whole. */
 export function hitGroupChild(doc: DesignDoc, groupId: string, x: number, y: number): DesignNode | null {
   const group = findDesignNode(doc, groupId)
   const local = canvasToContent(doc, groupId, x, y)
-  if (!group || group.kind !== 'group' || !local) return null
+  if (!group || (group.kind !== 'group' && group.kind !== 'instance') || !local) return null
   const children = group.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
     const found = hitIn(children[i], local.x, local.y, false)
     if (found) return found
   }
   return null
+}
+
+const FLOW_BREAK = 16
+
+/** True when the point is inside the node or within 16 document pixels of its border box. */
+export function inFlowBand(doc: DesignDoc, id: string, x: number, y: number): boolean {
+  const path = pathToNode(doc, id)
+  if (!path?.length) return false
+  let px = x
+  let py = y
+  for (const node of path) {
+    const local = parentPointToContent(node, px, py)
+    px = local.x
+    py = local.y
+  }
+  const parent = path[path.length - 1]
+  if (!parent) return false
+  return px >= -FLOW_BREAK && py >= -FLOW_BREAK && px <= parent.w + FLOW_BREAK && py <= parent.h + FLOW_BREAK
+}
+
+/** Insert index among non-absolute siblings. `local` is the pointer on the main axis. */
+export function flowInsertIndex(parent: DesignNode, id: string, local: number): number {
+  let index = 0
+  for (const sibling of parent.children ?? []) {
+    if (sibling.absolute || sibling.id === id) continue
+    const center = parent.layout === 'row' ? sibling.x + sibling.w / 2 : sibling.y + sibling.h / 2
+    if (local > center) index += 1
+  }
+  return index
+}
+
+export type DesignFlowBar = { x: number; y: number; w: number; h: number }
+
+/** A 2px bar in the gap where an in-flow drag would insert, in canvas space. */
+export function flowBreakBar(doc: DesignDoc, parentId: string, id: string, pointerX: number, pointerY: number): DesignFlowBar | null {
+  const parent = findDesignNode(doc, parentId)
+  const localPoint = canvasToContent(doc, parentId, pointerX, pointerY)
+  const origin = nodeBoxOrigin(doc, parentId)
+  if (!parent?.layout || !localPoint || !origin) return null
+  const along = parent.layout === 'row' ? localPoint.x : localPoint.y
+  const index = flowInsertIndex(parent, id, along)
+  const flow = (parent.children ?? []).filter((child) => !child.absolute && child.id !== id)
+  const before = index > 0 ? flow[index - 1] : null
+  const after = flow[index]
+  const pad = parent.pad ?? 0
+  if (parent.layout === 'row') {
+    const left = before ? before.x + before.w : pad
+    const right = after ? after.x : parent.w - pad
+    const mid = (left + right) / 2
+    return { x: origin.x + mid - 1, y: origin.y + pad, w: 2, h: Math.max(2, parent.h - pad * 2) }
+  }
+  const top = before ? before.y + before.h : pad
+  const bottom = after ? after.y : parent.h - pad
+  const mid = (top + bottom) / 2
+  return { x: origin.x + pad, y: origin.y + mid - 1, w: Math.max(2, parent.w - pad * 2), h: 2 }
 }
 
 /** Deepest frame under a canvas point, skipping a node and its descendants. */
@@ -1156,7 +1228,11 @@ export function selectDesignRect(doc: DesignDoc, x: number, y: number, w: number
   const walk = (node: DesignNode, ancestors: string[], toCanvas: (px: number, py: number) => DesignVectorPoint) => {
     if (node.visible === false) return
     const box = canvasBox(node, toCanvas)
-    if (boxesIntersect(box, rect) && !node.locked) hits.push({ id: node.id, full: boxInside(box, rect), ancestors: [...ancestors] })
+    if (node.locked) {
+      if (boxesIntersect(box, rect)) hits.push({ id: node.id, full: boxInside(box, rect), ancestors: [...ancestors] })
+      return
+    }
+    if (boxesIntersect(box, rect)) hits.push({ id: node.id, full: boxInside(box, rect), ancestors: [...ancestors] })
     const nested = (px: number, py: number) => {
       const parent = spinToParent(node, px, py)
       return toCanvas(parent.x, parent.y)
@@ -1589,10 +1665,11 @@ function locateIn(node: DesignNode, id: string): { node: DesignNode; parentId: s
 }
 
 function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNode | null {
-  if (node.visible === false || node.locked) return null
+  if (node.visible === false) return null
   const local = parentPointToContent(node, x, y)
   const inside = insideNode(node, local, node.kind === 'line' ? 6 : 0)
-  if (node.kind === 'group') {
+  if (node.locked) return inside ? node : null
+  if (node.kind === 'group' || node.kind === 'instance') {
     if (!inside) return null
     if (deep) {
       const children = node.children ?? []
@@ -1603,7 +1680,7 @@ function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNod
     }
     return node
   }
-  if ((node.kind === 'frame' || node.kind === 'instance') && !inside) return null
+  if (node.kind === 'frame' && !inside) return null
   const children = node.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
     const found = hitIn(children[i], local.x, local.y, deep)

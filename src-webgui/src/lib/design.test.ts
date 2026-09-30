@@ -42,6 +42,7 @@ import {
   emptyDesign,
   frameAtPoint,
   hitDesign,
+  selectDesignHit,
   insertDesignNode,
   isDesignPath,
   nodeChrome,
@@ -504,6 +505,7 @@ function sample(): DesignDoc {
   assert.equal(stackDesign(hidden, 20, 30)[0]?.id, 'a')
   const locked = setDesignLocked(back, 'a', true)
   assert.equal(hitDesign(locked, 20, 30)?.id, 'g')
+  assert.equal(hitDesign(locked, 20, 30, true)?.id, 'a')
   const flipped = flipDesignNode(back, 'g', 'x')
   assert.equal(flipped.screens[0].children?.[0].flipX, true)
   assert.equal(flipDesignNode(flipped, 'g', 'x').screens[0].children?.[0].flipX, undefined)
@@ -663,18 +665,52 @@ function sample(): DesignDoc {
   assert.deepEqual(nodeBoxOrigin(doc, 'r'), { x: 70, y: 90 })
   assert.equal(nodeOrigin(doc, 'r')?.x, 170)
   assert.equal(designDrop(doc, 'r', 120, 140).kind, 'stay')
-  const outside = designDrop(doc, 'r', 900, 900)
-  assert.equal(outside.kind, 'move')
+  assert.equal(designDrop(doc, 'r', 900, 900).kind, 'stay')
   const lockedFrame = setDesignLocked(doc, 'board', true)
   assert.equal(designDrop(lockedFrame, 'r', 900, 900).kind, 'stay')
   assert.equal(canLeaveParent(lockedFrame, 'r', null), false)
   assert.equal(canLeaveParent(lockedFrame, 'r', 'board'), true)
-  assert.equal(designDrop(setDesignLocked(lockedFrame, 'board', false), 'r', 900, 900).kind, 'move')
-  if (outside.kind === 'move') {
-    assert.equal(outside.parentId, null)
-    assert.equal(outside.x, 70)
-    assert.equal(outside.y, 90)
+  assert.equal(designDrop(setDesignLocked(lockedFrame, 'board', false), 'r', 900, 900).kind, 'stay')
+  const direct = createNode('rect', 'd', 420, 40)
+  direct.w = 80
+  direct.h = 40
+  direct.flipX = true
+  const directFrame = createNode('frame', 'board2', 0, 0)
+  directFrame.w = 400
+  directFrame.h = 300
+  directFrame.children = [direct]
+  const cleared = designDrop({ ...emptyDesign(), screens: [directFrame] }, 'd', 900, 900)
+  assert.equal(cleared.kind, 'move')
+  if (cleared.kind === 'move') {
+    assert.equal(cleared.parentId, null)
+    assert.equal(cleared.x, 420)
+    assert.equal(cleared.y, 40)
   }
+  const overlap = createNode('rect', 'o', 350, 20)
+  overlap.w = 80
+  overlap.h = 40
+  directFrame.children = [overlap]
+  assert.equal(designDrop({ ...emptyDesign(), screens: [directFrame] }, 'o', 900, 900).kind, 'stay')
+  const outer = createNode('frame', 'outer', 0, 0)
+  outer.w = 400
+  outer.h = 300
+  const inner = createNode('frame', 'inner', 20, 20)
+  inner.w = 100
+  inner.h = 80
+  const kid = createNode('rect', 'kid', 140, 10)
+  kid.w = 40
+  kid.h = 40
+  inner.children = [kid]
+  outer.children = [inner]
+  const nest = { ...emptyDesign(), screens: [outer] }
+  const upOne = designDrop(nest, 'kid', 900, 900)
+  assert.equal(upOne.kind, 'move')
+  if (upOne.kind === 'move') {
+    assert.equal(upOne.parentId, 'outer')
+    assert.equal(upOne.x, 160)
+    assert.equal(upOne.y, 30)
+  }
+  assert.equal(designDrop(setDesignLocked(nest, 'outer', true), 'kid', 900, 900).kind, 'stay')
   const nested = createNode('frame', 'inner', 20, 20)
   nested.w = 200
   nested.h = 160
@@ -743,4 +779,41 @@ function sample(): DesignDoc {
   assert.equal(spaced.screens[0].children?.[0].x, 10)
   assert.equal(spaced.screens[0].children?.[1].x, 150)
   assert.equal(hitGroupChild(grouped!, 'g', 20, 30)?.id, 'a')
+}
+
+{
+  const frame = createNode('frame', 'board', 0, 0)
+  frame.w = 200
+  frame.h = 200
+  const rect = createNode('rect', 'r', 20, 30)
+  rect.w = 40
+  rect.h = 40
+  frame.children = [rect]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  const lockedFrame = setDesignLocked(doc, 'board', true)
+  assert.equal(hitDesign(lockedFrame, 30, 40)?.id, 'board')
+  assert.deepEqual(selectDesignRect(lockedFrame, 0, 0, 200, 200), ['board'])
+  assert.equal(hitDesign(setDesignLocked(doc, 'r', true), 30, 40)?.id, 'r')
+  const group = createNode('group', 'g', 10, 10)
+  group.w = 80
+  group.h = 80
+  const child = createNode('rect', 'a', 5, 5)
+  child.w = 20
+  child.h = 20
+  group.children = [child]
+  const grouped = { ...emptyDesign(), screens: [{ ...frame, children: [group] }] }
+  assert.equal(hitDesign(setDesignLocked(grouped, 'g', true), 20, 20)?.id, 'g')
+  const inner = createNode('rect', 'inner', 10, 10)
+  inner.w = 30
+  inner.h = 30
+  const instance: DesignNode = { id: 'inst', kind: 'instance', x: 0, y: 0, w: 80, h: 60, component: 'button', children: [inner] }
+  const host = createNode('frame', 'host', 0, 0)
+  host.w = 200
+  host.h = 200
+  host.children = [instance]
+  const instDoc = { ...emptyDesign(), screens: [host] }
+  assert.equal(hitDesign(instDoc, 20, 20)?.id, 'inst')
+  assert.equal(hitDesign(instDoc, 20, 20, true)?.id, 'inner')
+  assert.equal(selectDesignHit(instDoc, 20, 20, ['inst'], false), 'inner')
+  assert.equal(hitDesign(instDoc, 40, 80)?.id, 'host')
 }

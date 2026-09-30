@@ -21,6 +21,9 @@ import {
   designChatTitle,
   designDrop,
   designLayerName,
+  flowBreakBar,
+  flowInsertIndex,
+  inFlowBand,
   designPath,
   designQueryNode,
   deleteDesignNode,
@@ -65,6 +68,7 @@ import {
   type DesignAlignAxis,
   type DesignAlignEdge,
   type DesignDoc,
+  type DesignFlowBar,
   type DesignHandle,
   type DesignOrder,
   type DesignPenPoint,
@@ -119,7 +123,7 @@ type DesignCommands = {
 }
 type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 type Drag =
-  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean }
+  | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
@@ -233,6 +237,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [propsOpen, setPropsOpen] = useState(true)
   const [ghost, setGhost] = useState<Ghost | null>(null)
+  const [flowBar, setFlowBar] = useState<DesignFlowBar | null>(null)
   const [pen, setPen] = useState<PenDraft | null>(null)
   const [penHover, setPenHover] = useState<{ x: number; y: number } | null>(null)
   const [penHandle, setPenHandle] = useState<number | null>(null)
@@ -581,6 +586,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       if (Math.hypot(screenDx, screenDy) < 4) return
       drag.moved = true
+      const flowId = drag.ids.length === 1 ? drag.ids[0] : null
+      const flowLocated = flowId ? locateDesign(doc, flowId) : null
+      const flowParent = flowLocated?.parentId ? findDesignNode(doc, flowLocated.parentId) : null
+      const flowing = !!(flowId && flowLocated && flowParent?.layout && !flowLocated.node.absolute)
+      if (flowing && flowId && flowParent && point && !drag.broke && inFlowBand(doc, flowParent.id, point.x, point.y)) {
+        setFlowBar(flowBreakBar(doc, flowParent.id, flowId, point.x, point.y))
+        return
+      }
+      if (flowing && point && !drag.broke) drag.broke = true
+      setFlowBar(null)
       let view = doc
       let frozen: string | undefined
       for (const id of drag.ids) {
@@ -607,6 +622,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       dragRef.current = null
       setDragCursor(null)
       setGhost(null)
+      setFlowBar(null)
       if (drag?.kind === 'pen') setPenHandle(null)
       if (!drag || drag.kind === 'pan' || drag.kind === 'pen') return
       const stored = useKoma.getState().design.docs[key]?.doc
@@ -631,23 +647,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const dragId = drag.ids[0]
       if (!dragId || !point) return
       const located = locateDesign(doc, dragId)
-      const origin = nodeOrigin(doc, dragId)
       let next = doc
-      if (located && origin && drag.ids.length === 1 && !(focus && located.parentId == null)) {
+      if (located && drag.ids.length === 1 && !(focus && located.parentId == null)) {
         const drop = designDrop(doc, dragId, point.x, point.y)
         const parent = located.parentId ? findDesignNode(doc, located.parentId) : null
-        if (drop.kind === 'stay' && parent?.layout && !located.node.absolute && frameAtPoint(doc, point.x, point.y, dragId) === located.parentId) {
-          const parentOrigin = nodeOrigin(doc, parent.id)
-          if (parentOrigin) {
-            const local = parent.layout === 'row' ? origin.x - parentOrigin.x : origin.y - parentOrigin.y
-            let index = 0
-            for (const sibling of parent.children ?? []) {
-              if (sibling.absolute || sibling.id === dragId) continue
-              const center = parent.layout === 'row' ? sibling.x + sibling.w / 2 : sibling.y + sibling.h / 2
-              if (local > center) index += 1
-            }
-            next = reorderDesignNode(doc, dragId, index)
-          }
+        const localPoint = parent ? canvasToContent(doc, parent.id, point.x, point.y) : null
+        if (drop.kind === 'stay' && parent?.layout && !located.node.absolute && localPoint && inFlowBand(doc, parent.id, point.x, point.y)) {
+          const along = parent.layout === 'row' ? localPoint.x : localPoint.y
+          next = reorderDesignNode(doc, dragId, flowInsertIndex(parent, dragId, along))
         } else if (drop.kind === 'move' && !(focus && drop.parentId == null)) {
           next = placeDesignNode(doc, dragId, drop.parentId, snapDesign(drop.x, doc.grid, doc.snap), snapDesign(drop.y, doc.grid, doc.snap))
         }
@@ -1333,6 +1340,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         >
           <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} />
           <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
+            {flowBar ? (
+              <div className="pointer-events-none absolute z-10" style={{ left: flowBar.x, top: flowBar.y, width: flowBar.w, height: flowBar.h, background: SELECTION }} />
+            ) : null}
             {doc.screens.map((screen) => (
               <DesignNodeView
                 key={screen.id}
@@ -1392,6 +1402,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     const row = locateDesign(current, item)
                     if (row) origins[item] = { x: row.node.x, y: row.node.y }
                   }
+                  if (locateDesign(current, target)?.node.locked) return
                   dragRef.current = {
                     kind: 'move',
                     ids,
@@ -1400,6 +1411,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     origins,
                     remembered: false,
                     moved: false,
+                    broke: false,
                   }
                   setDragCursor('grabbing')
                 }}
@@ -1409,7 +1421,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   setSelection([id])
                   const storedNow = useKoma.getState().design.docs[key]?.doc
                   const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
-                  if (!located) return
+                  if (!located || located.node.locked) return
                   const node = { ...located.node }
                   if (handle.includes('w') || handle.includes('e')) delete node.wMode
                   if (handle.includes('n') || handle.includes('s')) delete node.hMode
@@ -1843,10 +1855,11 @@ function DesignNodeView({
   const flipX = node.flipX ? -1 : 1
   const flipY = node.flipY ? -1 : 1
   const transform = rotation || node.flipX || node.flipY ? `rotate(${rotation}deg) scale(${flipX}, ${flipY})` : undefined
-  const childIds = locked || node.kind === 'instance' ? [] : selectedIds
+  const childIds = locked || node.locked || node.kind === 'instance' ? [] : selectedIds
+  const hitHere = !locked
   return (
     <div
-      className={`absolute ${locked || node.locked ? 'pointer-events-none' : 'pointer-events-auto'}`}
+      className={`absolute ${hitHere ? 'pointer-events-auto' : 'pointer-events-none'}`}
       style={{
         left: node.x,
         top: node.y,
@@ -1855,16 +1868,16 @@ function DesignNodeView({
         opacity: chrome.opacity,
         transform,
         outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
-        cursor: locked || node.locked || dragCursor ? undefined : 'grab',
+        cursor: !hitHere || node.locked || dragCursor ? undefined : 'grab',
       }}
-      onPointerDown={locked || node.locked ? undefined : (event) => onSelect(node.id, event)}
-      onContextMenu={locked || node.locked ? undefined : (event) => {
+      onPointerDown={hitHere ? (event) => onSelect(node.id, event) : undefined}
+      onContextMenu={hitHere ? (event) => {
         event.preventDefault()
         event.stopPropagation()
         onMenu(node.id, event.clientX, event.clientY)
-      }}
+      } : undefined}
       onDoubleClick={(event) => {
-        if (locked || node.locked || node.kind !== 'text') return
+        if (!hitHere || node.locked || node.kind !== 'text') return
         event.stopPropagation()
         onEdit(node.id)
       }}
@@ -1922,7 +1935,7 @@ function DesignNodeView({
             selectedIds={childIds}
             editing={editing}
             dragCursor={dragCursor}
-            locked={locked || node.kind === 'instance'}
+            locked={locked || !!node.locked || node.kind === 'instance'}
             onSelect={onSelect}
             onResize={onResize}
             onCorner={onCorner}
