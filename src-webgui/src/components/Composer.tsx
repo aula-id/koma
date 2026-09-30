@@ -39,6 +39,7 @@ import {
   attachmentMarkersRemoved,
   attachmentQueueStillPending,
   imageMarker,
+  markerLabel,
   type MarkerInsertRow,
 } from '../lib/composerMarkers'
 import {
@@ -285,13 +286,51 @@ export function Composer() {
     editorApi.current?.focus()
   }, [diagramChatQueue, consumeDiagramChatQueue])
 
+  const insertAttachmentChip = (kind: 'image' | 'pasted_text', markerN: number, queueId?: string) => {
+    const marker = markerLabel(kind, markerN)
+    if (draftRef.current.includes(marker)) return
+    editorApi.current?.insertChip(chipPayloadForAttachMarker(kind, markerN, queueId), {
+      atEnd: true,
+      trailingSpace: true,
+    })
+    draftRef.current = `${draftRef.current}${draftRef.current && !draftRef.current.endsWith(' ') ? ' ' : ''}${marker} `
+  }
+
+  const flushAttachmentInserts = () => {
+    const assigned = assignFreshMarkerInserts(markerInsertQueue.current, seenAttachmentMarkers.current, attachments)
+    const removals = assigned.filter((row) => row.cancelled)
+    const keeps = assigned.filter((row) => !row.cancelled)
+    for (const row of removals) {
+      req({ r: 'RemoveAttachment', markerN: row.markerN, kind: row.kind })
+    }
+    skipAttachmentReconcile.current = true
+    if (keeps.length) {
+      setLocalPastes((prev) =>
+        prev.map((item) => {
+          const q = markerInsertQueue.current.find((row) => row.id === item.id)
+          if (!q || q.markerN == null) return item
+          return { ...item, markerN: q.markerN, n: q.markerN }
+        }),
+      )
+      for (const row of keeps) insertAttachmentChip(row.kind, row.markerN, row.id)
+    }
+    for (const att of attachments) {
+      if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
+      insertAttachmentChip(att.kind, att.markerN)
+    }
+    queueMicrotask(() => {
+      skipAttachmentReconcile.current = false
+    })
+  }
+
   useEffect(() => {
     if (!pendingComposerAttachmentInserts.length) return
     for (const row of pendingComposerAttachmentInserts) {
       markerInsertQueue.current.push({ id: row.id, kind: row.kind, markerN: null, cancelled: false })
     }
     consumePendingComposerAttachmentInserts()
-  }, [pendingComposerAttachmentInserts, consumePendingComposerAttachmentInserts])
+    flushAttachmentInserts()
+  }, [pendingComposerAttachmentInserts, consumePendingComposerAttachmentInserts, attachments, req])
 
   // A design reference is a chip. The kdsgn fence stays on the chip until send.
   useEffect(() => {
@@ -325,9 +364,16 @@ export function Composer() {
     consumeComposerRefill()
   }, [composerRefill, consumeComposerRefill])
 
-  // Paste chips and the draft are session-local. Switching sessions must not
-  // keep the previous session's composer text, chips, or in-flight markers.
+  // First mount must not wipe in-flight diagram attaches. Only a real session
+  // change clears the draft.
+  const sessionSeenRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
+    if (sessionSeenRef.current === undefined) {
+      sessionSeenRef.current = sessionId
+      return
+    }
+    if (sessionSeenRef.current === sessionId) return
+    sessionSeenRef.current = sessionId
     setPasteTexts({})
     setLocalPastes([])
     setDiagramChips([])
@@ -337,12 +383,7 @@ export function Composer() {
     markerInsertQueue.current = []
     submitArmed.current = false
     consumePendingComposerAttachmentInserts()
-    seenAttachmentMarkers.current = new Set(
-      useKoma
-        .getState()
-        .session.attachments.filter((item) => item.kind === 'pasted_text' || item.kind === 'image')
-        .map((item) => `${item.kind}:${item.markerN}`),
-    )
+    seenAttachmentMarkers.current = new Set()
   }, [sessionId, consumePendingComposerAttachmentInserts])
 
   // Steer cap: the daemon queues at most 5 pending mid-turn submits; the 6th is
@@ -525,33 +566,7 @@ export function Composer() {
   // waiting, or drop a chip the user removed before the number came back.
   // A send that landed during the wait flushes once every live row is bound.
   useEffect(() => {
-    const assigned = assignFreshMarkerInserts(markerInsertQueue.current, seenAttachmentMarkers.current, attachments)
-    if (!assigned.length) return
-    const removals = assigned.filter((row) => row.cancelled)
-    const keeps = assigned.filter((row) => !row.cancelled)
-    for (const row of removals) {
-      req({ r: 'RemoveAttachment', markerN: row.markerN, kind: row.kind })
-    }
-    if (keeps.length) {
-      setLocalPastes((prev) =>
-        prev.map((item) => {
-          const q = markerInsertQueue.current.find((row) => row.id === item.id)
-          if (!q || q.markerN == null) return item
-          return { ...item, markerN: q.markerN, n: q.markerN }
-        }),
-      )
-      skipAttachmentReconcile.current = true
-      for (const row of keeps) {
-        if (draftRef.current.includes(row.marker)) continue
-        editorApi.current?.insertChip(chipPayloadForAttachMarker(row.kind, row.markerN, row.id), {
-          atEnd: true,
-          trailingSpace: true,
-        })
-      }
-      queueMicrotask(() => {
-        skipAttachmentReconcile.current = false
-      })
-    }
+    flushAttachmentInserts()
   }, [attachments, req])
 
   // Flush a send that happened while the paste marker was still in flight.

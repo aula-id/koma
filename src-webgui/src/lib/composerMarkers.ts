@@ -81,9 +81,9 @@ export function assignFreshMarkerInserts(
     if (att.kind !== 'pasted_text' && att.kind !== 'image') continue
     const key = `${att.kind}:${att.markerN}`
     if (seen.has(key)) continue
-    seen.add(key)
     const row = queue.find((item) => item.kind === att.kind && item.markerN == null && !item.cancelled)
     if (!row) continue
+    seen.add(key)
     row.markerN = att.markerN
     const marker = markerLabel(att.kind as 'image' | 'pasted_text', att.markerN)
     assigned.push({
