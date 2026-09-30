@@ -2920,18 +2920,53 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+function formatBareNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  const rounded = Math.round(value * 100) / 100
+  return String(rounded)
+}
+
+function isBareNumberDraft(raw: string): boolean {
+  return raw === '' || /^-?\d*\.?\d*$/.test(raw)
+}
+
+function parseBareNumber(raw: string): number {
+  const trimmed = raw.trim()
+  if (trimmed === '' || trimmed === '-' || trimmed === '.') return 0
+  const next = Number(trimmed)
+  return Number.isFinite(next) ? next : 0
+}
+
 function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setDraft(null)
+  }, [value, mixed])
+  const shown = mixed ? '' : draft ?? formatBareNumber(value)
   return (
     <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
       <span className="flex-none text-[11px] text-koma-dim">{label}</span>
       <input
-        type="number"
-        value={mixed ? '' : Number.isFinite(value) ? Math.round(value * 100) / 100 : 0}
+        type="text"
+        inputMode="decimal"
+        value={shown}
         placeholder={mixed ? 'Mixed' : undefined}
         aria-label={ariaLabel ?? label}
+        onFocus={() => {
+          focused.current = true
+          if (!mixed) setDraft(formatBareNumber(value))
+        }}
         onChange={(event) => {
-          const next = Number(event.target.value)
-          if (Number.isFinite(next)) onChange(next)
+          if (mixed) return
+          const raw = event.target.value
+          if (isBareNumberDraft(raw)) setDraft(raw)
+        }}
+        onBlur={() => {
+          focused.current = false
+          if (mixed) return
+          onChange(parseBareNumber(draft ?? formatBareNumber(value)))
+          setDraft(null)
         }}
         className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
       />
@@ -2981,7 +3016,25 @@ function SizeMode({ label, value, mixed, onChange }: { label: string; value: str
 
 function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: { name: string }[]; onChange: (radius: number | string | null) => void }) {
   const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<string | null>(null)
+  const focused = useRef(false)
   const token = !mixed && typeof value === 'string' ? value : ''
+  const numericShown =
+    typeof value === 'number' ? formatBareNumber(value) : resolved && !token ? resolved : '0'
+  useEffect(() => {
+    if (!focused.current) setDraft(null)
+  }, [value, mixed, token, resolved])
+  const commitRadius = (raw: string) => {
+    const trimmed = raw.trim()
+    const named = tokens.find((item) => item.name === trimmed)
+    if (named) {
+      onChange(named.name)
+      return
+    }
+    const radius = parseBareNumber(raw)
+    if (radius <= 0) onChange(null)
+    else onChange(radius)
+  }
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
@@ -2997,21 +3050,29 @@ function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: numb
           />
         ) : null}
         <input
-          type={token ? 'text' : 'number'}
-          min={token ? undefined : 0}
+          type="text"
+          inputMode={token ? 'text' : 'decimal'}
           aria-label="Corner radius"
-          value={mixed ? '' : token || (typeof value === 'number' ? value : 0)}
+          value={mixed ? '' : token || draft || numericShown}
           placeholder={mixed ? 'Mixed' : undefined}
+          onFocus={() => {
+            focused.current = true
+            if (!mixed && !token) setDraft(typeof value === 'number' ? formatBareNumber(value) : numericShown)
+          }}
           onChange={(event) => {
-            const raw = event.target.value.trim()
-            const named = tokens.find((item) => item.name === raw)
-            if (named) {
-              onChange(named.name)
+            if (mixed) return
+            const raw = event.target.value
+            if (token) {
+              setDraft(raw)
               return
             }
-            const radius = Number(raw)
-            if (!raw || !Number.isFinite(radius) || radius <= 0) onChange(null)
-            else onChange(radius)
+            if (isBareNumberDraft(raw)) setDraft(raw)
+          }}
+          onBlur={() => {
+            focused.current = false
+            if (mixed) return
+            commitRadius(draft ?? (token || numericShown))
+            setDraft(null)
           }}
           className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
         />
@@ -3099,16 +3160,30 @@ function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x: numbe
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setDraft(null)
+  }, [value])
   return (
     <label className="flex flex-col gap-1">
       <span className="text-koma-dim">{label}</span>
       <input
-        type="number"
-        min={0}
-        value={value}
+        type="text"
+        inputMode="decimal"
+        value={draft ?? formatBareNumber(value)}
+        onFocus={() => {
+          focused.current = true
+          setDraft(formatBareNumber(value))
+        }}
         onChange={(event) => {
-          const next = Number(event.target.value)
-          onChange(Number.isFinite(next) && next > 0 ? next : 0)
+          const raw = event.target.value
+          if (isBareNumberDraft(raw)) setDraft(raw)
+        }}
+        onBlur={() => {
+          focused.current = false
+          onChange(parseBareNumber(draft ?? formatBareNumber(value)))
+          setDraft(null)
         }}
         className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
       />
