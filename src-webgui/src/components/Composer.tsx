@@ -46,6 +46,7 @@ import {
   moveComposerToken,
   wrapSelection,
 } from '../lib/composerSegments'
+import { inlineToHtml } from '../lib/markdownNote'
 
 type DiagramChip = { id: string; title: string; mermaid: string; doc: DiagramDoc }
 type DesignChip = { id: string; title: string; text: string }
@@ -213,6 +214,20 @@ function chipRangeForDelete(
 const COMPOSER_FIELD_CLASS =
   'm-0 box-border w-full whitespace-pre-wrap break-words p-0 text-[14px] leading-[22px] [overflow-wrap:anywhere] [tab-size:4]'
 
+const COMPOSER_OVERLAY_MD =
+  '[&_strong]:font-semibold [&_em]:italic [&_code]:rounded [&_code]:bg-koma-panel2 [&_code]:px-0.5 [&_code]:text-[13px]'
+
+function renderComposerProse(slice: string, key: string): ReactNode {
+  if (!slice) return null
+  return (
+    <span
+      key={key}
+      className={COMPOSER_OVERLAY_MD}
+      dangerouslySetInnerHTML={{ __html: inlineToHtml(slice) }}
+    />
+  )
+}
+
 // Overlay renderer: walks the chip ranges in order, emitting the untouched
 // in-between text verbatim and wrapping each range's slice in a tinted pill
 // span. The plain-text pieces + pill contents concatenate back to EXACTLY
@@ -229,14 +244,14 @@ function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNo
   const tail = '\u200b'
   if (ranges.length === 0) return (
     <>
-      {text}
+      {renderComposerProse(text, 'prose')}
       {tail}
     </>
   )
   const nodes: ReactNode[] = []
   let cursor = 0
   ranges.forEach(([start, end], i) => {
-    if (start > cursor) nodes.push(text.slice(cursor, start))
+    if (start > cursor) nodes.push(renderComposerProse(text.slice(cursor, start), `prose-${i}`))
     const part = text.slice(start, end)
     // Dim the `@` (and multi-root `[N]`) prefix inside the pill; the rest of
     // the label reads at normal (tinted) text color. Purely cosmetic — `part`
@@ -260,7 +275,7 @@ function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNo
     )
     cursor = end
   })
-  if (cursor < text.length) nodes.push(text.slice(cursor))
+  if (cursor < text.length) nodes.push(renderComposerProse(text.slice(cursor), 'prose-tail'))
   nodes.push(tail)
   return nodes
 }
@@ -289,7 +304,7 @@ export function Composer() {
   const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
-  const [previewOpen, setPreviewOpen] = useState(true)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [previewMd, setPreviewMd] = useState('')
   const [diagramChips, setDiagramChips] = useState<DiagramChip[]>([])
   const diagramChipsRef = useRef<DiagramChip[]>([])
@@ -1367,7 +1382,7 @@ export function Composer() {
           <div
             ref={overlayRef}
             aria-hidden="true"
-            className={`pointer-events-none absolute inset-0 z-0 overflow-x-hidden overflow-y-auto text-koma-fg [scrollbar-gutter:stable] ${COMPOSER_FIELD_CLASS}`}
+            className={`pointer-events-none absolute inset-0 z-0 overflow-x-hidden overflow-y-auto text-koma-fg [scrollbar-gutter:stable] ${COMPOSER_FIELD_CLASS} ${COMPOSER_OVERLAY_MD}`}
           >
             {renderComposerOverlay(input, pickedTokensRef.current)}
           </div>

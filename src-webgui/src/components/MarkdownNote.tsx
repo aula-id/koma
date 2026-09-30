@@ -62,20 +62,26 @@ function NoteImage({ root, path, alt, preview }: { root: string; path: string; a
   return <img src={url} alt={alt} className="max-w-full rounded" />
 }
 
-function InlineEditor({
+export function InlineMarkdownInput({
   text,
   className,
+  style,
+  'aria-label': ariaLabel,
   editorRef,
   onChange,
   onFocus,
+  onBlur,
   onKeyDown,
 }: {
   text: string
   className: string
-  editorRef: (el: HTMLElement | null) => void
+  style?: React.CSSProperties
+  'aria-label'?: string
+  editorRef?: (el: HTMLElement | null) => void
   onChange: (text: string) => void
-  onFocus: () => void
-  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void
+  onFocus?: () => void
+  onBlur?: () => void
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
 }) {
   const ref = useRef<HTMLElement>(null)
   const focused = useRef(false)
@@ -89,19 +95,22 @@ function InlineEditor({
     <div
       ref={(el) => {
         ref.current = el
-        editorRef(el)
+        editorRef?.(el)
       }}
       contentEditable
       suppressContentEditableWarning
       role="textbox"
+      aria-label={ariaLabel}
       aria-multiline="true"
       className={className}
+      style={style}
       onFocus={() => {
         focused.current = true
-        onFocus()
+        onFocus?.()
       }}
       onBlur={() => {
         focused.current = false
+        onBlur?.()
       }}
       onInput={() => onChange(inlineFromHtml(ref.current?.innerHTML ?? ''))}
       onKeyDown={onKeyDown}
@@ -437,7 +446,7 @@ export function MarkdownNote({
               <ListTag key={key} className={`my-1 pl-4 ${block.kind === 'ol' ? 'list-decimal' : 'list-disc'}`}>
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex}>
-                    <InlineEditor
+                    <InlineMarkdownInput
                       text={item}
                       className="min-h-[1.2em] outline-none"
                       editorRef={(el) => {
@@ -483,7 +492,7 @@ export function MarkdownNote({
                     : 'my-1 min-h-[1.2em] outline-none'
           if (!isNoteText(block)) return null
           return (
-            <InlineEditor
+            <InlineMarkdownInput
               key={key}
               text={block.text}
               className={className}

@@ -32,6 +32,8 @@ export type DiagramNode = {
   /** Omitted border follows the kind: shapes are stroked, text is not. */
   stroke?: boolean
   strokeColor?: string
+  /** Label color. Omitted uses the theme foreground. */
+  textColor?: string
   /** Markdown description. Omitted when blank. The readable copy is the notes file. */
   detail?: string
 }
@@ -131,6 +133,7 @@ export function copyNode(node: DiagramNode, id: string, dx: number, dy: number):
   if (node.fillColor) next.fillColor = node.fillColor
   if (node.stroke != null) next.stroke = node.stroke
   if (node.strokeColor) next.strokeColor = node.strokeColor
+  if (node.textColor) next.textColor = node.textColor
   if (node.detail?.trim()) next.detail = node.detail
   return next
 }
@@ -165,6 +168,8 @@ function parseNodes(value: unknown): DiagramNode[] | null {
     if (typeof row.stroke === 'boolean' && row.stroke !== painted) node.stroke = row.stroke
     const strokeColor = parseColor(row.strokeColor)
     if (strokeColor) node.strokeColor = strokeColor
+    const textColor = parseColor(row.textColor)
+    if (textColor) node.textColor = textColor
     const detail = parseDetail(row.detail)
     if (detail) node.detail = detail
     nodes.push(node)
@@ -296,6 +301,7 @@ export function serializeDiagram(doc: DiagramDoc): string {
       if (n.fillColor) row.fillColor = n.fillColor
       if (typeof n.stroke === 'boolean' && n.stroke !== painted) row.stroke = n.stroke
       if (n.strokeColor) row.strokeColor = n.strokeColor
+      if (n.textColor) row.textColor = n.textColor
       if (n.detail?.trim()) row.detail = n.detail
       return row
     }),
@@ -333,13 +339,20 @@ export type DiagramEdgeStyle = {
 }
 
 /** Resolved fill and border. Text is bare unless a file says otherwise. */
-export function nodeStyle(node: DiagramNode): { fill: boolean; fillColor: string; stroke: boolean; strokeColor: string } {
+export function nodeStyle(node: DiagramNode): {
+  fill: boolean
+  fillColor: string
+  stroke: boolean
+  strokeColor: string
+  textColor: string
+} {
   const painted = node.kind !== 'text'
   return {
     fill: node.fill ?? painted,
     fillColor: node.fillColor ?? '',
     stroke: node.stroke ?? painted,
     strokeColor: node.strokeColor ?? '',
+    textColor: node.textColor ?? '',
   }
 }
 

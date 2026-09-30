@@ -359,8 +359,8 @@ function UserMessage({
       {showBand ? (
         <div className="flex overflow-hidden bg-koma-band">
           <div className="w-[3px] flex-none bg-koma-accent" />
-          <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
-            {designed.prose || content}
+          <div className="min-w-0 flex-1 px-3 py-2 text-[13px] [&_.koma-md]:text-koma-accent [&_.koma-md_code]:text-koma-accent/90">
+            <MessageBody text={designed.prose || content} />
           </div>
         </div>
       ) : null}

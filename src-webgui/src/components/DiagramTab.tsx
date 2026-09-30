@@ -9,7 +9,8 @@ import { showCodingHistory } from './CodingHistory'
 import { EditorChrome } from './EditorChrome'
 import { Toggle } from './panels/form'
 import { DiagramMarker, DiagramRefMenuItems } from './DiagramVisual'
-import { MarkdownNote } from './MarkdownNote'
+import { InlineMarkdownInput, MarkdownNote } from './MarkdownNote'
+import { inlineToHtml } from '../lib/markdownNote'
 import {
   addDiagramAreaToChat,
   addDiagramDocToChat,
@@ -1004,7 +1005,8 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                 <input
                   autoFocus
                   defaultValue={node.text}
-                  className="z-10 w-full border-0 bg-transparent px-2 text-center text-[12px] text-koma-fg shadow-none outline-none"
+                  className="z-10 w-full border-0 bg-transparent px-2 text-center text-[12px] shadow-none outline-none"
+                  style={{ color: paint.textColor || 'var(--color-koma-fg)' }}
                   onPointerDown={(e) => e.stopPropagation()}
                   onChange={(e) => {
                     const text = e.target.value
@@ -1028,7 +1030,11 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
                   onBlur={() => setEditing(null)}
                 />
               ) : (
-                <span className="pointer-events-none z-10 truncate px-2 text-center text-[12px]">{node.text || ' '}</span>
+                <span
+                  className="pointer-events-none z-10 truncate px-2 text-center text-[12px]"
+                  style={{ color: paint.textColor || 'var(--color-koma-fg)' }}
+                  dangerouslySetInnerHTML={{ __html: inlineToHtml(node.text || ' ') }}
+                />
               )}
               {tool === 'select' && editing !== node.id && (connectDrag?.fromId === node.id || (hoverId === node.id && (!selected || connectDrag))) ? (
                 Array.from({ length: DIAGRAM_PORTS }, (_, port) => {
@@ -1458,18 +1464,28 @@ function CardSettings({
   const style = nodeStyle(node)
   return (
     <div className="flex flex-col gap-3 p-3">
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">Label</span>
-        <input
-          key={node.id}
-          value={node.text}
-          aria-label="Label"
-          onFocus={onTextDone}
-          onChange={(e) => onText(e.target.value)}
-          onBlur={onTextDone}
-          className="h-7 w-full rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
-        />
-      </label>
+        <div className="flex items-start gap-2">
+          <InlineMarkdownInput
+            key={node.id}
+            text={node.text}
+            aria-label="Label"
+            className="min-h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-2 py-1 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40 [&_strong]:font-semibold [&_em]:italic [&_code]:rounded [&_code]:bg-koma-panel2 [&_code]:px-0.5"
+            style={{ color: style.textColor || undefined }}
+            onFocus={onTextDone}
+            onBlur={onTextDone}
+            onChange={onText}
+          />
+          <ColorWell
+            label="Label color"
+            value={style.textColor}
+            fallback="var(--color-koma-fg)"
+            picker="#c8d3f5"
+            onChange={(textColor) => onChange({ textColor })}
+          />
+        </div>
+      </div>
       <PaintRow
         label="Fill"
         on={style.fill}
