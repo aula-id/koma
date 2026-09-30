@@ -8,7 +8,27 @@ import {
   type DragEvent,
   type KeyboardEvent,
 } from 'react'
-import { ArrowUp, Bold, Code, Frame, Italic, Layers, Paperclip, Search, Square, X } from 'lucide-react'
+import {
+  ArrowUp,
+  Bold,
+  Code,
+  Frame,
+  Heading2,
+  Italic,
+  Layers,
+  Link,
+  List,
+  ListChecks,
+  ListOrdered,
+  Paperclip,
+  Quote,
+  Search,
+  Square,
+  Strikethrough,
+  Braces,
+  X,
+} from 'lucide-react'
+import { safeNoteUrl } from '../lib/markdownNote'
 import { useKoma } from '../store/koma'
 import {
   readCodingPathDragData,
@@ -664,6 +684,24 @@ export function Composer() {
   // user edit fires onChange; programmatic refills (rewind/omnisearch/history
   // recall) go through setInput directly, so staging a rewind never
   // self-cancels here. A user edit also resets any in-progress history walk.
+  const cancelMarkerQueueRows = (removed: Set<string>) => {
+    for (const key of removed) {
+      const colon = key.indexOf(':')
+      if (colon < 0) continue
+      const kind = key.slice(0, colon)
+      if (kind !== 'image' && kind !== 'pasted_text') continue
+      const markerN = Number(key.slice(colon + 1))
+      if (!Number.isFinite(markerN)) continue
+      for (const row of markerInsertQueue.current) {
+        if (row.kind === kind && row.markerN === markerN) row.cancelled = true
+      }
+      if (kind === 'pasted_text') {
+        dirtyPastes.current.delete(markerN)
+        setLocalPastes((prev) => prev.filter((item) => item.markerN !== markerN))
+      }
+    }
+  }
+
   const onDraft = (val: string) => {
     const removed = attachmentMarkersRemoved(draftRef.current, val)
     echoDraft.current = val !== input
@@ -672,6 +710,7 @@ export function Composer() {
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
     resetHistory()
     if (skipAttachmentReconcile.current) return
+    cancelMarkerQueueRows(removed)
     const queue = markerInsertQueue.current
     for (const att of useKoma.getState().session.attachments) {
       if (att.kind !== 'image' && att.kind !== 'pasted_text') continue
@@ -768,15 +807,18 @@ export function Composer() {
   }
 
   const removeAttachment = (markerN: number, kind: 'image' | 'file' | 'pasted_text') => {
-    req({ r: 'RemoveAttachment', markerN, kind })
     if (kind === 'image' || kind === 'pasted_text') {
-      const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
-      setInput((prev) => (prev.includes(marker) ? prev.replace(marker, '') : prev))
+      cancelMarkerQueueRows(new Set([`${kind}:${markerN}`]))
+      const chipKind = kind === 'image' ? 'image' : 'paste'
+      const hadChip = editorApi.current?.removeAttachMarkerChip(chipKind, markerN) ?? false
+      if (!hadChip) {
+        req({ r: 'RemoveAttachment', markerN, kind })
+        const marker = kind === 'image' ? imageMarker(markerN) : pasteMarker(markerN)
+        setInput((prev) => (prev.includes(marker) ? prev.replace(marker, '') : prev))
+      }
+      return
     }
-    if (kind === 'pasted_text') {
-      dirtyPastes.current.delete(markerN)
-      setLocalPastes((prev) => prev.filter((item) => item.markerN !== markerN))
-    }
+    req({ r: 'RemoveAttachment', markerN, kind })
   }
 
   const editPaste = (markerN: number, text: string) => {
@@ -835,8 +877,18 @@ export function Composer() {
       localPastes.length > 0 ||
       attachments.some((item) => item.kind === 'pasted_text' || item.kind === 'image')) &&
     !atSteerCap
-  const applyFormat = (kind: 'bold' | 'italic' | 'code') => {
+  const [linkDraft, setLinkDraft] = useState<string | null>(null)
+
+  const applyFormat = (kind: 'bold' | 'italic' | 'code' | 'strikethrough') => {
     editorApi.current?.format(kind)
+  }
+
+  const applyLink = () => {
+    const href = linkDraft?.trim() ?? ''
+    setLinkDraft(null)
+    if (!href || !safeNoteUrl(href)) return
+    editorApi.current?.insertLink(href)
+    editorApi.current?.focus()
   }
 
   const formatButton =
@@ -1065,17 +1117,72 @@ export function Composer() {
             </div>
           </div>
         )}
-        <div className="flex items-center gap-0.5">
+        <div className="flex flex-wrap items-center gap-0.5">
           <button type="button" className={formatButton} title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('bold')}>
             <Bold size={14} />
           </button>
           <button type="button" className={formatButton} title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('italic')}>
             <Italic size={14} />
           </button>
+          <button type="button" className={formatButton} title="Strikethrough" aria-label="Strikethrough" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('strikethrough')}>
+            <Strikethrough size={14} />
+          </button>
           <button type="button" className={formatButton} title="Inline code" aria-label="Inline code" onMouseDown={(event) => event.preventDefault()} onClick={() => applyFormat('code')}>
             <Code size={14} />
           </button>
+          <button
+            type="button"
+            className={formatButton}
+            title="Link"
+            aria-label="Link"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setLinkDraft((current) => (current == null ? 'https://' : null))}
+          >
+            <Link size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Heading" aria-label="Heading" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleHeading()}>
+            <Heading2 size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Bullet list" aria-label="Bullet list" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleBullet()}>
+            <List size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleNumber()}>
+            <ListOrdered size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Checklist" aria-label="Checklist" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleCheckList()}>
+            <ListChecks size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Quote" aria-label="Quote" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleQuote()}>
+            <Quote size={14} />
+          </button>
+          <button type="button" className={formatButton} title="Code block" aria-label="Code block" onMouseDown={(event) => event.preventDefault()} onClick={() => editorApi.current?.toggleCodeBlock()}>
+            <Braces size={14} />
+          </button>
         </div>
+        {linkDraft != null ? (
+          <form
+            className="flex gap-1 py-0.5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              applyLink()
+            }}
+          >
+            <input
+              autoFocus
+              value={linkDraft}
+              aria-label="Link address"
+              placeholder="https://…"
+              onChange={(event) => setLinkDraft(event.target.value)}
+              className="h-7 min-w-0 flex-1 rounded-md border border-koma-border bg-koma-bg px-2 text-[11px] text-koma-fg outline-none focus:border-koma-accent"
+            />
+            <button type="submit" className="rounded-md bg-koma-accent/20 px-2 text-[11px] text-koma-fg hover:bg-koma-accent/30">
+              Add
+            </button>
+            <button type="button" className="rounded-md px-2 text-[11px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => setLinkDraft(null)}>
+              Cancel
+            </button>
+          </form>
+        ) : null}
 
         <LexicalMarkdownEditor
           profile="composer"

@@ -11,12 +11,21 @@ import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin'
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin'
 import { $createCodeNode, CodeNode } from '@lexical/code'
 import { LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
-import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, ListItemNode, ListNode } from '@lexical/list'
+import {
+  INSERT_CHECK_LIST_COMMAND,
+  INSERT_ORDERED_LIST_COMMAND,
+  INSERT_UNORDERED_LIST_COMMAND,
+  ListItemNode,
+  ListNode,
+} from '@lexical/list'
+import { CheckListPlugin } from '@lexical/react/LexicalCheckListPlugin'
 import {
   $convertFromMarkdownString,
   BOLD_STAR,
   BOLD_UNDERSCORE,
+  CHECK_LIST,
   CODE,
+  $generateNodesFromMarkdownString,
   HEADING,
   INLINE_CODE,
   ITALIC_STAR,
@@ -46,6 +55,8 @@ import {
   DRAGOVER_COMMAND,
   DROP_COMMAND,
   FORMAT_TEXT_COMMAND,
+  KEY_BACKSPACE_COMMAND,
+  KEY_DELETE_COMMAND,
   KEY_ENTER_COMMAND,
   PASTE_COMMAND,
   type LexicalEditor,
@@ -65,6 +76,8 @@ import {
   findFileRefWireInText,
   type ComposerChipPayload,
 } from '../../lib/composerIpc'
+import { loneHttpUrl, looksLikeComposerMarkdown } from '../../lib/composerMarkdownPaste'
+import { safeNoteUrl } from '../../lib/markdownNote'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
 
 export type LexicalProfile = 'composer' | 'inline' | 'note'
@@ -75,12 +88,14 @@ export type LexicalEditorHandle = {
   appendText: (text: string) => void
   insertChip: (payload: ComposerChipPayload, opts?: { atEnd?: boolean; trailingSpace?: boolean }) => void
   replacePendingAttachChip: (queueId: string, payload: ComposerChipPayload) => boolean
+  removeAttachMarkerChip: (kind: 'image' | 'paste', markerN: number) => boolean
   setMarkdown: (markdown: string, edge?: 'start' | 'end') => void
   getMarkdown: () => string
-  format: (kind: 'bold' | 'italic' | 'code') => void
+  format: (kind: 'bold' | 'italic' | 'code' | 'strikethrough') => void
   toggleHeading: () => void
   toggleBullet: () => void
   toggleNumber: () => void
+  toggleCheckList: () => void
   toggleQuote: () => void
   toggleCodeBlock: () => void
   insertLink: (url: string) => void
@@ -129,7 +144,17 @@ const imageTransformer: TextMatchTransformer = {
 }
 
 const INLINE: Transformer[] = [INLINE_CODE, BOLD_STAR, BOLD_UNDERSCORE, ITALIC_STAR, ITALIC_UNDERSCORE, STRIKETHROUGH, LINK]
-const COMPOSER: Transformer[] = [CODE, ...INLINE, markerTransformer, fileTransformer]
+const COMPOSER: Transformer[] = [
+  CODE,
+  HEADING,
+  QUOTE,
+  UNORDERED_LIST,
+  ORDERED_LIST,
+  CHECK_LIST,
+  ...INLINE,
+  markerTransformer,
+  fileTransformer,
+]
 const NOTE: Transformer[] = [CODE, HEADING, QUOTE, UNORDERED_LIST, ORDERED_LIST, ...INLINE, imageTransformer]
 
 function transformersFor(profile: LexicalProfile): Transformer[] {
@@ -219,6 +244,84 @@ function $replaceChipByQueueId(queueId: string, payload: ComposerChipPayload): b
     if ($isElementNode(node)) stack.push(...node.getChildren())
   }
   return false
+}
+
+function $removeAttachMarkerChips(kind: 'image' | 'paste', markerN: number): boolean {
+  let removed = false
+  const stack: LexicalNode[] = [$getRoot()]
+  while (stack.length) {
+    const node = stack.pop()!
+    if ($isComposerChipNode(node) && node.getChipKind() === kind && node.getMarkerN() === markerN) {
+      node.remove()
+      removed = true
+    }
+    if ($isElementNode(node)) stack.push(...node.getChildren())
+  }
+  return removed
+}
+
+/** Backspace/Delete on a collapsed caret beside an inline pile chip. */
+function $pasteComposerPlainText(editor: LexicalEditor, transformers: Transformer[], raw: string): boolean {
+  const text = raw.replace(/\r\n/g, '\n')
+  const url = loneHttpUrl(text)
+  if (url && safeNoteUrl(url)) {
+    let wrapSelection = false
+    editor.getEditorState().read(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection) || selection.isCollapsed()) return
+      if (selection.getTextContent().trim()) wrapSelection = true
+    })
+    if (wrapSelection) {
+      editor.dispatchCommand(TOGGLE_LINK_COMMAND, url)
+      return true
+    }
+    let inserted = false
+    editor.update(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection)) return
+      const nodes = $generateNodesFromMarkdownString(`[${url}](${url})`, transformers, true)
+      if (!nodes.length) return
+      selection.insertNodes(nodes)
+      inserted = true
+    })
+    return inserted
+  }
+  if (!looksLikeComposerMarkdown(text)) return false
+  let handled = false
+  editor.update(() => {
+    const selection = $getSelection()
+    if (!$isRangeSelection(selection)) return
+    const nodes = $generateNodesFromMarkdownString(text, transformers, true)
+    if (!nodes.length) return
+    selection.insertNodes(nodes)
+    $promoteFileRefChips()
+    handled = true
+  })
+  return handled
+}
+
+function $deleteAdjacentComposerChip(forward: boolean): boolean {
+  const selection = $getSelection()
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false
+  const anchor = selection.anchor
+  const node = anchor.getNode()
+  let chip: ComposerChipNode | null = null
+  if ($isComposerChipNode(node)) {
+    chip = node
+  } else if ($isTextNode(node)) {
+    const offset = anchor.offset
+    if (!forward && offset === 0) {
+      const prev = node.getPreviousSibling()
+      if ($isComposerChipNode(prev)) chip = prev
+    }
+    if (forward && offset === node.getTextContentSize()) {
+      const next = node.getNextSibling()
+      if ($isComposerChipNode(next)) chip = next
+    }
+  }
+  if (!chip) return false
+  chip.remove()
+  return true
 }
 
 function $prepareInsert(atEnd: boolean) {
@@ -332,6 +435,13 @@ function EditorPlugins({
         })
         return ok
       },
+      removeAttachMarkerChip: (kind, markerN) => {
+        let ok = false
+        editor.update(() => {
+          ok = $removeAttachMarkerChips(kind, markerN)
+        })
+        return ok
+      },
       setMarkdown: applyMarkdown,
       getMarkdown: () => readMarkdown(editor, transformers),
       format: (kind) => {
@@ -351,6 +461,9 @@ function EditorPlugins({
       },
       toggleNumber: () => {
         editor.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined)
+      },
+      toggleCheckList: () => {
+        editor.dispatchCommand(INSERT_CHECK_LIST_COMMAND, undefined)
       },
       toggleQuote: () => {
         editor.update(() => {
@@ -435,6 +548,30 @@ function EditorPlugins({
   }, [editor, profile])
 
   useEffect(() => {
+    if (profile !== 'composer') return
+    const onBackspace = () => {
+      let handled = false
+      editor.update(() => {
+        handled = $deleteAdjacentComposerChip(false)
+      })
+      return handled
+    }
+    const onDelete = () => {
+      let handled = false
+      editor.update(() => {
+        handled = $deleteAdjacentComposerChip(true)
+      })
+      return handled
+    }
+    const unregisterBack = editor.registerCommand(KEY_BACKSPACE_COMMAND, onBackspace, COMMAND_PRIORITY_HIGH)
+    const unregisterDel = editor.registerCommand(KEY_DELETE_COMMAND, onDelete, COMMAND_PRIORITY_HIGH)
+    return () => {
+      unregisterBack()
+      unregisterDel()
+    }
+  }, [editor, profile])
+
+  useEffect(() => {
     const deliverImages = (files: File[]) => {
       if (!files.length) return
       const now = performance.now()
@@ -466,6 +603,13 @@ function EditorPlugins({
           event.preventDefault()
           void readClipboardImages().then(deliverImages)
           return true
+        }
+        if (profile === 'composer' && event instanceof ClipboardEvent) {
+          const plain = event.clipboardData?.getData('text/plain') ?? ''
+          if (plain && $pasteComposerPlainText(editor, transformers, plain)) {
+            event.preventDefault()
+            return true
+          }
         }
         if (event instanceof ClipboardEvent) return onPasteRef.current?.(event) ?? false
         return false
@@ -538,7 +682,7 @@ function EditorPlugins({
       unregisterOver()
       unregisterDrop()
     }
-  }, [editor])
+  }, [editor, profile, transformers])
 
   return (
     <>
@@ -559,7 +703,8 @@ function EditorPlugins({
       />
       <HistoryPlugin />
       <LinkPlugin />
-      {profile === 'note' ? <ListPlugin /> : null}
+      {profile === 'note' || profile === 'composer' ? <ListPlugin /> : null}
+      {profile === 'note' || profile === 'composer' ? <CheckListPlugin /> : null}
       <MarkdownShortcutPlugin transformers={transformers} />
       <OnChangePlugin
         onChange={() => {
@@ -627,7 +772,13 @@ export function LexicalMarkdownEditor({
           paragraph: 'm-0',
           heading: { h1: 'my-1 text-[15px] font-semibold', h2: 'my-1 text-[13px] font-semibold', h3: 'my-1 text-[12px] font-semibold' },
           quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
-          list: { ul: 'my-1 list-disc pl-4', ol: 'my-1 list-decimal pl-4', listitem: 'my-0.5' },
+          list: {
+            ul: 'my-1 list-disc pl-4',
+            ol: 'my-1 list-decimal pl-4',
+            listitem: 'my-0.5',
+            listitemChecked: 'my-0.5 line-through opacity-70',
+            listitemUnchecked: 'my-0.5',
+          },
           text: {
             bold: 'font-semibold',
             italic: 'italic',
