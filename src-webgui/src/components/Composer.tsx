@@ -837,7 +837,7 @@ export function Composer() {
     // claude.ai-style composer pinned at the bottom: a single rounded card
     // (textarea on top, an action bar below) that grows with its content. Drag
     // a file anywhere over the card to attach; the card rings on drag-over.
-    <div className="relative px-2 pb-3 pt-1" data-tour="composer">
+    <div className="px-2 pb-3 pt-1" data-tour="composer">
       {/* Follow-ups queue: submits made while the turn is cooking are queued
           daemon-side (cap 5). Selectable list — click or ↑ from composer. */}
       {pendingSteer.length > 0 && (
@@ -916,6 +916,19 @@ export function Composer() {
               : '↑ or click to select · ctrl+x clear all'}
           </div>
         </div>
+      )}
+      {pasteEditMarker != null && (
+        <ComposerPasteEditOverlay
+          markerN={pasteEditMarker}
+          title={
+            attachments.find((item) => item.kind === 'pasted_text' && item.markerN === pasteEditMarker)?.name ??
+            `Pasted Text #${pasteEditMarker}`
+          }
+          initialText={pasteTexts[pasteEditMarker] ?? ''}
+          loading={pasteTexts[pasteEditMarker] == null}
+          onSave={savePasteFromOverlay}
+          onClose={() => setPasteEditMarker(null)}
+        />
       )}
       <div
         onDrop={onDrop}
@@ -1141,21 +1154,6 @@ export function Composer() {
           </div>
         </div>
       </div>
-      {pasteEditMarker != null && (
-        pasteTexts[pasteEditMarker] == null ? (
-          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-koma-bg/70">
-            <p className="text-[13px] text-koma-dim">Loading pasted text…</p>
-          </div>
-        ) : (
-          <ComposerPasteEditOverlay
-            markerN={pasteEditMarker}
-            title={attachments.find((item) => item.kind === 'pasted_text' && item.markerN === pasteEditMarker)?.name ?? `Paste ${pasteEditMarker}`}
-            initialText={pasteTexts[pasteEditMarker]}
-            onSave={savePasteFromOverlay}
-            onClose={() => setPasteEditMarker(null)}
-          />
-        )
-      )}
     </div>
   )
 }
