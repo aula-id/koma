@@ -637,32 +637,88 @@ export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): D
   return null
 }
 
+/** True when the user has double-clicked into a group, frame, or instance for scoped editing. */
+export function canEnterDesignContainer(node: DesignNode | null | undefined): boolean {
+  return node?.kind === 'group' || node?.kind === 'frame' || node?.kind === 'instance'
+}
+
+/** Hit test within an entered container. Coordinates are canvas space. */
+export function hitDesignInScope(doc: DesignDoc, scopeId: string, x: number, y: number, deep = false): DesignNode | null {
+  const scope = findDesignNode(doc, scopeId) ?? doc.screens.find((screen) => screen.id === scopeId)
+  if (!scope) return null
+  const local = canvasToContent(doc, scopeId, x, y)
+  if (!local) return null
+  const children = scope.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) {
+    const found = hitIn(children[i], local.x, local.y, deep)
+    if (found) return found
+  }
+  if (scope.kind === 'group' && insideNode(scope, local, 0)) return scope
+  return null
+}
+
 /**
- * The node a click should select. A selected group or instance, or one that contains the selection,
- * drills one level. Otherwise that hit stays on the group or instance, and deep steps into it once.
+ * The node a click should select. When enteredContainerId is set, hits are scoped to that container.
+ * Otherwise shallow hit applies (groups and instances stay whole unless deep is true).
  */
-export function selectDesignHit(doc: DesignDoc, x: number, y: number, selected: readonly string[], deep: boolean): string | null {
-  const entered = enteredGroup(doc, selected, x, y)
-  if (entered) return hitGroupChild(doc, entered, x, y)?.id ?? entered
+export function selectDesignHit(
+  doc: DesignDoc,
+  x: number,
+  y: number,
+  deep: boolean,
+  enteredContainerId: string | null = null,
+): string | null {
+  if (enteredContainerId) {
+    return hitDesignInScope(doc, enteredContainerId, x, y, deep)?.id ?? null
+  }
   return hitDesign(doc, x, y, deep)?.id ?? null
 }
 
-function enteredGroup(doc: DesignDoc, selected: readonly string[], x: number, y: number): string | null {
-  let bestId: string | null = null
-  let bestDepth = -1
-  for (const id of selected) {
-    const path = pathToNode(doc, id)
-    if (!path) continue
-    for (let index = 0; index < path.length; index++) {
-      const node = path[index]
-      if (!node || (node.kind !== 'group' && node.kind !== 'instance') || !pointInDesign(doc, node.id, x, y)) continue
-      if (index >= bestDepth) {
-        bestId = node.id
-        bestDepth = index
-      }
-    }
+/** Step out one container level after Escape or the step-out control. */
+export function exitDesignContainer(doc: DesignDoc, enteredId: string | null): { nextEnteredId: string | null; selectId: string | null } {
+  if (!enteredId) return { nextEnteredId: null, selectId: null }
+  const row = locateDesign(doc, enteredId)
+  const parentId = row?.parentId ?? null
+  const parent = parentId ? findDesignNode(doc, parentId) : null
+  if (parentId && parent && canEnterDesignContainer(parent)) {
+    return { nextEnteredId: parentId, selectId: enteredId }
   }
-  return bestId
+  return { nextEnteredId: null, selectId: enteredId }
+}
+
+export function validateDesignEnteredContainer(doc: DesignDoc, enteredId: string | null): string | null {
+  if (!enteredId) return null
+  const node = findDesignNode(doc, enteredId) ?? doc.screens.find((screen) => screen.id === enteredId)
+  return node ? enteredId : null
+}
+
+/** Layer selection enters the immediate container parent, matching Open Pencil layer-tree scope sync. */
+export function designEnterScopeForLayerSelect(doc: DesignDoc, selectedId: string): string | null {
+  const row = locateDesign(doc, selectedId)
+  if (!row?.parentId) return null
+  const parent = findDesignNode(doc, row.parentId) ?? doc.screens.find((screen) => screen.id === row.parentId)
+  return parent && canEnterDesignContainer(parent) ? row.parentId : null
+}
+
+export type ResolveDesignHit =
+  | { kind: 'hit'; id: string }
+  | { kind: 'clear' }
+  | { kind: 'exit-and-hit'; enteredContainerId: string | null; id: string | null }
+
+/** Canvas click selection with enter/exit rules (click inside empty entered area clears; outside exits one level). */
+export function resolveDesignSelectHit(
+  doc: DesignDoc,
+  x: number,
+  y: number,
+  enteredContainerId: string | null,
+): ResolveDesignHit {
+  const hitId = selectDesignHit(doc, x, y, false, enteredContainerId)
+  if (hitId) return { kind: 'hit', id: hitId }
+  if (!enteredContainerId) return { kind: 'clear' }
+  if (pointInDesign(doc, enteredContainerId, x, y)) return { kind: 'clear' }
+  const { nextEnteredId } = exitDesignContainer(doc, enteredContainerId)
+  const afterId = selectDesignHit(doc, x, y, false, nextEnteredId)
+  return { kind: 'exit-and-hit', enteredContainerId: nextEnteredId, id: afterId }
 }
 
 /** One level inside a group or instance. A nested group or instance is returned whole. */
@@ -1271,7 +1327,14 @@ export function stackDesign(doc: DesignDoc, x: number, y: number): DesignNode[] 
 }
 
 /** Ids touched by a canvas rectangle. A fully covered parent stands in for its children. */
-export function selectDesignRect(doc: DesignDoc, x: number, y: number, w: number, h: number): string[] {
+export function selectDesignRect(
+  doc: DesignDoc,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  enteredContainerId: string | null = null,
+): string[] {
   const rect = { x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h) }
   if (rect.w < 1 && rect.h < 1) return []
   const hits: { id: string; full: boolean; ancestors: string[] }[] = []
@@ -1289,7 +1352,21 @@ export function selectDesignRect(doc: DesignDoc, x: number, y: number, w: number
     }
     for (const child of node.children ?? []) walk(child, [...ancestors, node.id], nested)
   }
-  for (const screen of doc.screens) walk(screen, [], (px, py) => ({ x: px, y: py }))
+  if (enteredContainerId) {
+    const scope = findDesignNode(doc, enteredContainerId) ?? doc.screens.find((screen) => screen.id === enteredContainerId)
+    const path = scope ? pathToNode(doc, scope.id) : null
+    if (scope && path?.length) {
+      let toCanvas = (px: number, py: number) => ({ x: px, y: py })
+      for (let index = 0; index < path.length - 1; index++) {
+        const node = path[index]
+        const outer = toCanvas
+        toCanvas = (px, py) => outer(spinToParent(node, px, py))
+      }
+      walk(scope, path.slice(0, -1).map((node) => node.id), toCanvas)
+    }
+  } else {
+    for (const screen of doc.screens) walk(screen, [], (px, py) => ({ x: px, y: py }))
+  }
   const full = new Set(hits.filter((hit) => hit.full).map((hit) => hit.id))
   return hits
     .filter((hit) => {

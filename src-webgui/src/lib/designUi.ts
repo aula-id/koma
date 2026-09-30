@@ -5,10 +5,12 @@ export type DesignUiState = {
   selection: string[]
   focusId: string | null
   overrideTargetId: string | null
+  enteredContainerId: string | null
 }
 
 export type DesignLayerOp =
   | { op: 'select'; id: string; shift: boolean }
+  | { op: 'enter'; id: string }
   | { op: 'rename'; id: string; name: string }
   | { op: 'visible'; id: string; visible: boolean }
   | { op: 'locked'; id: string; locked: boolean }

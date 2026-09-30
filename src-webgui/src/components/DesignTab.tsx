@@ -64,7 +64,12 @@ import {
   resolveInstanceTree,
   resolveRef,
   selectAllDesign,
-  selectDesignHit,
+  canEnterDesignContainer,
+  designEnterScopeForLayerSelect,
+  exitDesignContainer,
+  hitDesignInScope,
+  resolveDesignSelectHit,
+  validateDesignEnteredContainer,
   selectDesignRect,
   sharedValue,
   serializeDesign,
@@ -187,16 +192,20 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [rev, setRev] = useState(0)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [overrideTargetId, setOverrideTargetId] = useState<string | null>(null)
+  const [enteredContainerId, setEnteredContainerId] = useState<string | null>(null)
   const focusRef = useRef<string | null>(null)
   const overrideTargetRef = useRef<string | null>(null)
+  const enteredContainerRef = useRef<string | null>(null)
   toolRef.current = tool
   focusRef.current = focusId
   overrideTargetRef.current = overrideTargetId
+  enteredContainerRef.current = enteredContainerId
 
   useEffect(() => {
     pastRef.current = []
     futureRef.current = []
     setSelection([])
+    setEnteredContainerId(null)
     setEditing(null)
     setFocusId(null)
     setOverrideTargetId(null)
@@ -240,8 +249,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   useEffect(() => {
     if (panelTabId !== tab.id) return
-    publishDesignUi({ root: tab.root, path: tab.path, selection, focusId, overrideTargetId })
-  }, [focusId, overrideTargetId, panelTabId, selection, tab.id, tab.path, tab.root])
+    publishDesignUi({ root: tab.root, path: tab.path, selection, focusId, overrideTargetId, enteredContainerId })
+  }, [enteredContainerId, focusId, overrideTargetId, panelTabId, selection, tab.id, tab.path, tab.root])
 
   useEffect(() => {
     return () => {
@@ -279,6 +288,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!overrideTargetId) return
     if (selection.length !== 1) setOverrideTargetId(null)
   }, [overrideTargetId, selection])
+
+  useEffect(() => {
+    if (!file?.doc) return
+    setEnteredContainerId((current) => validateDesignEnteredContainer(file.doc, current))
+  }, [file?.doc])
 
   const closeNudge = () => {
     if (nudgeTimerRef.current) {
@@ -640,7 +654,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const doc = editingDoc(stored, focus)
       if (drag.kind === 'marquee') {
         const box = drawnBox(drag.x0, drag.y0, drag.x1, drag.y1, 1, false)
-        if (box.w >= 2 || box.h >= 2) setSelection(selectDesignRect(doc, box.x, box.y, box.w, box.h))
+        if (box.w >= 2 || box.h >= 2) setSelection(selectDesignRect(doc, box.x, box.y, box.w, box.h, enteredContainerRef.current))
         return
       }
       if (drag.kind === 'draw') {
@@ -1147,9 +1161,17 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   layerOpsRef.current = (action) => {
     const open = viewDoc()
     if (!open) return
+    if (action.op === 'enter') {
+      setEnteredContainerId(action.id)
+      setSelection([action.id])
+      setPropsOpen(true)
+      setEditing(null)
+      return
+    }
     if (action.op === 'select') {
       const ids = selectionRef.current
       setSelection(action.shift ? (ids.includes(action.id) ? ids.filter((item) => item !== action.id) : [...ids, action.id]) : [action.id])
+      if (!action.shift) setEnteredContainerId(designEnterScopeForLayerSelect(open.doc, action.id))
       setPropsOpen(true)
       setEditing(null)
       return
@@ -1257,6 +1279,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       return
     }
+    setEnteredContainerId(null)
     setSelection([])
     dragRef.current = { kind: 'marquee', x0: point.x, y0: point.y, x1: point.x, y1: point.y }
   }
@@ -1337,7 +1360,27 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         ? { screen: selected.id }
         : null
   const chain = selectedId ? designPath(doc, selectedId) ?? [] : []
+  const enteredBox = enteredContainerId ? designCanvasBox(doc, enteredContainerId) : null
+  const enterContainerAt = (containerId: string, clientX: number, clientY: number) => {
+    const storedNow = useKoma.getState().design.docs[key]?.doc
+    const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
+    const point = toDoc(clientX, clientY)
+    setEnteredContainerId(containerId)
+    if (!point) {
+      setSelection([])
+      return
+    }
+    const inner = hitDesignInScope(current, containerId, point.x, point.y, true)
+    setSelection(inner && inner.id !== containerId ? [inner.id] : [])
+    setPropsOpen(true)
+  }
   const stepOut = () => {
+    if (enteredContainerId) {
+      const { nextEnteredId, selectId } = exitDesignContainer(doc, enteredContainerId)
+      setEnteredContainerId(nextEnteredId)
+      if (selectId) setSelection([selectId])
+      return
+    }
     if (selection.length) {
       const id = selection[selection.length - 1]
       const row = id ? locateDesign(doc, id) : null
@@ -1482,6 +1525,18 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   : { left: guide.from, top: guide.at, width: Math.max(guide.to - guide.from, 1), height: 1 / Math.max(view.zoom, 0.25), background: SELECTION }}
               />
             ))}
+            {enteredBox ? (
+              <div
+                className="pointer-events-none absolute z-[5]"
+                style={{
+                  left: enteredBox.x,
+                  top: enteredBox.y,
+                  width: enteredBox.w,
+                  height: enteredBox.h,
+                  outline: `${1 / Math.max(view.zoom, 0.25)}px dashed ${SELECTION}`,
+                }}
+              />
+            ) : null}
             {snapMarks?.measures.map((measure, index) => (
               <div
                 key={`measure-${measure.axis}-${index}`}
@@ -1519,7 +1574,13 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 selectedIds={selection}
                 editing={editing}
                 dragCursor={dragCursor}
+                enteredContainerId={enteredContainerId}
                 overrideTargetId={overrideTargetId}
+                onEnterContainer={(id, event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  enterContainerAt(id, event.clientX, event.clientY)
+                }}
                 onCorner={(id, corner, event) => {
                   event.preventDefault()
                   event.stopPropagation()
@@ -1559,22 +1620,44 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   const storedNow = useKoma.getState().design.docs[key]?.doc
                   const current = storedNow ? editingDoc(storedNow, focusRef.current) : doc
                   const point = toDoc(event.clientX, event.clientY)
-                  const target = point ? selectDesignHit(current, point.x, point.y, selectionRef.current, event.detail >= 2) ?? id : id
+                  let target = id
+                  if (point) {
+                    const resolved = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
+                    if (resolved.kind === 'clear') {
+                      selectionRef.current = []
+                      setSelection([])
+                      setPropsOpen(true)
+                      return
+                    }
+                    if (resolved.kind === 'exit-and-hit') {
+                      setEnteredContainerId(resolved.enteredContainerId)
+                      if (!resolved.id) {
+                        selectionRef.current = []
+                        setSelection([])
+                        setPropsOpen(true)
+                        return
+                      }
+                      target = resolved.id
+                    } else {
+                      target = resolved.id
+                    }
+                  }
                   const previous = selectionRef.current
                   const ids = event.shiftKey ? previous.includes(target) ? previous.filter((item) => item !== target) : [...previous, target] : previous.includes(target) ? previous : [target]
+                  const moveIds = designRoots(current, ids)
                   selectionRef.current = ids
                   setSelection(ids)
                   setPropsOpen(true)
                   if (event.shiftKey) return
                   const origins: Record<string, { x: number; y: number }> = {}
-                  for (const item of ids) {
+                  for (const item of moveIds) {
                     const row = locateDesign(current, item)
                     if (row) origins[item] = { x: row.node.x, y: row.node.y }
                   }
                   if (locateDesign(current, target)?.node.locked) return
                   dragRef.current = {
                     kind: 'move',
-                    ids,
+                    ids: moveIds,
                     startX: event.clientX,
                     startY: event.clientY,
                     origins,
@@ -1686,7 +1769,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           <ToolButton label="Hand (H)" selected={tool === 'pan'} onClick={() => setTool('pan')}>
             <Hand size={15} strokeWidth={2.25} />
           </ToolButton>
-          {focusedComponent || chain.length ? (
+          {focusedComponent || chain.length || enteredContainerId ? (
             <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
               {focusedComponent ? (
                 <button
@@ -1694,6 +1777,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   onClick={() => {
                     setFocusId(null)
                     setSelection([])
+                    setEnteredContainerId(null)
                   }}
                   className="h-6 flex-none rounded px-1.5 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
                 >
@@ -1705,8 +1789,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   {focusedComponent || index > 0 ? <span className="px-0.5 text-[12px] text-koma-dim">/</span> : null}
                   <button
                     type="button"
-                    onClick={() => setSelection([node.id])}
-                    className="h-6 max-w-24 truncate rounded px-1.5 text-[12px] text-koma-fg hover:bg-koma-hover"
+                    onClick={() => {
+                      setSelection([node.id])
+                      if (canEnterDesignContainer(node)) setEnteredContainerId(node.id)
+                      else setEnteredContainerId(designEnterScopeForLayerSelect(doc, node.id))
+                    }}
+                    className={`h-6 max-w-24 truncate rounded px-1.5 text-[12px] hover:bg-koma-hover ${enteredContainerId === node.id ? 'bg-koma-accent/15 text-koma-accent' : 'text-koma-fg'}`}
                   >
                     {designLayerName(node)}
                   </button>

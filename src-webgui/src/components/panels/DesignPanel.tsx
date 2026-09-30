@@ -446,6 +446,7 @@ export function DesignPanel() {
                 doc={viewDoc}
                 selection={selection}
                 onSelect={(id, shift) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', id, shift })}
+                onEnter={(id) => emitDesignLayer(designTab.root, designTab.path, { op: 'enter', id })}
                 onRename={(id, name) => emitDesignLayer(designTab.root, designTab.path, { op: 'rename', id, name })}
                 onVisible={(id, visible) => emitDesignLayer(designTab.root, designTab.path, { op: 'visible', id, visible })}
                 onLocked={(id, locked) => emitDesignLayer(designTab.root, designTab.path, { op: 'locked', id, locked })}

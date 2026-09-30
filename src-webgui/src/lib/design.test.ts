@@ -53,7 +53,11 @@ import {
   frameAtPoint,
   frameDesignView,
   hitDesign,
+  designEnterScopeForLayerSelect,
+  exitDesignContainer,
+  resolveDesignSelectHit,
   selectDesignHit,
+  validateDesignEnteredContainer,
   insertDesignNode,
   isDesignPath,
   nodeChrome,
@@ -830,8 +834,41 @@ function sample(): DesignDoc {
   const instDoc = { ...emptyDesign(), screens: [host] }
   assert.equal(hitDesign(instDoc, 20, 20)?.id, 'inst')
   assert.equal(hitDesign(instDoc, 20, 20, true)?.id, 'inner')
-  assert.equal(selectDesignHit(instDoc, 20, 20, ['inst'], false), 'inner')
+  assert.equal(selectDesignHit(instDoc, 20, 20, false), 'inst')
+  assert.equal(selectDesignHit(instDoc, 20, 20, true), 'inner')
+  assert.equal(selectDesignHit(instDoc, 20, 20, true, 'inst'), 'inner')
   assert.equal(hitDesign(instDoc, 40, 80)?.id, 'host')
+}
+
+{
+  const outer = createNode('group', 'outer', 0, 0)
+  outer.w = 200
+  outer.h = 200
+  const inner = createNode('group', 'inner', 20, 20)
+  inner.w = 80
+  inner.h = 80
+  const leaf = createNode('rect', 'leaf', 10, 10)
+  leaf.w = 20
+  leaf.h = 20
+  inner.children = [leaf]
+  outer.children = [inner]
+  const screen = createNode('frame', 'screen', 0, 0)
+  screen.w = 400
+  screen.h = 400
+  screen.children = [outer]
+  const doc = { ...emptyDesign(), screens: [screen] }
+  assert.equal(hitDesign(doc, 35, 35)?.id, 'outer')
+  assert.equal(selectDesignHit(doc, 35, 35, false, 'outer'), 'inner')
+  assert.equal(selectDesignHit(doc, 35, 35, false, 'inner'), 'leaf')
+  assert.equal(designEnterScopeForLayerSelect(doc, 'leaf'), 'inner')
+  assert.equal(designEnterScopeForLayerSelect(doc, 'inner'), 'outer')
+  assert.deepEqual(exitDesignContainer(doc, 'inner'), { nextEnteredId: 'outer', selectId: 'inner' })
+  assert.deepEqual(exitDesignContainer(doc, 'outer'), { nextEnteredId: 'screen', selectId: 'outer' })
+  assert.equal(validateDesignEnteredContainer(doc, 'inner'), 'inner')
+  assert.equal(validateDesignEnteredContainer(doc, 'missing'), null)
+  assert.deepEqual(resolveDesignSelectHit(doc, 35, 35, 'inner'), { kind: 'hit', id: 'leaf' })
+  assert.deepEqual(resolveDesignSelectHit(doc, 25, 25, 'inner'), { kind: 'clear' })
+  assert.deepEqual(selectDesignRect(doc, 0, 0, 50, 50, 'outer'), ['inner'])
 }
 
 {

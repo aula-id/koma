@@ -22,6 +22,7 @@ export function DesignNodeView({
   editing,
   dragCursor,
   locked = false,
+  enteredContainerId = null,
   overrideTargetId = null,
   onSelect,
   onResize,
@@ -30,6 +31,7 @@ export function DesignNodeView({
   onText,
   onTextBlur,
   onMenu,
+  onEnterContainer,
 }: {
   doc: DesignDoc
   node: DesignNode
@@ -38,8 +40,10 @@ export function DesignNodeView({
   editing: string | null
   dragCursor: string | null
   locked?: boolean
+  enteredContainerId?: string | null
   overrideTargetId?: string | null
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
+  onEnterContainer?: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
@@ -71,7 +75,10 @@ export function DesignNodeView({
   const flipX = node.flipX ? -1 : 1
   const flipY = node.flipY ? -1 : 1
   const transform = rotation || node.flipX || node.flipY ? `rotate(${rotation}deg) scale(${flipX}, ${flipY})` : undefined
-  const childIds = locked || node.locked || node.kind === 'instance' ? [] : selectedIds
+  const drillParent = node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance'
+  const enteredHere = enteredContainerId === node.id
+  const lockChildren = locked || node.locked || (drillParent && !enteredHere)
+  const childIds = lockChildren ? [] : selectedIds
   const hitHere = !locked
   return (
     <div
@@ -93,9 +100,16 @@ export function DesignNodeView({
         onMenu(node.id, event.clientX, event.clientY)
       } : undefined}
       onDoubleClick={(event) => {
-        if (!hitHere || node.locked || node.kind !== 'text') return
-        event.stopPropagation()
-        onEdit(node.id)
+        if (!hitHere || node.locked) return
+        if (node.kind === 'text') {
+          event.stopPropagation()
+          onEdit(node.id)
+          return
+        }
+        if ((node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance') && onEnterContainer) {
+          event.stopPropagation()
+          onEnterContainer(node.id, event)
+        }
       }}
     >
       {container ? (
@@ -162,8 +176,10 @@ export function DesignNodeView({
             selectedIds={childIds}
             editing={editing}
             dragCursor={dragCursor}
-            locked={locked || !!node.locked || node.kind === 'instance'}
+            locked={lockChildren}
+            enteredContainerId={enteredContainerId}
             overrideTargetId={overrideTargetId}
+            onEnterContainer={onEnterContainer}
             onSelect={onSelect}
             onResize={onResize}
             onCorner={onCorner}

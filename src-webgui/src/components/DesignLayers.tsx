@@ -9,6 +9,7 @@ export function DesignLayers({
   doc,
   selection,
   onSelect,
+  onEnter,
   onRename,
   onVisible,
   onLocked,
@@ -18,6 +19,7 @@ export function DesignLayers({
   doc: DesignDoc
   selection: string[]
   onSelect: (id: string, shift: boolean) => void
+  onEnter: (id: string) => void
   onRename: (id: string, name: string) => void
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
@@ -66,6 +68,7 @@ export function DesignLayers({
           }}
           onEdit={setEditing}
           onSelect={onSelect}
+          onEnter={onEnter}
           onRename={(id, name) => {
             setEditing(null)
             onRename(id, name)
@@ -91,6 +94,7 @@ function LayerList({
   onToggle,
   onEdit,
   onSelect,
+  onEnter,
   onRename,
   onVisible,
   onLocked,
@@ -107,6 +111,7 @@ function LayerList({
   onToggle: (id: string) => void
   onEdit: (id: string | null) => void
   onSelect: (id: string, shift: boolean) => void
+  onEnter: (id: string) => void
   onRename: (id: string, name: string) => void
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
@@ -131,6 +136,7 @@ function LayerList({
               onToggle={() => onToggle(node.id)}
               onEdit={() => onEdit(node.id)}
               onSelect={(shift) => onSelect(node.id, shift)}
+              onEnter={() => onEnter(node.id)}
               onRename={(name) => onRename(node.id, name)}
               onVisible={() => onVisible(node.id, node.visible === false)}
               onLocked={() => onLocked(node.id, !node.locked)}
@@ -158,6 +164,7 @@ function LayerList({
                 onToggle={onToggle}
                 onEdit={onEdit}
                 onSelect={onSelect}
+                onEnter={onEnter}
                 onRename={onRename}
                 onVisible={onVisible}
                 onLocked={onLocked}
@@ -182,6 +189,7 @@ function LayerRow({
   onToggle,
   onEdit,
   onSelect,
+  onEnter,
   onRename,
   onVisible,
   onLocked,
@@ -197,6 +205,7 @@ function LayerRow({
   onToggle: () => void
   onEdit: () => void
   onSelect: (shift: boolean) => void
+  onEnter: () => void
   onRename: (name: string) => void
   onVisible: () => void
   onLocked: () => void
@@ -249,6 +258,10 @@ function LayerRow({
       }}
       onDoubleClick={(event) => {
         event.stopPropagation()
+        if (event.ctrlKey && (isDesignContainer(node.kind) || node.kind === 'instance')) {
+          onEnter()
+          return
+        }
         onEdit()
       }}
     >
