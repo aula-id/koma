@@ -48,7 +48,7 @@ import { pasteMarker } from './pasteText.ts'
   assert.deepEqual(emptyDraft.map((item) => item.key), ['image:1', 'pasted_text:2', 'file:3'])
 
   const placed = listedComposerAttachments(`hello ${imageMarker(1)}`, attachments, [])
-  assert.deepEqual(placed.map((item) => item.key), ['pasted_text:2', 'file:3'])
+  assert.deepEqual(placed.map((item) => item.key), ['image:1', 'pasted_text:2', 'file:3'])
 
   const pendingOnly = listedComposerAttachments('', [], [{ id: 'p0', n: 0 }])
   assert.equal(pendingOnly.some((item) => item.key === 'p0' && item.markerN == null), true)

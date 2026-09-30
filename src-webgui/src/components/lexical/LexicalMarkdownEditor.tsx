@@ -548,10 +548,16 @@ function EditorPlugins({
     suppress.current = true
     const prepared = profile === 'note' ? normalizeDiagramNoteMarkdown(next) : next
     editor.update(() => {
-      $convertFromMarkdownString(prepared, transformers, undefined, false)
-      if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
-      if (profile === 'note') $promoteNoteImages()
-      if (profile === 'composer') $promoteFileRefChips()
+      if (prepared === '') {
+        const root = $getRoot()
+        root.clear()
+        root.append($createParagraphNode())
+      } else {
+        $convertFromMarkdownString(prepared, transformers, undefined, false)
+        if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
+        if (profile === 'note') $promoteNoteImages()
+        if (profile === 'composer') $promoteFileRefChips()
+      }
       if (edge === 'end') $getRoot().selectEnd()
       else if (edge === 'start') $getRoot().selectStart()
     })

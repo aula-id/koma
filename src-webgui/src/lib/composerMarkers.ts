@@ -69,30 +69,26 @@ export type ListedComposerAttachment = {
   id?: string
 }
 
-/** Unplaced session attachments plus in-flight pastes for the composer strip. */
+/** Session attachments plus in-flight pastes for the composer inventory strip. */
 export function listedComposerAttachments(
-  draft: string,
+  _draft: string,
   attachments: Array<{ kind: 'image' | 'file' | 'pasted_text'; markerN: number; name: string }>,
   localPastes: Array<{ id: string; markerN?: number; n?: number }>,
 ): ListedComposerAttachment[] {
   const listed: ListedComposerAttachment[] = []
   const seen = new Set<string>()
   for (const att of attachments) {
-    if (att.kind !== 'file' && attachmentMarkerInDraft(draft, att.kind, att.markerN)) continue
     const key = `${att.kind}:${att.markerN}`
     listed.push({ key, kind: att.kind, markerN: att.markerN, name: att.name })
     seen.add(key)
   }
   let unmatchedSessionPastes = attachments.filter(
-    (att) =>
-      att.kind === 'pasted_text' &&
-      !attachmentMarkerInDraft(draft, att.kind, att.markerN) &&
-      !localPastes.some((paste) => paste.markerN === att.markerN),
+    (att) => att.kind === 'pasted_text' && !localPastes.some((paste) => paste.markerN === att.markerN),
   ).length
   for (const paste of localPastes) {
     if (paste.markerN != null) {
       const key = `pasted_text:${paste.markerN}`
-      if (seen.has(key) || attachmentMarkerInDraft(draft, 'pasted_text', paste.markerN)) continue
+      if (seen.has(key)) continue
       listed.push({
         key: paste.id,
         kind: 'pasted_text',

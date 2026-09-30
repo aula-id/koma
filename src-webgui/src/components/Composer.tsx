@@ -510,6 +510,7 @@ export function Composer() {
     }
     submitLock.current = true
     submitArmed.current = false
+    echoDraft.current = true
     for (const item of attachments) consumedAttachKeys.current.add(`${item.kind}:${item.markerN}`)
     for (const item of locals) {
       if (item.markerN != null) consumedAttachKeys.current.add(`pasted_text:${item.markerN}`)
@@ -706,6 +707,7 @@ export function Composer() {
   }
 
   const onDraft = (val: string) => {
+    if (submitLock.current) return
     echoDraft.current = val !== input
     draftRef.current = val
     setInput(val)
