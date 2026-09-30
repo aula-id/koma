@@ -3,6 +3,8 @@
 import type { DiagramDoc } from './diagram'
 import {
   bytesToBase64,
+  cachedDiagramNoteImage,
+  cachedDiagramNoteImageByName,
   diagramFolder,
   diagramShapeFolder,
   renderShapeNote,
@@ -91,11 +93,47 @@ async function readBytes(
   root: string,
   path: string,
 ): Promise<Uint8Array | null> {
+  const cached = cachedDiagramNoteImage(root, path)
+  if (cached?.length) return cached
   try {
     return await requestFileBytes(req, root, path)
   } catch {
     return null
   }
+}
+
+async function readShapeImage(
+  req: Parameters<typeof requestFileBytes>[0],
+  root: string,
+  folder: string | null,
+  legacy: string | null,
+  name: string,
+): Promise<Uint8Array | null> {
+  const named = cachedDiagramNoteImageByName(root, name)
+  if (named?.length) return named
+  const paths = [folder ? `${folder}/${name}` : null, legacy ? `${legacy}/${name}` : null].filter(
+    (path): path is string => !!path,
+  )
+  for (const path of paths) {
+    const hit = await readBytes(req, root, path)
+    if (hit?.length) return hit
+  }
+  for (const path of paths) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)))
+      const hit = await readBytes(req, root, path)
+      if (hit?.length) return hit
+    }
+  }
+  return null
+}
+
+function imageNamesInShape(detail: string | undefined, note: string): string[] {
+  const names = new Set<string>()
+  for (const source of [detail, note]) {
+    for (const name of shapeDetailImageNames(source)) names.add(name)
+  }
+  return [...names]
 }
 
 /** Copy legacy flat `.koma/<stem>/img.png` into a shape folder when referenced only there. */
@@ -141,12 +179,19 @@ export async function attachDiagramShapesToComposer(root: string, diagPath: stri
       req({ r: 'AttachPaste', text: body })
     }
     const detail = shapeDetailText(doc, kind, id)
-    const names = shapeDetailImageNames(detail)
-    if (!names.length) continue
+    let names = imageNamesInShape(detail, body)
     const legacy = diagramFolder(diagPath)
+    if (!names.length && folder) {
+      const listed = await listFolder({ hostId: useKoma.getState().remoteState.hostId ?? 'local', root }, folder)
+      const files = listed.filter((entry) => !entry.isDir && noteImageFile(basename(entry.path))).map((entry) => basename(entry.path))
+      if (/\[Image #\d+\]/.test(detail ?? '') || /\[Image #\d+\]/.test(body)) {
+        names = files
+      } else if (files.length && /!\[[^\]]*]\([^)]+\)/.test(`${detail ?? ''}\n${body}`)) {
+        names = files
+      }
+    }
     for (const name of names) {
-      let bytes = folder ? await readBytes(req, root, `${folder}/${name}`) : null
-      if (!bytes?.length && legacy) bytes = await readBytes(req, root, `${legacy}/${name}`)
+      const bytes = await readShapeImage(req, root, folder, legacy, name)
       if (!bytes?.length) continue
       st.stageComposerAttachmentInsert('image')
       req({

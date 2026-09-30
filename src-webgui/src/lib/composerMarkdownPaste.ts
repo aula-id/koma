@@ -3,6 +3,13 @@
 const TABLE_ROW = /^\s*\|?.+\|.+\|?\s*$/
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/
 
+/** GFM task marker left in a list item after `- ` was already consumed. */
+export function splitTaskListMarker(text: string): { checked: boolean; rest: string } | null {
+  const match = text.match(/^\[(\s|x)\]\s+/i)
+  if (!match) return null
+  return { checked: /^x$/i.test(match[1] ?? ''), rest: text.slice(match[0].length) }
+}
+
 /** True when plain-text paste should be parsed as markdown blocks/inlines. */
 export function looksLikeComposerMarkdown(text: string): boolean {
   const sample = text.replace(/\r\n/g, '\n')
@@ -62,6 +69,22 @@ function inlineMarkdown(node: Node): string {
   return inner()
 }
 
+function listItemMarkdown(el: HTMLElement): string {
+  const box = el.querySelector(':scope > input[type="checkbox"]')
+  const checked =
+    box instanceof HTMLInputElement
+      ? box.checked
+      : el.classList.contains('koma-checklist-checked') || el.getAttribute('aria-checked') === 'true'
+  const isTask =
+    !!box ||
+    el.classList.contains('koma-checklist-item') ||
+    el.classList.contains('task-list-item') ||
+    el.getAttribute('role') === 'checkbox'
+  const text = inlineMarkdown(el).trim()
+  if (isTask) return `- [${checked ? 'x' : ' '}] ${text}`
+  return `- ${text}`
+}
+
 function blockMarkdown(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) {
     const t = decodeEntities(node.textContent ?? '').trim()
@@ -74,7 +97,7 @@ function blockMarkdown(node: Node): string {
   if (tag === 'ul') {
     return `${Array.from(el.children)
       .filter((child) => child.tagName.toLowerCase() === 'li')
-      .map((li) => `- ${inlineMarkdown(li).trim()}`)
+      .map((li) => listItemMarkdown(li as HTMLElement))
       .join('\n')}\n\n`
   }
   if (tag === 'ol') {
@@ -84,7 +107,7 @@ function blockMarkdown(node: Node): string {
       .map((li) => `${n++}. ${inlineMarkdown(li).trim()}`)
       .join('\n')}\n\n`
   }
-  if (tag === 'li') return `- ${inlineMarkdown(el).trim()}\n`
+  if (tag === 'li') return `${listItemMarkdown(el)}\n`
   if (/^h[1-6]$/.test(tag)) {
     const level = Number(tag[1]) || 1
     return `${'#'.repeat(Math.min(6, level))} ${inlineMarkdown(el).trim()}\n\n`

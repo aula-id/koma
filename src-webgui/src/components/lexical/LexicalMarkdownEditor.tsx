@@ -88,6 +88,7 @@ import {
   loneHttpUrl,
   looksLikeComposerMarkdown,
   markdownFromClipboardHtml,
+  splitTaskListMarker,
 } from '../../lib/composerMarkdownPaste'
 import { normalizeDiagramNoteMarkdown, noteImageFile, safeNoteUrl } from '../../lib/markdownNote'
 import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
@@ -188,14 +189,25 @@ const COMPOSER: Transformer[] = [
   CODE,
   HEADING,
   QUOTE,
+  // CHECK_LIST must beat UNORDERED_LIST: both match `- `, and import takes the first hit.
+  CHECK_LIST,
   UNORDERED_LIST,
   ORDERED_LIST,
-  CHECK_LIST,
   ...INLINE,
   markerTransformer,
   fileTransformer,
 ]
-const NOTE: Transformer[] = [CODE, HEADING, QUOTE, UNORDERED_LIST, ORDERED_LIST, imageTransformer, ...INLINE.filter((t) => t !== LINK), noteLinkTransformer]
+const NOTE: Transformer[] = [
+  CODE,
+  HEADING,
+  QUOTE,
+  CHECK_LIST,
+  UNORDERED_LIST,
+  ORDERED_LIST,
+  imageTransformer,
+  ...INLINE.filter((t) => t !== LINK),
+  noteLinkTransformer,
+]
 
 function transformersFor(profile: LexicalProfile): Transformer[] {
   if (profile === 'note') return NOTE
@@ -279,6 +291,19 @@ function $promoteNoteImages() {
     const src = link.getURL().replace(/\\/g, '/').split('/').pop() ?? ''
     if (!noteImageFile(src)) continue
     link.replace($createNoteImageNode(link.getTextContent(), src))
+  }
+}
+
+function $promoteTaskListMarkers() {
+  for (const node of $getRoot().getAllTextNodes()) {
+    const item = node.getParent()
+    if (!$isListItemNode(item) || item.getFirstChild() !== node) continue
+    const split = splitTaskListMarker(node.getTextContent())
+    if (!split) continue
+    node.setTextContent(split.rest)
+    const list = item.getParent()
+    if ($isListNode(list) && list.getListType() !== 'check') list.setListType('check')
+    item.setChecked(split.checked)
   }
 }
 
@@ -414,6 +439,7 @@ function $pasteComposerPlainText(editor: LexicalEditor, transformers: Transforme
     const nodes = $generateNodesFromMarkdownString(text, transformers, true)
     if (!nodes.length) return
     selection.insertNodes(nodes)
+    $promoteTaskListMarkers()
     $promoteFileRefChips()
     handled = true
   })
@@ -523,6 +549,7 @@ function EditorPlugins({
     const prepared = profile === 'note' ? normalizeDiagramNoteMarkdown(next) : next
     editor.update(() => {
       $convertFromMarkdownString(prepared, transformers, undefined, false)
+      if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
       if (profile === 'note') $promoteNoteImages()
       if (profile === 'composer') $promoteFileRefChips()
       if (edge === 'end') $getRoot().selectEnd()
@@ -1002,6 +1029,7 @@ export function LexicalMarkdownEditor({
           const seed =
             profile === 'note' ? normalizeDiagramNoteMarkdown(initial.current) : initial.current
           $convertFromMarkdownString(seed, transformersFor(profile), undefined, false)
+          if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
           if (profile === 'note') $promoteNoteImages()
           if (profile === 'composer') $promoteFileRefChips()
         },

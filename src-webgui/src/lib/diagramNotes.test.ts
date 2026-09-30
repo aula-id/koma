@@ -2,11 +2,15 @@ import assert from 'node:assert/strict'
 import { emptyDiagram } from './diagram.ts'
 import { orphanDiagramNoteImages } from './diagramNoteAttach.ts'
 import {
+  cacheDiagramNoteImage,
+  cachedDiagramNoteImage,
+  cachedDiagramNoteImageByName,
   diagramFolder,
   diagramShapeFolder,
   diagramShapeNotesPath,
   renderDiagramNotes,
   renderShapeNote,
+  shapeDetailImageNames,
   shapeNoteAttachName,
 } from './diagramNotes.ts'
 import { normalizeDiagramNoteMarkdown, repairComposerImageMarkers } from './markdownNote.ts'
@@ -68,4 +72,12 @@ assert.equal(renderDiagramNotes(emptyDiagram(), '.koma/auth.diag'), '')
   const kept = normalizeDiagramNoteMarkdown(hard)
   assert.equal(kept.includes('hello\\'), true)
   assert.equal(kept.includes('world'), true)
+}
+
+{
+  const bytes = new Uint8Array([1, 2, 3])
+  cacheDiagramNoteImage('/ws', '.koma/auth/cards/n1/img-1.png', bytes)
+  assert.equal(cachedDiagramNoteImage('/ws', '.koma/auth/cards/n1/img-1.png'), bytes)
+  assert.equal(cachedDiagramNoteImageByName('/ws', 'img-1.png'), bytes)
+  assert.deepEqual(shapeDetailImageNames('see ![wire](img-1.png) and [download](shot.jpg)'), ['img-1.png', 'shot.jpg'])
 }

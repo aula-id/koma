@@ -216,7 +216,31 @@ export function writeWorkspaceText(req: WriteReq, root: string, path: string, te
   })
 }
 
+const noteImageBytes = new Map<string, Uint8Array>()
+
+function noteImageKey(root: string, path: string): string {
+  return `${root}\0${path.replace(/\\/g, '/')}`
+}
+
+/** Keep pasted detail images in memory so Add-to-chat can attach before disk catches up. */
+export function cacheDiagramNoteImage(root: string, path: string, bytes: Uint8Array): void {
+  noteImageBytes.set(noteImageKey(root, path), bytes)
+}
+
+export function cachedDiagramNoteImage(root: string, path: string): Uint8Array | null {
+  return noteImageBytes.get(noteImageKey(root, path)) ?? null
+}
+
+export function cachedDiagramNoteImageByName(root: string, name: string): Uint8Array | null {
+  const suffix = `/${name}`
+  for (const [key, bytes] of noteImageBytes) {
+    if (key.startsWith(`${root}\0`) && (key.endsWith(suffix) || key.endsWith(`\0${name}`))) return bytes
+  }
+  return null
+}
+
 export function writeWorkspaceBytes(req: WriteReq, root: string, path: string, bytes: Uint8Array): void {
+  cacheDiagramNoteImage(root, path, bytes)
   req({
     r: 'FileWriteBytes',
     root,
