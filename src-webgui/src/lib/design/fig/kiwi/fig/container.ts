@@ -1,0 +1,91 @@
+import { deflateSync, inflateSync } from 'fflate'
+import { decompress as fzstdDecompressSync } from 'fzstd'
+
+import { isZstdCompressed } from './protocol'
+
+export const FIG_KIWI_DEFAULT_VERSION = 101
+
+function bunZstdDecompressSync(data: Uint8Array): Uint8Array | undefined {
+  const g = globalThis as { Bun?: { zstdDecompressSync?: (data: Uint8Array) => Uint8Array } }
+  return g.Bun?.zstdDecompressSync?.(data)
+}
+
+export function parseFigKiwiChunks(binary: Uint8Array): Uint8Array[] | null {
+  const header = new TextDecoder().decode(binary.slice(0, 8))
+  if (header !== 'fig-kiwi') return null
+
+  const view = new DataView(binary.buffer, binary.byteOffset, binary.byteLength)
+  let offset = 12
+
+  const chunks: Uint8Array[] = []
+  while (offset < binary.length) {
+    const chunkLen = view.getUint32(offset, true)
+    offset += 4
+    chunks.push(binary.slice(offset, offset + chunkLen))
+    offset += chunkLen
+  }
+  return chunks.length >= 2 ? chunks : null
+}
+
+export function decompressFigKiwiData(compressed: Uint8Array): Uint8Array {
+  if (isZstdCompressed(compressed)) {
+    const decompressed = bunZstdDecompressSync(compressed)
+    if (decompressed) return decompressed
+    return fzstdDecompressSync(compressed)
+  }
+
+  try {
+    return inflateSync(compressed)
+  } catch {
+    throw new Error('Failed to decompress fig-kiwi data')
+  }
+}
+
+export async function decompressFigKiwiDataAsync(compressed: Uint8Array): Promise<Uint8Array> {
+  if (isZstdCompressed(compressed)) {
+    const bunDecompressed = bunZstdDecompressSync(compressed)
+    if (bunDecompressed) return bunDecompressed
+    return fzstdDecompressSync(compressed)
+  }
+  try {
+    return inflateSync(compressed)
+  } catch {
+    throw new Error('Failed to decompress fig-kiwi data')
+  }
+}
+
+export function buildFigKiwi(
+  schemaDeflated: Uint8Array,
+  dataRaw: Uint8Array,
+  version = FIG_KIWI_DEFAULT_VERSION
+): Uint8Array {
+  let dataCompressed: Uint8Array
+  const zstdCompress: ((data: Uint8Array) => Uint8Array) | undefined = (() => {
+    const g = globalThis as { Bun?: { zstdCompressSync?: (data: Uint8Array) => Uint8Array } }
+    return g.Bun?.zstdCompressSync
+  })()
+  if (zstdCompress) {
+    dataCompressed = zstdCompress(dataRaw)
+  } else {
+    dataCompressed = deflateSync(dataRaw)
+  }
+
+  const total = 8 + 4 + 4 + schemaDeflated.length + 4 + dataCompressed.length
+  const out = new Uint8Array(total)
+  const view = new DataView(out.buffer)
+
+  out.set(new TextEncoder().encode('fig-kiwi'), 0)
+  view.setUint32(8, version, true)
+
+  let offset = 12
+  view.setUint32(offset, schemaDeflated.length, true)
+  offset += 4
+  out.set(schemaDeflated, offset)
+  offset += schemaDeflated.length
+
+  view.setUint32(offset, dataCompressed.length, true)
+  offset += 4
+  out.set(dataCompressed, offset)
+
+  return out
+}

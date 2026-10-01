@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ChevronRight, Hand, MousePointer2, PenTool, Play, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { ChevronRight, Frame, Hand, MousePointer2, PenTool, Play, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { KomaSelect } from './KomaSelect'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'

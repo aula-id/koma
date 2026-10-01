@@ -19,7 +19,6 @@ import {
   designQueryNode,
   dropDesignToken,
   importFigToDesign,
-  importPenToDesign,
   isDesignPath,
   serializeDesign,
   resolveRef,
@@ -445,8 +444,8 @@ export function DesignPanel() {
                 </button>
                 <button
                   type="button"
-                  aria-label="Import .fig or .pen"
-                  title="Import .fig or .pen"
+                  aria-label="Import .fig"
+                  title="Import .fig"
                   onClick={() => importInputRef.current?.click()}
                   className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
                 >
@@ -455,18 +454,16 @@ export function DesignPanel() {
                 <input
                   ref={importInputRef}
                   type="file"
-                  accept=".fig,.pen,application/octet-stream"
+                  accept=".fig,application/octet-stream"
                   hidden
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     event.target.value = ''
                     if (!file || !activeRoot) return
                     void file.arrayBuffer().then(async (buffer) => {
-                      const imported = file.name.toLowerCase().endsWith('.pen')
-                        ? await importPenToDesign(new TextDecoder().decode(buffer))
-                        : await importFigToDesign(buffer)
+                      const imported = await importFigToDesign(buffer)
                       if (imported.error) return
-                      const name = designFileName(file.name.replace(/\.(fig|pen)$/i, '')) ?? `import-${Date.now()}.kdsgn`
+                      const name = designFileName(file.name.replace(/\.fig$/i, '')) ?? `import-${Date.now()}.kdsgn`
                       const path = name.startsWith('.koma/') ? name : `.koma/${name}`
                       req({
                         r: 'FileWriteBytes',
@@ -795,6 +792,36 @@ function AssetTile({
   onChat: () => void
 }) {
   const dragged = useRef(false)
+  if (deleting) {
+    return (
+      <div
+        className="flex min-h-[104px] flex-col items-center justify-center gap-2 rounded bg-koma-error/15 p-2 text-[12px] font-medium text-koma-error"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <span className="max-w-full truncate px-1">delete?</span>
+        <span className="flex flex-none items-center gap-1.5">
+          <button
+            type="button"
+            autoFocus
+            aria-label={`Delete ${name}`}
+            className="rounded px-2 py-0.5 text-koma-success hover:bg-koma-success/15"
+            onClick={onDelete}
+          >
+            yes
+          </button>
+          <button
+            type="button"
+            aria-label="Cancel delete"
+            className="rounded px-2 py-0.5 hover:bg-koma-error/15"
+            onClick={onCancelDelete}
+          >
+            no
+          </button>
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="group relative">
       <button
@@ -826,23 +853,15 @@ function AssetTile({
           <span className="min-w-0 flex-1 truncate">{name}</span>
         </span>
       </button>
-      {deleting ? (
-        <div className="absolute inset-x-1 top-1.5 flex items-center justify-center gap-1 rounded bg-koma-panel px-1 py-0.5 text-[11px] text-koma-error shadow-sm">
-          <span>Delete?</span>
-          <button type="button" className="rounded px-1 text-koma-success hover:bg-koma-success/15" onClick={onDelete}>yes</button>
-          <button type="button" className="rounded px-1 hover:bg-koma-hover" onClick={onCancelDelete}>no</button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          title="Delete"
-          aria-label={`Delete ${name}`}
-          onClick={onAskDelete}
-          className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded bg-white text-koma-dim shadow-sm hover:text-koma-error"
-        >
-          <Trash2 size={12} />
-        </button>
-      )}
+      <button
+        type="button"
+        title="Delete"
+        aria-label={`Delete ${name}`}
+        onClick={onAskDelete}
+        className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded bg-white text-koma-dim shadow-sm hover:text-koma-error"
+      >
+        <Trash2 size={12} />
+      </button>
       <button
         type="button"
         title="Add to chat"

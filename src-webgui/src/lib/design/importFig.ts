@@ -313,54 +313,9 @@ export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): De
   return { doc, error: null }
 }
 
-export function sceneGraphToDesign(graph: { getPages?: (includeInternal?: boolean) => Array<Record<string, unknown>>; getNode?: (id: string) => Record<string, unknown> | undefined }): DesignImportResult {
-  const doc = emptyDesign()
-  doc.version = 2
-  const pages = graph.getPages?.(true) ?? []
-  const mapNode = (row: Record<string, unknown>): DesignNode => {
-    const type = typeof row.type === 'string' ? row.type : 'FRAME'
-    const kind = figKind(type === 'CANVAS' ? 'FRAME' : type)
-    const fills = Array.isArray(row.fills) ? row.fills.flatMap((item) => {
-      if (!item || typeof item !== 'object') return []
-      const paint = figPaint(item as Record<string, unknown>)
-      return paint ? [paint] : []
-    }) : []
-    const node: DesignNode = {
-      id: typeof row.id === 'string' ? row.id : mint('pen', { i: 0 }),
-      kind: type === 'CANVAS' ? 'frame' : kind,
-      name: typeof row.name === 'string' ? row.name : kind,
-      x: typeof row.x === 'number' ? row.x : 0,
-      y: typeof row.y === 'number' ? row.y : 0,
-      w: Math.max(1, typeof row.width === 'number' ? row.width : 100),
-      h: Math.max(1, typeof row.height === 'number' ? row.height : 100),
-    }
-    if (fills.length) {
-      node.fills = fills
-      if (fills[0].color) node.fill = fills[0].color
-    }
-    if (typeof row.text === 'string' && row.text) {
-      node.kind = 'text'
-      node.text = row.text
-    }
-    if (row.layoutMode === 'HORIZONTAL') node.layout = 'row'
-    if (row.layoutMode === 'VERTICAL') node.layout = 'column'
-    if (row.layoutMode === 'GRID') node.layout = 'grid'
-    if (typeof row.itemSpacing === 'number') node.gap = row.itemSpacing
-    if (typeof row.fontSize === 'number') node.fontSize = row.fontSize
-    if (row.isMask === true) node.mask = true
-    const childIds = Array.isArray(row.childIds) ? row.childIds.filter((id): id is string => typeof id === 'string') : []
-    const children = childIds.map((id) => graph.getNode?.(id)).filter((item): item is Record<string, unknown> => !!item).map(mapNode)
-    if (children.length) node.children = children
-    return node
-  }
-  doc.screens = pages.map(mapNode)
-  if (!doc.screens.length) return { doc, error: 'No pages or nodes to import' }
-  return { doc, error: null }
-}
-
 export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImportResult> {
   try {
-    const { parseFigBuffer } = await import('@open-pencil/fig')
+    const { parseFigBuffer } = await import('./fig/parseFigBuffer')
     const parsed = parseFigBuffer(buffer)
     if (parsed?.nodeChanges?.length) return nodeChangesToDesign(parsed.nodeChanges as Array<Record<string, unknown>>)
   } catch {
@@ -375,19 +330,4 @@ export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImpo
   const graph = await parseFigArchive(buffer)
   if (graph) return graphToDesign(graph)
   return { doc: emptyDesign(), error: 'Could not parse this .fig file' }
-}
-
-export async function importPenToDesign(text: string): Promise<DesignImportResult> {
-  try {
-    const { parsePenFile } = await import('@open-pencil/pen')
-    const graph = parsePenFile(text)
-    return sceneGraphToDesign(graph)
-  } catch {
-    try {
-      const parsed = JSON.parse(text)
-      return graphToDesign(parsed)
-    } catch {
-      return { doc: emptyDesign(), error: 'Could not parse this .pen file' }
-    }
-  }
 }
