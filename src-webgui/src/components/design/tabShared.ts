@@ -1,7 +1,9 @@
 import {
   snapDesign,
   componentView,
+  layoutDesign,
   resolveRef,
+  syncLinkedComponents,
   writeComponentView,
   type DesignDoc,
   type DesignHandle,
@@ -156,8 +158,9 @@ export function editingDoc(stored: DesignDoc, focusId: string | null): DesignDoc
 }
 
 export function projectDoc(stored: DesignDoc, focusId: string | null, view: DesignDoc): DesignDoc {
-  if (!focusId) return view
-  return writeComponentView(stored, focusId, view) ?? stored
+  if (!focusId) return layoutDesign(syncLinkedComponents(view))
+  const written = writeComponentView(stored, focusId, view)
+  return written ? layoutDesign(written) : stored
 }
 
 export function paintCss(doc: DesignDoc, ref: string, fallback: string): string {

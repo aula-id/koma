@@ -92,6 +92,7 @@ import {
   setVariantProps,
   updateDesignNode,
   writeComponentView,
+  syncLinkedComponents,
   textStyle,
   variantKey,
 } from './design.ts'
@@ -510,6 +511,16 @@ function sample(): DesignDoc {
   const kept = createComponentFromFrame(doc, 'screen', 'screen-1', mint)
   assert.equal(kept?.screens[0].kind, 'frame')
   assert.equal(kept?.components[0].id, 'screen-1')
+  assert.equal(kept?.components[0].variants[0].node.id, 'screen')
+  const isolated = componentView(kept!, 'screen-1')
+  const recoloured = updateDesignNode(isolated!, 'screen', (node) => ({ ...node, fill: '#ff3300' }))
+  const synced = writeComponentView(kept!, 'screen-1', recoloured)
+  assert.equal(synced?.components[0].variants[0].node.fill, '#ff3300')
+  assert.equal(synced?.screens[0].fill, '#ff3300')
+  assert.equal(synced?.screens[0].x, 0)
+  const pageEdit = updateDesignNode(kept!, 'screen', (node) => ({ ...node, fill: '#00aa44' }))
+  const linked = syncLinkedComponents(pageEdit)
+  assert.equal(linked.components[0].variants[0].node.fill, '#00aa44')
 }
 
 {

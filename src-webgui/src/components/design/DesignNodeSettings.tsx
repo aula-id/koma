@@ -1,5 +1,4 @@
-import { useState, type ReactNode } from 'react'
-import { Plus } from 'lucide-react'
+import { useState } from 'react'
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -11,13 +10,30 @@ import {
   AlignVerticalSpaceBetween,
   ArrowDown,
   ArrowRight,
+  Blend,
+  Cloud,
+  Component,
+  Crop,
+  Droplets,
   FlipHorizontal2,
   FlipVertical2,
+  Layers,
+  MessageSquare,
+  Move,
+  MoveHorizontal,
+  MoveVertical,
+  Plus,
+  RotateCcw,
   RotateCw,
+  Scaling,
   Square,
   TextAlignCenter,
   TextAlignEnd,
   TextAlignStart,
+  UnfoldHorizontal,
+  UnfoldVertical,
+  WrapText,
+  X,
 } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
 import {
@@ -48,6 +64,7 @@ import {
   RadiusField,
   Section,
   SizeMode,
+  StrokeAlignIcon,
   containerPaint,
 } from './DesignPropertyFields'
 
@@ -187,16 +204,19 @@ export function NodeSettings({
   const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
   return (
     <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
-      {onMakeComponent ? (
-        <button type="button" onClick={onMakeComponent} className="h-7 rounded bg-koma-accent/20 text-koma-accent">
-          Create component
-        </button>
-      ) : null}
-      {onAddToChat ? (
-        <button type="button" onClick={onAddToChat} className="flex h-7 items-center gap-1 rounded px-1 text-koma-dim hover:bg-koma-hover">
-          <Plus size={14} strokeWidth={2.25} />
-          Chat
-        </button>
+      {onMakeComponent || onAddToChat ? (
+        <div className="flex items-center gap-1">
+          {onMakeComponent ? (
+            <button type="button" title="Create component" aria-label="Create component" onClick={onMakeComponent} className="flex h-7 w-7 items-center justify-center rounded bg-koma-accent/20 text-koma-accent hover:bg-koma-accent/30">
+              <Component size={14} />
+            </button>
+          ) : null}
+          {onAddToChat ? (
+            <button type="button" title="Add to chat" aria-label="Add to chat" onClick={onAddToChat} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+              <MessageSquare size={14} />
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {componentName != null ? (
         <label className="flex flex-col gap-1">
@@ -242,8 +262,8 @@ export function NodeSettings({
             <button type="submit" className="h-7 rounded px-1 text-koma-dim hover:bg-koma-hover">Add</button>
           </form>
           {onAddVariant ? (
-            <button type="button" onClick={onAddVariant} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
-              Add variant
+            <button type="button" title="Add variant" aria-label="Add variant" onClick={onAddVariant} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+              <Plus size={14} />
             </button>
           ) : null}
         </div>
@@ -258,8 +278,8 @@ export function NodeSettings({
         />
       ))}
       {onResetInstance ? (
-        <button type="button" onClick={onResetInstance} className="h-7 rounded text-koma-dim hover:bg-koma-hover">
-          Reset overrides
+        <button type="button" title="Reset overrides" aria-label="Reset overrides" onClick={onResetInstance} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
+          <RotateCcw size={14} />
         </button>
       ) : null}
       {multi ? null : (
@@ -425,74 +445,66 @@ export function NodeSettings({
               )}
             </div>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-koma-dim">Wrap{textOf((item) => (item.wrap ? 'on' : 'off')).mixed ? ' · Mixed' : ''}</span>
-            <button
-              type="button"
-              aria-pressed={nodes.every((item) => item.wrap === true)}
-              onClick={() => {
-                const allOn = nodes.every((item) => item.wrap === true)
-                onPatch((current) => {
-                  const next = { ...current }
-                  if (allOn) delete next.wrap
-                  else next.wrap = true
-                  return next
-                })
-              }}
-              className={`h-6 rounded px-2 ${nodes.every((item) => item.wrap) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-            >
-              {nodes.every((item) => item.wrap) ? 'On' : 'Off'}
-            </button>
-          </div>
         </>
       ) : null}
+      <div className="flex items-center gap-0.5">
+      {flows ? (
+        <AlignButton
+          label={textOf((item) => (item.wrap ? 'on' : 'off')).mixed ? 'Wrap · Mixed' : nodes.every((item) => item.wrap) ? 'Wrap on' : 'Wrap off'}
+          pressed={nodes.every((item) => item.wrap === true)}
+          onClick={() => {
+            const allOn = nodes.every((item) => item.wrap === true)
+            onPatch((current) => {
+              const next = { ...current }
+              if (allOn) delete next.wrap
+              else next.wrap = true
+              return next
+            })
+          }}
+        >
+          <WrapText size={14} />
+        </AlignButton>
+      ) : null}
       {nodes.every((item) => item.kind === 'frame' || item.kind === 'instance') ? (
-        <div className="flex items-center justify-between">
-          <span className="text-koma-dim">Clip</span>
-          <button
-            type="button"
-            aria-pressed={nodes.every((item) => item.clip !== false)}
-            onClick={() => {
-              const allOn = nodes.every((item) => item.clip !== false)
-              onPatch((current) => {
-                const next = { ...current }
-                if (allOn) next.clip = false
-                else delete next.clip
-                return next
-              })
-            }}
-            className={`h-6 rounded px-2 ${nodes.every((item) => item.clip !== false) ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-          >
-            {nodes.every((item) => item.clip !== false) ? 'On' : 'Off'}
-          </button>
-        </div>
+        <AlignButton
+          label={nodes.every((item) => item.clip !== false) ? 'Clip on' : 'Clip off'}
+          pressed={nodes.every((item) => item.clip !== false)}
+          onClick={() => {
+            const allOn = nodes.every((item) => item.clip !== false)
+            onPatch((current) => {
+              const next = { ...current }
+              if (allOn) next.clip = false
+              else delete next.clip
+              return next
+            })
+          }}
+        >
+          <Crop size={14} />
+        </AlignButton>
       ) : null}
       {hasParent ? (
-        <div className="flex items-center justify-between">
-          <span className="text-koma-dim">Absolute{absoluteField.mixed ? ' · Mixed' : ''}</span>
-          <button
-            type="button"
-            aria-pressed={absoluteField.value === 'on' && !absoluteField.mixed}
-            onClick={() => {
-              const allOn = nodes.every((item) => item.absolute === true)
-              onPatch((current) => {
-                const next = { ...current }
-                if (allOn) delete next.absolute
-                else next.absolute = true
-                return next
-              })
-            }}
-            className={`h-6 rounded px-2 ${absoluteField.value === 'on' && !absoluteField.mixed ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-          >
-            {absoluteField.mixed ? 'Mixed' : absoluteField.value === 'on' ? 'On' : 'Off'}
-          </button>
-        </div>
+        <AlignButton
+          label={absoluteField.mixed ? 'Absolute · Mixed' : absoluteField.value === 'on' ? 'Absolute on' : 'Absolute off'}
+          pressed={absoluteField.value === 'on' && !absoluteField.mixed}
+          onClick={() => {
+            const allOn = nodes.every((item) => item.absolute === true)
+            onPatch((current) => {
+              const next = { ...current }
+              if (allOn) delete next.absolute
+              else next.absolute = true
+              return next
+            })
+          }}
+        >
+          <Move size={14} />
+        </AlignButton>
       ) : null}
+      </div>
       </Section>
       ) : null}
       <Section title="Appearance">
         <div className={`grid gap-1 ${showRadius ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          <GeomField label="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
+          <GeomField label="Op" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
             const opacity = Math.min(100, Math.max(0, value)) / 100
             setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
           }} />
@@ -549,40 +561,128 @@ export function NodeSettings({
         ) : (
           <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} />
         )}
-        <div className="mt-1 grid grid-cols-2 gap-1">
-          <GeomField label="W" ariaLabel="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
-          <Choices label="Align" value={node.strokeAlign ?? 'center'} options={[{ value: 'inside', label: 'In' }, { value: 'center', label: 'Ctr' }, { value: 'outside', label: 'Out' }]} onChange={(strokeAlign) => setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])} />
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <GeomField label="W" ariaLabel="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
+          </div>
+          <Choices
+            label="Align"
+            grow={false}
+            value={node.strokeAlign ?? 'center'}
+            options={[
+              { value: 'inside', label: 'Inside', icon: <StrokeAlignIcon mode="inside" /> },
+              { value: 'center', label: 'Center', icon: <StrokeAlignIcon mode="center" /> },
+              { value: 'outside', label: 'Outside', icon: <StrokeAlignIcon mode="outside" /> },
+            ]}
+            onChange={(strokeAlign) => setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])}
+          />
         </div>
       </Section>
       {hasParent && !sizeModes ? (
         <Section title="Constraints">
-          <Choices label="Horizontal" value={node.constraintH ?? 'start'} options={[{ value: 'start', label: 'Left' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'Right' }, { value: 'stretch', label: 'Stretch' }, { value: 'scale', label: 'Scale' }]} onChange={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])} />
-          <Choices label="Vertical" value={node.constraintV ?? 'start'} options={[{ value: 'start', label: 'Top' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'Bottom' }, { value: 'stretch', label: 'Stretch' }, { value: 'scale', label: 'Scale' }]} onChange={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])} />
+          <div className="flex items-center gap-1">
+            <span title="Horizontal" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><MoveHorizontal size={13} /></span>
+            <Choices
+              label="Horizontal"
+              value={node.constraintH ?? 'start'}
+              options={[
+                { value: 'start', label: 'Left', icon: <AlignStartVertical size={13} /> },
+                { value: 'center', label: 'Center', icon: <AlignCenterVertical size={13} /> },
+                { value: 'end', label: 'Right', icon: <AlignEndVertical size={13} /> },
+                { value: 'stretch', label: 'Stretch', icon: <UnfoldHorizontal size={13} /> },
+                { value: 'scale', label: 'Scale', icon: <Scaling size={13} /> },
+              ]}
+              onChange={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span title="Vertical" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><MoveVertical size={13} /></span>
+            <Choices
+              label="Vertical"
+              value={node.constraintV ?? 'start'}
+              options={[
+                { value: 'start', label: 'Top', icon: <AlignStartHorizontal size={13} /> },
+                { value: 'center', label: 'Center', icon: <AlignCenterHorizontal size={13} /> },
+                { value: 'end', label: 'Bottom', icon: <AlignEndHorizontal size={13} /> },
+                { value: 'stretch', label: 'Stretch', icon: <UnfoldVertical size={13} /> },
+                { value: 'scale', label: 'Scale', icon: <Scaling size={13} /> },
+              ]}
+              onChange={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])}
+            />
+          </div>
         </Section>
       ) : null}
       <Section title="Effects">
-        <Choices label="Blend" value={node.blend ?? 'normal'} options={[{ value: 'normal', label: 'Norm' }, { value: 'multiply', label: 'Mul' }, { value: 'screen', label: 'Scr' }, { value: 'overlay', label: 'Ovl' }]} onChange={(blend) => setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])} />
-        <button
-          type="button"
-          className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover"
-          onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000' }] }))}
-        >
-          Add drop shadow
-        </button>
-        <button
-          type="button"
-          className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover"
-          onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'layer-blur', blur: 4 }] }))}
-        >
-          Add layer blur
-        </button>
+        <div className="flex items-center gap-1">
+          <span title="Blend" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><Blend size={13} /></span>
+          <KomaSelect
+            aria-label="Blend"
+            title="Blend"
+            value={node.blend ?? 'normal'}
+            onChange={(event) => {
+              const blend = event.target.value
+              setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])
+            }}
+            className="h-7 min-w-0 flex-1 px-1.5 text-[12px]"
+          >
+            <option value="normal">Normal</option>
+            <option value="multiply">Multiply</option>
+            <option value="screen">Screen</option>
+            <option value="overlay">Overlay</option>
+            <option value="darken">Darken</option>
+            <option value="lighten">Lighten</option>
+            <option value="color-burn">Color burn</option>
+            <option value="color-dodge">Color dodge</option>
+            <option value="soft-light">Soft light</option>
+            <option value="hard-light">Hard light</option>
+            <option value="difference">Difference</option>
+            <option value="exclusion">Exclusion</option>
+          </KomaSelect>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <AlignButton
+            label="Add drop shadow"
+            onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000' }] }))}
+          >
+            <Cloud size={14} />
+          </AlignButton>
+          <AlignButton
+            label="Add layer blur"
+            onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'layer-blur', blur: 4 }] }))}
+          >
+            <Droplets size={14} />
+          </AlignButton>
+          <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask'] : [])}>
+            <Layers size={14} />
+          </AlignButton>
+        </div>
         {(node.effects ?? []).map((effect, index) => (
-          <div key={`${effect.kind}-${index}`} className="flex items-center gap-1 text-[11px] text-koma-dim">
-            <span className="flex-1 truncate">{effect.kind}</span>
-            <button type="button" className="h-6 px-1" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>Remove</button>
+          <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
+            <span title={effect.kind === 'drop-shadow' ? 'Drop shadow' : 'Layer blur'} className="flex h-7 w-7 flex-none items-center justify-center text-koma-dim">
+              {effect.kind === 'drop-shadow' ? <Cloud size={13} /> : <Droplets size={13} />}
+            </span>
+            {effect.kind === 'drop-shadow' ? (
+              <>
+                <div className="min-w-0 flex-1">
+                  <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, x } : item)) }))} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, y } : item)) }))} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <GeomField label="B" ariaLabel="Shadow blur" value={effect.blur ?? 8} onChange={(blur) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, blur } : item)) }))} />
+                </div>
+              </>
+            ) : (
+              <div className="min-w-0 flex-1">
+                <GeomField label="B" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, blur } : item)) }))} />
+              </div>
+            )}
+            <button type="button" title="Remove" aria-label="Remove effect" className="flex h-7 w-7 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>
+              <X size={13} />
+            </button>
           </div>
         ))}
-        <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask'] : [])}><Square size={14} /></AlignButton>
       </Section>
       {allText ? (
         <Section title="Text">

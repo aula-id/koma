@@ -971,7 +971,8 @@ export function createComponentFromFrame(doc: DesignDoc, frameId: string, compon
   const located = locateDesign(doc, frameId)
   if (!located || located.node.kind !== 'frame') return null
   if (doc.components.some((component) => component.id === componentId)) return null
-  const source = copyTree(located.node, mint)
+  // A top-level screen keeps the same ids so isolation writes can update it live.
+  const source = located.parentId ? copyTree(located.node, mint) : structuredClone(located.node)
   source.x = 0
   source.y = 0
   if (source.wMode !== 'hug' && source.wMode !== 'fill') source.wMode = 'fixed'
@@ -1210,7 +1211,7 @@ export function componentView(doc: DesignDoc, componentId: string): DesignDoc | 
   return { ...doc, screens }
 }
 
-/** Write canvas edits back onto one component. Real screens stay put. An empty board deletes the component. */
+/** Write canvas edits back onto one component. Linked screens and instances stay live. */
 export function writeComponentView(doc: DesignDoc, componentId: string, view: DesignDoc): DesignDoc | null {
   const index = doc.components.findIndex((item) => item.id === componentId)
   if (index < 0) return null
@@ -1227,7 +1228,39 @@ export function writeComponentView(doc: DesignDoc, componentId: string, view: De
   const components = view.components.slice()
   if (!variants.length) components.splice(index, 1)
   else components[index] = syncAxes({ ...component, name: view.components[index]?.name ?? component.name, variants })
-  return { ...view, screens: doc.screens, components }
+  const screens = applyLinkedScreens(doc.screens, variants)
+  return { ...view, screens, components }
+}
+
+/** Page screens that share an id with a variant stay copies of that variant. */
+export function syncLinkedComponents(doc: DesignDoc): DesignDoc {
+  let changed = false
+  const components = doc.components.map((component) => {
+    let touched = false
+    const variants = component.variants.map((variant) => {
+      const screen = doc.screens.find((item) => item.id === variant.node.id)
+      if (!screen) return variant
+      const node = zeroRoot(screen)
+      touched = true
+      return { ...variant, node }
+    })
+    if (!touched) return component
+    changed = true
+    return syncAxes({ ...component, variants })
+  })
+  return changed ? { ...doc, components } : doc
+}
+
+function applyLinkedScreens(screens: DesignNode[], variants: DesignVariant[]): DesignNode[] {
+  if (!variants.length) return screens
+  let changed = false
+  const next = screens.map((screen) => {
+    const match = variants.find((variant) => variant.node.id === screen.id)
+    if (!match) return screen
+    changed = true
+    return { ...match.node, x: screen.x, y: screen.y }
+  })
+  return changed ? next : screens
 }
 
 /** Move a node forward or back among its siblings, screens included. */

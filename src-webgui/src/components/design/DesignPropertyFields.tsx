@@ -1,6 +1,26 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Minus, Square, Spline, Type } from 'lucide-react'
-import { KomaSelect } from '../KomaSelect'
+import {
+  Ban,
+  Blend,
+  ChevronRight,
+  Circle,
+  Component,
+  Contrast,
+  Crop,
+  Droplet,
+  Eye,
+  EyeOff,
+  Frame,
+  Grid3x3,
+  Group,
+  Image,
+  Maximize2,
+  Minus,
+  Scaling,
+  Square,
+  Spline,
+  Type,
+} from 'lucide-react'
 import {
   defaultGradient,
   designLayerName,
@@ -222,21 +242,41 @@ export function KindMark({ kind }: { kind: DesignNode['kind'] }) {
 
 export function SizeMode({ label, value, mixed, onChange }: { label: string; value: string; mixed?: boolean; onChange: (mode: 'fixed' | 'hug' | 'fill') => void }) {
   return (
-    <KomaSelect
-      chevron={false}
-      aria-label={label}
+    <Choices
+      label={label}
       value={mixed ? '' : value}
-      onChange={(event) => {
-        const mode = event.target.value
+      mixed={mixed}
+      grow={false}
+      options={[
+        { value: 'fixed', label: 'Fixed', icon: <Square size={13} /> },
+        { value: 'hug', label: 'Hug', icon: <MinimizeIcon /> },
+        { value: 'fill', label: 'Fill', icon: <Maximize2 size={13} /> },
+      ]}
+      onChange={(mode) => {
         if (mode === 'fixed' || mode === 'hug' || mode === 'fill') onChange(mode)
       }}
-      className="h-7 w-12 flex-none px-0.5 text-[10px]"
-    >
-      {mixed ? <option value="">Mix</option> : null}
-      <option value="fixed">Fix</option>
-      <option value="hug">Hug</option>
-      <option value="fill">Fill</option>
-    </KomaSelect>
+    />
+  )
+}
+
+function MinimizeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+      <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+      <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+      <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  )
+}
+
+export function StrokeAlignIcon({ mode }: { mode: 'inside' | 'center' | 'outside' }) {
+  const inset = mode === 'inside' ? 5 : mode === 'outside' ? 1.5 : 3.5
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      <rect x={inset} y={inset} width={14 - inset * 2} height={14 - inset * 2} fill="currentColor" opacity="0.22" />
+      <rect x="3.5" y="3.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth={mode === 'center' ? 2 : 1.5} />
+    </svg>
   )
 }
 
@@ -549,22 +589,45 @@ export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weig
   )
 }
 
-export function Choices<T extends string>({ label, value, mixed, options, onChange }: { label: string; value: T; mixed?: boolean; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
+export function Choices<T extends string>({
+  label,
+  value,
+  mixed,
+  options,
+  onChange,
+  grow = true,
+}: {
+  label: string
+  value: T | ''
+  mixed?: boolean
+  options: { value: T; label: string; icon?: ReactNode }[]
+  onChange: (value: T) => void
+  grow?: boolean
+}) {
+  const iconic = options.every((option) => option.icon)
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-koma-dim">{label}{mixed ? ' · Mixed' : ''}</span>
-      <div className="flex gap-0.5">
-        {options.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            aria-pressed={!mixed && option.value === value}
-            onClick={() => onChange(option.value)}
-            className={`h-7 flex-1 rounded text-[12px] ${!mixed && option.value === value ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-          >
-            {option.label}
-          </button>
-        ))}
+    <div className={`flex flex-col gap-1 ${grow ? 'min-w-0 flex-1' : 'flex-none'}`} role="group" aria-label={mixed ? `${label} · Mixed` : label}>
+      <div className={`flex ${iconic ? 'h-7 rounded border border-koma-border bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
+        {options.map((option) => {
+          const pressed = !mixed && option.value === value
+          return (
+            <button
+              key={option.value}
+              type="button"
+              title={option.label}
+              aria-label={option.label}
+              aria-pressed={pressed}
+              onClick={() => onChange(option.value)}
+              className={
+                iconic
+                  ? `flex h-6 items-center justify-center rounded ${grow ? 'min-w-0 flex-1' : 'w-6 flex-none'} ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+                  : `h-7 min-w-0 flex-1 rounded px-1 text-[12px] ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+              }
+            >
+              {option.icon ?? option.label}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -600,10 +663,10 @@ export function FillEditor({
         value={kind}
         mixed={mixed}
         options={[
-          { value: 'solid', label: 'Solid' },
-          { value: 'gradient', label: 'Gradient' },
-          { value: 'image', label: 'Image' },
-          { value: 'none', label: 'None' },
+          { value: 'solid', label: 'Solid', icon: <Droplet size={13} /> },
+          { value: 'gradient', label: 'Gradient', icon: <Blend size={13} /> },
+          { value: 'image', label: 'Image', icon: <Image size={13} /> },
+          { value: 'none', label: 'None', icon: <Ban size={13} /> },
         ]}
         onChange={(next) => {
           if (next === 'none') onChange(setNodeSolid(node, field, 'none'))
@@ -632,17 +695,17 @@ export function FillEditor({
       ) : null}
       {kind === 'image' && current ? (
         <div className="flex flex-col gap-1">
-          <button type="button" className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover" onClick={() => onPickImage?.()}>
-            Replace image
+          <button type="button" title="Replace image" aria-label="Replace image" className="flex h-7 items-center justify-center rounded border border-koma-border text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPickImage?.()}>
+            <Image size={13} />
           </button>
           <Choices
             label="Scale"
             value={current.scale ?? 'fill'}
             options={[
-              { value: 'fill', label: 'Fill' },
-              { value: 'fit', label: 'Fit' },
-              { value: 'crop', label: 'Crop' },
-              { value: 'tile', label: 'Tile' },
+              { value: 'fill', label: 'Fill', icon: <Maximize2 size={13} /> },
+              { value: 'fit', label: 'Fit', icon: <MinimizeIcon /> },
+              { value: 'crop', label: 'Crop', icon: <Crop size={13} /> },
+              { value: 'tile', label: 'Tile', icon: <Grid3x3 size={13} /> },
             ]}
             onChange={(scale: DesignImageScale) => onChange(setNodePaints(node, field, [{ ...current, scale }]))}
           />
@@ -674,10 +737,10 @@ export function GradientEditor({
         label="Kind"
         value={paint.kind ?? 'linear'}
         options={[
-          { value: 'linear', label: 'Linear' },
-          { value: 'radial', label: 'Radial' },
-          { value: 'angular', label: 'Angular' },
-          { value: 'diamond', label: 'Diamond' },
+          { value: 'linear', label: 'Linear', icon: <Minus size={13} /> },
+          { value: 'radial', label: 'Radial', icon: <Circle size={13} /> },
+          { value: 'angular', label: 'Angular', icon: <Contrast size={13} /> },
+          { value: 'diamond', label: 'Diamond', icon: <Scaling size={13} /> },
         ]}
         onChange={(kind: DesignGradientKind) => onChange({ ...paint, type: 'gradient', kind })}
       />
