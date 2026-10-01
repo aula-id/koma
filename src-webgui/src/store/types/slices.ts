@@ -183,7 +183,13 @@ export type UiSlice = {
   // Submit sends the Mermaid, which is what the model reads.
   diagramChatQueue: { title: string; mermaid: string; doc: DiagramDoc }[]
   /** Pending composer marker-insert rows for AttachFile/AttachPaste from outside the composer. */
-  pendingComposerAttachmentInserts: { id: string; kind: 'image' | 'pasted_text' }[]
+  pendingComposerAttachmentInserts: {
+    id: string
+    kind: 'image' | 'pasted_text'
+    name?: string
+    text?: string
+    path?: string
+  }[]
   // Design slices queued as chips. Submit sends the kdsgn fence, which is
   // what the model reads. The fence is not written into the draft text.
   designChatQueue: { title: string; text: string }[]

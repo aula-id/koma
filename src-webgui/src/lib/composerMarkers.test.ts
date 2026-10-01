@@ -60,6 +60,11 @@ import { pasteMarker } from './pasteText.ts'
   const linkedLocal = listedComposerAttachments('', attachments, [{ id: 'p2', markerN: 2, n: 2 }])
   assert.equal(linkedLocal.filter((item) => item.kind === 'pasted_text').length, 1)
 
+  const labeled = listedComposerAttachments('', attachments, [{ id: 'p2', markerN: 2, n: 2, label: 'cascade.rs:62:67' }])
+  assert.equal(labeled.find((item) => item.kind === 'pasted_text')?.name, 'cascade.rs:62:67')
+  const pendingLabel = listedComposerAttachments('', attachments, [{ id: 'p0', n: 0, label: 'cascade.rs:22' }])
+  assert.equal(pendingLabel.find((item) => item.kind === 'pasted_text')?.name, 'cascade.rs:22')
+
   const unplaced = listedComposerAttachments('hello', attachments, [])
   assert.equal(unplaced.some((item) => item.key === 'image:1'), true)
 }

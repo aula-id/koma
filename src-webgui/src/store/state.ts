@@ -309,13 +309,16 @@ export type KomaState = {
   insertToComposer: (path: string) => void
   /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
   putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
-  /** Insert selection ask payload and focus chat. */
-  askCodingSelectionInChat: (payload: string) => void
+  /** Stage a code-range paste pile (compact chip; body goes out on send). */
+  askCodingSelectionInChat: (payload: { text: string; label: string; path: string }) => void
   /** Queue a diagram drawing for the composer. The model receives its Mermaid. */
   addDiagramToChat: (item: { title: string; mermaid: string; doc: DiagramDoc }) => void
   consumeDiagramChatQueue: () => void
   /** Register a marker-insert row before AttachFile / AttachPaste from diagram → chat. */
-  stageComposerAttachmentInsert: (kind: 'image' | 'pasted_text') => string
+  stageComposerAttachmentInsert: (
+    kind: 'image' | 'pasted_text',
+    extra?: { name?: string; text?: string; path?: string },
+  ) => string
   consumePendingComposerAttachmentInserts: () => void
   /** Queue a design slice as a chat chip. The model receives its kdsgn fence. */
   addDesignToChat: (item: { title: string; text: string }) => void

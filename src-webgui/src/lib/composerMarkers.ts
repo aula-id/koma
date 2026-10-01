@@ -73,13 +73,17 @@ export type ListedComposerAttachment = {
 export function listedComposerAttachments(
   _draft: string,
   attachments: Array<{ kind: 'image' | 'file' | 'pasted_text'; markerN: number; name: string }>,
-  localPastes: Array<{ id: string; markerN?: number; n?: number }>,
+  localPastes: Array<{ id: string; markerN?: number; n?: number; label?: string }>,
 ): ListedComposerAttachment[] {
   const listed: ListedComposerAttachment[] = []
   const seen = new Set<string>()
+  const pendingLabels = localPastes.filter((paste) => paste.markerN == null && paste.label).map((paste) => paste.label as string)
+  let pendingLabelAt = 0
   for (const att of attachments) {
     const key = `${att.kind}:${att.markerN}`
-    listed.push({ key, kind: att.kind, markerN: att.markerN, name: att.name })
+    const local = att.kind === 'pasted_text' ? localPastes.find((paste) => paste.markerN === att.markerN) : undefined
+    const pendingLabel = !local && att.kind === 'pasted_text' ? pendingLabels[pendingLabelAt++] : undefined
+    listed.push({ key, kind: att.kind, markerN: att.markerN, name: local?.label || pendingLabel || att.name })
     seen.add(key)
   }
   let unmatchedSessionPastes = attachments.filter(
@@ -93,7 +97,7 @@ export function listedComposerAttachments(
         key: paste.id,
         kind: 'pasted_text',
         markerN: paste.markerN,
-        name: `Pasted Text #${paste.markerN}`,
+        name: paste.label || `Pasted Text #${paste.markerN}`,
         id: paste.id,
       })
       seen.add(key)
@@ -107,7 +111,7 @@ export function listedComposerAttachments(
       key: paste.id,
       kind: 'pasted_text',
       markerN: null,
-      name: 'Pasted Text',
+      name: paste.label || 'Pasted Text',
       id: paste.id,
     })
   }

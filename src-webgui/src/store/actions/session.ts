@@ -36,12 +36,19 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     })
   },
   askCodingSelectionInChat: (payload) => {
-    get().insertToComposer(payload)
+    const text = payload?.text?.replace(/\s+$/, '') ?? ''
+    if (!text) return
+    get().stageComposerAttachmentInsert('pasted_text', {
+      name: payload.label,
+      text,
+      path: payload.path,
+    })
+    get().req({ r: 'AttachPaste', text })
     get().activateTab('chat')
     queueMicrotask(() => {
       const el = document.querySelector(
-        '[data-tour="composer"] textarea',
-      ) as HTMLTextAreaElement | null
+        '[data-tour="composer"] textarea, [data-tour="composer"] [contenteditable="true"]',
+      ) as HTMLElement | null
       el?.focus()
     })
   },
@@ -50,12 +57,15 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     get().activateTab('chat')
   },
   consumeDiagramChatQueue: () => set((s) => ({ ui: { ...s.ui, diagramChatQueue: [] } })),
-  stageComposerAttachmentInsert: (kind) => {
+  stageComposerAttachmentInsert: (kind, extra) => {
     const id = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
     set((s) => ({
       ui: {
         ...s.ui,
-        pendingComposerAttachmentInserts: [...s.ui.pendingComposerAttachmentInserts, { id, kind }],
+        pendingComposerAttachmentInserts: [
+          ...s.ui.pendingComposerAttachmentInserts,
+          { id, kind, name: extra?.name, text: extra?.text, path: extra?.path },
+        ],
       },
     }))
     return id

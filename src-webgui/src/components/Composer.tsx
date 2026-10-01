@@ -77,7 +77,7 @@ function mintDiagramChipId(): string {
   return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
-type LocalPaste = PastedBlock & { id: string; markerN?: number }
+type LocalPaste = PastedBlock & { id: string; markerN?: number; label?: string }
 
 function steerPreview(text: string): string {
   const pasted = splitPasteMessage(text)
@@ -292,9 +292,14 @@ export function Composer() {
 
   useEffect(() => {
     if (!pendingComposerAttachmentInserts.length) return
+    const pastes: LocalPaste[] = []
     for (const row of pendingComposerAttachmentInserts) {
       markerInsertQueue.current.push({ id: row.id, kind: row.kind, markerN: null, cancelled: false })
+      if (row.kind === 'pasted_text' && row.text) {
+        pastes.push({ id: row.id, n: 0, path: row.path ?? '', text: row.text, label: row.name })
+      }
     }
+    if (pastes.length) setLocalPastes((prev) => [...prev, ...pastes])
     consumePendingComposerAttachmentInserts()
     flushAttachmentInserts()
   }, [pendingComposerAttachmentInserts, consumePendingComposerAttachmentInserts, attachments, req])

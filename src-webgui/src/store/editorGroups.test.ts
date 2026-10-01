@@ -8,6 +8,7 @@ import {
   gridLayout,
   gridLayoutFromTree,
   insertGroup,
+  nodeFracRect,
   isTabVisible,
   leafIds,
   neighbourInGroup,
@@ -126,12 +127,12 @@ const L2: EditorLayoutNode = {
 
 {
   const laid = gridLayout(['g0'], { g0: 1.7 }, 'col')
-  assert.equal(laid.gridTemplateColumns, 'minmax(0, 1fr)')
-  assert.equal(laid.gridTemplateRows, 'auto minmax(0, 1fr)')
   assert.equal(laid.cells.length, 1)
   assert.equal(laid.cells[0].grip, null)
-  assert.deepEqual(laid.cells[0].bar, { gridColumn: '1', gridRow: '1' })
-  assert.deepEqual(laid.cells[0].content, { gridColumn: '1', gridRow: '2' })
+  assert.equal(laid.cells[0].bar.left, '0%')
+  assert.equal(laid.cells[0].bar.top, '0%')
+  assert.equal(laid.cells[0].bar.width, '100%')
+  assert.equal(laid.cells[0].content.top, 'calc(0% + 32px)')
 }
 
 {
@@ -289,16 +290,16 @@ const L2: EditorLayoutNode = {
 
 {
   const row = gridLayout(['g0', 'g1'], { g0: 2, g1: 1 }, 'row')
-  assert.equal(row.cells[0].bar.gridColumn, '1 / 2')
-  assert.equal(row.cells[0].content.gridRow, '2 / 3')
-  assert.equal(row.cells[0].grip?.gridColumn, '2')
-  assert.equal(row.cells[1].content.gridColumn, '3 / 4')
+  assert.equal(row.cells[0].bar.width, '66.6667%')
+  assert.equal(row.cells[1].bar.left, '66.6667%')
+  assert.equal(row.cells[1].bar.width, '33.3333%')
+  assert.ok(row.cells[0].grip?.left.includes('66.6667%'))
 
   const col = gridLayout(['g0', 'g1'], { g0: 1, g1: 1 }, 'col')
-  assert.equal(col.cells[0].bar.gridRow, '1')
-  assert.equal(col.cells[0].content.gridRow, '2 / 3')
-  assert.equal(col.cells[0].grip?.gridRow, '3')
-  assert.equal(col.cells[1].bar.gridRow, '4')
+  assert.equal(col.cells[0].bar.height, '32px')
+  assert.equal(col.cells[0].bar.top, '0%')
+  assert.equal(col.cells[1].bar.top, '50%')
+  assert.ok(col.cells[0].grip?.top.includes('50%'))
 }
 
 {
@@ -306,15 +307,56 @@ const L2: EditorLayoutNode = {
   assert.ok(laid.cells.length === 3)
   assert.ok(laid.grips.length === 2)
   const byId = Object.fromEntries(laid.cells.map((c) => [c.id, c]))
-  assert.equal(byId.g0.bar.gridColumn, '1 / 2')
-  assert.equal(byId.g2.bar.gridColumn, '3 / 4')
-  assert.equal(byId.g2.content.gridRow, '2 / 6')
-  assert.equal(byId.g1.bar.gridRow, '4')
+  assert.equal(byId.g0.bar.width, '50%')
+  assert.equal(byId.g2.bar.left, '50%')
+  assert.equal(byId.g2.bar.width, '50%')
+  assert.equal(byId.g2.bar.height, '32px')
+  assert.equal(byId.g1.bar.top, '50%')
+  assert.equal(byId.g1.bar.width, '50%')
   const vGrip = laid.grips.find((g) => g.dir === 'row')
   const hGrip = laid.grips.find((g) => g.dir === 'col')
-  assert.equal(vGrip?.cell.gridColumn, '2')
-  assert.equal(hGrip?.cell.gridRow, '3')
-  assert.equal(hGrip?.cell.gridColumn, '1 / 2')
+  assert.ok(vGrip?.cell.left.includes('50%'))
+  assert.equal(vGrip?.cell.height, '100%')
+  assert.ok(hGrip?.cell.top.includes('50%'))
+  assert.equal(hGrip?.cell.width, '50%')
+}
+
+{
+  const twin: EditorLayoutNode = {
+    type: 'split',
+    id: 's0',
+    dir: 'row',
+    aSize: 1,
+    bSize: 1,
+    a: {
+      type: 'split',
+      id: 's1',
+      dir: 'col',
+      aSize: 1,
+      bSize: 3,
+      a: { type: 'leaf', id: 'g0' },
+      b: { type: 'leaf', id: 'g1' },
+    },
+    b: {
+      type: 'split',
+      id: 's2',
+      dir: 'col',
+      aSize: 3,
+      bSize: 1,
+      a: { type: 'leaf', id: 'g2' },
+      b: { type: 'leaf', id: 'g3' },
+    },
+  }
+  const left = nodeFracRect(twin, 'g0')
+  const rightTop = nodeFracRect(twin, 'g2')
+  assert.deepEqual(left, { x: 0, y: 0, w: 0.5, h: 0.25 })
+  assert.deepEqual(rightTop, { x: 0.5, y: 0, w: 0.5, h: 0.75 })
+  const resized = resizeSplit(twin, 's1', 80, 400)
+  assert.deepEqual(nodeFracRect(resized, 'g2'), rightTop)
+  assert.deepEqual(nodeFracRect(resized, 'g3'), { x: 0.5, y: 0.75, w: 0.5, h: 0.25 })
+  assert.notDeepEqual(nodeFracRect(resized, 'g0'), left)
+  const leftOnly = resizeSplit(twin, 's1', -80, 400)
+  assert.deepEqual(nodeFracRect(leftOnly, 'g2'), rightTop)
 }
 
 {

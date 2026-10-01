@@ -36,11 +36,10 @@ import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import {
   MAX_GROUPS,
   dropZoneFor,
-  findSplit,
   gridLayoutFromTree,
   groupOf,
   isTabVisible,
-  leafIds,
+  nodeFracRect,
   normalizeGroups,
   type DropZone,
   type EditorGroupId,
@@ -637,9 +636,9 @@ function EditorDropHighlight({
   )
 }
 
-// A single CSS grid hosts every group strip, every tab body, and every divider.
-// Tab bodies stay siblings even when moved: only their grid coordinates change,
-// so React never remounts chat, Monaco, xterm, streams, or extension iframes.
+// One positioning host for every group strip, tab body, and divider. Tab bodies
+// stay siblings: only their boxes change, so React never remounts chat, Monaco,
+// xterm, streams, or extension iframes. Sibling splits keep isolated sizes.
 function TabbedMain() {
   const rawUi = useKoma((s) => s.ui)
   const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
@@ -663,20 +662,19 @@ function TabbedMain() {
     [ui.splitTree, ui.groups],
   )
 
-  // After 2→1 collapse, some WebViews keep the previous multi-track paint until
+  // After 2→1 collapse, some WebViews keep the previous multi-pane paint until
   // a forced reflow. Nudge when the live group count drops to one.
   const groupCount = ui.groups?.length ?? 0
   useLayoutEffect(() => {
     if (groupCount !== 1) return
     const el = gridRef.current
     if (!el) return
-    // Read layout → write a no-op style toggle to flush stale tracks.
     void el.offsetWidth
-    const prev = el.style.gridTemplateColumns
-    el.style.gridTemplateColumns = 'minmax(0, 1fr)'
+    const prev = el.style.transform
+    el.style.transform = 'translateZ(0)'
     void el.offsetWidth
-    el.style.gridTemplateColumns = prev
-  }, [groupCount, layout.gridTemplateColumns, layout.gridTemplateRows])
+    el.style.transform = prev
+  }, [groupCount, layout.cells])
 
   const cells = useMemo(
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
@@ -871,18 +869,12 @@ function TabbedMain() {
   const startResize = (splitId: SplitNodeId, dir: SplitDir, e: ReactMouseEvent) => {
     e.preventDefault()
     const tree = ui.splitTree
-    const split = tree ? findSplit(tree, splitId) : null
-    const ids = split ? leafIds(split) : []
-    const rects = ids
-      .map((id) => paneEls.current.get(id)?.getBoundingClientRect())
-      .filter((r): r is DOMRect => !!r)
-    const total = rects.length
-      ? dir === 'row'
-        ? Math.max(...rects.map((r) => r.right)) - Math.min(...rects.map((r) => r.left))
-        : Math.max(...rects.map((r) => r.bottom)) - Math.min(...rects.map((r) => r.top))
-      : dir === 'row'
-        ? (gridRef.current?.clientWidth ?? 1)
-        : (gridRef.current?.clientHeight ?? 1)
+    const box = nodeFracRect(tree, splitId)
+    const host = gridRef.current
+    const total =
+      dir === 'row'
+        ? (box?.w ?? 1) * (host?.clientWidth ?? 1)
+        : (box?.h ?? 1) * (host?.clientHeight ?? 1)
     let prev = dir === 'row' ? e.clientX : e.clientY
     let raf = 0
     let pending: number | null = null
@@ -917,14 +909,10 @@ function TabbedMain() {
     <div className="flex h-full w-full min-w-0 flex-col">
       <div
         ref={gridRef}
-        className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
-        style={{
-          gridTemplateColumns: layout.gridTemplateColumns,
-          gridTemplateRows: layout.gridTemplateRows,
-        }}
+        className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
       >
         {layout.cells.map((cell) => (
-          <div key={`bar:${cell.id}`} style={cell.bar} className="min-w-0">
+          <div key={`bar:${cell.id}`} style={cell.bar} className="z-20 min-w-0">
             <TabBar groupId={cell.id} focused={ui.activeGroupId === cell.id} />
           </div>
         ))}

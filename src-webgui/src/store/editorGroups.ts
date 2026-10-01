@@ -6,8 +6,9 @@
 // is the only place membership, focus, and the tree are repaired — open*Tab
 // paths stay unaware of splits.
 //
-// Layout is still ONE css grid (see gridLayout) so tab bodies stay siblings:
-// only grid coordinates change, and React never remounts chat / Monaco / xterm.
+// Panes stay siblings (absolute boxes) so React never remounts chat / Monaco /
+// xterm. Each split owns its own aSize/bSize — sibling stacks do not share
+// tracks (tmux: LA[top|bot]|RB[top|bot] resizes independently).
 
 export type EditorGroupId = string
 export type SplitNodeId = string
@@ -37,6 +38,9 @@ export const MAX_GROUPS = 8
 
 /** Width of the draggable divider between two children, in px. */
 export const GRIP_PX = 5
+
+/** Tab strip height. Matches `TabBar` `h-8` so content boxes sit under it. */
+export const TAB_BAR_PX = 32
 
 const MIN_FRACTION = 0.12
 
@@ -472,219 +476,119 @@ export function resizeGroups(
   return { ...sizes, [a]: tree.aSize, [b]: tree.bSize }
 }
 
-export type GridCell = { gridColumn: string; gridRow: string }
+export type FracRect = { x: number; y: number; w: number; h: number }
+
+export type PaneBox = {
+  position: 'absolute'
+  left: string
+  top: string
+  width: string
+  height: string
+}
+
+export type GridCell = PaneBox
 
 export type GroupCells = {
   id: EditorGroupId
-  bar: GridCell
-  content: GridCell
+  bar: PaneBox
+  content: PaneBox
 }
 
 export type GripCell = {
   id: SplitNodeId
   dir: SplitDir
-  cell: GridCell
+  cell: PaneBox
 }
 
-type PaneRect = { col: number; row: number; cols: number; rows: number }
-
-function paneSize(node: EditorLayoutNode): { cols: number; rows: number } {
-  if (node.type === 'leaf') return { cols: 1, rows: 1 }
-  const a = paneSize(node.a)
-  const b = paneSize(node.b)
-  if (node.dir === 'row') return { cols: a.cols + b.cols, rows: Math.max(a.rows, b.rows) }
-  return { cols: Math.max(a.cols, b.cols), rows: a.rows + b.rows }
+function pct(n: number): string {
+  const value = Number.isFinite(n) ? Math.max(0, n) * 100 : 0
+  return `${+value.toFixed(4)}%`
 }
 
-function assignRects(
-  node: EditorLayoutNode,
-  rect: PaneRect,
-  leaves: Map<EditorGroupId, PaneRect>,
-  splits: Map<SplitNodeId, { rect: PaneRect; dir: SplitDir; afterCol?: number; afterRow?: number }>,
-) {
-  if (node.type === 'leaf') {
-    leaves.set(node.id, rect)
-    return
+function paneBox(x: number, y: number, w: number, h: number): PaneBox {
+  return { position: 'absolute', left: pct(x), top: pct(y), width: pct(w), height: pct(h) }
+}
+
+function leafBoxes(rect: FracRect): { bar: PaneBox; content: PaneBox } {
+  return {
+    bar: { position: 'absolute', left: pct(rect.x), top: pct(rect.y), width: pct(rect.w), height: `${TAB_BAR_PX}px` },
+    content: {
+      position: 'absolute',
+      left: pct(rect.x),
+      top: `calc(${pct(rect.y)} + ${TAB_BAR_PX}px)`,
+      width: pct(rect.w),
+      height: `calc(${pct(rect.h)} - ${TAB_BAR_PX}px)`,
+    },
   }
+}
+
+function splitChildren(node: Extract<EditorLayoutNode, { type: 'split' }>, rect: FracRect): { a: FracRect; b: FracRect; cut: number } {
+  const pair = node.aSize + node.bSize
+  const t = pair > 0 && Number.isFinite(pair) ? node.aSize / pair : 0.5
   if (node.dir === 'row') {
-    const ac = paneSize(node.a).cols
-    assignRects(node.a, { col: rect.col, row: rect.row, cols: ac, rows: rect.rows }, leaves, splits)
-    assignRects(node.b, { col: rect.col + ac, row: rect.row, cols: paneSize(node.b).cols, rows: rect.rows }, leaves, splits)
-    splits.set(node.id, { rect, dir: 'row', afterCol: rect.col + ac - 1 })
-    return
+    return {
+      a: { x: rect.x, y: rect.y, w: rect.w * t, h: rect.h },
+      b: { x: rect.x + rect.w * t, y: rect.y, w: rect.w * (1 - t), h: rect.h },
+      cut: t,
+    }
   }
-  const ar = paneSize(node.a).rows
-  assignRects(node.a, { col: rect.col, row: rect.row, cols: rect.cols, rows: ar }, leaves, splits)
-  assignRects(node.b, { col: rect.col, row: rect.row + ar, cols: rect.cols, rows: paneSize(node.b).rows }, leaves, splits)
-  splits.set(node.id, { rect, dir: 'col', afterRow: rect.row + ar - 1 })
-}
-
-function scaleRange(weights: number[], start: number, end: number, target: number) {
-  let sum = 0
-  for (let i = start; i < end; i++) sum += weights[i] ?? 0
-  if (end <= start) return
-  if (sum <= 0) {
-    const each = target / (end - start)
-    for (let i = start; i < end; i++) weights[i] = each
-    return
+  return {
+    a: { x: rect.x, y: rect.y, w: rect.w, h: rect.h * t },
+    b: { x: rect.x, y: rect.y + rect.h * t, w: rect.w, h: rect.h * (1 - t) },
+    cut: t,
   }
-  const factor = target / sum
-  for (let i = start; i < end; i++) weights[i] *= factor
 }
 
-function applyWeights(node: EditorLayoutNode, rect: PaneRect, colW: number[], rowW: number[]) {
-  if (node.type === 'leaf') return
-  if (node.dir === 'row') {
-    const ac = paneSize(node.a).cols
-    scaleRange(colW, rect.col, rect.col + ac, node.aSize)
-    scaleRange(colW, rect.col + ac, rect.col + rect.cols, node.bSize)
-  } else {
-    const ar = paneSize(node.a).rows
-    scaleRange(rowW, rect.row, rect.row + ar, node.aSize)
-    scaleRange(rowW, rect.row + ar, rect.row + rect.rows, node.bSize)
+function gripBox(dir: SplitDir, rect: FracRect, cut: number): PaneBox {
+  if (dir === 'row') {
+    return {
+      position: 'absolute',
+      left: `calc(${pct(rect.x + rect.w * cut)} - ${GRIP_PX / 2}px)`,
+      top: pct(rect.y),
+      width: `${GRIP_PX}px`,
+      height: pct(rect.h),
+    }
   }
-  const aRect =
-    node.dir === 'row'
-      ? { ...rect, cols: paneSize(node.a).cols }
-      : { ...rect, rows: paneSize(node.a).rows }
-  const bRect =
-    node.dir === 'row'
-      ? { col: rect.col + aRect.cols, row: rect.row, cols: paneSize(node.b).cols, rows: rect.rows }
-      : { col: rect.col, row: rect.row + aRect.rows, cols: rect.cols, rows: paneSize(node.b).rows }
-  applyWeights(node.a, aRect, colW, rowW)
-  applyWeights(node.b, bRect, colW, rowW)
-}
-
-function cssColStart(paneCol: number, vGrips: Set<number>): number {
-  let css = 1
-  for (let i = 0; i < paneCol; i++) css += 1 + (vGrips.has(i) ? 1 : 0)
-  return css
-}
-
-function cssAfterFr(paneCol: number, vGrips: Set<number>): number {
-  return cssColStart(paneCol, vGrips) + 1
-}
-
-function cssBarRow(paneRow: number, hGrips: Set<number>, rows: number): number {
-  if (paneRow >= rows) {
-    let css = 1
-    for (let i = 0; i < rows; i++) css += 2 + (hGrips.has(i) ? 1 : 0)
-    return css
+  return {
+    position: 'absolute',
+    left: pct(rect.x),
+    top: `calc(${pct(rect.y + rect.h * cut)} - ${GRIP_PX / 2}px)`,
+    width: pct(rect.w),
+    height: `${GRIP_PX}px`,
   }
-  let css = 1
-  for (let i = 0; i < paneRow; i++) css += 2 + (hGrips.has(i) ? 1 : 0)
-  return css
 }
 
-function cssContentRow(paneRow: number, hGrips: Set<number>): number {
-  return cssBarRow(paneRow, hGrips, paneRow + 1) + 1
-}
-
-function cssAfterContent(paneRow: number, hGrips: Set<number>): number {
-  return cssContentRow(paneRow, hGrips) + 1
-}
-
-function cssColGrip(afterPaneCol: number, vGrips: Set<number>): number {
-  return cssColStart(afterPaneCol, vGrips) + 1
-}
-
-function cssRowGrip(afterPaneRow: number, hGrips: Set<number>): number {
-  return cssBarRow(afterPaneRow, hGrips, afterPaneRow + 1) + 2
+/** Fraction of the editor box owned by a leaf or split. Isolated from siblings. */
+export function nodeFracRect(tree: EditorLayoutNode | null | undefined, id: string): FracRect | null {
+  const walk = (node: EditorLayoutNode, rect: FracRect): FracRect | null => {
+    if (node.type === 'leaf') return node.id === id ? rect : null
+    if (node.id === id) return rect
+    const kids = splitChildren(node, rect)
+    return walk(node.a, kids.a) ?? walk(node.b, kids.b)
+  }
+  return walk(asLayoutNode(tree), { x: 0, y: 0, w: 1, h: 1 })
 }
 
 export function gridLayoutFromTree(tree: EditorLayoutNode | null | undefined): {
-  gridTemplateColumns: string
-  gridTemplateRows: string
   cells: GroupCells[]
   grips: GripCell[]
 } {
   tree = asLayoutNode(tree)
-  if (tree.type === 'leaf') {
-    return {
-      gridTemplateColumns: 'minmax(0, 1fr)',
-      gridTemplateRows: 'auto minmax(0, 1fr)',
-      cells: [
-        {
-          id: tree.id,
-          bar: { gridColumn: '1', gridRow: '1' },
-          content: { gridColumn: '1', gridRow: '2' },
-        },
-      ],
-      grips: [],
-    }
-  }
-
-  const size = paneSize(tree)
-  const leaves = new Map<EditorGroupId, PaneRect>()
-  const splits = new Map<SplitNodeId, { rect: PaneRect; dir: SplitDir; afterCol?: number; afterRow?: number }>()
-  const rootRect = { col: 0, row: 0, cols: size.cols, rows: size.rows }
-  assignRects(tree, rootRect, leaves, splits)
-  const colW = Array.from({ length: size.cols }, () => 1)
-  const rowW = Array.from({ length: size.rows }, () => 1)
-  applyWeights(tree, rootRect, colW, rowW)
-
-  const vGrips = new Set<number>()
-  const hGrips = new Set<number>()
-  for (const split of splits.values()) {
-    if (split.dir === 'row' && split.afterCol != null) vGrips.add(split.afterCol)
-    if (split.dir === 'col' && split.afterRow != null) hGrips.add(split.afterRow)
-  }
-
-  const colTracks: string[] = []
-  for (let i = 0; i < size.cols; i++) {
-    colTracks.push(`minmax(0, ${colW[i]}fr)`)
-    if (vGrips.has(i)) colTracks.push(`${GRIP_PX}px`)
-  }
-  const rowTracks: string[] = []
-  for (let i = 0; i < size.rows; i++) {
-    rowTracks.push('auto')
-    rowTracks.push(`minmax(0, ${rowW[i]}fr)`)
-    if (hGrips.has(i)) rowTracks.push(`${GRIP_PX}px`)
-  }
-
   const cells: GroupCells[] = []
-  for (const [id, rect] of leaves) {
-    const colStart = cssColStart(rect.col, vGrips)
-    const colEnd = cssAfterFr(rect.col + rect.cols - 1, vGrips)
-    const barRow = cssBarRow(rect.row, hGrips, size.rows)
-    const contentStart = cssContentRow(rect.row, hGrips)
-    const contentEnd = cssAfterContent(rect.row + rect.rows - 1, hGrips)
-    cells.push({
-      id,
-      bar: { gridColumn: `${colStart} / ${colEnd}`, gridRow: `${barRow}` },
-      content: { gridColumn: `${colStart} / ${colEnd}`, gridRow: `${contentStart} / ${contentEnd}` },
-    })
-  }
-
   const grips: GripCell[] = []
-  for (const [id, split] of splits) {
-    if (split.dir === 'row' && split.afterCol != null) {
-      grips.push({
-        id,
-        dir: 'row',
-        cell: {
-          gridColumn: `${cssColGrip(split.afterCol, vGrips)}`,
-          gridRow: `${cssBarRow(split.rect.row, hGrips, size.rows)} / ${cssAfterContent(split.rect.row + split.rect.rows - 1, hGrips)}`,
-        },
-      })
-    } else if (split.dir === 'col' && split.afterRow != null) {
-      grips.push({
-        id,
-        dir: 'col',
-        cell: {
-          gridColumn: `${cssColStart(split.rect.col, vGrips)} / ${cssAfterFr(split.rect.col + split.rect.cols - 1, vGrips)}`,
-          gridRow: `${cssRowGrip(split.afterRow, hGrips)}`,
-        },
-      })
+  const walk = (node: EditorLayoutNode, rect: FracRect) => {
+    if (node.type === 'leaf') {
+      const boxes = leafBoxes(rect)
+      cells.push({ id: node.id, bar: boxes.bar, content: boxes.content })
+      return
     }
+    const kids = splitChildren(node, rect)
+    grips.push({ id: node.id, dir: node.dir, cell: gripBox(node.dir, rect, kids.cut) })
+    walk(node.a, kids.a)
+    walk(node.b, kids.b)
   }
-
-  return {
-    gridTemplateColumns: colTracks.join(' '),
-    gridTemplateRows: rowTracks.join(' '),
-    cells,
-    grips,
-  }
+  walk(tree, { x: 0, y: 0, w: 1, h: 1 })
+  return { cells, grips }
 }
 
 /** Flat two-pane helper used by older tests. Prefer gridLayoutFromTree. */
@@ -692,15 +596,12 @@ export function gridLayout(
   groups: readonly EditorGroupId[],
   sizes: Record<EditorGroupId, number>,
   dir: SplitDir,
-): { gridTemplateColumns: string; gridTemplateRows: string; cells: Array<GroupCells & { grip: GridCell | null }> } {
+): { cells: Array<GroupCells & { grip: PaneBox | null }> } {
   if (groups.length <= 1) {
     const laid = gridLayoutFromTree({ type: 'leaf', id: groups[0] ?? DEFAULT_GROUP })
-    return {
-      ...laid,
-      cells: laid.cells.map((cell) => ({ ...cell, grip: null })),
-    }
+    return { cells: laid.cells.map((cell) => ({ ...cell, grip: null })) }
   }
-  const tree: EditorLayoutNode = {
+  const laid = gridLayoutFromTree({
     type: 'split',
     id: 's0',
     dir,
@@ -708,12 +609,9 @@ export function gridLayout(
     bSize: sizes[groups[1]] ?? 1,
     a: { type: 'leaf', id: groups[0] },
     b: { type: 'leaf', id: groups[1] },
-  }
-  const laid = gridLayoutFromTree(tree)
+  })
   const grip = laid.grips[0]?.cell ?? null
   return {
-    gridTemplateColumns: laid.gridTemplateColumns,
-    gridTemplateRows: laid.gridTemplateRows,
     cells: laid.cells.map((cell, i) => ({
       ...cell,
       grip: i === 0 ? grip : null,

@@ -33,26 +33,28 @@ export function codingRangeToken(
   return b === a ? `${base}:${a} ` : `${base}:${a}-${b} `
 }
 
-/**
- * Ask-in-chat payload: range token + fenced selection so the model sees the
- * actual buffer text (may differ from disk if dirty).
- */
-export function codingAskInChatPayload(
-  root: string,
+/** Pile label: `file.rs:22` or `file.rs:62:67`. */
+export function codingAskInChatLabel(path: string, startLine: number, endLine: number): string {
+  const name = path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || path || 'file'
+  const a = Math.max(1, startLine)
+  const b = Math.max(a, endLine)
+  return b === a ? `${name}:${a}` : `${name}:${a}:${b}`
+}
+
+/** Selection staged as a paste pile. The composer hides the body until send. */
+export function codingAskInChatPaste(
   path: string,
-  workdirs: string[],
   startLine: number,
   endLine: number,
   selectedText: string,
-): string {
-  const token = codingRangeToken(root, path, workdirs, startLine, endLine).trimEnd()
-  const body = selectedText.replace(/\s+$/, '')
-  if (!body) return `${token} `
-  // Cap huge selections so the composer stays usable.
-  const max = 12_000
-  const clipped = body.length > max ? `${body.slice(0, max)}\n…` : body
-  const fencePath = path.replace(/\\/g, '/')
-  return `${token}\n\`\`\`${startLine}:${endLine}:${fencePath}\n${clipped}\n\`\`\`\n`
+): { text: string; label: string; path: string } | null {
+  const text = selectedText.replace(/\s+$/, '')
+  if (!text) return null
+  const a = Math.max(1, startLine)
+  const b = Math.max(a, endLine)
+  const rel = path.replace(/\\/g, '/').replace(/^\/+/, '')
+  const fencePath = b === a ? `${rel}:${a}` : `${rel}:${a}:${b}`
+  return { text, label: codingAskInChatLabel(path, a, b), path: fencePath }
 }
 
 /** Custom MIME for tree → composer DnD (not external file upload). */
