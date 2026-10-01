@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { createPortal } from 'react-dom'
-import { Minus, Plus } from 'lucide-react'
+import { createContext, useContext, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { ChevronLeft, Minus, Plus } from 'lucide-react'
 import {
   cacheDesignImage,
   defaultGradient,
@@ -19,9 +18,19 @@ import {
   type DesignGradientKind,
   type DesignImageScale,
   type DesignPaint,
+  type DesignToken,
 } from '../../lib/design'
+import { KomaSelect } from '../KomaSelect'
 import { TokenMenu } from './DesignTokenMenu'
-import type { DesignToken } from '../../lib/design'
+
+function LabeledControl({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2">
+      <span className="w-14 flex-none truncate text-[11px] text-koma-dim">{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </label>
+  )
+}
 
 const KINDS: { value: DesignGradientKind; label: string }[] = [
   { value: 'linear', label: 'Linear' },
@@ -29,6 +38,34 @@ const KINDS: { value: DesignGradientKind; label: string }[] = [
   { value: 'angular', label: 'Angular' },
   { value: 'diamond', label: 'Diamond' },
 ]
+
+export type PaintInspectorPage = {
+  kind: 'paint'
+  title: string
+  paint: DesignPaint
+  fallback: string
+  tokens?: DesignToken[]
+  allowImage?: boolean
+  allowGradient?: boolean
+  onChange: (paint: DesignPaint) => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+}
+
+export type TokenInspectorPage = {
+  kind: 'token'
+  title: string
+  tokens: DesignToken[]
+  selected?: string
+  onPick: (name: string | null) => void
+}
+
+export type InspectorPage = PaintInspectorPage | TokenInspectorPage
+
+export const InspectorPageContext = createContext<(page: InspectorPage) => void>(() => {})
+
+export function useInspectorPage() {
+  return useContext(InspectorPageContext)
+}
 
 function colorInputHex(value: string, fallback: string): string {
   const source = /^#[0-9a-fA-F]{3,8}$/.test(value) ? value : fallback
@@ -53,33 +90,79 @@ function parseHex(raw: string, tokens?: DesignToken[]): string | null {
   return null
 }
 
-export function DesignPaintPopup({
-  doc,
+function InspectorBack({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="flex h-8 items-center gap-1">
+      <button
+        type="button"
+        title="Back"
+        aria-label="Back"
+        onClick={onBack}
+        className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+      >
+        <ChevronLeft size={16} />
+      </button>
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-koma-fg">{title}</span>
+    </div>
+  )
+}
+
+export function InspectorPageView({ page, onBack }: { page: InspectorPage; onBack: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onBack()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onBack])
+  if (page.kind === 'token') {
+    return (
+      <div className="flex flex-col gap-2 px-2 pb-2 pt-1 text-[12px]">
+        <InspectorBack title={page.title} onBack={onBack} />
+        <TokenMenu tokens={page.tokens} selected={page.selected} allowNone onPick={(name) => { page.onPick(name); onBack() }} />
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-col gap-2 px-2 pb-2 pt-1 text-[12px]">
+      <InspectorBack title={page.title} onBack={onBack} />
+      <DesignPaintEditor
+        paint={page.paint}
+        fallback={page.fallback}
+        tokens={page.tokens}
+        allowImage={page.allowImage}
+        allowGradient={page.allowGradient}
+        onChange={page.onChange}
+        onStoreImage={page.onStoreImage}
+      />
+    </div>
+  )
+}
+
+export function DesignPaintEditor({
   paint,
   fallback,
   tokens,
   allowGradient = true,
   allowImage = true,
-  anchor,
   onChange,
-  onClose,
   onStoreImage,
 }: {
-  doc: DesignDoc
   paint: DesignPaint
   fallback: string
   tokens?: DesignToken[]
   allowGradient?: boolean
   allowImage?: boolean
-  anchor: HTMLElement | null
   onChange: (paint: DesignPaint) => void
-  onClose: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
-  const panelRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [editing, setEditing] = useState(0)
+  const [hexDraft, setHexDraft] = useState<string | null>(null)
   const mode = paint.type === 'gradient' ? 'gradient' : paint.type === 'image' ? 'image' : 'solid'
+  useEffect(() => {
+    setHexDraft(null)
+  }, [mode, editing])
   const stops = paint.stops?.length ? paint.stops : [{ color: '#4f46e5', at: 0 }, { color: '#22d3ee', at: 1 }]
   const stop = stops[Math.min(editing, stops.length - 1)] ?? stops[0]
   const solid = paint.color && paint.color !== 'none' ? paint.color : fallback
@@ -87,31 +170,10 @@ export function DesignPaintPopup({
   const picker = colorInputHex(hex, fallback)
   const imageUrl = paint.hash ? designImageUrl(paint.hash) : ''
   const opacity = Math.round((paint.opacity ?? 1) * 100)
-  const rect = anchor?.getBoundingClientRect()
-  const width = 284
-  const left = rect ? Math.min(Math.max(8, rect.left), window.innerWidth - width - 8) : 8
-  const top = rect ? (rect.bottom + 8 + 510 > window.innerHeight ? Math.max(8, rect.top - 518) : rect.bottom + 8) : 8
 
-  useEffect(() => {
-    const onDoc = (event: MouseEvent) => {
-      const target = event.target as Node
-      if (panelRef.current?.contains(target) || anchor?.contains(target)) return
-      onClose()
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [anchor, onClose])
-
-  const setSolid = (color: string) => onChange({ ...solidPaint(color), opacity: paint.opacity })
+  const setSolid = (color: string) => onChange({ ...solidPaint(color), opacity: paint.opacity, visible: paint.visible })
   const setStops = (next: { color: string; at: number }[], kind = paint.kind ?? 'linear') => {
-    onChange({ type: 'gradient', kind, stops: next, opacity: paint.opacity })
+    onChange({ type: 'gradient', kind, stops: next, opacity: paint.opacity, visible: paint.visible })
   }
   const setOpacity = (value: number) => {
     const next = Math.max(0, Math.min(100, value)) / 100
@@ -124,7 +186,7 @@ export function DesignPaintPopup({
     const hash = await hashBytes(bytes)
     cacheDesignImage(hash, bytes, mime)
     onStoreImage?.(hash, bytes, mime)
-    onChange(imagePaint(hash, paint.scale ?? 'fill'))
+    onChange({ ...imagePaint(hash, paint.scale ?? 'fill'), opacity: paint.opacity, visible: paint.visible })
   }
   const applyHex = (raw: string) => {
     const color = parseHex(raw, tokens)
@@ -133,81 +195,77 @@ export function DesignPaintPopup({
     else setSolid(color)
   }
 
-  return createPortal(
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-label="Color"
-      className="fixed z-[80] flex w-[284px] flex-col gap-2 rounded-lg border border-koma-border bg-koma-panel p-3 shadow-[0_0_12px_rgba(0,0,0,0.35)]"
-      style={{ left, top }}
-    >
-      <select
-        aria-label="Fill type"
-        value={mode}
-        onChange={(event) => {
-          const next = event.target.value
-          if (next === 'solid') setSolid(solid.startsWith('#') ? solid : fallback)
-          else if (next === 'gradient') onChange(defaultGradient(paint.kind ?? 'linear'))
-          else if (next === 'image') {
-            if (paint.hash) onChange({ ...paint, type: 'image', hash: paint.hash, scale: paint.scale ?? 'fill' })
-            else fileRef.current?.click()
-          }
-        }}
-        className="h-8 w-[116px] rounded-lg bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
-      >
-        <option value="solid">Solid</option>
-        {allowGradient ? <option value="gradient">Gradient</option> : null}
-        {allowImage ? <option value="image">Image</option> : null}
-      </select>
+  return (
+    <div className="flex flex-col gap-2">
+      <LabeledControl label="Type">
+        <KomaSelect
+          aria-label="Fill type"
+          value={mode}
+          onChange={(event) => {
+            const next = event.target.value
+            if (next === 'solid') setSolid(solid.startsWith('#') ? solid : fallback)
+            else if (next === 'gradient') onChange({ ...defaultGradient(paint.kind ?? 'linear'), opacity: paint.opacity, visible: paint.visible })
+            else if (next === 'image') onChange({ type: 'image', hash: paint.hash, scale: paint.scale ?? 'fill', opacity: paint.opacity, visible: paint.visible })
+          }}
+          className="h-7 w-full px-1.5 text-[12px]"
+        >
+          <option value="solid">Solid</option>
+          {allowGradient ? <option value="gradient">Gradient</option> : null}
+          {allowImage ? <option value="image">Image</option> : null}
+        </KomaSelect>
+      </LabeledControl>
       {mode === 'image' ? (
-        <div className="flex flex-col">
+        <div className="flex flex-col gap-2">
           <div
-            className="mb-1.5 flex h-[140px] items-center justify-center overflow-hidden rounded-lg"
+            className="flex h-[140px] items-center justify-center overflow-hidden rounded-lg"
             style={{
               backgroundColor: '#2a2d37',
               backgroundImage: 'conic-gradient(#3a3d48 0 25%, #2a2d37 0 50%, #3a3d48 0 75%, #2a2d37 0)',
               backgroundSize: '16px 16px',
             }}
           >
-            {imageUrl ? <img src={imageUrl} alt="" className="max-h-full max-w-full object-contain" /> : null}
+            {imageUrl ? <img src={imageUrl} alt="" className="max-h-full max-w-full object-contain" /> : <span className="text-[11px] text-koma-dim">No image</span>}
           </div>
-          {paint.hash ? (
-            <div className="mb-2 grid grid-cols-4 gap-0.5">
-              {(['fill', 'fit', 'crop', 'tile'] as DesignImageScale[]).map((scale) => (
-                <button
-                  key={scale}
-                  type="button"
-                  title={scale}
-                  aria-pressed={(paint.scale ?? 'fill') === scale}
-                  onClick={() => onChange({ ...paint, type: 'image', scale })}
-                  className={`h-8 rounded-lg text-[11px] capitalize ${((paint.scale ?? 'fill') === scale) ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover'}`}
-                >
-                  {scale}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <LabeledControl label="Scale">
+            <KomaSelect
+              aria-label="Image scale"
+              value={paint.scale ?? 'fill'}
+              onChange={(event) => {
+                const scale = event.target.value
+                if (scale !== 'fill' && scale !== 'fit' && scale !== 'crop' && scale !== 'tile') return
+                onChange({ ...paint, type: 'image', scale: scale as DesignImageScale })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="fill">Fill</option>
+              <option value="fit">Fit</option>
+              <option value="crop">Crop</option>
+              <option value="tile">Tile</option>
+            </KomaSelect>
+          </LabeledControl>
           <button
             type="button"
             className="h-8 w-full rounded-lg bg-koma-bg text-[12px] text-koma-fg hover:bg-koma-hover"
             onClick={() => fileRef.current?.click()}
           >
-            Choose image
+            {paint.hash ? 'Replace image' : 'Choose image'}
           </button>
         </div>
       ) : null}
       {mode === 'gradient' ? (
         <div className="flex flex-col gap-2">
-          <select
-            aria-label="Gradient kind"
-            value={paint.kind ?? 'linear'}
-            onChange={(event) => setStops(stops, event.target.value as DesignGradientKind)}
-            className="h-8 w-full rounded-lg bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
-          >
-            {KINDS.map((kind) => (
-              <option key={kind.value} value={kind.value}>{kind.label}</option>
-            ))}
-          </select>
+          <LabeledControl label="Style">
+            <KomaSelect
+              aria-label="Gradient kind"
+              value={paint.kind ?? 'linear'}
+              onChange={(event) => setStops(stops, event.target.value as DesignGradientKind)}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              {KINDS.map((kind) => (
+                <option key={kind.value} value={kind.value}>{kind.label}</option>
+              ))}
+            </KomaSelect>
+          </LabeledControl>
           <GradientRamp stops={stops} selected={editing} onSelect={setEditing} onStops={(next) => setStops(next)} />
         </div>
       ) : null}
@@ -215,16 +273,17 @@ export function DesignPaintPopup({
         <div className="flex flex-col gap-2">
           <HsvaWell hex={picker} onChange={applyHex} />
           {picker.startsWith('#') ? (
-            <div className="grid grid-cols-[16px_1fr] items-center gap-1 text-[11px] text-koma-dim">
+            <div className="flex flex-col gap-1">
               {(['h', 's', 'b'] as const).map((key) => {
                 const hsb = hexToHsb(picker)
                 const max = key === 'h' ? 360 : 100
+                const label = key === 'h' ? 'Hue' : key === 's' ? 'Sat' : 'Bri'
                 return (
-                  <span key={key} className="contents">
-                    <span className="uppercase">{key}</span>
+                  <label key={key} className="flex h-8 items-center gap-2 rounded-lg bg-koma-bg px-2">
+                    <span className="w-8 flex-none text-[11px] text-koma-dim">{label}</span>
                     <input
                       type="range"
-                      aria-label={key === 'h' ? 'Hue' : key === 's' ? 'Saturation' : 'Brightness'}
+                      aria-label={label}
                       min={0}
                       max={max}
                       value={Math.round(hsb[key])}
@@ -232,15 +291,16 @@ export function DesignPaintPopup({
                         const next = { ...hsb, [key]: Number(event.target.value) }
                         applyHex(hsbToHex(next.h, next.s, next.b))
                       }}
+                      className="min-w-0 flex-1"
                     />
-                  </span>
+                  </label>
                 )
               })}
             </div>
           ) : null}
           <button
             type="button"
-            className="h-7 rounded-lg bg-koma-bg text-[12px] text-koma-fg hover:bg-koma-hover"
+            className="h-8 rounded-lg bg-koma-bg text-[12px] text-koma-fg hover:bg-koma-hover"
             onClick={async () => {
               const Eye = (window as Window & { EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper
               if (!Eye) return
@@ -254,68 +314,94 @@ export function DesignPaintPopup({
           >
             Eyedropper
           </button>
-          <div className="flex gap-1">
-            <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+          <div className="grid grid-cols-[1fr_72px] gap-1">
+            <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2">
+              <span className="flex-none text-[11px] text-koma-dim">Hex</span>
               <input
                 aria-label="Hex"
-                defaultValue={hex.startsWith('#') ? hex.slice(1).toUpperCase() : hex}
-                key={hex}
-                onBlur={(event) => applyHex(event.target.value)}
-                className="h-8 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                value={hexDraft ?? (hex.startsWith('#') ? hex.slice(1).toUpperCase() : hex)}
+                onChange={(event) => {
+                  const raw = event.target.value
+                  setHexDraft(raw)
+                  const color = parseHex(raw, tokens)
+                  if (color) applyHex(color)
+                }}
+                onBlur={() => {
+                  if (hexDraft != null) applyHex(hexDraft)
+                  setHexDraft(null)
+                }}
+                className="h-6 min-w-0 flex-1 bg-transparent text-[12px] uppercase text-koma-fg outline-none"
               />
-            </div>
-            <div className="flex h-8 w-[60px] flex-none items-center rounded-lg bg-koma-bg px-1.5 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
-              <span className="text-[11px] text-koma-dim">%</span>
+            </label>
+            <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2">
+              <span className="flex-none text-[11px] text-koma-dim">%</span>
               <input
                 aria-label="Opacity"
-                defaultValue={String(opacity)}
-                key={opacity}
-                onBlur={(event) => {
+                value={String(opacity)}
+                onChange={(event) => {
                   const value = Number(event.target.value)
                   if (Number.isFinite(value)) setOpacity(value)
                 }}
-                className="h-8 min-w-0 flex-1 bg-transparent pl-1 text-[12px] text-koma-fg outline-none"
+                className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
               />
-            </div>
+            </label>
           </div>
           {picker.startsWith('#') ? (
-            <div className="grid grid-cols-4 gap-1">
+            <div className="grid grid-cols-2 gap-1">
               {(['r', 'g', 'b'] as const).map((key) => {
                 const rgba = hexToRgba(picker)
                 return (
-                  <label key={key} className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-1.5">
-                    <span className="text-[11px] uppercase text-koma-dim">{key}</span>
+                  <label key={key} className="flex h-8 items-center gap-2 rounded-lg bg-koma-bg px-2">
+                    <span className="w-3 flex-none text-[11px] uppercase text-koma-dim">{key}</span>
                     <input
                       aria-label={key.toUpperCase()}
-                      defaultValue={String(rgba[key])}
-                      key={`${key}-${rgba[key]}`}
-                      onBlur={(event) => {
+                      value={String(rgba[key])}
+                      onChange={(event) => {
                         const value = Number(event.target.value)
                         if (!Number.isFinite(value)) return
                         applyHex(rgbaToHex(key === 'r' ? value : rgba.r, key === 'g' ? value : rgba.g, key === 'b' ? value : rgba.b))
                       }}
-                      className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                      className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
                     />
                   </label>
                 )
               })}
-              <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-1.5">
-                <span className="text-[11px] text-koma-dim">A</span>
+              <label className="flex h-8 items-center gap-2 rounded-lg bg-koma-bg px-2">
+                <span className="w-3 flex-none text-[11px] text-koma-dim">A</span>
                 <input
                   aria-label="Alpha"
-                  defaultValue={String(opacity)}
-                  key={`a-${opacity}`}
-                  onBlur={(event) => {
+                  value={String(opacity)}
+                  onChange={(event) => {
                     const value = Number(event.target.value)
                     if (Number.isFinite(value)) setOpacity(value)
                   }}
-                  className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                  className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
                 />
               </label>
             </div>
           ) : null}
-          <TokenMenu tokens={tokens ?? []} selected={paint.color} onPick={(name) => { if (name) applyHex(name) }} />
+          {tokens?.length ? (
+            <div className="flex flex-col gap-1">
+              <span className="px-0.5 text-[11px] text-koma-dim">Tokens</span>
+              <TokenMenu tokens={tokens} selected={paint.color} onPick={(name) => { if (name) applyHex(name) }} />
+            </div>
+          ) : null}
         </div>
+      ) : null}
+      {mode === 'image' ? (
+        <label className="flex h-8 items-center gap-2 rounded-lg bg-koma-bg px-2">
+          <span className="flex-none text-[11px] text-koma-dim">Opacity</span>
+          <input
+            aria-label="Opacity"
+            value={String(opacity)}
+            onChange={(event) => {
+              const value = Number(event.target.value)
+              if (Number.isFinite(value)) setOpacity(value)
+            }}
+            className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+          />
+          <span className="flex-none text-[11px] text-koma-dim">%</span>
+        </label>
       ) : null}
       <input
         ref={fileRef}
@@ -328,8 +414,7 @@ export function DesignPaintPopup({
           if (file) void takeImage(file)
         }}
       />
-    </div>,
-    document.body,
+    </div>
   )
 }
 
@@ -451,7 +536,7 @@ export function paintSwatch(doc: DesignDoc, paint: DesignPaint, fallback: string
 }
 
 export function paintRowLabel(paint: DesignPaint): string {
-  if (paint.type === 'image') return 'Image'
+  if (paint.type === 'image') return paint.hash ? 'Image' : 'Choose image'
   if (paint.type === 'gradient') {
     if (paint.kind === 'radial') return 'Radial'
     if (paint.kind === 'angular') return 'Angular'
@@ -461,3 +546,4 @@ export function paintRowLabel(paint: DesignPaint): string {
   if (paint.color && paint.color !== 'none' && !paint.color.startsWith('#')) return paint.color
   return ''
 }
+

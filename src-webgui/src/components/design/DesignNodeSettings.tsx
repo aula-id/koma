@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
 import { DesignModeContext } from './DesignTokenMenu'
+import { InspectorPageContext, InspectorPageView, type InspectorPage } from './DesignPaintPopup'
 import {
   designChatText,
   designChatTitle,
@@ -261,8 +262,30 @@ export function NodeSettings({
   const maxHField = numberOf((item) => item.maxH ?? 0)
   const cornerField = (pick: (item: DesignNode) => number) => numberOf(pick)
   const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
+  const [inspectorPage, setInspectorPage] = useState<InspectorPage | null>(null)
+  useEffect(() => {
+    setInspectorPage(null)
+  }, [node.id, multi])
+  const openInspectorPage = (page: InspectorPage) => {
+    if (page.kind === 'paint') {
+      const apply = page.onChange
+      setInspectorPage({
+        ...page,
+        onChange: (paint) => {
+          setInspectorPage((current) => (current?.kind === 'paint' ? { ...current, paint } : current))
+          apply(paint)
+        },
+      })
+      return
+    }
+    setInspectorPage(page)
+  }
   return (
     <DesignModeContext.Provider value={doc.mode}>
+    <InspectorPageContext.Provider value={openInspectorPage}>
+    {inspectorPage ? (
+      <InspectorPageView page={inspectorPage} onBack={() => setInspectorPage(null)} />
+    ) : (
     <div className="flex flex-col gap-1 px-2 pb-2 text-[12px]">
       {onMakeComponent || onAddToChat ? (
         <div className="flex items-center gap-1">
@@ -1208,6 +1231,7 @@ export function NodeSettings({
                   paint={solidPaint(effect.color && effect.color !== 'none' ? effect.color : '#000000')}
                   fallback="#000000"
                   tokens={colorTokens}
+                  pageTitle="Shadow"
                   allowImage={false}
                   allowGradient={false}
                   onChange={(paint) => patchEffect({ color: paint.color && paint.color !== 'none' ? paint.color : '#000000' })}
@@ -1581,6 +1605,8 @@ export function NodeSettings({
         />
       ) : null}
     </div>
+    )}
+    </InspectorPageContext.Provider>
     </DesignModeContext.Provider>
   )
 }

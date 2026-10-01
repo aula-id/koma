@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { KomaSelect } from '../KomaSelect'
-import { TokenMenu } from './DesignTokenMenu'
 import type { DesignToken } from '../../lib/design'
 import {
   bindNodeField,
@@ -34,7 +33,7 @@ import {
   type DesignPenPoint,
 } from '../../lib/design'
 import { DESIGN_PATCH_DEBOUNCE_MS, SELECTION, SHAPE_FILL, type PenDraft } from './tabShared'
-import { DesignPaintPopup, paintRowLabel, paintSwatch } from './DesignPaintPopup'
+import { paintRowLabel, paintSwatch, useInspectorPage } from './DesignPaintPopup'
 
 function TokenBindControl({
   tokens,
@@ -47,45 +46,20 @@ function TokenBindControl({
   onBind: (token: string | null) => void
   compact?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDoc = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [open])
+  const openPage = useInspectorPage()
   return (
-    <div ref={rootRef} className="relative flex-none">
-      <button
-        type="button"
-        title={bound ? `Bound to ${bound}` : 'Bind token'}
-        aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
-        aria-pressed={!!bound}
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className={compact
-          ? `h-4 w-4 rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`
-          : `flex h-7 w-7 items-center justify-center rounded ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
-      >
-        {compact ? null : <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />}
-      </button>
-      {open ? (
-        <div className="absolute right-0 z-50 mt-1 w-56 rounded border border-koma-border bg-koma-panel p-1 shadow-lg">
-          <TokenMenu
-            tokens={tokens}
-            selected={bound}
-            allowNone
-            onPick={(name) => {
-              onBind(name)
-              setOpen(false)
-            }}
-          />
-        </div>
-      ) : null}
-    </div>
+    <button
+      type="button"
+      title={bound ? `Bound to ${bound}` : 'Bind token'}
+      aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
+      aria-pressed={!!bound}
+      onClick={() => openPage({ kind: 'token', title: 'Token', tokens, selected: bound, onPick: onBind })}
+      className={compact
+        ? `h-4 w-4 flex-none rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`
+        : `flex h-7 w-7 flex-none items-center justify-center rounded ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+    >
+      {compact ? null : <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />}
+    </button>
   )
 }
 
@@ -601,6 +575,7 @@ export function ColorRow({
   onChange,
   onRemove,
   onStoreImage,
+  pageTitle = 'Color',
 }: {
   doc: DesignDoc
   paint: DesignPaint
@@ -614,16 +589,30 @@ export function ColorRow({
   onChange: (paint: DesignPaint) => void
   onRemove?: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+  pageTitle?: string
 }) {
-  const [open, setOpen] = useState(false)
+  const openPage = useInspectorPage()
   const [hexDraft, setHexDraft] = useState<string | null>(null)
-  const swatchRef = useRef<HTMLButtonElement>(null)
   const named = paint.type === 'image' || paint.type === 'gradient'
   const token = paint.type === 'solid' && paint.color && !paint.color.startsWith('#') && paint.color !== 'none' ? paint.color : ''
   const hex = paint.type === 'solid' && paint.color?.startsWith('#') ? paint.color.slice(1).toUpperCase() : ''
   const opacity = mixed ? '' : String(Math.round((paint.opacity ?? 1) * 100))
   const swatch = mixed ? 'transparent' : paintSwatch(doc, paint, fallback)
   const label = mixed ? '' : paintRowLabel(paint) || token
+  const openEditor = () => {
+    if (mixed) return
+    openPage({
+      kind: 'paint',
+      title: pageTitle,
+      paint,
+      fallback,
+      tokens,
+      allowImage,
+      allowGradient,
+      onChange,
+      onStoreImage,
+    })
+  }
   const commitHex = (raw: string) => {
     setHexDraft(null)
     const trimmed = raw.trim()
@@ -652,22 +641,23 @@ export function ColorRow({
       <div className="grid h-7 min-w-0 flex-1 grid-cols-[1fr_auto] items-center overflow-hidden rounded border border-koma-border bg-koma-bg focus-within:border-koma-fg/40">
         <div className="flex h-7 min-w-0 items-center">
           <button
-            ref={swatchRef}
             type="button"
-            title="Color"
-            aria-label="Color"
-            aria-expanded={open}
-            onClick={() => setOpen((current) => !current)}
+            title={pageTitle}
+            aria-label={pageTitle}
+            onClick={openEditor}
             className="ml-2 h-4 w-4 flex-none rounded-full border border-koma-border"
             style={{ background: swatch }}
           />
           {named || token ? (
-            <span className="min-w-0 flex-1 truncate px-1.5 text-[12px] text-koma-fg">{mixed ? '—' : label}</span>
+            <button type="button" onClick={openEditor} className="min-w-0 flex-1 truncate px-1.5 text-left text-[12px] text-koma-fg">
+              {mixed ? '—' : label}
+            </button>
           ) : (
             <input
               aria-label="Hex"
               value={mixed ? '' : hexDraft ?? hex}
               placeholder={mixed ? '—' : '000000'}
+              onDoubleClick={openEditor}
               onChange={(event) => {
                 const raw = event.target.value
                 const body = raw.startsWith('#') ? raw.slice(1) : raw
@@ -708,20 +698,6 @@ export function ColorRow({
           <Minus size={14} />
         </button>
       ) : null}
-      {open ? (
-        <DesignPaintPopup
-          doc={doc}
-          paint={paint}
-          fallback={fallback}
-          tokens={tokens}
-          allowImage={allowImage}
-          allowGradient={allowGradient}
-          anchor={swatchRef.current}
-          onChange={onChange}
-          onClose={() => setOpen(false)}
-          onStoreImage={onStoreImage}
-        />
-      ) : null}
     </div>
   )
 }
@@ -736,6 +712,7 @@ export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weig
         fallback={resolved?.startsWith('#') ? resolved : fallback}
         tokens={tokens}
         mixed={mixed}
+        pageTitle={label}
         allowImage={false}
         allowGradient={false}
         onChange={(next) => onChange(next.color && next.color !== 'none' ? next.color : 'none')}
@@ -836,6 +813,7 @@ export function FillEditor({
               paint={paint}
               fallback={fallback}
               tokens={tokens}
+              pageTitle={label}
               allowImage={field === 'fill'}
               bound={node.bindings?.[field]}
               onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, implicit ? [paint] : paints), field, token)) : undefined}
