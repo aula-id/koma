@@ -32,7 +32,7 @@ export const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }
   { id: 'w', x: '0%', y: '50%', cursor: 'ew-resize' },
 ]
 
-export type Tool = 'select' | 'frame' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text' | 'pan' | 'polygon' | 'star'
+export type Tool = 'select' | 'frame' | 'section' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text' | 'pan' | 'polygon' | 'star'
 export type DrawShape = 'frame' | 'rect' | 'ellipse' | 'line' | 'text'
 export type View = { panX: number; panY: number; zoom: number }
 export type Ghost =
@@ -66,14 +66,16 @@ export type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 export type Drag =
   | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean; alt: boolean; scene: { moving: DesignRect; targets: DesignRect[] } | null }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
+  | { kind: 'rotate'; id: string; startX: number; startY: number; rotation: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
   | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
   | { kind: 'draw'; shape: DrawShape; cx: number; cy: number; x0: number; y0: number; x1: number; y1: number; parentId: string | null }
   | { kind: 'pen'; index: number; space: boolean }
   | { kind: 'vertex'; id: string; index: number; startX: number; startY: number }
+  | { kind: 'handle'; id: string; segment: number; end: 'start' | 'end'; startX: number; startY: number }
 
-let copiedShape: { nodes: DesignNode[]; parentId: string | null } | null = null
+let copiedShape: { nodes: DesignNode[]; parentId: string | null; components?: DesignDoc['components']; images?: DesignDoc['images'] } | null = null
 let copiedStyle: DesignStyle | null = null
 
 export function getCopiedShape() {

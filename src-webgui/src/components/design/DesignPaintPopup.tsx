@@ -6,6 +6,8 @@ import {
   defaultGradient,
   designImageUrl,
   hashBytes,
+  hexToHsb,
+  hsbToHex,
   imagePaint,
   mimeForName,
   nodeFillCss,
@@ -212,6 +214,46 @@ export function DesignPaintPopup({
               className="absolute inset-0 cursor-pointer opacity-0"
             />
           </label>
+          {picker.startsWith('#') ? (
+            <div className="grid grid-cols-[16px_1fr] items-center gap-1 text-[11px] text-koma-dim">
+              {(['h', 's', 'b'] as const).map((key) => {
+                const hsb = hexToHsb(picker)
+                const max = key === 'h' ? 360 : 100
+                return (
+                  <span key={key} className="contents">
+                    <span className="uppercase">{key}</span>
+                    <input
+                      type="range"
+                      aria-label={key === 'h' ? 'Hue' : key === 's' ? 'Saturation' : 'Brightness'}
+                      min={0}
+                      max={max}
+                      value={Math.round(hsb[key])}
+                      onChange={(event) => {
+                        const next = { ...hsb, [key]: Number(event.target.value) }
+                        applyHex(hsbToHex(next.h, next.s, next.b))
+                      }}
+                    />
+                  </span>
+                )
+              })}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="h-7 rounded-lg bg-koma-bg text-[12px] text-koma-fg hover:bg-koma-hover"
+            onClick={async () => {
+              const Eye = (window as Window & { EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper
+              if (!Eye) return
+              try {
+                const result = await new Eye().open()
+                applyHex(result.sRGBHex)
+              } catch {
+                /* cancelled */
+              }
+            }}
+          >
+            Eyedropper
+          </button>
           <div className="flex gap-1">
             <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
               <input

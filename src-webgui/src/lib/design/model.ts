@@ -78,6 +78,10 @@ export function createNode(kind: DesignDrawKind, id: string, x: number, y: numbe
   return { id, kind, name: 'Rectangle', x, y, w: 100, h: 100, fill: '#d9d9d9', stroke: 'none' }
 }
 
+export function createSectionNode(id: string, x: number, y: number): DesignNode {
+  return { ...createNode('frame', id, x, y), name: 'Section', section: true, w: 800, h: 600, fill: '#f3f4f6' }
+}
+
 export function isDesignContainer(kind: DesignKind): boolean {
   return kind === 'frame' || kind === 'group'
 }
@@ -124,6 +128,30 @@ export function pickVariant(component: DesignComponent, props?: Record<string, s
 }
 
 /** Paint the root fill, the first text node, and any per-child override. */
+function applyOverrideRow(node: DesignNode, row: DesignOverride): DesignNode {
+  let next = node
+  if (row.fill) next = { ...next, fill: row.fill }
+  if (row.fills?.length) next = { ...next, fills: row.fills.map((item) => ({ ...item })) }
+  if (row.stroke) next = { ...next, stroke: row.stroke }
+  if (row.strokes?.length) next = { ...next, strokes: row.strokes.map((item) => ({ ...item })) }
+  if (row.radius != null) next = { ...next, radius: row.radius }
+  if (row.opacity != null) next = { ...next, opacity: row.opacity }
+  if (row.fontSize != null) next = { ...next, fontSize: row.fontSize }
+  if (row.weight) next = { ...next, weight: row.weight }
+  if (row.color) next = { ...next, color: row.color }
+  if (row.strokeWidth != null) next = { ...next, strokeWidth: row.strokeWidth }
+  if (row.rotation != null) next = { ...next, rotation: row.rotation }
+  if (row.component) next = { ...next, component: row.component }
+  if (row.visible === false) next = { ...next, visible: false }
+  else if (row.visible === true) {
+    const shown = { ...next }
+    delete shown.visible
+    next = shown
+  }
+  if (row.text != null && node.kind === 'text') next = { ...next, text: row.text }
+  return next
+}
+
 export function applyOverrides(root: DesignNode, override: { text?: string; fill?: string; overrides?: DesignOverride[] }): DesignNode {
   const byId = new Map((override.overrides ?? []).map((item) => [item.id, item]))
   let textUsed = override.text == null
@@ -131,17 +159,9 @@ export function applyOverrides(root: DesignNode, override: { text?: string; fill
     let next = node
     const row = byId.get(node.id)
     if (isRoot && override.fill) next = { ...next, fill: override.fill }
-    if (row?.fill) next = { ...next, fill: row.fill }
-    if (row?.visible === false) next = { ...next, visible: false }
-    else if (row?.visible === true) {
-      const shown = { ...next }
-      delete shown.visible
-      next = shown
-    }
-    if (row?.text != null && node.kind === 'text') {
-      textUsed = true
-      next = { ...next, text: row.text }
-    } else if (!textUsed && node.kind === 'text') {
+    if (row) next = applyOverrideRow(next, row)
+    if (row?.text != null && node.kind === 'text') textUsed = true
+    else if (!textUsed && node.kind === 'text' && override.text != null) {
       textUsed = true
       next = { ...next, text: override.text }
     }
@@ -155,19 +175,18 @@ export function applyOverrides(root: DesignNode, override: { text?: string; fill
 export function mergeDesignOverride(
   node: DesignNode,
   targetId: string,
-  patch: { text?: string | null; fill?: string | null; visible?: boolean | null },
+  patch: Partial<Record<keyof Omit<DesignOverride, 'id'>, DesignOverride[keyof Omit<DesignOverride, 'id'>] | null>>,
 ): DesignNode {
   if (node.kind !== 'instance' || !targetId) return node
   const current = (node.overrides ?? []).map((item) => ({ ...item }))
   const index = current.findIndex((item) => item.id === targetId)
   const row: DesignOverride = index >= 0 ? { ...current[index] } : { id: targetId }
-  if (patch.text === null) delete row.text
-  else if (patch.text != null) row.text = patch.text
-  if (patch.fill === null) delete row.fill
-  else if (patch.fill != null) row.fill = patch.fill
-  if (patch.visible === null) delete row.visible
-  else if (patch.visible != null) row.visible = patch.visible
-  const empty = row.text == null && (row.fill == null || row.fill === '') && row.visible == null
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'id') continue
+    if (value === null) delete row[key as keyof DesignOverride]
+    else if (value !== undefined) (row as Record<string, unknown>)[key] = value
+  }
+  const empty = Object.keys(row).every((key) => key === 'id' || row[key as keyof DesignOverride] == null || row[key as keyof DesignOverride] === '')
   if (empty && index >= 0) current.splice(index, 1)
   else if (empty) return node
   else if (index >= 0) current[index] = row
@@ -404,6 +423,29 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.padBottom != null) next.padBottom = node.padBottom
   if (node.padLeft != null) next.padLeft = node.padLeft
   if (node.wrap) next.wrap = true
+  if (node.reverse) next.reverse = true
+  if (node.gapX) next.gapX = node.gapX
+  if (node.gapY) next.gapY = node.gapY
+  if (node.alignContent) next.alignContent = node.alignContent
+  if (node.alignSelf) next.alignSelf = node.alignSelf
+  if (node.margin) next.margin = node.margin
+  if (node.marginTop != null) next.marginTop = node.marginTop
+  if (node.marginRight != null) next.marginRight = node.marginRight
+  if (node.marginBottom != null) next.marginBottom = node.marginBottom
+  if (node.marginLeft != null) next.marginLeft = node.marginLeft
+  if (node.layoutGrids?.length) next.layoutGrids = node.layoutGrids.map((item) => ({ ...item }))
+  if (node.interactions?.length) next.interactions = node.interactions.map((item) => ({ ...item }))
+  if (node.svgAttrs) next.svgAttrs = { ...node.svgAttrs }
+  if (node.bindings) next.bindings = { ...node.bindings }
+  if (node.proportion) next.proportion = true
+  if (node.strokeTop != null) next.strokeTop = node.strokeTop
+  if (node.strokeRight != null) next.strokeRight = node.strokeRight
+  if (node.strokeBottom != null) next.strokeBottom = node.strokeBottom
+  if (node.strokeLeft != null) next.strokeLeft = node.strokeLeft
+  if (node.strokeStart) next.strokeStart = node.strokeStart
+  if (node.strokeEnd) next.strokeEnd = node.strokeEnd
+  if (node.strokeMarkerStart) next.strokeMarkerStart = node.strokeMarkerStart
+  if (node.strokeMarkerEnd) next.strokeMarkerEnd = node.strokeMarkerEnd
   if (node.minW != null) next.minW = node.minW
   if (node.maxW != null) next.maxW = node.maxW
   if (node.minH != null) next.minH = node.minH
@@ -500,6 +542,7 @@ export function resizeDesignNode(
   dy: number,
   grid: number,
   enabled: boolean,
+  constrain = false,
 ): DesignNode {
   const right = node.x + node.w
   const bottom = node.y + node.h
@@ -523,6 +566,11 @@ export function resizeDesignNode(
   const minH = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_H
   w = Math.max(minW, limitSize(w, node.minW, node.maxW))
   h = Math.max(minH, limitSize(h, node.minH, node.maxH))
+  if ((constrain || node.proportion) && node.w > 0 && node.h > 0 && handle.length === 2) {
+    const aspect = node.w / node.h
+    if (Math.abs(dx) >= Math.abs(dy)) h = Math.max(minH, w / aspect)
+    else w = Math.max(minW, h * aspect)
+  }
   if (handle.includes('w')) x = right - w
   if (handle.includes('n')) y = bottom - h
   const next: DesignNode = { ...node, x, y, w, h }
@@ -1477,6 +1525,70 @@ export function deleteVectorVertex(node: DesignNode, index: number): DesignNode 
   return fitVectorNode({ ...node, vector: { ...vector, vertices, segments } })
 }
 
+export function rotationFromCenter(cx: number, cy: number, x: number, y: number): number {
+  return (Math.atan2(y - cy, x - cx) * 180) / Math.PI
+}
+
+export function snapRotation(degrees: number, shift: boolean): number {
+  const wrapped = ((degrees % 360) + 360) % 360
+  return shift ? Math.round(wrapped / 15) * 15 % 360 : wrapped
+}
+
+export function moveVectorTangent(
+  node: DesignNode,
+  segmentIndex: number,
+  end: 'start' | 'end',
+  x: number,
+  y: number,
+  mirror = true,
+): DesignNode {
+  const vector = node.vector
+  const segment = vector?.segments[segmentIndex]
+  if (!vector || !segment) return node
+  const vertex = end === 'start' ? vector.vertices[segment.start] : vector.vertices[segment.end]
+  if (!vertex) return node
+  const tangent = { x: x - vertex.x, y: y - vertex.y }
+  const segments = vector.segments.map((item, index) => {
+    if (index !== segmentIndex) return item
+    return end === 'start' ? { ...item, tangentStart: tangent } : { ...item, tangentEnd: tangent }
+  })
+  if (mirror) {
+    const vertexIndex = end === 'start' ? segment.start : segment.end
+    for (let index = 0; index < segments.length; index++) {
+      if (index === segmentIndex) continue
+      const other = segments[index]
+      if (other.start === vertexIndex) segments[index] = { ...other, tangentStart: { x: -tangent.x, y: -tangent.y } }
+      else if (other.end === vertexIndex) segments[index] = { ...other, tangentEnd: { x: -tangent.x, y: -tangent.y } }
+    }
+  }
+  return fitVectorNode({ ...node, vector: { ...vector, segments } })
+}
+
+export function insertVertexOnSegment(node: DesignNode, segmentIndex: number, t: number): DesignNode {
+  const vector = node.vector
+  const segment = vector?.segments[segmentIndex]
+  if (!vector || !segment) return node
+  const start = vector.vertices[segment.start]
+  const end = vector.vertices[segment.end]
+  if (!start || !end) return node
+  const clamped = Math.min(1, Math.max(0, t))
+  const c1 = { x: start.x + segment.tangentStart.x, y: start.y + segment.tangentStart.y }
+  const c2 = { x: end.x + segment.tangentEnd.x, y: end.y + segment.tangentEnd.y }
+  const lerp = (a: DesignVectorPoint, b: DesignVectorPoint, u: number) => ({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u })
+  const p01 = lerp(start, c1, clamped)
+  const p12 = lerp(c1, c2, clamped)
+  const p23 = lerp(c2, end, clamped)
+  const p012 = lerp(p01, p12, clamped)
+  const p123 = lerp(p12, p23, clamped)
+  const point = lerp(p012, p123, clamped)
+  const index = vector.vertices.length
+  const vertices = [...vector.vertices, point]
+  const segments = vector.segments.slice()
+  segments[segmentIndex] = { start: segment.start, end: index, tangentStart: { x: p01.x - start.x, y: p01.y - start.y }, tangentEnd: { x: p012.x - point.x, y: p012.y - point.y } }
+  segments.push({ start: index, end: segment.end, tangentStart: { x: p123.x - point.x, y: p123.y - point.y }, tangentEnd: { x: p23.x - end.x, y: p23.y - end.y } })
+  return fitVectorNode({ ...node, vector: { ...vector, vertices, segments } })
+}
+
 export function insertVectorVertex(node: DesignNode, after: number, x: number, y: number): DesignNode {
   const vector = node.vector
   if (!vector) return node
@@ -2379,15 +2491,39 @@ function applyConstraints(frame: DesignNode, newW: number, newH: number): Design
   })
 }
 
+function resolveTracks(tracks: DesignNode['gridColumns'], fallbackCount: number, total: number, gap: number): number[] {
+  const expanded: { size: number | 'fr' | 'auto' }[] = []
+  if (!tracks?.length) {
+    for (let i = 0; i < Math.max(1, fallbackCount); i++) expanded.push({ size: 'fr' })
+  } else {
+    for (const track of tracks) {
+      const count = Math.max(1, track.count ?? 1)
+      for (let i = 0; i < count; i++) expanded.push({ size: track.size })
+    }
+  }
+  const fixed = expanded.reduce((sum, track) => sum + (typeof track.size === 'number' ? track.size : 0), 0)
+  const frs = expanded.filter((track) => track.size === 'fr').length
+  const autos = expanded.filter((track) => track.size === 'auto').length
+  const remain = Math.max(0, total - fixed - gap * Math.max(0, expanded.length - 1))
+  const share = frs + autos ? remain / (frs + autos) : 0
+  return expanded.map((track) => (typeof track.size === 'number' ? track.size : Math.max(1, share)))
+}
+
+function trackOffset(sizes: number[], index: number, gap: number, pad: number): { start: number; size: number } {
+  let start = pad
+  for (let i = 0; i < index; i++) start += sizes[i] + gap
+  return { start, size: sizes[index] ?? 1 }
+}
+
 function placeGrid(frame: DesignNode, frozenId?: string): DesignNode {
-  const columns = Math.max(1, frame.gridColumns?.[0]?.count ?? 2)
-  const rows = Math.max(1, frame.gridRows?.[0]?.count ?? 2)
   const pad = framePad(frame)
-  const gap = frame.gap ?? 0
+  const gapX = frame.gapX ?? frame.gap ?? 0
+  const gapY = frame.gapY ?? frame.gap ?? 0
   const innerW = Math.max(0, frame.w - pad.left - pad.right)
   const innerH = Math.max(0, frame.h - pad.top - pad.bottom)
-  const colW = columns > 0 ? (innerW - gap * (columns - 1)) / columns : innerW
-  const rowH = rows > 0 ? (innerH - gap * (rows - 1)) / rows : innerH
+  const colSizes = resolveTracks(frame.gridColumns, frame.gridColumns?.[0]?.count ?? 2, innerW, gapX)
+  const rowSizes = resolveTracks(frame.gridRows, frame.gridRows?.[0]?.count ?? 2, innerH, gapY)
+  const columns = Math.max(1, colSizes.length)
   const flow = (frame.children ?? []).filter((child) => !child.absolute && child.id !== frozenId)
   const placed = new Map<string, DesignNode>()
   flow.forEach((child, index) => {
@@ -2395,11 +2531,15 @@ function placeGrid(frame: DesignNode, frozenId?: string): DesignNode {
     const row = Math.max(0, (child.rowStart ?? Math.floor(index / columns) + 1) - 1)
     const spanC = Math.max(1, child.colSpan ?? 1)
     const spanR = Math.max(1, child.rowSpan ?? 1)
-    const x = pad.left + col * (colW + gap)
-    const y = pad.top + row * (rowH + gap)
-    const w = Math.max(1, colW * spanC + gap * (spanC - 1))
-    const h = Math.max(1, rowH * spanR + gap * (spanR - 1))
-    placed.set(child.id, child.x === x && child.y === y && child.w === w && child.h === h ? child : { ...child, x, y, w, h })
+    const xTrack = trackOffset(colSizes, col, gapX, pad.left)
+    const yTrack = trackOffset(rowSizes, row, gapY, pad.top)
+    let w = xTrack.size
+    let h = yTrack.size
+    for (let i = 1; i < spanC; i++) w += gapX + (colSizes[col + i] ?? 0)
+    for (let i = 1; i < spanR; i++) h += gapY + (rowSizes[row + i] ?? 0)
+    const x = xTrack.start
+    const y = yTrack.start
+    placed.set(child.id, child.x === x && child.y === y && child.w === w && child.h === h ? child : { ...child, x, y, w: Math.max(1, w), h: Math.max(1, h) })
   })
   const children = (frame.children ?? []).map((child) => placed.get(child.id) ?? child)
   if (children.every((child, index) => child === (frame.children ?? [])[index])) return frame
@@ -2479,6 +2619,16 @@ function framePad(frame: DesignNode): { top: number; right: number; bottom: numb
   }
 }
 
+function itemMargin(node: DesignNode): { top: number; right: number; bottom: number; left: number } {
+  const margin = node.margin ?? 0
+  return {
+    top: node.marginTop ?? margin,
+    right: node.marginRight ?? margin,
+    bottom: node.marginBottom ?? margin,
+    left: node.marginLeft ?? margin,
+  }
+}
+
 function limitSize(size: number, min?: number, max?: number): number {
   let next = size
   if (min != null && min > 0) next = Math.max(next, min)
@@ -2488,14 +2638,16 @@ function limitSize(size: number, min?: number, max?: number): number {
 
 function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   const pad = framePad(frame)
-  const gap = frame.gap ?? 0
   const horizontal = frame.layout === 'row'
+  const gap = horizontal ? (frame.gapX ?? frame.gap ?? 0) : (frame.gapY ?? frame.gap ?? 0)
+  const crossGap = horizontal ? (frame.gapY ?? frame.gap ?? 0) : (frame.gapX ?? frame.gap ?? 0)
   const mainStart = horizontal ? pad.left : pad.top
   const mainEnd = horizontal ? pad.right : pad.bottom
   const crossStart = horizontal ? pad.top : pad.left
   const crossEnd = horizontal ? pad.bottom : pad.right
   const children = frame.children ?? []
   const flow = children.filter((child) => !child.absolute && child.id !== frozenId)
+  if (frame.reverse) flow.reverse()
   const mainSize = (child: DesignNode) => (horizontal ? child.w : child.h)
   const crossSize = (child: DesignNode) => (horizontal ? child.h : child.w)
   const mainMode = (child: DesignNode) => (horizontal ? child.wMode : child.hMode)
@@ -2529,10 +2681,29 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   height = Math.max(1, limitSize(height, frame.minH, frame.maxH))
   const innerMain = Math.max(0, (horizontal ? width : height) - mainStart - mainEnd)
   const innerCross = Math.max(0, (horizontal ? height : width) - crossStart - crossEnd)
+  const childAlign = (child: DesignNode) => child.alignSelf ?? align
   const stretches = (child: DesignNode) => {
     const mode = crossMode(child)
     if (child.kind === 'instance' && mode !== 'fill') return false
-    return mode !== 'hug' && mode !== 'fixed' && (mode === 'fill' || align === 'stretch') && !hugsCross
+    return mode !== 'hug' && mode !== 'fixed' && (mode === 'fill' || childAlign(child) === 'stretch') && !hugsCross
+  }
+  const placeCross = (start: number, span: number, size: number, child: DesignNode) => {
+    const next = childAlign(child)
+    if (next === 'center') return start + (span - size) / 2
+    if (next === 'end') return start + span - size
+    return start
+  }
+  const mainMargin = (child: DesignNode) => {
+    const margin = itemMargin(child)
+    return horizontal ? margin.left + margin.right : margin.top + margin.bottom
+  }
+  const mainOffset = (child: DesignNode) => {
+    const margin = itemMargin(child)
+    return horizontal ? margin.left : margin.top
+  }
+  const crossOffset = (child: DesignNode) => {
+    const margin = itemMargin(child)
+    return horizontal ? margin.top : margin.left
   }
   const finish = (size: number, min?: number, max?: number) => {
     const limited = limitSize(Math.max(min == null && max == null ? 8 : 1, size), min, max)
@@ -2540,28 +2711,29 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   }
   if (!wrapping) {
     const fills = hugsMain ? [] : flow.filter((child) => mainMode(child) === 'fill')
-    const usedFixed = flow.reduce((sum, child) => sum + (fills.includes(child) ? 0 : sizedMain(child)), 0)
+    const usedFixed = flow.reduce((sum, child) => sum + (fills.includes(child) ? 0 : sizedMain(child) + mainMargin(child)), 0)
     const fillMain = fills.length ? Math.max(8, (innerMain - usedFixed - gaps) / fills.length) : 0
     const measured = flow.map((child) => {
       const main = fills.includes(child) ? fillMain : sizedMain(child)
       const cross = stretches(child) ? innerCross : crossSize(child)
       return { child, main: finish(main, mainMin(child), mainMax(child)), cross: finish(cross, crossMin(child), crossMax(child)) }
     })
-    const used = measured.reduce((sum, item) => sum + item.main, 0) + gaps
+    const used = measured.reduce((sum, item) => sum + item.main + mainMargin(item.child), 0) + gaps
     const space = justify === 'space' && measured.length > 1
-    const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main, 0)) / (measured.length - 1)) : gap
+    const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main + mainMargin(item.child), 0)) / (measured.length - 1)) : gap
     let cursor = mainStart
     if (!space && justify === 'center') cursor = mainStart + Math.max(0, innerMain - used) / 2
     if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
     const placed = new Map<string, DesignNode>()
     for (const item of measured) {
-      const crossPos = align === 'center' ? crossStart + (innerCross - item.cross) / 2 : align === 'end' ? crossStart + innerCross - item.cross : crossStart
-      const x = horizontal ? cursor : crossPos
-      const y = horizontal ? crossPos : cursor
+      const crossPos = placeCross(crossStart, innerCross, item.cross, item.child) + crossOffset(item.child)
+      const mainPos = cursor + mainOffset(item.child)
+      const x = horizontal ? mainPos : crossPos
+      const y = horizontal ? crossPos : mainPos
       const w = horizontal ? item.main : item.cross
       const h = horizontal ? item.cross : item.main
       placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
-      cursor += item.main + between
+      cursor += item.main + mainMargin(item.child) + between
     }
     const nextChildren = children.map((child) => placed.get(child.id) ?? child)
     if (width === frame.w && height === frame.h && nextChildren.every((child, index) => child === children[index])) return frame
@@ -2588,7 +2760,13 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   }
   if (line.length) lines.push(line)
   const placed = new Map<string, DesignNode>()
+  const wrapCross = lines.reduce((sum, row) => sum + row.reduce((max, item) => Math.max(max, item.cross), 0), 0) + Math.max(0, lines.length - 1) * crossGap
+  const alignContent = frame.alignContent ?? 'start'
+  let extra = Math.max(0, innerCross - wrapCross)
   let crossCursor = crossStart
+  if (alignContent === 'center') crossCursor += extra / 2
+  if (alignContent === 'end') crossCursor += extra
+  const lineGap = alignContent === 'space' && lines.length > 1 ? extra / (lines.length - 1) : crossGap
   for (const row of lines) {
     const lineCross = row.reduce((max, item) => Math.max(max, item.cross), 0)
     const rowMain = row.reduce((sum, item) => sum + item.main, 0)
@@ -2600,7 +2778,7 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
     if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
     for (const item of row) {
       const cross = stretches(item.child) ? Math.max(item.cross, lineCross) : item.cross
-      const crossPos = align === 'center' ? crossCursor + (lineCross - cross) / 2 : align === 'end' ? crossCursor + lineCross - cross : crossCursor
+      const crossPos = placeCross(crossCursor, lineCross, cross, item.child)
       const x = horizontal ? cursor : crossPos
       const y = horizontal ? crossPos : cursor
       const w = horizontal ? item.main : cross
@@ -2608,10 +2786,10 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
       placed.set(item.child.id, item.child.x === x && item.child.y === y && item.child.w === w && item.child.h === h ? item.child : { ...item.child, x, y, w, h })
       cursor += item.main + between
     }
-    crossCursor += lineCross + gap
+    crossCursor += lineCross + lineGap
   }
   if (hugsCross && lines.length) {
-    const size = Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, crossCursor - gap + crossEnd)
+    const size = Math.max(horizontal ? DESIGN_MIN_H : DESIGN_MIN_W, crossCursor - lineGap + crossEnd)
     const limited = Math.max(1, limitSize(size, horizontal ? frame.minH : frame.minW, horizontal ? frame.maxH : frame.maxW))
     if (horizontal) height = limited
     else width = limited

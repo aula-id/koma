@@ -328,7 +328,33 @@ export function NodeSettings({
           ) : null}
         </div>
       ) : null}
-      <Section title="Position">
+      <Section title="Layer">
+        <div className="flex items-center gap-1">
+          <AlignButton label={nodes.every((item) => item.visible === false) ? 'Show' : 'Hide'} pressed={nodes.every((item) => item.visible === false)} onClick={() => {
+            const show = nodes.some((item) => item.visible === false)
+            onPatch((current) => {
+              const next = { ...current }
+              if (show) delete next.visible
+              else next.visible = false
+              return next
+            })
+          }}><Layers size={14} /></AlignButton>
+          <AlignButton label={nodes.every((item) => item.locked) ? 'Unlock' : 'Lock'} pressed={nodes.every((item) => !!item.locked)} onClick={() => {
+            const unlock = nodes.every((item) => item.locked)
+            onPatch((current) => {
+              const next = { ...current }
+              if (unlock) delete next.locked
+              else next.locked = true
+              return next
+            })
+          }}><Square size={14} /></AlignButton>
+        </div>
+        <GeomField label="Op" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
+          const opacity = Math.min(100, Math.max(0, value)) / 100
+          setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
+        }} />
+      </Section>
+      <Section title="Measures">
         <div className="grid grid-cols-2 gap-1">
           <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
           <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
@@ -368,6 +394,15 @@ export function NodeSettings({
             else next.flipY = true
             return next
           })}><FlipVertical2 size={14} /></AlignButton>
+          <AlignButton label="Lock proportions" pressed={nodes.every((item) => !!item.proportion)} onClick={() => {
+            const allOn = nodes.every((item) => item.proportion)
+            onPatch((current) => {
+              const next = { ...current }
+              if (allOn) delete next.proportion
+              else next.proportion = true
+              return next
+            })
+          }}><Crop size={14} /></AlignButton>
           <AlignButton label="Rotate 90 degrees" onClick={() => onPatch((current) => {
             const wrapped = (((current.rotation ?? 0) + 90) % 360 + 360) % 360
             const next = { ...current }
@@ -393,6 +428,15 @@ export function NodeSettings({
           <AlignButton label="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
           <AlignButton label="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
           <AlignButton label="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
+          <AlignButton label="Reverse" pressed={nodes.every((item) => item.reverse)} onClick={() => {
+            const allOn = nodes.every((item) => item.reverse)
+            onPatch((current) => {
+              const next = { ...current }
+              if (allOn) delete next.reverse
+              else next.reverse = true
+              return next
+            })
+          }}><RotateCcw size={14} /></AlignButton>
         </div>
       ) : null}
       {!layoutField.mixed && layoutField.value === 'grid' ? (
@@ -405,6 +449,8 @@ export function NodeSettings({
         <>
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
+            <GeomField label="GX" ariaLabel="Column gap" value={numberOf((item) => item.gapX ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapX ?? item.gap ?? 0).mixed} onChange={(gapX) => setField(gapX > 0 ? { gapX } : {}, gapX > 0 ? [] : ['gapX'])} />
+            <GeomField label="GY" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
             <GeomField label="Pad" value={padField.value} mixed={padField.mixed} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
           </div>
           <div className="grid grid-cols-4 gap-1">
@@ -504,14 +550,45 @@ export function NodeSettings({
         </AlignButton>
       ) : null}
       </div>
+      {hasParent ? (
+        <div className="grid grid-cols-2 gap-1">
+          <Choices
+            label="Align self"
+            value={node.alignSelf ?? 'start'}
+            options={[{ value: 'start', label: 'Start' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'End' }, { value: 'stretch', label: 'Stretch' }]}
+            onChange={(alignSelf) => setField(alignSelf === 'start' ? {} : { alignSelf }, alignSelf === 'start' ? ['alignSelf'] : [])}
+          />
+        </div>
+      ) : null}
+      {hasParent ? (
+        <div className="grid grid-cols-4 gap-1">
+          <GeomField label="MT" ariaLabel="Margin top" value={numberOf((item) => item.marginTop ?? item.margin ?? 0).value} onChange={(marginTop) => setField(marginTop ? { marginTop } : {}, marginTop ? [] : ['marginTop'])} />
+          <GeomField label="MR" ariaLabel="Margin right" value={numberOf((item) => item.marginRight ?? item.margin ?? 0).value} onChange={(marginRight) => setField(marginRight ? { marginRight } : {}, marginRight ? [] : ['marginRight'])} />
+          <GeomField label="MB" ariaLabel="Margin bottom" value={numberOf((item) => item.marginBottom ?? item.margin ?? 0).value} onChange={(marginBottom) => setField(marginBottom ? { marginBottom } : {}, marginBottom ? [] : ['marginBottom'])} />
+          <GeomField label="ML" ariaLabel="Margin left" value={numberOf((item) => item.marginLeft ?? item.margin ?? 0).value} onChange={(marginLeft) => setField(marginLeft ? { marginLeft } : {}, marginLeft ? [] : ['marginLeft'])} />
+        </div>
+      ) : null}
+      {allFrames ? (
+        <div className="flex flex-col gap-1">
+          <AlignButton
+            label="Board grid"
+            pressed={!!node.layoutGrids?.length}
+            onClick={() => setField(node.layoutGrids?.length ? {} : { layoutGrids: [{ kind: 'square', size: 8 }] }, node.layoutGrids?.length ? ['layoutGrids'] : [])}
+          >
+            <Square size={14} />
+          </AlignButton>
+          {node.layoutGrids?.[0] ? (
+            <div className="grid grid-cols-2 gap-1">
+              <GeomField label="Size" ariaLabel="Grid size" value={node.layoutGrids[0].size ?? 8} onChange={(size) => setField({ layoutGrids: [{ ...node.layoutGrids![0], size }] })} />
+              <GeomField label="Count" ariaLabel="Grid count" value={node.layoutGrids[0].count ?? 0} onChange={(count) => setField({ layoutGrids: [{ ...node.layoutGrids![0], count: count > 0 ? count : undefined }] })} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       </Section>
       ) : null}
       <Section title="Appearance">
         <div className={`grid gap-1 ${showRadius ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          <GeomField label="Op" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} onChange={(value) => {
-            const opacity = Math.min(100, Math.max(0, value)) / 100
-            setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
-          }} />
           {showRadius ? (
             <RadiusField
               value={radiusField.mixed ? undefined : node.radius}
@@ -721,7 +798,7 @@ export function NodeSettings({
         </Section>
       ) : null}
       <Section
-        title="Effects"
+        title="Shadow"
         action={(
           <AlignButton label="Add drop shadow" onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 4, y: 4, blur: 4, spread: 0, color: '#000000' }] }))}>
             <Plus size={14} />
@@ -769,6 +846,21 @@ export function NodeSettings({
               </div>
             )
           }
+          return null
+        })}
+      </Section>
+      <Section
+        title="Blur"
+        action={(
+          <AlignButton label="Add blur" onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'layer-blur', blur: 4 }] }))}>
+            <Plus size={14} />
+          </AlignButton>
+        )}
+      >
+        {(node.effects ?? []).map((effect, index) => {
+          if (effect.kind !== 'layer-blur' && effect.kind !== 'background-blur') return null
+          const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
+          const removeEffect = () => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))
           return (
             <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
               <KomaSelect
@@ -836,6 +928,7 @@ export function NodeSettings({
             <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
             <AlignButton label="Align center" pressed={!textAlignField.mixed && textAlignField.value === 'center'} onClick={() => setField({ textAlign: 'center' })}><TextAlignCenter size={14} /></AlignButton>
             <AlignButton label="Align right" pressed={!textAlignField.mixed && textAlignField.value === 'right'} onClick={() => setField({ textAlign: 'right' })}><TextAlignEnd size={14} /></AlignButton>
+            <AlignButton label="Justify" pressed={!textAlignField.mixed && textAlignField.value === 'justify'} onClick={() => setField({ textAlign: 'justify' })}><span className="text-[10px]">J</span></AlignButton>
             <AlignButton label="Align top" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'top'} onClick={() => setField({ textVertical: 'top' })}><span className="text-[10px]">T</span></AlignButton>
             <AlignButton label="Align middle" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'center'} onClick={() => setField({}, ['textVertical'])}><span className="text-[10px]">M</span></AlignButton>
             <AlignButton label="Align bottom" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'bottom'} onClick={() => setField({ textVertical: 'bottom' })}><span className="text-[10px]">B</span></AlignButton>
@@ -871,6 +964,80 @@ export function NodeSettings({
               else setField({ letterSpacing })
             }} />
           </div>
+        </Section>
+      ) : null}
+      {!multi && (node.kind === 'vector' || node.kind === 'line') ? (
+        <Section title="SVG">
+          <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2">
+            <span className="text-[11px] text-koma-dim">id</span>
+            <input
+              aria-label="SVG id"
+              value={node.svgAttrs?.id ?? ''}
+              onChange={(event) => {
+                const value = event.target.value.trim()
+                const svgAttrs = { ...(node.svgAttrs ?? {}) }
+                if (value) svgAttrs.id = value
+                else delete svgAttrs.id
+                setField(Object.keys(svgAttrs).length ? { svgAttrs } : {}, Object.keys(svgAttrs).length ? [] : ['svgAttrs'])
+              }}
+              className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+            />
+          </label>
+        </Section>
+      ) : null}
+      {!multi ? (
+        <Section
+          title="Interactions"
+          action={(
+            <AlignButton label="Add click navigate" onClick={() => setField({ interactions: [...(node.interactions ?? []), { trigger: 'click', action: 'navigate', target: doc.screens[0]?.id ?? '' }] })}>
+              <Plus size={14} />
+            </AlignButton>
+          )}
+        >
+          {(node.interactions ?? []).map((item, index) => (
+            <div key={`${item.target}-${index}`} className="flex items-center gap-1">
+              <KomaSelect
+                aria-label="Navigate to"
+                value={item.target}
+                onChange={(event) => {
+                  const target = event.target.value
+                  setField({ interactions: (node.interactions ?? []).map((row, at) => (at === index ? { ...row, target } : row)) })
+                }}
+                className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
+              >
+                <option value="">Frame</option>
+                {doc.screens.map((screen) => (
+                  <option key={screen.id} value={screen.id}>{designLayerName(screen)}</option>
+                ))}
+              </KomaSelect>
+              <button type="button" title="Remove" aria-label="Remove interaction" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
+                const next = (node.interactions ?? []).filter((_, at) => at !== index)
+                setField(next.length ? { interactions: next } : {}, next.length ? [] : ['interactions'])
+              }}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </Section>
+      ) : null}
+      {colorTokens.length || doc.tokens.some((token) => token.kind === 'space' || token.kind === 'radius') ? (
+        <Section title="Tokens">
+          <Choices
+            label="Bind fill"
+            value={node.bindings?.fill ?? ''}
+            options={[{ value: '', label: 'None' }, ...colorTokens.map((token) => ({ value: token.name, label: token.name }))]}
+            onChange={(name) => {
+              const bindings = { ...(node.bindings ?? {}) }
+              if (name) bindings.fill = name
+              else delete bindings.fill
+              onPatch((current) => {
+                const next = { ...current, fill: name || current.fill }
+                if (Object.keys(bindings).length) next.bindings = bindings
+                else delete next.bindings
+                return next
+              })
+            }}
+          />
         </Section>
       ) : null}
       {!multi && node.kind === 'instance' ? (

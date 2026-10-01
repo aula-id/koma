@@ -19,6 +19,7 @@ import {
   mergeDesignOverride,
   nodePaints,
   pickVariant,
+  reorderNodePaint,
   setNodePaints,
   setNodeSolid,
   solidPaint,
@@ -741,17 +742,26 @@ export function FillEditor({
   return (
     <div className="flex flex-col gap-2">
       {paints.map((paint, index) => (
-        <ColorRow
-          key={`${paint.type}-${index}`}
-          doc={doc}
-          paint={paint}
-          fallback={fallback}
-          tokens={tokens}
-          allowImage={field === 'fill'}
-          onChange={(next) => onChange(setNodePaints(node, field, implicit ? [next] : paints.map((item, at) => (at === index ? next : item))))}
-          onRemove={() => onChange(implicit || paints.length <= 1 ? setNodeSolid(node, field, 'none') : setNodePaints(node, field, paints.filter((_, at) => at !== index)))}
-          onStoreImage={onStoreImage}
-        />
+        <div key={`${paint.type}-${index}`} className="flex items-start gap-1">
+          {paints.length > 1 ? (
+            <div className="flex flex-col">
+              <button type="button" title="Move up" aria-label="Move up" disabled={index === 0} className="h-4 w-5 text-[10px] text-koma-dim disabled:opacity-30" onClick={() => onChange(reorderNodePaint(node, field, index, index - 1))}>↑</button>
+              <button type="button" title="Move down" aria-label="Move down" disabled={index === paints.length - 1} className="h-4 w-5 text-[10px] text-koma-dim disabled:opacity-30" onClick={() => onChange(reorderNodePaint(node, field, index, index + 1))}>↓</button>
+            </div>
+          ) : null}
+          <div className="min-w-0 flex-1">
+            <ColorRow
+              doc={doc}
+              paint={paint}
+              fallback={fallback}
+              tokens={tokens}
+              allowImage={field === 'fill'}
+              onChange={(next) => onChange(setNodePaints(node, field, implicit ? [next] : paints.map((item, at) => (at === index ? next : item))))}
+              onRemove={() => onChange(implicit || paints.length <= 1 ? setNodeSolid(node, field, 'none') : setNodePaints(node, field, paints.filter((_, at) => at !== index)))}
+              onStoreImage={onStoreImage}
+            />
+          </div>
+        </div>
       ))}
     </div>
   )

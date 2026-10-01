@@ -19,6 +19,9 @@ import {
   type DesignEffect,
   type DesignTextRun,
   type DesignGuide,
+  type DesignInteraction,
+  type DesignLayoutGrid,
+  type DesignPageView,
 } from './types'
 import { emptyDesign, isDesignContainer } from './model'
 import { clonePaint } from './paint'
@@ -41,7 +44,9 @@ const ALIGNS = ['start', 'center', 'end', 'stretch'] as const
 const JUSTIFIES = ['start', 'center', 'end', 'space'] as const
 const SIZES = ['hug', 'fill', 'fixed'] as const
 const WEIGHTS = ['regular', 'medium', 'bold'] as const
-const TEXT_ALIGNS = ['left', 'center', 'right'] as const
+const TEXT_ALIGNS = ['left', 'center', 'right', 'justify'] as const
+const STROKE_MARKERS = ['none', 'arrow', 'dot'] as const
+const GRID_KINDS = ['square', 'column', 'row'] as const
 const TEXT_VERTICAL = ['top', 'center', 'bottom'] as const
 const TEXT_HUGS = ['height', 'width'] as const
 const FONT_FAMILY = /^[\w][\w\s,-]{0,80}$/
@@ -285,6 +290,59 @@ function parseNode(value: unknown): DesignNode | null {
   if (row.flipY === true) node.flipY = true
   if (row.visible === false) node.visible = false
   if (row.locked === true) node.locked = true
+  const alignSelf = oneOf(row.alignSelf, ALIGNS)
+  if (alignSelf && alignSelf !== 'start') node.alignSelf = alignSelf
+  const margin = num(row.margin)
+  if (margin != null && margin !== 0) node.margin = margin
+  const marginTop = num(row.marginTop)
+  const marginRight = num(row.marginRight)
+  const marginBottom = num(row.marginBottom)
+  const marginLeft = num(row.marginLeft)
+  if (marginTop != null) node.marginTop = marginTop
+  if (marginRight != null) node.marginRight = marginRight
+  if (marginBottom != null) node.marginBottom = marginBottom
+  if (marginLeft != null) node.marginLeft = marginLeft
+  const strokeTop = num(row.strokeTop)
+  const strokeRight = num(row.strokeRight)
+  const strokeBottom = num(row.strokeBottom)
+  const strokeLeft = num(row.strokeLeft)
+  if (strokeTop != null && strokeTop >= 0) node.strokeTop = strokeTop
+  if (strokeRight != null && strokeRight >= 0) node.strokeRight = strokeRight
+  if (strokeBottom != null && strokeBottom >= 0) node.strokeBottom = strokeBottom
+  if (strokeLeft != null && strokeLeft >= 0) node.strokeLeft = strokeLeft
+  const strokeStart = oneOf(row.strokeStart, STROKE_CAPS)
+  const strokeEnd = oneOf(row.strokeEnd, STROKE_CAPS)
+  if (strokeStart && strokeStart !== 'none') node.strokeStart = strokeStart
+  if (strokeEnd && strokeEnd !== 'none') node.strokeEnd = strokeEnd
+  const strokeMarkerStart = oneOf(row.strokeMarkerStart, STROKE_MARKERS)
+  const strokeMarkerEnd = oneOf(row.strokeMarkerEnd, STROKE_MARKERS)
+  if (strokeMarkerStart && strokeMarkerStart !== 'none') node.strokeMarkerStart = strokeMarkerStart
+  if (strokeMarkerEnd && strokeMarkerEnd !== 'none') node.strokeMarkerEnd = strokeMarkerEnd
+  if (row.proportion === true) node.proportion = true
+  if (row.svgAttrs && typeof row.svgAttrs === 'object' && !Array.isArray(row.svgAttrs)) {
+    const attrs: Record<string, string> = {}
+    for (const [key, value] of Object.entries(row.svgAttrs as Record<string, unknown>)) {
+      if (typeof value === 'string' && key) attrs[key] = value
+    }
+    if (Object.keys(attrs).length) node.svgAttrs = attrs
+  }
+  if (row.bindings && typeof row.bindings === 'object' && !Array.isArray(row.bindings)) {
+    const bindings: Record<string, string> = {}
+    for (const [key, value] of Object.entries(row.bindings as Record<string, unknown>)) {
+      if (typeof value === 'string' && TOKEN_NAME.test(value)) bindings[key] = value
+    }
+    if (Object.keys(bindings).length) node.bindings = bindings
+  }
+  if (Array.isArray(row.interactions)) {
+    const interactions: DesignInteraction[] = []
+    for (const item of row.interactions) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const rowItem = item as Record<string, unknown>
+      if (rowItem.trigger !== 'click' || rowItem.action !== 'navigate' || typeof rowItem.target !== 'string' || !rowItem.target) continue
+      interactions.push({ trigger: 'click', action: 'navigate', target: rowItem.target })
+    }
+    if (interactions.length) node.interactions = interactions
+  }
   if (kind === 'frame') {
     const layout = oneOf(row.layout, LAYOUTS)
     if (layout) node.layout = layout
@@ -305,6 +363,34 @@ function parseNode(value: unknown): DesignNode | null {
     if (padBottom != null && padBottom >= 0) node.padBottom = padBottom
     if (padLeft != null && padLeft >= 0) node.padLeft = padLeft
     if (row.wrap === true) node.wrap = true
+    if (row.reverse === true) node.reverse = true
+    const gapX = num(row.gapX)
+    const gapY = num(row.gapY)
+    if (gapX != null && gapX > 0) node.gapX = gapX
+    if (gapY != null && gapY > 0) node.gapY = gapY
+    const alignContent = oneOf(row.alignContent, ALIGNS)
+    if (alignContent && alignContent !== 'start') node.alignContent = alignContent
+    if (Array.isArray(row.layoutGrids)) {
+      const grids: DesignLayoutGrid[] = []
+      for (const item of row.layoutGrids) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+        const grid = item as Record<string, unknown>
+        const kind = oneOf(grid.kind, GRID_KINDS)
+        if (!kind) continue
+        const next: DesignLayoutGrid = { kind }
+        const size = num(grid.size)
+        const gutter = num(grid.gutter)
+        const count = num(grid.count)
+        const offset = num(grid.offset)
+        if (size != null && size > 0) next.size = size
+        if (gutter != null && gutter >= 0) next.gutter = gutter
+        if (count != null && count > 0) next.count = Math.round(count)
+        if (offset != null) next.offset = offset
+        if (typeof grid.color === 'string') next.color = grid.color
+        grids.push(next)
+      }
+      if (grids.length) node.layoutGrids = grids
+    }
   }
   if ((kind === 'frame' || kind === 'instance') && row.clip === false) node.clip = false
   const minW = num(row.minW)
@@ -392,7 +478,19 @@ function parseOverrides(value: unknown): DesignOverride[] | null {
     if (radius != null) next.radius = radius
     if (typeof row.component === 'string' && row.component) next.component = row.component
     if (row.visible === false || row.visible === true) next.visible = row.visible
-    if (next.text == null && next.fill == null && next.fills == null && next.stroke == null && next.strokes == null && next.radius == null && next.visible == null && next.component == null) continue
+    const opacity = num(row.opacity)
+    if (opacity != null && opacity >= 0 && opacity <= 1) next.opacity = opacity
+    const fontSize = num(row.fontSize)
+    if (fontSize != null && fontSize > 0) next.fontSize = fontSize
+    const weight = oneOf(row.weight, WEIGHTS)
+    if (weight) next.weight = weight
+    const color = parsePaint(row.color)
+    if (color && color !== 'none') next.color = color
+    const strokeWidth = num(row.strokeWidth)
+    if (strokeWidth != null && strokeWidth >= 0) next.strokeWidth = strokeWidth
+    const rotation = num(row.rotation)
+    if (rotation != null) next.rotation = rotation
+    if (next.text == null && next.fill == null && next.fills == null && next.stroke == null && next.strokes == null && next.radius == null && next.visible == null && next.component == null && next.opacity == null && next.fontSize == null && next.weight == null && next.color == null && next.strokeWidth == null && next.rotation == null) continue
     rows.push(next)
   }
   return rows
@@ -553,6 +651,20 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
   if (Object.keys(images).length) doc.images = images
   if (guides.length) doc.guides = guides
   if (libraries.length) doc.libraries = libraries
+  if (typeof raw.activePage === 'string' && raw.activePage) doc.activePage = raw.activePage
+  if (raw.pageViews && typeof raw.pageViews === 'object' && !Array.isArray(raw.pageViews)) {
+    const pageViews: Record<string, DesignPageView> = {}
+    for (const [id, value] of Object.entries(raw.pageViews as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const view = value as Record<string, unknown>
+      const panX = num(view.panX)
+      const panY = num(view.panY)
+      const zoom = num(view.zoom)
+      if (panX == null || panY == null || zoom == null) continue
+      pageViews[id] = { panX, panY, zoom }
+    }
+    if (Object.keys(pageViews).length) doc.pageViews = pageViews
+  }
   return { doc, error: null }
 }
 
@@ -570,6 +682,29 @@ export function writeNode(node: DesignNode): DesignNode {
   if (node.padBottom != null) row.padBottom = node.padBottom
   if (node.padLeft != null) row.padLeft = node.padLeft
   if (node.wrap) row.wrap = true
+  if (node.reverse) row.reverse = true
+  if (node.gapX) row.gapX = node.gapX
+  if (node.gapY) row.gapY = node.gapY
+  if (node.alignContent && node.alignContent !== 'start') row.alignContent = node.alignContent
+  if (node.alignSelf && node.alignSelf !== 'start') row.alignSelf = node.alignSelf
+  if (node.margin) row.margin = node.margin
+  if (node.marginTop != null) row.marginTop = node.marginTop
+  if (node.marginRight != null) row.marginRight = node.marginRight
+  if (node.marginBottom != null) row.marginBottom = node.marginBottom
+  if (node.marginLeft != null) row.marginLeft = node.marginLeft
+  if (node.layoutGrids?.length) row.layoutGrids = node.layoutGrids.map((item) => ({ ...item }))
+  if (node.strokeTop != null) row.strokeTop = node.strokeTop
+  if (node.strokeRight != null) row.strokeRight = node.strokeRight
+  if (node.strokeBottom != null) row.strokeBottom = node.strokeBottom
+  if (node.strokeLeft != null) row.strokeLeft = node.strokeLeft
+  if (node.strokeStart && node.strokeStart !== 'none') row.strokeStart = node.strokeStart
+  if (node.strokeEnd && node.strokeEnd !== 'none') row.strokeEnd = node.strokeEnd
+  if (node.strokeMarkerStart && node.strokeMarkerStart !== 'none') row.strokeMarkerStart = node.strokeMarkerStart
+  if (node.strokeMarkerEnd && node.strokeMarkerEnd !== 'none') row.strokeMarkerEnd = node.strokeMarkerEnd
+  if (node.proportion) row.proportion = true
+  if (node.svgAttrs && Object.keys(node.svgAttrs).length) row.svgAttrs = { ...node.svgAttrs }
+  if (node.bindings && Object.keys(node.bindings).length) row.bindings = { ...node.bindings }
+  if (node.interactions?.length) row.interactions = node.interactions.map((item) => ({ ...item }))
   if (node.minW != null) row.minW = node.minW
   if (node.maxW != null) row.maxW = node.maxW
   if (node.minH != null) row.minH = node.minH
@@ -644,6 +779,12 @@ export function writeNode(node: DesignNode): DesignNode {
       if (item.radius != null) copy.radius = item.radius
       if (item.component) copy.component = item.component
       if (item.visible != null) copy.visible = item.visible
+      if (item.opacity != null) copy.opacity = item.opacity
+      if (item.fontSize != null) copy.fontSize = item.fontSize
+      if (item.weight) copy.weight = item.weight
+      if (item.color) copy.color = item.color
+      if (item.strokeWidth != null) copy.strokeWidth = item.strokeWidth
+      if (item.rotation != null) copy.rotation = item.rotation
       return copy
     })
   }
@@ -716,6 +857,7 @@ function designNeedsV2(doc: DesignDoc): boolean {
   const walk = (node: DesignNode): boolean => {
     if (node.fills?.length || node.strokes?.length || node.effects?.length || node.runs?.length) return true
     if (node.blend || node.mask || node.constraintH || node.constraintV || node.booleanOp || node.section) return true
+    if (node.reverse || node.gapX || node.gapY || node.alignSelf || node.interactions?.length || node.layoutGrids?.length) return true
     if (node.layout === 'grid' || node.pointCount != null) return true
     return (node.children ?? []).some(walk)
   }
@@ -731,6 +873,8 @@ export function serializeDesign(doc: DesignDoc): string {
   if (doc.images && Object.keys(doc.images).length) row.images = { ...doc.images }
   if (doc.guides?.length) row.guides = doc.guides.map((guide) => ({ ...guide }))
   if (doc.libraries?.length) row.libraries = doc.libraries.slice()
+  if (doc.activePage) row.activePage = doc.activePage
+  if (doc.pageViews && Object.keys(doc.pageViews).length) row.pageViews = { ...doc.pageViews }
   if (doc.tokens.length) {
     row.tokens = doc.tokens.map((token) => ({ name: token.name, kind: token.kind, values: { ...token.values } }))
   }

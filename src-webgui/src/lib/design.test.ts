@@ -91,7 +91,12 @@ import {
   outlineStrokeNode,
   detachInstance,
   graphToDesign,
+  hexToHsb,
+  hsbToHex,
+  insertVertexOnSegment,
+  moveVectorTangent,
   moveVectorVertex,
+  reorderNodePaint,
   setVariantProps,
   updateDesignNode,
   writeComponentView,
@@ -1293,4 +1298,92 @@ function sample(): DesignDoc {
   const node = createPolygonNode('v', 0, 0, 80, 4)
   const moved = moveVectorVertex(node, 0, 12, 16)
   assert.ok(moved.vector?.vertices.some((point) => point.x === 0 || point.y === 0))
+}
+
+{
+  const a = createNode('rect', 'a', 0, 0)
+  const b = createNode('rect', 'b', 0, 0)
+  const host = createNode('frame', 'host', 0, 0)
+  host.layout = 'row'
+  host.reverse = true
+  host.gapX = 12
+  host.w = 240
+  host.h = 40
+  a.w = 40
+  b.w = 40
+  host.children = [a, b]
+  const laid = layoutDesign({ ...emptyDesign(), screens: [host] }).screens[0]
+  assert.equal(laid.children?.[0].x, 52)
+  assert.equal(laid.children?.[1].x, 0)
+}
+
+{
+  const child = createNode('rect', 'c', 0, 0)
+  child.colSpan = 2
+  const host = createNode('frame', 'g', 0, 0)
+  host.layout = 'grid'
+  host.w = 200
+  host.h = 100
+  host.gridColumns = [{ size: 40 }, { size: 'fr' }, { size: 'auto' }]
+  host.gridRows = [{ size: 'fr', count: 1 }]
+  host.children = [child]
+  const laid = layoutDesign({ ...emptyDesign(), screens: [host] }).screens[0]
+  assert.ok((laid.children?.[0].w ?? 0) > 40)
+}
+
+{
+  const square = createNode('rect', 'sq', 0, 0)
+  square.w = 100
+  square.h = 50
+  const constrained = resizeDesignNode(square, 'se', 40, 10, 1, false, true)
+  assert.equal(Math.round(constrained.w / constrained.h), 2)
+}
+
+{
+  const path = createPolygonNode('p', 0, 0, 80, 4)
+  const curved = moveVectorTangent(path, 0, 'start', 20, -10, true)
+  assert.ok(curved.vector?.segments[0].tangentStart.x !== 0 || curved.vector?.segments[0].tangentStart.y !== 0)
+  const inserted = insertVertexOnSegment(curved, 0, 0.5)
+  assert.ok((inserted.vector?.vertices.length ?? 0) > (curved.vector?.vertices.length ?? 0))
+}
+
+{
+  const hsb = hexToHsb('#ff0000')
+  assert.equal(Math.round(hsb.h), 0)
+  assert.equal(hsbToHex(0, 100, 100), '#ff0000')
+}
+
+{
+  const node = createNode('rect', 'r', 0, 0)
+  const stacked = appendNodePaint(node, 'fill', solidPaint('#112233'))
+  const reordered = reorderNodePaint(stacked, 'fill', 0, 1)
+  assert.equal(reordered.fills?.[1]?.color ?? reordered.fill, stacked.fills?.[0]?.color ?? stacked.fill)
+}
+
+{
+  const frame = createNode('frame', 'f', 0, 0)
+  frame.interactions = [{ trigger: 'click', action: 'navigate', target: 'home' }]
+  const parsed = parseDesign(serializeDesign({ ...emptyDesign(), screens: [frame] }))
+  assert.equal(parsed.doc.screens[0].interactions?.[0].target, 'home')
+}
+
+{
+  const root = createNode('frame', 'root', 0, 0)
+  const kid = createNode('text', 'kid', 0, 0)
+  kid.text = 'Hi'
+  root.children = [kid]
+  const overridden = applyOverrides(root, { overrides: [{ id: 'kid', text: 'Bye', opacity: 0.5, fontSize: 18 }] })
+  assert.equal(overridden.children?.[0].text, 'Bye')
+  assert.equal(overridden.children?.[0].opacity, 0.5)
+  assert.equal(overridden.children?.[0].fontSize, 18)
+}
+
+{
+  const pen = graphToDesign({
+    children: [{ type: 'rectangle', name: 'Card', width: 120, height: 80, fill: '#abcdef', layout: 'row', gap: 8 }],
+    variables: { brand: { type: 'color', value: '#112233' } },
+  })
+  assert.equal(pen.doc.screens[0].kind, 'rect')
+  assert.equal(pen.doc.screens[0].fill, '#abcdef')
+  assert.equal(pen.doc.tokens[0]?.name, 'brand')
 }

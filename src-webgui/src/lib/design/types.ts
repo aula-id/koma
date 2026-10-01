@@ -10,7 +10,7 @@ export type DesignLayout = 'row' | 'column' | 'grid'
 export type DesignAlign = 'start' | 'center' | 'end' | 'space' | 'stretch'
 export type DesignSize = 'hug' | 'fill' | 'fixed'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
-export type DesignTextAlign = 'left' | 'center' | 'right'
+export type DesignTextAlign = 'left' | 'center' | 'right' | 'justify'
 export type DesignTextVertical = 'top' | 'center' | 'bottom'
 /** `height` hugs the block height. `width` hugs both axes. */
 export type DesignTextHug = 'height' | 'width'
@@ -28,6 +28,11 @@ export type DesignTextCase = 'original' | 'upper' | 'lower' | 'title'
 export type DesignTextTruncate = 'off' | 'end'
 export type DesignBooleanOp = 'union' | 'subtract' | 'intersect' | 'exclude'
 export type DesignEffectKind = 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur'
+export type DesignStrokeMarker = 'none' | 'arrow' | 'dot'
+export type DesignInteraction = { trigger: 'click'; action: 'navigate'; target: string }
+export type DesignLayoutGrid = { kind: 'square' | 'column' | 'row'; size?: number; color?: string; gutter?: number; count?: number; offset?: number }
+export type DesignPageView = { panX: number; panY: number; zoom: number }
+export type DesignBindingMap = Record<string, string>
 
 export type DesignVectorPoint = { x: number; y: number }
 
@@ -136,11 +141,26 @@ export type DesignNode = {
   /** Omitted means a free frame. Ignored on other kinds. */
   layout?: DesignLayout
   gap?: number
+  gapX?: number
+  gapY?: number
   pad?: number
+  reverse?: boolean
   /** Cross-axis alignment. `stretch` sizes non-hug, non-fixed children to the inner cross size. Omitted means start. */
   align?: DesignAlign
   /** Main-axis alignment. Omitted means start. */
   justify?: DesignAlign
+  alignContent?: DesignAlign
+  alignSelf?: DesignAlign
+  margin?: number
+  marginTop?: number
+  marginRight?: number
+  marginBottom?: number
+  marginLeft?: number
+  layoutGrids?: DesignLayoutGrid[]
+  interactions?: DesignInteraction[]
+  svgAttrs?: Record<string, string>
+  bindings?: DesignBindingMap
+  proportion?: boolean
   /** Extra inset on one side. Omitted sides use `pad`. */
   padTop?: number
   padRight?: number
@@ -163,6 +183,14 @@ export type DesignNode = {
   strokeCap?: DesignStrokeCap
   strokeJoin?: DesignStrokeJoin
   strokeDash?: number[]
+  strokeTop?: number
+  strokeRight?: number
+  strokeBottom?: number
+  strokeLeft?: number
+  strokeStart?: DesignStrokeCap
+  strokeEnd?: DesignStrokeCap
+  strokeMarkerStart?: DesignStrokeMarker
+  strokeMarkerEnd?: DesignStrokeMarker
   blend?: DesignBlend
   effects?: DesignEffect[]
   mask?: boolean
@@ -235,6 +263,12 @@ export type DesignOverride = {
   radius?: number | string
   visible?: boolean
   component?: string
+  opacity?: number
+  fontSize?: number
+  weight?: DesignWeight
+  color?: DesignRef
+  strokeWidth?: number
+  rotation?: number
 }
 
 export type DesignVariant = {
@@ -274,4 +308,6 @@ export type DesignDoc = {
   images?: Record<string, DesignImageAsset>
   guides?: DesignGuide[]
   libraries?: string[]
+  activePage?: string
+  pageViews?: Record<string, DesignPageView>
 }

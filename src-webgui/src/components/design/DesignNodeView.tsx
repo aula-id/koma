@@ -26,6 +26,7 @@ export function DesignNodeView({
   node,
   zoom,
   selectedIds,
+  geometryId = null,
   editing,
   dragCursor,
   locked = false,
@@ -33,6 +34,7 @@ export function DesignNodeView({
   overrideTargetId = null,
   onSelect,
   onResize,
+  onRotate,
   onCorner,
   onEdit,
   onText,
@@ -44,6 +46,7 @@ export function DesignNodeView({
   node: DesignNode
   zoom: number
   selectedIds: string[]
+  geometryId?: string | null
   editing: string | null
   dragCursor: string | null
   locked?: boolean
@@ -52,6 +55,7 @@ export function DesignNodeView({
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onEnterContainer?: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
+  onRotate?: (id: string, event: ReactPointerEvent<HTMLButtonElement>) => void
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
   onText: (id: string, text: string) => void
@@ -147,7 +151,7 @@ export function DesignNodeView({
       <div
         className={`absolute inset-0 ${overrideMark ? 'ring-2 ring-inset ring-[#9747ff]' : ''}`}
         style={{
-          border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px ${painted.strokeDash?.length ? ((painted.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed') : 'solid'} ${stroke}`,
+          border: undefined,
           borderRadius: radius,
           overflow: clips ? 'hidden' : undefined,
           boxShadow: painted.effects?.filter((item) => item.visible !== false && (item.kind === 'drop-shadow' || item.kind === 'inner-shadow')).map((item) => `${item.kind === 'inner-shadow' ? 'inset ' : ''}${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${item.color && item.color !== 'none' ? item.color : 'rgba(0,0,0,0.25)'}`).join(', ') || undefined,
@@ -171,14 +175,26 @@ export function DesignNodeView({
             }}
           />
         ) : null}
-        {node.kind === 'line' ? (
+        {node.kind !== 'text' && node.kind !== 'vector' && !bareStroke && !strokeOff ? (
+          <svg className="pointer-events-none absolute overflow-visible" width={boxW} height={boxH} style={{ left: painted.strokeAlign === 'outside' ? -chrome.strokeWidth / 2 : painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0, top: painted.strokeAlign === 'outside' ? -chrome.strokeWidth / 2 : painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0, width: painted.strokeAlign === 'center' ? boxW : boxW - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : -chrome.strokeWidth), height: painted.strokeAlign === 'center' ? boxH : boxH - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : -chrome.strokeWidth) }}>
+            {node.kind === 'line' ? (
+              <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeStart === 'round' || painted.strokeCap === 'round' ? 'round' : painted.strokeStart === 'square' || painted.strokeCap === 'square' ? 'square' : 'butt'} strokeDasharray={painted.strokeDash?.join(' ')} />
+            ) : node.kind === 'ellipse' ? (
+              <ellipse cx={boxW / 2} cy={boxH / 2} rx={Math.max(0.5, boxW / 2 - (painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : painted.strokeAlign === 'outside' ? 0 : 0))} ry={Math.max(0.5, boxH / 2 - (painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0))} fill="none" stroke={stroke} strokeWidth={chrome.strokeWidth} strokeDasharray={painted.strokeDash?.join(' ')} />
+            ) : (
+              <rect x={painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0} y={painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0} width={Math.max(1, boxW - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : 0))} height={Math.max(1, boxH - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : 0))} rx={node.kind === 'ellipse' ? boxW : corners.tl} ry={node.kind === 'ellipse' ? boxH : corners.tl} fill="none" stroke={stroke} strokeWidth={chrome.strokeWidth} strokeDasharray={painted.strokeDash?.join(' ')} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} />
+            )}
+            {painted.strokeMarkerEnd === 'arrow' ? <polygon points={`${boxW},${boxH / 2} ${boxW - 8},${boxH / 2 - 4} ${boxW - 8},${boxH / 2 + 4}`} fill={stroke} /> : null}
+            {painted.strokeMarkerStart === 'dot' || painted.strokeMarkerEnd === 'dot' ? <circle cx={painted.strokeMarkerStart === 'dot' ? 0 : boxW} cy={boxH / 2} r={3} fill={stroke} /> : null}
+          </svg>
+        ) : node.kind === 'line' ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
             <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeDasharray={painted.strokeDash?.join(' ')} />
           </svg>
         ) : null}
         {node.kind === 'vector' && node.vector ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
-            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} />
+            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} {...(node.svgAttrs ?? {})} />
           </svg>
         ) : null}
         {node.kind === 'text' && editing === node.id ? (
@@ -200,12 +216,37 @@ export function DesignNodeView({
         ) : node.kind === 'text' ? (
           <div
             className="flex h-full w-full px-1"
-            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start', textAlign: style.align, alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color || chrome.fill, 'var(--color-koma-fg)') }}
           >
             <span className="whitespace-pre-wrap">{node.text || 'Text'}</span>
           </div>
         ) : node.kind === 'instance' && !visual ? (
           <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
+        ) : null}
+        {node.kind === 'frame' && node.layoutGrids?.length ? (
+          <svg className="pointer-events-none absolute inset-0 overflow-hidden" width={boxW} height={boxH}>
+            {node.layoutGrids.map((grid, index) => {
+              const color = grid.color || 'rgba(255,0,0,0.18)'
+              if (grid.kind === 'square') {
+                const size = grid.size ?? 8
+                const lines = []
+                for (let x = grid.offset ?? 0; x < boxW; x += size) lines.push(<line key={`v${index}-${x}`} x1={x} y1={0} x2={x} y2={boxH} stroke={color} strokeWidth={1} />)
+                for (let y = grid.offset ?? 0; y < boxH; y += size) lines.push(<line key={`h${index}-${y}`} x1={0} y1={y} x2={boxW} y2={y} stroke={color} strokeWidth={1} />)
+                return lines
+              }
+              const count = grid.count ?? 3
+              const gutter = grid.gutter ?? 16
+              const offset = grid.offset ?? 0
+              const span = grid.kind === 'column' ? boxW : boxH
+              const cell = Math.max(1, (span - offset * 2 - gutter * Math.max(0, count - 1)) / count)
+              return Array.from({ length: count }, (_, at) => {
+                const start = offset + at * (cell + gutter)
+                return grid.kind === 'column'
+                  ? <rect key={`c${index}-${at}`} x={start} y={0} width={cell} height={boxH} fill={color} />
+                  : <rect key={`r${index}-${at}`} x={0} y={start} width={boxW} height={cell} fill={color} />
+              })
+            })}
+          </svg>
         ) : null}
         {children?.map((child) => (
           <DesignNodeView
@@ -214,6 +255,7 @@ export function DesignNodeView({
             node={child}
             zoom={zoom}
             selectedIds={childIds}
+            geometryId={geometryId}
             editing={editing}
             dragCursor={dragCursor}
             locked={lockChildren}
@@ -222,6 +264,7 @@ export function DesignNodeView({
             onEnterContainer={onEnterContainer}
             onSelect={onSelect}
             onResize={onResize}
+            onRotate={onRotate}
             onCorner={onCorner}
             onEdit={onEdit}
             onText={onText}
@@ -230,7 +273,7 @@ export function DesignNodeView({
           />
         ))}
       </div>
-      {selected && !locked && !node.locked && !dragCursor ? (
+      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id ? (
         HANDLES.map((handle) => (
           <button
             key={handle.id}
@@ -242,7 +285,29 @@ export function DesignNodeView({
           />
         ))
       ) : null}
-      {selected && !locked && !node.locked && !dragCursor && (node.kind === 'rect' || node.kind === 'frame') ? (
+      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id && onRotate ? (
+        (['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
+          <button
+            key={`rot-${corner}`}
+            type="button"
+            aria-label={`Rotate ${corner}`}
+            className="absolute z-20 border-0 p-0"
+            style={{
+              left: corner.includes('w') ? -18 * unit : boxW + 18 * unit,
+              top: corner.includes('n') ? -18 * unit : boxH + 18 * unit,
+              width: 8 * unit,
+              height: 8 * unit,
+              background: '#ffffff',
+              border: `${unit}px solid ${SELECTION}`,
+              borderRadius: '50%',
+              transform: 'translate(-50%, -50%)',
+              cursor: 'grab',
+            }}
+            onPointerDown={(event) => onRotate(node.id, event)}
+          />
+        ))
+      ) : null}
+      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id && (node.kind === 'rect' || node.kind === 'frame') ? (
         ([
           { id: 'tl' as const, x: insetAt(corners.tl, boxW), y: insetAt(corners.tl, boxH), cursor: 'nwse-resize' },
           { id: 'tr' as const, x: boxW - insetAt(corners.tr, boxW), y: insetAt(corners.tr, boxH), cursor: 'nesw-resize' },

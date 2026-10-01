@@ -223,3 +223,52 @@ export function defaultGradient(kind: NonNullable<DesignPaint['kind']> = 'linear
 export function imagePaint(hash: string, scale: NonNullable<DesignPaint['scale']> = 'fill'): DesignPaint {
   return { type: 'image', hash, scale }
 }
+
+export function reorderNodePaint(node: DesignNode, field: 'fill' | 'stroke', from: number, to: number): DesignNode {
+  const paints = nodePaints(node, field)
+  if (from < 0 || to < 0 || from >= paints.length || to >= paints.length || from === to) return node
+  const next = paints.slice()
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  return setNodePaints(node, field, next)
+}
+
+export function hexToHsb(hex: string): { h: number; s: number; b: number } {
+  const body = hex.startsWith('#') ? hex.slice(1) : hex
+  const n = parseInt(body.length === 3 ? body.split('').map((item) => item + item).join('') : body.slice(0, 6), 16)
+  const r = ((n >> 16) & 255) / 255
+  const g = ((n >> 8) & 255) / 255
+  const bl = (n & 255) / 255
+  const max = Math.max(r, g, bl)
+  const min = Math.min(r, g, bl)
+  const d = max - min
+  let h = 0
+  if (d) {
+    if (max === r) h = ((g - bl) / d) % 6
+    else if (max === g) h = (bl - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  return { h, s: max ? (d / max) * 100 : 0, b: max * 100 }
+}
+
+export function hsbToHex(h: number, s: number, b: number): string {
+  const sat = Math.max(0, Math.min(100, s)) / 100
+  const val = Math.max(0, Math.min(100, b)) / 100
+  const hue = ((h % 360) + 360) % 360
+  const c = val * sat
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1))
+  const m = val - c
+  let r = 0
+  let g = 0
+  let bl = 0
+  if (hue < 60) { r = c; g = x }
+  else if (hue < 120) { r = x; g = c }
+  else if (hue < 180) { g = c; bl = x }
+  else if (hue < 240) { g = x; bl = c }
+  else if (hue < 300) { r = x; bl = c }
+  else { r = c; bl = x }
+  const hex = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, '0')
+  return `#${hex(r)}${hex(g)}${hex(bl)}`
+}
