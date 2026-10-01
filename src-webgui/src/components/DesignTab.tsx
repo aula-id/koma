@@ -104,7 +104,11 @@ import {
   emptyPlayState,
   retargetTextRuns,
   firstVisiblePaint,
+  keepImageCropWorldFixed,
   nodePaints,
+  panImageCrop,
+  setNodePaints,
+  isImageCropPaint,
   openVectorEndpoints,
   paintGradientAngle,
   paintGradientCenter,
@@ -117,6 +121,7 @@ import {
   hashBytes,
   hydrateDesignImages,
   imageNaturalSize,
+  rememberImageSize,
   mimeForName,
   putDesignImage,
   writeDesignAsset,
@@ -135,6 +140,7 @@ import {
   type DesignQuery,
   type DesignInteraction,
   type DesignNode,
+  type DesignPaint,
   type DesignPlayState,
   type DesignWeight,
 } from '../lib/design'
@@ -196,6 +202,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const nudgeOpenRef = useRef(false)
   const nudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragRef = useRef<Drag | null>(null)
+  const cropEditRef = useRef(false)
   const labelNoted = useRef(false)
   const patchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingTypePatchRef = useRef<((node: DesignNode) => DesignNode) | null>(null)
@@ -209,6 +216,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [selection, setSelection] = useState<string[]>([])
   const [editing, setEditing] = useState<string | null>(null)
   const [propsOpen, setPropsOpen] = useState(true)
+  const [openFillToken, setOpenFillToken] = useState(0)
+  const [inspectorPaint, setInspectorPaint] = useState<DesignPaint | null>(null)
   const [ghost, setGhost] = useState<Ghost | null>(null)
   const [flowBar, setFlowBar] = useState<DesignFlowBar | null>(null)
   const [snapMarks, setSnapMarks] = useState<{ guides: DesignGuide[]; measures: DesignMeasure[] } | null>(null)
@@ -403,8 +412,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const path = designAssetPath(hash, mime)
       cacheDesignImage(hash, bytes, mime)
       writeDesignAsset(req, tab.root, path, bytes)
-      next = putDesignImage(next, hash, mime, path)
       const size = await imageNaturalSize(bytes, mime)
+      rememberImageSize(hash, size.w, size.h)
+      next = putDesignImage(next, hash, mime, path, size)
       const selected = selectionRef.current[0]
       const target = selected ? findDesignNode(next, selected) : null
       if (target && (target.kind === 'rect' || target.kind === 'frame' || target.kind === 'ellipse')) {
@@ -697,6 +707,30 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         updateRef.current(tab.root, tab.path, next)
         return
       }
+      if (drag.kind === 'crop') {
+        const stored = useKoma.getState().design?.docs?.[key]?.doc
+        if (!stored) return
+        const focus = focusRef.current
+        const doc = editingDoc(stored, focus)
+        const zoom = viewRef.current.zoom || 1
+        const screenDx = (event.clientX - drag.startX) / zoom
+        const screenDy = (event.clientY - drag.startY) / zoom
+        const located = locateDesign(doc, drag.id)
+        if (!located) return
+        const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
+        const nextPaint = panImageCrop(drag.paint, delta.x, delta.y)
+        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, (node) => {
+          const paints = nodePaints(node, 'fill')
+          return setNodePaints(node, 'fill', paints.map((paint) => (isImageCropPaint(paint) && paint.hash === drag.paint.hash ? nextPaint : paint)))
+        })))
+        if (serializeDesign(next) === serializeDesign(stored)) return
+        if (!drag.remembered) {
+          noteRef.current(stored)
+          drag.remembered = true
+        }
+        updateRef.current(tab.root, tab.path, next)
+        return
+      }
       if (drag.kind !== 'move' && drag.kind !== 'resize' && drag.kind !== 'radius') return
       const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
@@ -730,7 +764,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const located = locateDesign(doc, drag.id)
         if (!located) return
         const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
-        const nextNode = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
+        const resized = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
+        const nextNode = cropEditRef.current ? keepImageCropWorldFixed(drag.node, resized) : resized
         const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
         if (serializeDesign(next) === serializeDesign(stored)) return
         if (!drag.remembered) {
@@ -1700,6 +1735,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     setSelection(ids)
     setPropsOpen(true)
     if (event.shiftKey || locateDesign(current, target)?.node.locked) return
+    if (cropEditRef.current && ids.length === 1 && ids[0] === target) {
+      const paint = nodePaints(locateDesign(current, target)?.node, 'fill').find(isImageCropPaint)
+      if (paint) {
+        dragRef.current = { kind: 'crop', id: target, startX: event.clientX, startY: event.clientY, paint: { ...paint }, remembered: false }
+        setDragCursor('move')
+        return
+      }
+    }
     const origins: Record<string, { x: number; y: number }> = {}
     for (const item of moveIds) {
       const row = locateDesign(current, item)
@@ -1786,6 +1829,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const located = selectedId ? locateDesign(doc, selectedId) : null
   const selected = located?.node ?? null
   const multi = selectedNodes.length > 1
+  const cropEdit = !multi && isImageCropPaint(inspectorPaint)
+  cropEditRef.current = cropEdit
   const parentNode = located?.parentId ? findDesignNode(doc, located.parentId) : null
   const sizeModes = !multi && (parentNode?.layout === 'row' || parentNode?.layout === 'column')
   const everyParent = selectedNodes.length > 0 && selectedNodes.every((node) => locateDesign(doc, node.id)?.parentId != null)
@@ -2030,6 +2075,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 dragCursor={dragCursor}
                 enteredContainerId={enteredContainerId}
                 overrideTargetId={overrideTargetId}
+                cropEditId={cropEdit ? selectedId : null}
+                onOpenFill={(id) => {
+                  setSelection([id])
+                  setPropsOpen(true)
+                  setOpenFillToken((token) => token + 1)
+                }}
                 onEnterContainer={(id, event) => {
                   event.preventDefault()
                   event.stopPropagation()
@@ -2116,6 +2167,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     if (row) origins[item] = { x: row.node.x, y: row.node.y }
                   }
                   if (locateDesign(current, target)?.node.locked) return
+                  if (cropEditRef.current && ids.length === 1 && ids[0] === target) {
+                    const paint = nodePaints(locateDesign(current, target)?.node, 'fill').find(isImageCropPaint)
+                    if (paint) {
+                      dragRef.current = { kind: 'crop', id: target, startX: event.clientX, startY: event.clientY, paint: { ...paint }, remembered: false }
+                      setDragCursor('move')
+                      return
+                    }
+                  }
                   dragRef.current = {
                     kind: 'move',
                     ids: moveIds,
@@ -2640,6 +2699,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 if (childId && selected) setSelection([selected.id])
                 setOverrideTargetId(childId)
               }}
+              openFillToken={openFillToken}
+              onInspectorPaint={setInspectorPaint}
               onPickImage={() => imageInputRef.current?.click()}
               onStoreImage={(hash, bytes, mime) => {
                 const path = designAssetPath(hash, mime)

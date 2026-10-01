@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -42,6 +42,10 @@ import {
   applyFramePreset,
   applyTextRun,
   bindNodeField,
+  designImageSize,
+  ensureImageCrop,
+  nodePaints,
+  setNodePaints,
   reshapeDesignNode,
   retuneDesignShape,
   shapeKindOf,
@@ -61,6 +65,7 @@ import {
   type DesignLayout,
   type DesignLayoutGrid,
   type DesignNode,
+  type DesignPaint,
   type DesignReshapeKind,
   type DesignOverlayPlace,
   type DesignTextRun,
@@ -112,6 +117,8 @@ export function NodeSettings({
   onStoreImage,
   textRange,
   parentLayout,
+  openFillToken,
+  onInspectorPaint,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -140,6 +147,8 @@ export function NodeSettings({
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
   textRange?: { start: number; end: number } | null
   parentLayout?: DesignLayout | null
+  openFillToken?: number
+  onInspectorPaint?: (paint: DesignPaint | null) => void
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -263,9 +272,15 @@ export function NodeSettings({
   const cornerField = (pick: (item: DesignNode) => number) => numberOf(pick)
   const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
   const [inspectorPage, setInspectorPage] = useState<InspectorPage | null>(null)
+  const onInspectorPaintRef = useRef(onInspectorPaint)
+  onInspectorPaintRef.current = onInspectorPaint
   useEffect(() => {
     setInspectorPage(null)
   }, [node.id, multi])
+  useEffect(() => {
+    onInspectorPaintRef.current?.(inspectorPage?.kind === 'paint' ? inspectorPage.paint : null)
+  }, [inspectorPage])
+  useEffect(() => () => onInspectorPaintRef.current?.(null), [])
   const openInspectorPage = (page: InspectorPage) => {
     if (page.kind === 'paint') {
       const apply = page.onChange
@@ -280,6 +295,33 @@ export function NodeSettings({
     }
     setInspectorPage(page)
   }
+  useEffect(() => {
+    if (!openFillToken || multi) return
+    const paints = nodePaints(node, 'fill')
+    const paint = paints[0] ?? solidPaint(SHAPE_FILL)
+    const boxed = paint.type === 'image' && paint.scale === 'crop'
+      ? ensureImageCrop(paint, { w: node.w, h: node.h }, designImageSize(doc, paint.hash))
+      : paint
+    openInspectorPage({
+      kind: 'paint',
+      title: 'Fill',
+      paint: boxed,
+      fallback: SHAPE_FILL,
+      tokens: colorTokens,
+      allowImage: true,
+      allowGradient: true,
+      box: { w: node.w, h: node.h },
+      natural: designImageSize(doc, paint.hash),
+      onChange: (next) => onPatch((current) => {
+        const currentPaints = nodePaints(current, 'fill')
+        const painted = next.type === 'image' && next.scale === 'crop'
+          ? ensureImageCrop(next, { w: current.w, h: current.h }, designImageSize(doc, next.hash))
+          : next
+        return setNodePaints(current, 'fill', currentPaints.length ? currentPaints.map((item, at) => (at === 0 ? painted : item)) : [painted])
+      }),
+      onStoreImage,
+    })
+  }, [openFillToken])
   return (
     <DesignModeContext.Provider value={doc.mode}>
     <InspectorPageContext.Provider value={openInspectorPage}>

@@ -4,9 +4,14 @@ import {
   designLayerName,
   nodeChrome,
   firstVisiblePaint,
+  imageAssetUrl,
+  imageCropRect,
+  imageFillPlacement,
+  isImageCropPaint,
   isPaintVisible,
   nodeFillCss,
   nodeFillLayers,
+  nodeHasImageFill,
   nodePaints,
   paintAlias,
   siblingMaskStyle,
@@ -39,11 +44,13 @@ export function DesignNodeView({
   locked = false,
   enteredContainerId = null,
   overrideTargetId = null,
+  cropEditId = null,
   onSelect,
   onResize,
   onRotate,
   onCorner,
   onEdit,
+  onOpenFill,
   onText,
   onTextRange,
   onTextBlur,
@@ -62,12 +69,14 @@ export function DesignNodeView({
   locked?: boolean
   enteredContainerId?: string | null
   overrideTargetId?: string | null
+  cropEditId?: string | null
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onEnterContainer?: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
   onRotate?: (id: string, event: ReactPointerEvent<HTMLButtonElement>) => void
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
+  onOpenFill?: (id: string) => void
   onText: (id: string, text: string) => void
   onTextRange?: (id: string, start: number, end: number) => void
   onTextBlur: () => void
@@ -95,15 +104,22 @@ export function DesignNodeView({
   const fill = bareFill ? 'transparent' : nodeFillCss(doc, painted, fillFallbackCss)
   const stroke = nodeStrokeCss(doc, painted, paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)'))
   const fillLayers = bareFill || node.kind === 'line' || node.kind === 'vector' ? [] : nodeFillLayers(doc, painted, fillFallbackCss)
-  const fillSizes = fillPaints.map((paint) => paint.type === 'image' ? (paint.scale === 'tile' ? 'auto' : paint.scale === 'fit' ? 'contain' : 'cover') : '100% 100%')
+  const fillPlacements = fillPaints.map((paint) => imageFillPlacement({ w: boxW, h: boxH }, paint))
+  const fillSizes = fillPlacements.map((item) => item.size)
+  const fillPositions = fillPlacements.map((item) => item.position)
   const fillRepeats = fillPaints.map((paint) => paint.type === 'image' && paint.scale === 'tile' ? 'repeat' : 'no-repeat')
+  const cropEdit = cropEditId === node.id
+  const cropPaint = cropEdit ? fillPaints.find(isImageCropPaint) : null
+  const cropRect = cropPaint ? imageCropRect({ w: boxW, h: boxH }, cropPaint) : null
+  const cropUrl = cropPaint ? imageAssetUrl(doc, cropPaint.hash) : ''
   const corners = cornerPixels(doc, visual ?? node)
   const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
   const unit = 1 / Math.max(zoom, 0.25)
   const insetAt = (value: number, span: number) => Math.min(span / 2, Math.max(8 * unit, value > 0 ? value : 14 * unit))
   const clipValue = node.kind === 'instance' ? node.clip ?? visual?.clip : node.clip
-  const clips = (node.kind === 'frame' || node.kind === 'instance') && clipValue !== false
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
+  const cropDescendant = !!cropEditId && (node.id === cropEditId || !!(children && nodeContainsId(children, cropEditId)))
+  const clips = (node.kind === 'frame' || node.kind === 'instance') && clipValue !== false && !cropDescendant
   const rotation = node.rotation ?? 0
   const flipX = node.flipX ? -1 : 1
   const flipY = node.flipY ? -1 : 1
@@ -134,7 +150,7 @@ export function DesignNodeView({
         WebkitMaskRepeat: maskStyle?.WebkitMaskRepeat,
         maskMode: maskStyle?.maskMode,
         outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
-        cursor: !hitHere || node.locked || dragCursor ? undefined : 'grab',
+        cursor: !hitHere || node.locked || dragCursor ? undefined : cropEdit ? 'move' : 'grab',
       }}
       onPointerDown={hitHere ? (event) => onSelect(node.id, event) : undefined}
       onContextMenu={hitHere ? (event) => {
@@ -147,6 +163,11 @@ export function DesignNodeView({
         if (node.kind === 'text') {
           event.stopPropagation()
           onEdit(node.id)
+          return
+        }
+        if (nodeHasImageFill(painted) && onOpenFill) {
+          event.stopPropagation()
+          onOpenFill(node.id)
           return
         }
         if ((node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance' || node.kind === 'vector') && onEnterContainer) {
@@ -171,6 +192,22 @@ export function DesignNodeView({
           {designLayerName(node)}
         </span>
       ) : null}
+      {cropEdit && cropRect && cropUrl ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute"
+          style={{
+            left: cropRect.x,
+            top: cropRect.y,
+            width: cropRect.w,
+            height: cropRect.h,
+            backgroundImage: `url("${cropUrl}")`,
+            backgroundSize: '100% 100%',
+            backgroundRepeat: 'no-repeat',
+            opacity: 0.35,
+          }}
+        />
+      ) : null}
       <div
         className={`absolute inset-0 ${overrideMark ? 'ring-2 ring-inset ring-[#9747ff]' : ''}`}
         style={{
@@ -191,7 +228,7 @@ export function DesignNodeView({
               backgroundImage: fillLayers.length ? fillLayers.join(', ') : undefined,
               backgroundSize: fillLayers.length ? fillSizes.join(', ') : undefined,
               backgroundRepeat: fillLayers.length ? fillRepeats.join(', ') : undefined,
-              backgroundPosition: fillLayers.length ? fillPaints.map(() => 'center').join(', ') : undefined,
+              backgroundPosition: fillLayers.length ? fillPositions.join(', ') : undefined,
               opacity: fillPaints.length === 1 ? fillPaint?.opacity ?? 1 : 1,
               borderRadius: 'inherit',
             }}
@@ -295,6 +332,7 @@ export function DesignNodeView({
             locked={lockChildren}
             enteredContainerId={enteredContainerId}
             overrideTargetId={overrideTargetId}
+            cropEditId={cropEditId}
             maskStyle={mask && !child.mask ? siblingMaskStyle(mask, child, doc) : undefined}
             onEnterContainer={onEnterContainer}
             onSelect={onSelect}
@@ -302,6 +340,7 @@ export function DesignNodeView({
             onRotate={onRotate}
             onCorner={onCorner}
             onEdit={onEdit}
+            onOpenFill={onOpenFill}
             onText={onText}
             onTextRange={onTextRange}
             onTextBlur={onTextBlur}
@@ -315,14 +354,14 @@ export function DesignNodeView({
           <button
             key={handle.id}
             type="button"
-            aria-label={`Resize ${handle.id}`}
+            aria-label={`${cropEdit ? 'Crop' : 'Resize'} ${handle.id}`}
             className="absolute z-10 border-0 p-0"
             style={{ left: handle.x, top: handle.y, width: 7 * unit, height: 7 * unit, background: '#ffffff', border: `${unit}px solid ${SELECTION}`, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
             onPointerDown={(event) => onResize(node.id, handle.id, event)}
           />
         ))
       ) : null}
-      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id && onRotate ? (
+      {selected && !cropEdit && !locked && !node.locked && !dragCursor && geometryId !== node.id && onRotate ? (
         (['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
           <button
             key={`rot-${corner}`}
@@ -344,7 +383,7 @@ export function DesignNodeView({
           />
         ))
       ) : null}
-      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id && (node.kind === 'rect' || node.kind === 'frame') ? (
+      {selected && !cropEdit && !locked && !node.locked && !dragCursor && geometryId !== node.id && (node.kind === 'rect' || node.kind === 'frame') ? (
         ([
           { id: 'tl' as const, x: insetAt(corners.tl, boxW), y: insetAt(corners.tl, boxH), cursor: 'nwse-resize' },
           { id: 'tr' as const, x: boxW - insetAt(corners.tr, boxW), y: insetAt(corners.tr, boxH), cursor: 'nesw-resize' },
@@ -431,4 +470,8 @@ function StrokeShape({
 
 function cornersSafe(node: DesignNode): number {
   return typeof node.radius === 'number' ? node.radius : 0
+}
+
+function nodeContainsId(nodes: DesignNode[], id: string): boolean {
+  return nodes.some((node) => node.id === id || !!(node.children && nodeContainsId(node.children, id)))
 }

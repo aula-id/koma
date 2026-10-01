@@ -104,6 +104,10 @@ export type DesignPaint = {
   transform?: number[]
   hash?: string
   scale?: DesignImageScale
+  imageX?: number
+  imageY?: number
+  imageW?: number
+  imageH?: number
   width?: number
   align?: DesignStrokeAlign
   dash?: number
@@ -122,6 +126,8 @@ export type DesignPaint = {
 export type DesignImageAsset = {
   mime: string
   path: string
+  w?: number
+  h?: number
 }
 
 export type DesignEffect = {

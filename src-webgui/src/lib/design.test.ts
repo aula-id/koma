@@ -82,6 +82,11 @@ import {
   appendNodePaint,
   applyImageFill,
   applyDesignToken,
+  ensureImageCrop,
+  imageCropRect,
+  keepImageCropWorldFixed,
+  nodeHasImageFill,
+  panImageCrop,
   putDesignImage,
   resolvePaintCss,
   solidPaint,
@@ -185,6 +190,42 @@ assert.equal(isDesignPath('.koma/auth.diag'), false)
   const round = parseDesign(serializeDesign({ ...doc, screens: [rect] }))
   assert.equal(round.error, null)
   assert.equal(round.doc.images?.[hashed]?.mime, 'image/png')
+}
+
+{
+  const cover = imageCropRect({ w: 100, h: 100 }, { type: 'image', hash: 'x', scale: 'crop' }, { w: 200, h: 100 })
+  assert.equal(cover.w, 200)
+  assert.equal(cover.h, 100)
+  assert.equal(cover.x, -50)
+  assert.equal(cover.y, 0)
+  const stored = ensureImageCrop({ type: 'image', hash: 'x', scale: 'fill' }, { w: 100, h: 80 }, { w: 200, h: 80 })
+  assert.equal(stored.scale, 'crop')
+  assert.equal(stored.imageW, 200)
+  assert.equal(stored.imageH, 80)
+  assert.equal(stored.imageX, -50)
+  const prev = createNode('rect', 'r', 10, 20)
+  prev.w = 100
+  prev.h = 80
+  prev.fills = [{ type: 'image', hash: 'x', scale: 'crop', imageX: -50, imageY: 0, imageW: 200, imageH: 80 }]
+  const next = { ...prev, x: 20, y: 20, w: 90, h: 80 }
+  const kept = keepImageCropWorldFixed(prev, next)
+  assert.equal(kept.fills?.[0].imageX, -60)
+  assert.equal(kept.fills?.[0].imageY, 0)
+  const panned = panImageCrop(prev.fills[0], 5, -3)
+  assert.equal(panned.imageX, -45)
+  assert.equal(panned.imageY, -3)
+  assert.equal(nodeHasImageFill(prev), true)
+  const hashed = 'b'.repeat(64)
+  const cropped = { type: 'image' as const, hash: hashed, scale: 'crop' as const, imageX: -10, imageY: 4, imageW: 140, imageH: 90 }
+  const round = parseDesign(serializeDesign({
+    ...emptyDesign(),
+    screens: [{ ...createNode('rect', 'r', 0, 0), fills: [cropped] }],
+    images: { [hashed]: { mime: 'image/png', path: '.koma/assets/x.png', w: 200, h: 100 } },
+  }))
+  assert.equal(round.error, null)
+  assert.equal(round.doc.screens[0].fills?.[0].imageX, -10)
+  assert.equal(round.doc.screens[0].fills?.[0].imageW, 140)
+  assert.equal(round.doc.images?.[hashed]?.w, 200)
 }
 
 {

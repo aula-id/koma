@@ -23,6 +23,10 @@ export function clonePaint(paint: DesignPaint): DesignPaint {
   if (paint.transform) next.transform = paint.transform.slice()
   if (paint.hash) next.hash = paint.hash
   if (paint.scale) next.scale = paint.scale
+  if (paint.imageX != null) next.imageX = paint.imageX
+  if (paint.imageY != null) next.imageY = paint.imageY
+  if (paint.imageW != null) next.imageW = paint.imageW
+  if (paint.imageH != null) next.imageH = paint.imageH
   if (paint.width != null) next.width = paint.width
   if (paint.align) next.align = paint.align
   if (paint.dash != null) next.dash = paint.dash
@@ -275,6 +279,80 @@ export function defaultGradient(kind: NonNullable<DesignPaint['kind']> = 'linear
 
 export function imagePaint(hash: string, scale: NonNullable<DesignPaint['scale']> = 'fill'): DesignPaint {
   return { type: 'image', hash, scale }
+}
+
+export function isImageCropPaint(paint: DesignPaint | null | undefined): boolean {
+  return !!paint && paint.type === 'image' && paint.visible !== false && !!paint.hash && paint.scale === 'crop'
+}
+
+export function firstImageFill(node: DesignNode | null | undefined): DesignPaint | null {
+  return nodePaints(node, 'fill').find((paint) => paint.type === 'image' && paint.visible !== false && !!paint.hash) ?? null
+}
+
+export function nodeHasImageFill(node: DesignNode | null | undefined): boolean {
+  return firstImageFill(node) != null
+}
+
+export function imageCropRect(
+  box: { w: number; h: number },
+  paint: DesignPaint,
+  natural?: { w: number; h: number } | null,
+): { x: number; y: number; w: number; h: number } {
+  if (paint.imageW != null && paint.imageH != null && paint.imageW > 0 && paint.imageH > 0) {
+    return { x: paint.imageX ?? 0, y: paint.imageY ?? 0, w: paint.imageW, h: paint.imageH }
+  }
+  const nw = natural?.w ?? 0
+  const nh = natural?.h ?? 0
+  if (nw > 0 && nh > 0 && box.w > 0 && box.h > 0) {
+    const scale = Math.max(box.w / nw, box.h / nh)
+    const w = nw * scale
+    const h = nh * scale
+    return { x: (box.w - w) / 2, y: (box.h - h) / 2, w, h }
+  }
+  return { x: 0, y: 0, w: Math.max(1, box.w), h: Math.max(1, box.h) }
+}
+
+export function ensureImageCrop(
+  paint: DesignPaint,
+  box: { w: number; h: number },
+  natural?: { w: number; h: number } | null,
+): DesignPaint {
+  if (paint.type !== 'image') return paint
+  const rect = imageCropRect(box, paint, natural)
+  if (paint.scale === 'crop' && paint.imageX === rect.x && paint.imageY === rect.y && paint.imageW === rect.w && paint.imageH === rect.h) return paint
+  return { ...paint, scale: 'crop', imageX: rect.x, imageY: rect.y, imageW: rect.w, imageH: rect.h }
+}
+
+export function panImageCrop(paint: DesignPaint, dx: number, dy: number): DesignPaint {
+  if (!isImageCropPaint(paint)) return paint
+  return { ...paint, imageX: (paint.imageX ?? 0) + dx, imageY: (paint.imageY ?? 0) + dy }
+}
+
+export function keepImageCropWorldFixed(prev: DesignNode, next: DesignNode): DesignNode {
+  const paints = nodePaints(next, 'fill')
+  if (!paints.some(isImageCropPaint)) return next
+  const dx = next.x - prev.x
+  const dy = next.y - prev.y
+  if (!dx && !dy) return next
+  return setNodePaints(next, 'fill', paints.map((paint) => {
+    if (!isImageCropPaint(paint)) return paint
+    return { ...paint, imageX: (paint.imageX ?? 0) - dx, imageY: (paint.imageY ?? 0) - dy }
+  }))
+}
+
+export function imageFillPlacement(
+  box: { w: number; h: number },
+  paint: DesignPaint,
+  natural?: { w: number; h: number } | null,
+): { size: string; position: string } {
+  if (paint.type !== 'image') return { size: '100% 100%', position: 'center' }
+  if (paint.scale === 'tile') return { size: 'auto', position: '0 0' }
+  if (paint.scale === 'fit') return { size: 'contain', position: 'center' }
+  if (paint.scale === 'crop') {
+    const rect = imageCropRect(box, paint, natural)
+    return { size: `${rect.w}px ${rect.h}px`, position: `${rect.x}px ${rect.y}px` }
+  }
+  return { size: 'cover', position: 'center' }
 }
 
 export function reorderNodePaint(node: DesignNode, field: 'fill' | 'stroke', from: number, to: number): DesignNode {

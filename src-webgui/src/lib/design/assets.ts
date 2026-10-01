@@ -1,9 +1,24 @@
 import { bytesToBase64 } from '../diagramNotes'
 import { bytesToObjectUrl, requestFileBytes } from '../filePreview'
 import { mintRequestId } from '../../store/coding'
-import type { DesignDoc, DesignImageScale, DesignNode } from './types'
+import type { DesignDoc, DesignImageAsset, DesignImageScale, DesignNode } from './types'
 
 const urls = new Map<string, string>()
+const sizes = new Map<string, { w: number; h: number }>()
+
+export function rememberImageSize(hash: string, w: number, h: number) {
+  if (!hash || !(w > 0) || !(h > 0)) return
+  sizes.set(hash, { w, h })
+}
+
+export function designImageSize(doc: DesignDoc | null | undefined, hash: string | null | undefined): { w: number; h: number } | null {
+  if (!hash) return null
+  const cached = sizes.get(hash)
+  if (cached) return cached
+  const asset = doc?.images?.[hash]
+  if (asset?.w && asset.h && asset.w > 0 && asset.h > 0) return { w: asset.w, h: asset.h }
+  return null
+}
 
 export function designAssetDir(): string {
   return '.koma/assets'
@@ -83,8 +98,14 @@ export async function hydrateDesignImages(
   return results.some(Boolean)
 }
 
-export function putDesignImage(doc: DesignDoc, hash: string, mime: string, path: string): DesignDoc {
-  return { ...doc, version: 2, images: { ...(doc.images ?? {}), [hash]: { mime, path } } }
+export function putDesignImage(doc: DesignDoc, hash: string, mime: string, path: string, size?: { w: number; h: number }): DesignDoc {
+  const asset: DesignImageAsset = { mime, path }
+  if (size && size.w > 0 && size.h > 0) {
+    rememberImageSize(hash, size.w, size.h)
+    asset.w = size.w
+    asset.h = size.h
+  }
+  return { ...doc, version: 2, images: { ...(doc.images ?? {}), [hash]: asset } }
 }
 
 export function applyImageFill(node: DesignNode, hash: string, scale: DesignImageScale = 'fill'): DesignNode {

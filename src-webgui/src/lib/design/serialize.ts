@@ -123,6 +123,14 @@ function parsePaintObject(value: unknown): DesignPaint | null {
     paint.hash = row.hash
     const scale = oneOf(row.scale, IMAGE_SCALES)
     if (scale && scale !== 'fill') paint.scale = scale
+    const imageX = num(row.imageX)
+    const imageY = num(row.imageY)
+    const imageW = num(row.imageW)
+    const imageH = num(row.imageH)
+    if (imageX != null) paint.imageX = imageX
+    if (imageY != null) paint.imageY = imageY
+    if (imageW != null && imageW > 0) paint.imageW = imageW
+    if (imageH != null && imageH > 0) paint.imageH = imageH
   }
   const width = num(row.width)
   if (width != null && width > 0 && width !== 1) paint.width = width
@@ -659,7 +667,12 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
       if (typeof asset.mime !== 'string' || !asset.mime || typeof asset.path !== 'string' || !asset.path) {
         return { doc: emptyDesign(), error: 'This file is not a design' }
       }
-      images[hash] = { mime: asset.mime, path: asset.path }
+      const stored: DesignImageAsset = { mime: asset.mime, path: asset.path }
+      const width = num(asset.w)
+      const height = num(asset.h)
+      if (width != null && width > 0) stored.w = width
+      if (height != null && height > 0) stored.h = height
+      images[hash] = stored
     }
   }
   const guides: DesignGuide[] = []

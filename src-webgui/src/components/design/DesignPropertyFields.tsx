@@ -17,7 +17,9 @@ import { KomaSelect } from '../KomaSelect'
 import type { DesignToken } from '../../lib/design'
 import {
   bindNodeField,
+  designImageSize,
   designLayerName,
+  ensureImageCrop,
   effectiveInstanceChild,
   mergeDesignOverride,
   nodePaints,
@@ -576,6 +578,7 @@ export function ColorRow({
   onRemove,
   onStoreImage,
   pageTitle = 'Color',
+  box,
 }: {
   doc: DesignDoc
   paint: DesignPaint
@@ -590,6 +593,7 @@ export function ColorRow({
   onRemove?: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
   pageTitle?: string
+  box?: { w: number; h: number }
 }) {
   const openPage = useInspectorPage()
   const [hexDraft, setHexDraft] = useState<string | null>(null)
@@ -601,14 +605,20 @@ export function ColorRow({
   const label = mixed ? '' : paintRowLabel(paint) || token
   const openEditor = () => {
     if (mixed) return
+    const ready = paint.type === 'image' && paint.scale === 'crop' && box
+      ? ensureImageCrop(paint, box, designImageSize(doc, paint.hash))
+      : paint
+    if (ready !== paint) onChange(ready)
     openPage({
       kind: 'paint',
       title: pageTitle,
-      paint,
+      paint: ready,
       fallback,
       tokens,
       allowImage,
       allowGradient,
+      box,
+      natural: designImageSize(doc, paint.hash),
       onChange,
       onStoreImage,
     })
@@ -814,6 +824,7 @@ export function FillEditor({
               fallback={fallback}
               tokens={tokens}
               pageTitle={label}
+              box={{ w: node.w, h: node.h }}
               allowImage={field === 'fill'}
               bound={node.bindings?.[field]}
               onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, implicit ? [paint] : paints), field, token)) : undefined}

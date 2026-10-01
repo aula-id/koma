@@ -4,13 +4,16 @@ import {
   cacheDesignImage,
   defaultGradient,
   designImageUrl,
+  ensureImageCrop,
   hashBytes,
   hexToHsb,
   hexToRgba,
   hsbToHex,
+  imageNaturalSize,
   imagePaint,
   mimeForName,
   nodeFillCss,
+  rememberImageSize,
   resolveColor,
   rgbaToHex,
   solidPaint,
@@ -47,6 +50,8 @@ export type PaintInspectorPage = {
   tokens?: DesignToken[]
   allowImage?: boolean
   allowGradient?: boolean
+  box?: { w: number; h: number }
+  natural?: { w: number; h: number } | null
   onChange: (paint: DesignPaint) => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }
@@ -132,6 +137,8 @@ export function InspectorPageView({ page, onBack }: { page: InspectorPage; onBac
         tokens={page.tokens}
         allowImage={page.allowImage}
         allowGradient={page.allowGradient}
+        box={page.box}
+        natural={page.natural}
         onChange={page.onChange}
         onStoreImage={page.onStoreImage}
       />
@@ -145,6 +152,8 @@ export function DesignPaintEditor({
   tokens,
   allowGradient = true,
   allowImage = true,
+  box,
+  natural,
   onChange,
   onStoreImage,
 }: {
@@ -153,6 +162,8 @@ export function DesignPaintEditor({
   tokens?: DesignToken[]
   allowGradient?: boolean
   allowImage?: boolean
+  box?: { w: number; h: number }
+  natural?: { w: number; h: number } | null
   onChange: (paint: DesignPaint) => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
@@ -185,8 +196,11 @@ export function DesignPaintEditor({
     const bytes = new Uint8Array(await file.arrayBuffer())
     const hash = await hashBytes(bytes)
     cacheDesignImage(hash, bytes, mime)
+    const size = await imageNaturalSize(bytes, mime)
+    rememberImageSize(hash, size.w, size.h)
     onStoreImage?.(hash, bytes, mime)
-    onChange({ ...imagePaint(hash, paint.scale ?? 'fill'), opacity: paint.opacity, visible: paint.visible })
+    const next = { ...imagePaint(hash, paint.scale ?? 'fill'), opacity: paint.opacity, visible: paint.visible }
+    onChange(next.scale === 'crop' && box ? ensureImageCrop(next, box, size) : next)
   }
   const applyHex = (raw: string) => {
     const color = parseHex(raw, tokens)
@@ -233,7 +247,8 @@ export function DesignPaintEditor({
               onChange={(event) => {
                 const scale = event.target.value
                 if (scale !== 'fill' && scale !== 'fit' && scale !== 'crop' && scale !== 'tile') return
-                onChange({ ...paint, type: 'image', scale: scale as DesignImageScale })
+                const next = { ...paint, type: 'image' as const, scale: scale as DesignImageScale }
+                onChange(scale === 'crop' && box ? ensureImageCrop(next, box, natural) : next)
               }}
               className="h-7 w-full px-1.5 text-[12px]"
             >

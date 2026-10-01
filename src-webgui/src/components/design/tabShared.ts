@@ -8,6 +8,7 @@ import {
   type DesignDoc,
   type DesignHandle,
   type DesignNode,
+  type DesignPaint,
   type DesignOrder,
   type DesignPenPoint,
   type DesignRect,
@@ -66,6 +67,7 @@ export type RadiusCorner = 'tl' | 'tr' | 'bl' | 'br'
 export type Drag =
   | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean; alt: boolean; scene: { moving: DesignRect; targets: DesignRect[] } | null }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
+  | { kind: 'crop'; id: string; startX: number; startY: number; paint: DesignPaint; remembered: boolean }
   | { kind: 'rotate'; id: string; startX: number; startY: number; rotation: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
