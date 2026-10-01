@@ -196,7 +196,176 @@ async function parseFigArchive(buffer: ArrayBuffer): Promise<unknown | null> {
   return null
 }
 
+function guidId(value: { sessionID?: number; localID?: number } | string | undefined): string {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  return `${value.sessionID ?? 0}:${value.localID ?? 0}`
+}
+
+function colorHex(color: { r?: number; g?: number; b?: number } | undefined): string | null {
+  if (!color) return null
+  const hex = (n: number) => Math.max(0, Math.min(255, Math.round((n ?? 0) * 255))).toString(16).padStart(2, '0')
+  return `#${hex(color.r ?? 0)}${hex(color.g ?? 0)}${hex(color.b ?? 0)}`
+}
+
+function figPaint(paint: Record<string, unknown>): DesignPaint | null {
+  if (paint.visible === false) return null
+  const type = typeof paint.type === 'string' ? paint.type.toUpperCase() : 'SOLID'
+  const opacity = typeof paint.opacity === 'number' && paint.opacity < 1 ? paint.opacity : undefined
+  if (type.includes('GRADIENT')) {
+    const stops = Array.isArray(paint.stops)
+      ? paint.stops.flatMap((stop) => {
+          if (!stop || typeof stop !== 'object') return []
+          const item = stop as Record<string, unknown>
+          const color = colorHex(item.color as { r?: number; g?: number; b?: number } | undefined)
+          const at = typeof item.position === 'number' ? item.position : typeof item.at === 'number' ? item.at : 0
+          return color ? [{ color, at }] : []
+        })
+      : []
+    return {
+      type: 'gradient',
+      kind: type.includes('RADIAL') ? 'radial' : type.includes('ANGULAR') ? 'angular' : type.includes('DIAMOND') ? 'diamond' : 'linear',
+      stops: stops.length >= 2 ? stops : [{ color: '#000000', at: 0 }, { color: '#ffffff', at: 1 }],
+      opacity,
+    }
+  }
+  if (type === 'IMAGE') {
+    const image = paint.image && typeof paint.image === 'object' ? paint.image as Record<string, unknown> : null
+    const hash = typeof image?.hash === 'string' ? image.hash : typeof paint.hash === 'string' ? paint.hash : ''
+    if (!hash) return null
+    return { type: 'image', hash, scale: 'fill', opacity }
+  }
+  const color = colorHex(paint.color as { r?: number; g?: number; b?: number } | undefined)
+  return color ? { type: 'solid', color, opacity } : null
+}
+
+function figKind(type: string | undefined): DesignNode['kind'] {
+  const raw = (type ?? '').toUpperCase()
+  if (raw.includes('TEXT')) return 'text'
+  if (raw.includes('ELLIPSE')) return 'ellipse'
+  if (raw.includes('LINE')) return 'line'
+  if (raw.includes('VECTOR') || raw.includes('BOOLEAN') || raw.includes('STAR') || raw.includes('POLYGON')) return 'vector'
+  if (raw.includes('RECT')) return 'rect'
+  if (raw.includes('GROUP')) return 'group'
+  if (raw.includes('INSTANCE')) return 'instance'
+  return 'frame'
+}
+
+export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): DesignImportResult {
+  const doc = emptyDesign()
+  doc.version = 2
+  const nodes = new Map<string, DesignNode>()
+  const children = new Map<string, string[]>()
+  for (const row of changes) {
+    if (row.phase === 'REMOVED') continue
+    const id = guidId(row.guid as { sessionID?: number; localID?: number } | string | undefined) || mint('fig', { i: nodes.size })
+    const size = row.size && typeof row.size === 'object' ? row.size as { x?: number; y?: number } : {}
+    const transform = row.transform && typeof row.transform === 'object' ? row.transform as { m02?: number; m12?: number } : {}
+    const fills = Array.isArray(row.fillPaints) ? row.fillPaints.map((item) => figPaint(item as Record<string, unknown>)).filter((item): item is DesignPaint => !!item) : []
+    const strokes = Array.isArray(row.strokePaints) ? row.strokePaints.map((item) => figPaint(item as Record<string, unknown>)).filter((item): item is DesignPaint => !!item) : []
+    const kind = figKind(typeof row.type === 'string' ? row.type : undefined)
+    const node: DesignNode = {
+      id,
+      kind,
+      name: typeof row.name === 'string' ? row.name : kind,
+      x: transform.m02 ?? 0,
+      y: transform.m12 ?? 0,
+      w: Math.max(1, size.x ?? 100),
+      h: Math.max(1, size.y ?? 100),
+    }
+    if (fills.length) {
+      node.fills = fills
+      if (fills[0].color) node.fill = fills[0].color
+    }
+    if (strokes.length) {
+      node.strokes = strokes
+      if (strokes[0].color) node.stroke = strokes[0].color
+    }
+    if (typeof row.strokeWeight === 'number') node.strokeWidth = row.strokeWeight
+    if (typeof row.cornerRadius === 'number' && row.cornerRadius > 0) node.radius = row.cornerRadius
+    if (typeof row.opacity === 'number' && row.opacity < 1) node.opacity = row.opacity
+    if (row.visible === false) node.visible = false
+    if (row.locked === true) node.locked = true
+    if (row.mask === true) node.mask = true
+    if (row.stackMode === 'HORIZONTAL') node.layout = 'row'
+    if (row.stackMode === 'VERTICAL') node.layout = 'column'
+    if (typeof row.stackSpacing === 'number') node.gap = row.stackSpacing
+    if (typeof row.fontSize === 'number') node.fontSize = row.fontSize
+    if (row.textData && typeof row.textData === 'object') {
+      const text = (row.textData as { characters?: string }).characters
+      if (typeof text === 'string') node.text = text
+    }
+    nodes.set(id, node)
+    const parent = row.parentIndex && typeof row.parentIndex === 'object' ? guidId((row.parentIndex as { guid?: { sessionID?: number; localID?: number } }).guid) : ''
+    if (parent) {
+      const list = children.get(parent) ?? []
+      list.push(id)
+      children.set(parent, list)
+    }
+  }
+  const attach = (node: DesignNode): DesignNode => {
+    const kids = (children.get(node.id) ?? []).map((id) => nodes.get(id)).filter((item): item is DesignNode => !!item).map(attach)
+    return kids.length ? { ...node, children: kids } : node
+  }
+  const roots = [...nodes.values()].filter((node) => ![...children.values()].some((list) => list.includes(node.id)))
+  doc.screens = (roots.length ? roots : [...nodes.values()]).map(attach)
+  if (!doc.screens.length) return { doc, error: 'No pages or nodes to import' }
+  return { doc, error: null }
+}
+
+export function sceneGraphToDesign(graph: { getPages?: (includeInternal?: boolean) => Array<Record<string, unknown>>; getNode?: (id: string) => Record<string, unknown> | undefined }): DesignImportResult {
+  const doc = emptyDesign()
+  doc.version = 2
+  const pages = graph.getPages?.(true) ?? []
+  const mapNode = (row: Record<string, unknown>): DesignNode => {
+    const type = typeof row.type === 'string' ? row.type : 'FRAME'
+    const kind = figKind(type === 'CANVAS' ? 'FRAME' : type)
+    const fills = Array.isArray(row.fills) ? row.fills.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const paint = figPaint(item as Record<string, unknown>)
+      return paint ? [paint] : []
+    }) : []
+    const node: DesignNode = {
+      id: typeof row.id === 'string' ? row.id : mint('pen', { i: 0 }),
+      kind: type === 'CANVAS' ? 'frame' : kind,
+      name: typeof row.name === 'string' ? row.name : kind,
+      x: typeof row.x === 'number' ? row.x : 0,
+      y: typeof row.y === 'number' ? row.y : 0,
+      w: Math.max(1, typeof row.width === 'number' ? row.width : 100),
+      h: Math.max(1, typeof row.height === 'number' ? row.height : 100),
+    }
+    if (fills.length) {
+      node.fills = fills
+      if (fills[0].color) node.fill = fills[0].color
+    }
+    if (typeof row.text === 'string' && row.text) {
+      node.kind = 'text'
+      node.text = row.text
+    }
+    if (row.layoutMode === 'HORIZONTAL') node.layout = 'row'
+    if (row.layoutMode === 'VERTICAL') node.layout = 'column'
+    if (row.layoutMode === 'GRID') node.layout = 'grid'
+    if (typeof row.itemSpacing === 'number') node.gap = row.itemSpacing
+    if (typeof row.fontSize === 'number') node.fontSize = row.fontSize
+    if (row.isMask === true) node.mask = true
+    const childIds = Array.isArray(row.childIds) ? row.childIds.filter((id): id is string => typeof id === 'string') : []
+    const children = childIds.map((id) => graph.getNode?.(id)).filter((item): item is Record<string, unknown> => !!item).map(mapNode)
+    if (children.length) node.children = children
+    return node
+  }
+  doc.screens = pages.map(mapNode)
+  if (!doc.screens.length) return { doc, error: 'No pages or nodes to import' }
+  return { doc, error: null }
+}
+
 export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImportResult> {
+  try {
+    const { parseFigBuffer } = await import('@open-pencil/fig')
+    const parsed = parseFigBuffer(buffer)
+    if (parsed?.nodeChanges?.length) return nodeChangesToDesign(parsed.nodeChanges as Array<Record<string, unknown>>)
+  } catch {
+    /* fallback */
+  }
   try {
     const text = new TextDecoder().decode(buffer)
     if (text.trim().startsWith('{')) return graphToDesign(JSON.parse(text))
@@ -210,9 +379,15 @@ export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImpo
 
 export async function importPenToDesign(text: string): Promise<DesignImportResult> {
   try {
-    const parsed = JSON.parse(text)
-    return graphToDesign(parsed)
+    const { parsePenFile } = await import('@open-pencil/pen')
+    const graph = parsePenFile(text)
+    return sceneGraphToDesign(graph)
   } catch {
-    return { doc: emptyDesign(), error: 'Could not parse this .pen file' }
+    try {
+      const parsed = JSON.parse(text)
+      return graphToDesign(parsed)
+    } catch {
+      return { doc: emptyDesign(), error: 'Could not parse this .pen file' }
+    }
   }
 }

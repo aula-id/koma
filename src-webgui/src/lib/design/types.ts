@@ -7,7 +7,7 @@ export const DESIGN_MIN_H = 8
 
 export type DesignKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'instance'
 export type DesignLayout = 'row' | 'column' | 'grid'
-export type DesignAlign = 'start' | 'center' | 'end' | 'space' | 'stretch'
+export type DesignAlign = 'start' | 'center' | 'end' | 'space' | 'stretch' | 'around' | 'evenly'
 export type DesignSize = 'hug' | 'fill' | 'fixed'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
 export type DesignTextAlign = 'left' | 'center' | 'right' | 'justify'
@@ -29,7 +29,17 @@ export type DesignTextTruncate = 'off' | 'end'
 export type DesignBooleanOp = 'union' | 'subtract' | 'intersect' | 'exclude'
 export type DesignEffectKind = 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur'
 export type DesignStrokeMarker = 'none' | 'arrow' | 'dot'
-export type DesignInteraction = { trigger: 'click'; action: 'navigate'; target: string }
+export type DesignInteractionTrigger = 'click' | 'mouse-enter' | 'mouse-leave' | 'after-delay'
+export type DesignInteractionAction = 'navigate' | 'open-overlay' | 'toggle-overlay' | 'close-overlay' | 'prev-screen' | 'open-url'
+export type DesignInteraction = {
+  trigger: DesignInteractionTrigger
+  action: DesignInteractionAction
+  target?: string
+  delay?: number
+  url?: string
+  overlayX?: number
+  overlayY?: number
+}
 export type DesignLayoutGrid = { kind: 'square' | 'column' | 'row'; size?: number; color?: string; gutter?: number; count?: number; offset?: number }
 export type DesignPageView = { panX: number; panY: number; zoom: number }
 export type DesignBindingMap = Record<string, string>
@@ -66,7 +76,7 @@ export type DesignPenPoint = {
 const KINDS: readonly DesignKind[] = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance']
 const LAYOUTS: readonly DesignLayout[] = ['row', 'column', 'grid']
 const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end', 'stretch']
-const JUSTIFIES: readonly DesignAlign[] = ['start', 'center', 'end', 'space']
+const JUSTIFIES: readonly DesignAlign[] = ['start', 'center', 'end', 'space', 'around', 'evenly']
 const SIZES: readonly DesignSize[] = ['hug', 'fill', 'fixed']
 const WEIGHTS: readonly DesignWeight[] = ['regular', 'medium', 'bold']
 const TEXT_ALIGNS: readonly DesignTextAlign[] = ['left', 'center', 'right']
@@ -92,6 +102,19 @@ export type DesignPaint = {
   transform?: number[]
   hash?: string
   scale?: DesignImageScale
+  width?: number
+  align?: DesignStrokeAlign
+  dash?: number
+  gap?: number
+  capStart?: DesignStrokeCap
+  capEnd?: DesignStrokeCap
+  join?: DesignStrokeJoin
+  markerStart?: DesignStrokeMarker
+  markerEnd?: DesignStrokeMarker
+  top?: number
+  right?: number
+  bottom?: number
+  left?: number
 }
 
 export type DesignImageAsset = {

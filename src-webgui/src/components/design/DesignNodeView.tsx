@@ -9,14 +9,19 @@ import {
   nodeFillLayers,
   nodePaints,
   paintAlias,
+  maskClipCss,
   nodeStrokeCss,
   resolveInstanceTree,
+  resolvePaintCss,
   resolveRef,
+  strokePaintDash,
+  strokePaintWidth,
   textStyle,
   vectorSvgPath,
   type DesignDoc,
   type DesignHandle,
   type DesignNode,
+  type DesignPaint,
   type DesignWeight,
 } from '../../lib/design'
 import { HANDLES, SELECTION, SHAPE_FILL, paintCss, weightCss, type RadiusCorner } from './tabShared'
@@ -41,6 +46,7 @@ export function DesignNodeView({
   onTextBlur,
   onMenu,
   onEnterContainer,
+  clipPath,
 }: {
   doc: DesignDoc
   node: DesignNode
@@ -61,6 +67,7 @@ export function DesignNodeView({
   onText: (id: string, text: string) => void
   onTextBlur: () => void
   onMenu: (id: string, clientX: number, clientY: number) => void
+  clipPath?: string
 }) {
   if (node.visible === false) return null
   const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
@@ -110,6 +117,7 @@ export function DesignNodeView({
         height: boxH,
         opacity: chrome.opacity,
         transform,
+        clipPath,
         outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
         cursor: !hitHere || node.locked || dragCursor ? undefined : 'grab',
       }}
@@ -158,7 +166,6 @@ export function DesignNodeView({
           filter: painted.effects?.some((item) => item.visible !== false && item.kind === 'layer-blur') ? `blur(${painted.effects.find((item) => item.kind === 'layer-blur')?.blur ?? 4}px)` : undefined,
           backdropFilter: painted.effects?.some((item) => item.visible !== false && item.kind === 'background-blur') ? `blur(${painted.effects.find((item) => item.kind === 'background-blur')?.blur ?? 8}px)` : undefined,
           mixBlendMode: painted.blend && painted.blend !== 'normal' && painted.blend !== 'pass-through' ? painted.blend : undefined,
-          WebkitMaskImage: painted.mask ? fill : undefined,
         }}
       >
         {node.kind !== 'line' && node.kind !== 'vector' ? (
@@ -176,25 +183,24 @@ export function DesignNodeView({
           />
         ) : null}
         {node.kind !== 'text' && node.kind !== 'vector' && !bareStroke && !strokeOff ? (
-          <svg className="pointer-events-none absolute overflow-visible" width={boxW} height={boxH} style={{ left: painted.strokeAlign === 'outside' ? -chrome.strokeWidth / 2 : painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0, top: painted.strokeAlign === 'outside' ? -chrome.strokeWidth / 2 : painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0, width: painted.strokeAlign === 'center' ? boxW : boxW - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : -chrome.strokeWidth), height: painted.strokeAlign === 'center' ? boxH : boxH - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : -chrome.strokeWidth) }}>
-            {node.kind === 'line' ? (
-              <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeStart === 'round' || painted.strokeCap === 'round' ? 'round' : painted.strokeStart === 'square' || painted.strokeCap === 'square' ? 'square' : 'butt'} strokeDasharray={painted.strokeDash?.join(' ')} />
-            ) : node.kind === 'ellipse' ? (
-              <ellipse cx={boxW / 2} cy={boxH / 2} rx={Math.max(0.5, boxW / 2 - (painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : painted.strokeAlign === 'outside' ? 0 : 0))} ry={Math.max(0.5, boxH / 2 - (painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0))} fill="none" stroke={stroke} strokeWidth={chrome.strokeWidth} strokeDasharray={painted.strokeDash?.join(' ')} />
-            ) : (
-              <rect x={painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0} y={painted.strokeAlign === 'inside' ? chrome.strokeWidth / 2 : 0} width={Math.max(1, boxW - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : 0))} height={Math.max(1, boxH - (painted.strokeAlign === 'inside' ? chrome.strokeWidth : 0))} rx={node.kind === 'ellipse' ? boxW : corners.tl} ry={node.kind === 'ellipse' ? boxH : corners.tl} fill="none" stroke={stroke} strokeWidth={chrome.strokeWidth} strokeDasharray={painted.strokeDash?.join(' ')} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} />
-            )}
-            {painted.strokeMarkerEnd === 'arrow' ? <polygon points={`${boxW},${boxH / 2} ${boxW - 8},${boxH / 2 - 4} ${boxW - 8},${boxH / 2 + 4}`} fill={stroke} /> : null}
-            {painted.strokeMarkerStart === 'dot' || painted.strokeMarkerEnd === 'dot' ? <circle cx={painted.strokeMarkerStart === 'dot' ? 0 : boxW} cy={boxH / 2} r={3} fill={stroke} /> : null}
+          <svg className="pointer-events-none absolute overflow-visible" width={boxW} height={boxH}>
+            {nodePaints(painted, 'stroke').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
+              <StrokeShape key={`${paint.type}-${index}`} doc={doc} node={painted} paint={paint} fallback={stroke} boxW={boxW} boxH={boxH} />
+            ))}
           </svg>
         ) : node.kind === 'line' ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
-            <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeDasharray={painted.strokeDash?.join(' ')} />
+            {nodePaints(painted, 'stroke').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
+              <StrokeShape key={`${paint.type}-${index}`} doc={doc} node={painted} paint={paint} fallback={stroke} boxW={boxW} boxH={boxH} />
+            ))}
           </svg>
         ) : null}
         {node.kind === 'vector' && node.vector ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
             <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} {...(node.svgAttrs ?? {})} />
+            {nodePaints(painted, 'stroke').slice(1).filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
+              <path key={`stroke-${index}`} d={vectorSvgPath(node.vector)} fill="none" stroke={resolvePaintCss(doc, paint, stroke)} strokeWidth={strokePaintWidth(paint, chrome.strokeWidth)} strokeDasharray={strokePaintDash(paint, painted.strokeDash)} />
+            ))}
           </svg>
         ) : null}
         {node.kind === 'text' && editing === node.id ? (
@@ -248,7 +254,9 @@ export function DesignNodeView({
             })}
           </svg>
         ) : null}
-        {children?.map((child) => (
+        {children?.map((child, index) => {
+          const mask = [...(children ?? [])].slice(0, index).reverse().find((item) => item.mask)
+          return (
           <DesignNodeView
             key={child.id}
             doc={doc}
@@ -261,6 +269,7 @@ export function DesignNodeView({
             locked={lockChildren}
             enteredContainerId={enteredContainerId}
             overrideTargetId={overrideTargetId}
+            clipPath={mask && !child.mask ? maskClipCss(mask, boxW, boxH) : undefined}
             onEnterContainer={onEnterContainer}
             onSelect={onSelect}
             onResize={onResize}
@@ -271,7 +280,8 @@ export function DesignNodeView({
             onTextBlur={onTextBlur}
             onMenu={onMenu}
           />
-        ))}
+          )
+        })}
       </div>
       {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id ? (
         HANDLES.map((handle) => (
@@ -326,4 +336,72 @@ export function DesignNodeView({
       ) : null}
     </div>
   )
+}
+
+function StrokeShape({
+  doc,
+  node,
+  paint,
+  fallback,
+  boxW,
+  boxH,
+}: {
+  doc: DesignDoc
+  node: DesignNode
+  paint: DesignPaint
+  fallback: string
+  boxW: number
+  boxH: number
+}) {
+  const color = resolvePaintCss(doc, paint, fallback)
+  const width = strokePaintWidth(paint, node.strokeWidth ?? (node.kind === 'line' ? 2 : 1))
+  const align = paint.align ?? node.strokeAlign ?? 'center'
+  const dash = strokePaintDash(paint, node.strokeDash)
+  const cap = paint.capStart ?? paint.capEnd ?? node.strokeStart ?? node.strokeCap
+  const linecap = cap === 'round' || cap === 'square' ? cap : 'butt'
+  const join = paint.join ?? node.strokeJoin ?? 'miter'
+  const inset = align === 'inside' ? width / 2 : align === 'outside' ? -width / 2 : 0
+  const top = paint.top ?? node.strokeTop ?? width
+  const right = paint.right ?? node.strokeRight ?? width
+  const bottom = paint.bottom ?? node.strokeBottom ?? width
+  const left = paint.left ?? node.strokeLeft ?? width
+  const sided = paint.top != null || paint.right != null || paint.bottom != null || paint.left != null || node.strokeTop != null
+  const markerStart = paint.markerStart ?? node.strokeMarkerStart
+  const markerEnd = paint.markerEnd ?? node.strokeMarkerEnd
+  if (node.kind === 'line') {
+    return (
+      <g>
+        <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={color} strokeWidth={width} strokeLinecap={linecap} strokeDasharray={dash} />
+        {markerStart === 'arrow' ? <polygon points={`0,${boxH / 2} 8,${boxH / 2 - 4} 8,${boxH / 2 + 4}`} fill={color} /> : null}
+        {markerEnd === 'arrow' ? <polygon points={`${boxW},${boxH / 2} ${boxW - 8},${boxH / 2 - 4} ${boxW - 8},${boxH / 2 + 4}`} fill={color} /> : null}
+        {markerStart === 'dot' ? <circle cx={0} cy={boxH / 2} r={3} fill={color} /> : null}
+        {markerEnd === 'dot' ? <circle cx={boxW} cy={boxH / 2} r={3} fill={color} /> : null}
+      </g>
+    )
+  }
+  if (node.kind === 'ellipse') {
+    return <ellipse cx={boxW / 2} cy={boxH / 2} rx={Math.max(0.5, boxW / 2 - inset)} ry={Math.max(0.5, boxH / 2 - inset)} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} />
+  }
+  if (sided) {
+    return (
+      <g>
+        {top > 0 ? <line x1={0} y1={0} x2={boxW} y2={0} stroke={color} strokeWidth={top} /> : null}
+        {right > 0 ? <line x1={boxW} y1={0} x2={boxW} y2={boxH} stroke={color} strokeWidth={right} /> : null}
+        {bottom > 0 ? <line x1={0} y1={boxH} x2={boxW} y2={boxH} stroke={color} strokeWidth={bottom} /> : null}
+        {left > 0 ? <line x1={0} y1={0} x2={0} y2={boxH} stroke={color} strokeWidth={left} /> : null}
+      </g>
+    )
+  }
+  return (
+    <g>
+      <rect x={inset} y={inset} width={Math.max(1, boxW - inset * 2)} height={Math.max(1, boxH - inset * 2)} rx={cornersSafe(node)} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} strokeLinecap={linecap} strokeLinejoin={join} />
+      {markerEnd === 'arrow' ? <polygon points={`${boxW},${boxH / 2} ${boxW - 8},${boxH / 2 - 4} ${boxW - 8},${boxH / 2 + 4}`} fill={color} /> : null}
+      {markerStart === 'dot' ? <circle cx={0} cy={boxH / 2} r={3} fill={color} /> : null}
+      {markerEnd === 'dot' ? <circle cx={boxW} cy={boxH / 2} r={3} fill={color} /> : null}
+    </g>
+  )
+}
+
+function cornersSafe(node: DesignNode): number {
+  return typeof node.radius === 'number' ? node.radius : 0
 }

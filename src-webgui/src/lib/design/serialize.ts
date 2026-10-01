@@ -41,7 +41,9 @@ const TEXT_CASES = ['original', 'upper', 'lower', 'title'] as const
 const TRUNCATES = ['off', 'end'] as const
 const PAINT_TYPES = ['solid', 'gradient', 'image'] as const
 const ALIGNS = ['start', 'center', 'end', 'stretch'] as const
-const JUSTIFIES = ['start', 'center', 'end', 'space'] as const
+const JUSTIFIES = ['start', 'center', 'end', 'space', 'around', 'evenly'] as const
+const INTERACTION_TRIGGERS = ['click', 'mouse-enter', 'mouse-leave', 'after-delay'] as const
+const INTERACTION_ACTIONS = ['navigate', 'open-overlay', 'toggle-overlay', 'close-overlay', 'prev-screen', 'open-url'] as const
 const SIZES = ['hug', 'fill', 'fixed'] as const
 const WEIGHTS = ['regular', 'medium', 'bold'] as const
 const TEXT_ALIGNS = ['left', 'center', 'right', 'justify'] as const
@@ -93,9 +95,7 @@ function parsePaintObject(value: unknown): DesignPaint | null {
     const color = parsePaint(row.color)
     if (!color || color === 'none') return null
     paint.color = color
-    return paint
-  }
-  if (type === 'gradient') {
+  } else if (type === 'gradient') {
     const kind = oneOf(row.kind, GRADIENTS) ?? 'linear'
     paint.kind = kind
     const stops: { color: string; at: number }[] = []
@@ -116,12 +116,38 @@ function parsePaintObject(value: unknown): DesignPaint | null {
     if (Array.isArray(row.transform) && row.transform.every((item) => typeof item === 'number' && Number.isFinite(item))) {
       paint.transform = row.transform.slice()
     }
-    return paint
+  } else {
+    if (typeof row.hash !== 'string' || !row.hash) return null
+    paint.hash = row.hash
+    const scale = oneOf(row.scale, IMAGE_SCALES)
+    if (scale && scale !== 'fill') paint.scale = scale
   }
-  if (typeof row.hash !== 'string' || !row.hash) return null
-  paint.hash = row.hash
-  const scale = oneOf(row.scale, IMAGE_SCALES)
-  if (scale && scale !== 'fill') paint.scale = scale
+  const width = num(row.width)
+  if (width != null && width > 0 && width !== 1) paint.width = width
+  const align = oneOf(row.align, STROKE_ALIGNS)
+  if (align && align !== 'center') paint.align = align
+  const dash = num(row.dash)
+  const gap = num(row.gap)
+  if (dash != null && dash > 0) paint.dash = dash
+  if (gap != null && gap >= 0) paint.gap = gap
+  const capStart = oneOf(row.capStart, STROKE_CAPS)
+  const capEnd = oneOf(row.capEnd, STROKE_CAPS)
+  if (capStart && capStart !== 'none') paint.capStart = capStart
+  if (capEnd && capEnd !== 'none') paint.capEnd = capEnd
+  const join = oneOf(row.join, STROKE_JOINS)
+  if (join && join !== 'miter') paint.join = join
+  const markerStart = oneOf(row.markerStart, STROKE_MARKERS)
+  const markerEnd = oneOf(row.markerEnd, STROKE_MARKERS)
+  if (markerStart && markerStart !== 'none') paint.markerStart = markerStart
+  if (markerEnd && markerEnd !== 'none') paint.markerEnd = markerEnd
+  const top = num(row.top)
+  const right = num(row.right)
+  const bottom = num(row.bottom)
+  const left = num(row.left)
+  if (top != null && top >= 0) paint.top = top
+  if (right != null && right >= 0) paint.right = right
+  if (bottom != null && bottom >= 0) paint.bottom = bottom
+  if (left != null && left >= 0) paint.left = left
   return paint
 }
 
@@ -338,8 +364,19 @@ function parseNode(value: unknown): DesignNode | null {
     for (const item of row.interactions) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue
       const rowItem = item as Record<string, unknown>
-      if (rowItem.trigger !== 'click' || rowItem.action !== 'navigate' || typeof rowItem.target !== 'string' || !rowItem.target) continue
-      interactions.push({ trigger: 'click', action: 'navigate', target: rowItem.target })
+      const trigger = oneOf(rowItem.trigger, INTERACTION_TRIGGERS)
+      const action = oneOf(rowItem.action, INTERACTION_ACTIONS)
+      if (!trigger || !action) continue
+      const next: DesignInteraction = { trigger, action }
+      if (typeof rowItem.target === 'string' && rowItem.target) next.target = rowItem.target
+      const delay = num(rowItem.delay)
+      if (delay != null && delay >= 0) next.delay = delay
+      if (typeof rowItem.url === 'string' && rowItem.url) next.url = rowItem.url
+      const overlayX = num(rowItem.overlayX)
+      const overlayY = num(rowItem.overlayY)
+      if (overlayX != null) next.overlayX = overlayX
+      if (overlayY != null) next.overlayY = overlayY
+      interactions.push(next)
     }
     if (interactions.length) node.interactions = interactions
   }
@@ -368,7 +405,7 @@ function parseNode(value: unknown): DesignNode | null {
     const gapY = num(row.gapY)
     if (gapX != null && gapX > 0) node.gapX = gapX
     if (gapY != null && gapY > 0) node.gapY = gapY
-    const alignContent = oneOf(row.alignContent, ALIGNS)
+    const alignContent = oneOf(row.alignContent, JUSTIFIES) ?? oneOf(row.alignContent, ALIGNS)
     if (alignContent && alignContent !== 'start') node.alignContent = alignContent
     if (Array.isArray(row.layoutGrids)) {
       const grids: DesignLayoutGrid[] = []
@@ -894,4 +931,22 @@ export function serializeDesign(doc: DesignDoc): string {
   }
   if (doc.screens.length) row.screens = doc.screens.map(writeNode)
   return JSON.stringify(row)
+}
+
+export function serializeDesignSlice(
+  nodes: DesignNode[],
+  extras?: { components?: DesignDoc['components']; images?: DesignDoc['images'] },
+): string {
+  const doc = emptyDesign()
+  doc.version = 2
+  doc.screens = nodes
+  if (extras?.components?.length) doc.components = extras.components
+  if (extras?.images && Object.keys(extras.images).length) doc.images = extras.images
+  return serializeDesign(doc)
+}
+
+export function parseDesignSlice(text: string): { nodes: DesignNode[]; components: DesignDoc['components']; images: DesignDoc['images'] } | null {
+  const parsed = parseDesign(text)
+  if (parsed.error || !parsed.doc.screens.length) return null
+  return { nodes: parsed.doc.screens, components: parsed.doc.components, images: parsed.doc.images }
 }

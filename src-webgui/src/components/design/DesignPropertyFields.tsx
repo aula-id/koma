@@ -14,6 +14,7 @@ import {
   Type,
 } from 'lucide-react'
 import {
+  bindNodeField,
   designLayerName,
   effectiveInstanceChild,
   mergeDesignOverride,
@@ -115,6 +116,32 @@ export function InstanceOverrides({
               onChange={(event) => commitFill(child.id, event.target.value)}
               className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
             />
+            <div className="grid grid-cols-2 gap-1">
+              <input
+                aria-label={`${name} stroke`}
+                value={effective.stroke && effective.stroke !== 'none' ? effective.stroke : ''}
+                placeholder="Stroke"
+                onFocus={() => onPickTarget?.(child.id)}
+                onChange={(event) => {
+                  const value = event.target.value.trim()
+                  onPatch((current) => mergeDesignOverride(current, child.id, { stroke: value || null }))
+                }}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+              <input
+                aria-label={`${name} color`}
+                value={effective.color && effective.color !== 'none' ? effective.color : ''}
+                placeholder="Color"
+                onFocus={() => onPickTarget?.(child.id)}
+                onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { color: event.target.value.trim() || null }))}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+              <GeomField label="Op" ariaLabel={`${name} opacity`} suffix="%" value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
+              <GeomField label="R" ariaLabel={`${name} radius`} value={typeof effective.radius === 'number' ? effective.radius : 0} onChange={(radius) => onPatch((current) => mergeDesignOverride(current, child.id, { radius: radius > 0 ? radius : null }))} />
+              <GeomField label="Sz" ariaLabel={`${name} font size`} value={effective.fontSize} onChange={(fontSize) => onPatch((current) => mergeDesignOverride(current, child.id, { fontSize: fontSize > 0 ? fontSize : null }))} />
+              <GeomField label="Sw" ariaLabel={`${name} stroke width`} value={effective.strokeWidth} onChange={(strokeWidth) => onPatch((current) => mergeDesignOverride(current, child.id, { strokeWidth: strokeWidth > 0 ? strokeWidth : null }))} />
+              <GeomField label="Rot" ariaLabel={`${name} rotation`} value={effective.rotation} onChange={(rotation) => onPatch((current) => mergeDesignOverride(current, child.id, { rotation: rotation ? rotation : null }))} />
+            </div>
           </div>
         )
       })}
@@ -159,7 +186,7 @@ function parseBareNumber(raw: string): number {
   return Number.isFinite(next) ? next : 0
 }
 
-export function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; onChange: (value: number) => void }) {
+export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, bound, onBind, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; tokens?: { name: string }[]; bound?: string; onBind?: (token: string | null) => void; onChange: (value: number) => void }) {
   const [draft, setDraft] = useState<string | null>(null)
   const focused = useRef(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -210,6 +237,19 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: 
         className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
       />
       {suffix ? <span className="flex-none text-[11px] text-koma-dim">{suffix}</span> : null}
+      {tokens?.length && onBind ? (
+        <button
+          type="button"
+          title={bound ? `Bound to ${bound}` : 'Bind token'}
+          aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
+          aria-pressed={!!bound}
+          onClick={() => {
+            if (bound) onBind(null)
+            else onBind(tokens[0].name)
+          }}
+          className={`h-4 w-4 flex-none rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`}
+        />
+      ) : null}
     </label>
   )
 }
@@ -529,6 +569,8 @@ export function ColorRow({
   mixed,
   allowImage = true,
   allowGradient = true,
+  bound,
+  onBind,
   onChange,
   onRemove,
   onStoreImage,
@@ -540,6 +582,8 @@ export function ColorRow({
   mixed?: boolean
   allowImage?: boolean
   allowGradient?: boolean
+  bound?: string
+  onBind?: (token: string | null) => void
   onChange: (paint: DesignPaint) => void
   onRemove?: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
@@ -569,6 +613,15 @@ export function ColorRow({
   }
   return (
     <div className="flex items-center gap-1">
+      <button
+        type="button"
+        title={paint.visible === false ? 'Show' : 'Hide'}
+        aria-label={paint.visible === false ? 'Show paint' : 'Hide paint'}
+        onClick={() => onChange({ ...paint, visible: paint.visible === false ? undefined : false })}
+        className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+      >
+        {paint.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
       <div className="grid h-8 min-w-0 flex-1 grid-cols-[1fr_auto] items-center gap-0.5">
         <div className={`flex h-8 min-w-0 items-center bg-koma-bg ${named || token ? 'rounded-l-lg' : 'rounded-l-lg'} focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent`}>
           <button
@@ -622,6 +675,18 @@ export function ColorRow({
           />
         </div>
       </div>
+      {tokens?.length && onBind ? (
+        <button
+          type="button"
+          title={bound ? `Bound to ${bound}` : 'Bind token'}
+          aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
+          aria-pressed={!!bound}
+          onClick={() => onBind(bound ? null : tokens[0].name)}
+          className={`flex h-8 w-8 flex-none items-center justify-center rounded-lg ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+        >
+          <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />
+        </button>
+      ) : null}
       {onRemove ? (
         <button type="button" title="Remove" aria-label="Remove color" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={onRemove}>
           <Minus size={14} />
@@ -756,10 +821,62 @@ export function FillEditor({
               fallback={fallback}
               tokens={tokens}
               allowImage={field === 'fill'}
+              bound={node.bindings?.[field]}
+              onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, implicit ? [paint] : paints), field, token)) : undefined}
               onChange={(next) => onChange(setNodePaints(node, field, implicit ? [next] : paints.map((item, at) => (at === index ? next : item))))}
               onRemove={() => onChange(implicit || paints.length <= 1 ? setNodeSolid(node, field, 'none') : setNodePaints(node, field, paints.filter((_, at) => at !== index)))}
               onStoreImage={onStoreImage}
             />
+            {field === 'stroke' ? (
+              <div className="mt-1 grid grid-cols-4 gap-1">
+                <GeomField label="W" ariaLabel="Stroke width" value={paint.width ?? node.strokeWidth ?? 1} onChange={(width) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, width } : item))))} />
+                <GeomField label="D" ariaLabel="Dash" value={paint.dash ?? 0} onChange={(dash) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, dash: dash > 0 ? dash : undefined } : item))))} />
+                <GeomField label="G" ariaLabel="Gap" value={paint.gap ?? 0} onChange={(gap) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, gap: gap > 0 ? gap : undefined } : item))))} />
+                <select
+                  aria-label="Stroke align"
+                  value={paint.align ?? node.strokeAlign ?? 'center'}
+                  onChange={(event) => {
+                    const align = event.target.value
+                    if (align !== 'inside' && align !== 'center' && align !== 'outside') return
+                    onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, align: align === 'center' ? undefined : align } : item))))
+                  }}
+                  className="h-8 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none"
+                >
+                  <option value="inside">In</option>
+                  <option value="center">Mid</option>
+                  <option value="outside">Out</option>
+                </select>
+                <GeomField label="T" ariaLabel="Stroke top" value={paint.top ?? node.strokeTop ?? paint.width ?? node.strokeWidth ?? 1} onChange={(top) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top } : item))))} />
+                <GeomField label="R" ariaLabel="Stroke right" value={paint.right ?? node.strokeRight ?? paint.width ?? node.strokeWidth ?? 1} onChange={(right) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, right } : item))))} />
+                <GeomField label="B" ariaLabel="Stroke bottom" value={paint.bottom ?? node.strokeBottom ?? paint.width ?? node.strokeWidth ?? 1} onChange={(bottom) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, bottom } : item))))} />
+                <GeomField label="L" ariaLabel="Stroke left" value={paint.left ?? node.strokeLeft ?? paint.width ?? node.strokeWidth ?? 1} onChange={(left) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, left } : item))))} />
+                <select aria-label="Start cap" value={paint.capStart ?? node.strokeStart ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capStart'] } : item))))} className="h-8 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none">
+                  <option value="none">Cap</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                </select>
+                <select aria-label="End cap" value={paint.capEnd ?? node.strokeEnd ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capEnd'] } : item))))} className="h-8 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none">
+                  <option value="none">End</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                </select>
+                <select aria-label="Start marker" value={paint.markerStart ?? node.strokeMarkerStart ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerStart'] } : item))))} className="h-8 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none">
+                  <option value="none">M0</option>
+                  <option value="arrow">Arrow</option>
+                  <option value="dot">Dot</option>
+                </select>
+                <select aria-label="End marker" value={paint.markerEnd ?? node.strokeMarkerEnd ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerEnd'] } : item))))} className="h-8 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none">
+                  <option value="none">M1</option>
+                  <option value="arrow">Arrow</option>
+                  <option value="dot">Dot</option>
+                </select>
+                <select aria-label="Join" value={paint.join ?? node.strokeJoin ?? 'miter'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, join: event.target.value === 'miter' ? undefined : event.target.value as DesignPaint['join'] } : item))))} className="h-8 col-span-2 rounded-lg bg-koma-bg px-1 text-[12px] text-koma-fg outline-none">
+                  <option value="miter">Miter</option>
+                  <option value="round">Round</option>
+                  <option value="bevel">Bevel</option>
+                </select>
+              </div>
+            ) : null}
           </div>
         </div>
       ))}

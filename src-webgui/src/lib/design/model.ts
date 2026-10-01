@@ -9,6 +9,7 @@ import {
   type DesignDoc,
   type DesignDrawKind,
   type DesignHandle,
+  type DesignInteraction,
   type DesignKind,
   type DesignLayout,
   type DesignMeasure,
@@ -33,7 +34,7 @@ import {
   type DesignVectorSegment,
   type DesignWeight,
 } from './types'
-import { clonePaint, firstVisiblePaint, nodePaints, paintAlias } from './paint'
+import { clonePaint, firstVisiblePaint, nodePaints, paintAlias, strokePaintWidth } from './paint'
 
 export function emptyDesign(): DesignDoc {
   return {
@@ -219,7 +220,15 @@ export function effectiveInstanceChild(
 ): {
   text: string
   fill: DesignRef | undefined
+  stroke: DesignRef | undefined
   visible: boolean
+  opacity: number
+  fontSize: number
+  weight: DesignWeight
+  color: DesignRef | undefined
+  strokeWidth: number
+  rotation: number
+  radius: number | string | undefined
   hasTextOverride: boolean
   hasFillOverride: boolean
   hasVisibleOverride: boolean
@@ -238,7 +247,15 @@ export function effectiveInstanceChild(
   return {
     text: row?.text ?? base.text ?? '',
     fill: row?.fill ?? base.fill,
+    stroke: row?.stroke ?? base.stroke,
     visible,
+    opacity: row?.opacity ?? base.opacity ?? 1,
+    fontSize: row?.fontSize ?? base.fontSize ?? 13,
+    weight: row?.weight ?? base.weight ?? 'regular',
+    color: row?.color ?? base.color,
+    strokeWidth: row?.strokeWidth ?? base.strokeWidth ?? 1,
+    rotation: row?.rotation ?? base.rotation ?? 0,
+    radius: row?.radius ?? base.radius,
     hasTextOverride: row?.text != null,
     hasFillOverride: row?.fill != null && row.fill !== '',
     hasVisibleOverride: row?.visible != null,
@@ -250,6 +267,139 @@ export function resolveRef(doc: DesignDoc, ref: string): string {
   const token = doc.tokens.find((item) => item.name === ref)
   if (!token) return ''
   return token.values[doc.mode] ?? token.values[doc.modes[0] ?? ''] ?? Object.values(token.values)[0] ?? ''
+}
+
+export function boundNumber(doc: DesignDoc, node: DesignNode, field: string, fallback: number): number {
+  const token = node.bindings?.[field]
+  if (!token) return fallback
+  const raw = resolveRef(doc, token)
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+
+export function bindNodeField(node: DesignNode, field: string, token: string | null): DesignNode {
+  const bindings = { ...(node.bindings ?? {}) }
+  if (token) bindings[field] = token
+  else delete bindings[field]
+  const next = { ...node }
+  if (Object.keys(bindings).length) next.bindings = bindings
+  else delete next.bindings
+  return next
+}
+
+const BIND_NUMBERS = ['gap', 'gapX', 'gapY', 'pad', 'padTop', 'padRight', 'padBottom', 'padLeft', 'radius', 'fontSize', 'opacity', 'rotation', 'strokeWidth'] as const
+
+export function applyNodeBindings(doc: DesignDoc, node: DesignNode): DesignNode {
+  if (!node.bindings || !Object.keys(node.bindings).length) return node
+  const next: DesignNode = { ...node }
+  for (const field of BIND_NUMBERS) {
+    if (!node.bindings[field]) continue
+    const n = boundNumber(doc, node, field, Number.NaN)
+    if (!Number.isFinite(n)) continue
+    if (field === 'radius') next.radius = n
+    else (next as Record<string, unknown>)[field] = n
+  }
+  if (node.bindings.fill) {
+    const value = resolveRef(doc, node.bindings.fill)
+    if (value) next.fill = value
+  }
+  if (node.bindings.stroke) {
+    const value = resolveRef(doc, node.bindings.stroke)
+    if (value) next.stroke = value
+  }
+  if (node.bindings.color) {
+    const value = resolveRef(doc, node.bindings.color)
+    if (value) next.color = value
+  }
+  return next
+}
+
+export function visibleDesignScreens(doc: DesignDoc): DesignNode[] {
+  const id = doc.activePage
+  if (!id) return doc.screens
+  const found = doc.screens.filter((screen) => screen.id === id)
+  return found.length ? found : doc.screens
+}
+
+export function collectDesignFrames(node: DesignNode, into: DesignNode[] = []): DesignNode[] {
+  if (node.kind === 'frame') into.push(node)
+  for (const child of node.children ?? []) collectDesignFrames(child, into)
+  return into
+}
+
+export function collectDocFrames(doc: DesignDoc): DesignNode[] {
+  const frames: DesignNode[] = []
+  for (const screen of doc.screens) collectDesignFrames(screen, frames)
+  return frames
+}
+
+export function maskClipCss(mask: DesignNode, parentW: number, parentH: number): string {
+  if (mask.kind === 'ellipse') {
+    return `ellipse(${mask.w / 2}px ${mask.h / 2}px at ${mask.x + mask.w / 2}px ${mask.y + mask.h / 2}px)`
+  }
+  return `inset(${mask.y}px ${Math.max(0, parentW - mask.x - mask.w)}px ${Math.max(0, parentH - mask.y - mask.h)}px ${mask.x}px)`
+}
+
+export type DesignPlayState = {
+  screenId: string
+  overlays: { id: string; x: number; y: number }[]
+  history: string[]
+}
+
+export function emptyPlayState(doc: DesignDoc): DesignPlayState {
+  const screenId = doc.activePage ?? doc.screens[0]?.id ?? ''
+  return { screenId, overlays: [], history: screenId ? [screenId] : [] }
+}
+
+export function runPlayAction(
+  doc: DesignDoc,
+  state: DesignPlayState,
+  interaction: DesignInteraction,
+): DesignPlayState {
+  if (interaction.action === 'open-url') {
+    if (interaction.url && typeof window !== 'undefined') window.open(interaction.url, '_blank', 'noopener')
+    return state
+  }
+  if (interaction.action === 'prev-screen') {
+    const history = state.history.slice(0, -1)
+    const screenId = history[history.length - 1] ?? state.screenId
+    return { ...state, screenId, overlays: [], history: history.length ? history : [screenId] }
+  }
+  if (interaction.action === 'close-overlay') {
+    return { ...state, overlays: state.overlays.slice(0, -1) }
+  }
+  const target = interaction.target && findDesignNode(doc, interaction.target) ? interaction.target : ''
+  if (interaction.action === 'open-overlay' && target) {
+    return { ...state, overlays: [...state.overlays, { id: target, x: interaction.overlayX ?? 0, y: interaction.overlayY ?? 0 }] }
+  }
+  if (interaction.action === 'toggle-overlay' && target) {
+    const open = state.overlays.some((item) => item.id === target)
+    return {
+      ...state,
+      overlays: open
+        ? state.overlays.filter((item) => item.id !== target)
+        : [...state.overlays, { id: target, x: interaction.overlayX ?? 0, y: interaction.overlayY ?? 0 }],
+    }
+  }
+  if (interaction.action === 'navigate' && target) {
+    return { screenId: target, overlays: [], history: [...state.history, target] }
+  }
+  return state
+}
+
+export function openVectorEndpoints(node: DesignNode): { index: number; x: number; y: number }[] {
+  const vector = node.vector
+  if (!vector) return []
+  const uses = new Array(vector.vertices.length).fill(0)
+  for (const segment of vector.segments) {
+    uses[segment.start] += 1
+    uses[segment.end] += 1
+  }
+  const ends: { index: number; x: number; y: number }[] = []
+  vector.vertices.forEach((vertex, index) => {
+    if (uses[index] === 1) ends.push({ index, x: vertex.x, y: vertex.y })
+  })
+  return ends
 }
 
 function defaultTokenValue(kind: DesignTokenKind, mode: string): string {
@@ -333,7 +483,7 @@ export function nodeChrome(node: DesignNode): { fill: string; stroke: string; ra
     stroke,
     radius: node.radius ?? 0,
     opacity: node.opacity ?? 1,
-    strokeWidth: node.strokeWidth ?? (node.kind === 'line' ? 2 : 1),
+    strokeWidth: strokePaintWidth(strokePaint, node.strokeWidth ?? (node.kind === 'line' ? 2 : 1)),
   }
 }
 
@@ -955,7 +1105,7 @@ export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | n
 export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
   let changed = false
   const screens = doc.screens.map((screen) => {
-    const laid = layoutNode(screen, frozenId)
+    const laid = layoutNode(doc, screen, frozenId)
     const next = bindInstanceTree(doc, laid, frozenId)
     if (next !== screen) changed = true
     return next
@@ -1228,7 +1378,7 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
     maxW: assetW,
     maxH: assetH,
   }
-  const laid = layoutNode(pinned)
+  const laid = layoutNode(doc, pinned)
   const boxW = Number.isFinite(node.w) && node.w > 0 ? Math.min(node.w, laid.w) : laid.w
   const boxH = Number.isFinite(node.h) && node.h > 0 ? Math.min(node.h, laid.h) : laid.h
   const sx = laid.w > 0 ? boxW / laid.w : 1
@@ -1541,13 +1691,23 @@ export function moveVectorTangent(
   x: number,
   y: number,
   mirror = true,
+  lengthOnly = false,
 ): DesignNode {
   const vector = node.vector
   const segment = vector?.segments[segmentIndex]
   if (!vector || !segment) return node
   const vertex = end === 'start' ? vector.vertices[segment.start] : vector.vertices[segment.end]
   if (!vertex) return node
-  const tangent = { x: x - vertex.x, y: y - vertex.y }
+  const existing = end === 'start' ? segment.tangentStart : segment.tangentEnd
+  let tangent = { x: x - vertex.x, y: y - vertex.y }
+  if (lengthOnly) {
+    const nextLen = Math.hypot(tangent.x, tangent.y)
+    const oldLen = Math.hypot(existing.x, existing.y)
+    if (oldLen > 0) {
+      const scale = nextLen / oldLen
+      tangent = { x: existing.x * scale, y: existing.y * scale }
+    }
+  }
   const segments = vector.segments.map((item, index) => {
     if (index !== segmentIndex) return item
     return end === 'start' ? { ...item, tangentStart: tangent } : { ...item, tangentEnd: tangent }
@@ -2455,16 +2615,17 @@ export function reorderDesignNode(doc: DesignDoc, id: string, index: number): De
   })
 }
 
-function layoutNode(node: DesignNode, frozenId?: string): DesignNode {
-  let next = node
-  if (node.children?.length) {
-    let changed = false
-    const children = node.children.map((child) => {
-      const laid = layoutNode(child, frozenId)
+function layoutNode(doc: DesignDoc, node: DesignNode, frozenId?: string): DesignNode {
+  const bound = applyNodeBindings(doc, node)
+  let next = bound
+  if (bound.children?.length) {
+    let changed = bound !== node
+    const children = bound.children.map((child) => {
+      const laid = layoutNode(doc, child, frozenId)
       if (laid !== child) changed = true
       return laid
     })
-    if (changed) next = { ...node, children }
+    if (changed) next = { ...bound, children }
   }
   if (next.kind === 'text') next = hugText(next)
   if (next.kind === 'group') next = fitGroup(next)
@@ -2629,6 +2790,32 @@ function itemMargin(node: DesignNode): { top: number; right: number; bottom: num
   }
 }
 
+function justifyMain(
+  justify: DesignAlign | undefined,
+  start: number,
+  inner: number,
+  used: number,
+  content: number,
+  gap: number,
+  count: number,
+): { cursor: number; between: number } {
+  if (justify === 'space' && count > 1) return { cursor: start, between: Math.max(0, (inner - content) / (count - 1)) }
+  if (justify === 'around' && count > 0) {
+    const extra = Math.max(0, inner - content)
+    const between = extra / count
+    return { cursor: start + between / 2, between }
+  }
+  if (justify === 'evenly' && count > 0) {
+    const extra = Math.max(0, inner - content)
+    const between = extra / (count + 1)
+    return { cursor: start + between, between }
+  }
+  let cursor = start
+  if (justify === 'center') cursor = start + Math.max(0, inner - used) / 2
+  if (justify === 'end') cursor = start + Math.max(0, inner - used)
+  return { cursor, between: gap }
+}
+
 function limitSize(size: number, min?: number, max?: number): number {
   let next = size
   if (min != null && min > 0) next = Math.max(next, min)
@@ -2719,11 +2906,10 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
       return { child, main: finish(main, mainMin(child), mainMax(child)), cross: finish(cross, crossMin(child), crossMax(child)) }
     })
     const used = measured.reduce((sum, item) => sum + item.main + mainMargin(item.child), 0) + gaps
-    const space = justify === 'space' && measured.length > 1
-    const between = space ? Math.max(0, (innerMain - measured.reduce((sum, item) => sum + item.main + mainMargin(item.child), 0)) / (measured.length - 1)) : gap
-    let cursor = mainStart
-    if (!space && justify === 'center') cursor = mainStart + Math.max(0, innerMain - used) / 2
-    if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
+    const content = measured.reduce((sum, item) => sum + item.main + mainMargin(item.child), 0)
+    const packed = justifyMain(justify, mainStart, innerMain, used, content, gap, measured.length)
+    const between = packed.between
+    let cursor = packed.cursor
     const placed = new Map<string, DesignNode>()
     for (const item of measured) {
       const crossPos = placeCross(crossStart, innerCross, item.cross, item.child) + crossOffset(item.child)
@@ -2762,20 +2948,16 @@ function placeFlow(frame: DesignNode, frozenId?: string): DesignNode {
   const placed = new Map<string, DesignNode>()
   const wrapCross = lines.reduce((sum, row) => sum + row.reduce((max, item) => Math.max(max, item.cross), 0), 0) + Math.max(0, lines.length - 1) * crossGap
   const alignContent = frame.alignContent ?? 'start'
-  let extra = Math.max(0, innerCross - wrapCross)
-  let crossCursor = crossStart
-  if (alignContent === 'center') crossCursor += extra / 2
-  if (alignContent === 'end') crossCursor += extra
-  const lineGap = alignContent === 'space' && lines.length > 1 ? extra / (lines.length - 1) : crossGap
+  const linePack = justifyMain(alignContent, crossStart, innerCross, wrapCross + (alignContent === 'space' || alignContent === 'around' || alignContent === 'evenly' ? 0 : Math.max(0, lines.length - 1) * crossGap), wrapCross, crossGap, lines.length)
+  let crossCursor = linePack.cursor
+  const lineGap = alignContent === 'space' || alignContent === 'around' || alignContent === 'evenly' ? linePack.between : crossGap
   for (const row of lines) {
     const lineCross = row.reduce((max, item) => Math.max(max, item.cross), 0)
     const rowMain = row.reduce((sum, item) => sum + item.main, 0)
-    const space = justify === 'space' && row.length > 1
-    const between = space ? Math.max(0, (innerMain - rowMain) / (row.length - 1)) : gap
-    const used = rowMain + (space ? 0 : Math.max(0, row.length - 1) * gap)
-    let cursor = mainStart
-    if (!space && justify === 'center') cursor = mainStart + Math.max(0, innerMain - used) / 2
-    if (!space && justify === 'end') cursor = mainStart + Math.max(0, innerMain - used)
+    const used = rowMain + Math.max(0, row.length - 1) * gap
+    const packed = justifyMain(justify, mainStart, innerMain, used, rowMain, gap, row.length)
+    const between = packed.between
+    let cursor = packed.cursor
     for (const item of row) {
       const cross = stretches(item.child) ? Math.max(item.cross, lineCross) : item.cross
       const crossPos = placeCross(crossCursor, lineCross, cross, item.child)

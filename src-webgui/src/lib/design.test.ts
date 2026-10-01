@@ -90,8 +90,15 @@ import {
   booleanDesignNodes,
   outlineStrokeNode,
   detachInstance,
+  applyNodeBindings,
+  boundNumber,
+  emptyPlayState,
   graphToDesign,
   hexToHsb,
+  maskClipCss,
+  nodeChangesToDesign,
+  runPlayAction,
+  visibleDesignScreens,
   hsbToHex,
   insertVertexOnSegment,
   moveVectorTangent,
@@ -1386,4 +1393,90 @@ function sample(): DesignDoc {
   assert.equal(pen.doc.screens[0].kind, 'rect')
   assert.equal(pen.doc.screens[0].fill, '#abcdef')
   assert.equal(pen.doc.tokens[0]?.name, 'brand')
+}
+
+{
+  const stroke = { type: 'solid' as const, color: '#112233', width: 4, dash: 6, gap: 3, capStart: 'round' as const, markerEnd: 'arrow' as const }
+  const node = createNode('rect', 'r', 0, 0)
+  node.strokes = [stroke]
+  const parsed = parseDesign(serializeDesign({ ...emptyDesign(), screens: [node] }))
+  assert.equal(parsed.doc.screens[0].strokes?.[0].width, 4)
+  assert.equal(parsed.doc.screens[0].strokes?.[0].dash, 6)
+  assert.equal(parsed.doc.screens[0].strokes?.[0].markerEnd, 'arrow')
+}
+
+{
+  const a = createNode('rect', 'a', 0, 0)
+  const b = createNode('rect', 'b', 0, 0)
+  const host = createNode('frame', 'around', 0, 0)
+  host.layout = 'row'
+  host.justify = 'around'
+  host.w = 200
+  host.h = 40
+  a.w = 40
+  b.w = 40
+  host.children = [a, b]
+  const laid = layoutDesign({ ...emptyDesign(), screens: [host] }).screens[0]
+  assert.ok((laid.children?.[0].x ?? 0) > 0)
+  assert.ok((laid.children?.[1].x ?? 0) > (laid.children?.[0].x ?? 0))
+}
+
+{
+  const doc = addDesignToken(emptyDesign(), 'space.gap', 'space')!
+  const next = setDesignTokenValue(doc, 'space.gap', 'light', '16')!
+  const frame = createNode('frame', 'f', 0, 0)
+  frame.layout = 'row'
+  frame.bindings = { gap: 'space.gap' }
+  frame.gap = 0
+  const a = createNode('rect', 'a', 0, 0)
+  const b = createNode('rect', 'b', 0, 0)
+  a.w = 20
+  b.w = 20
+  frame.children = [a, b]
+  frame.w = 80
+  const bound = applyNodeBindings(next, frame)
+  assert.equal(boundNumber(next, frame, 'gap', 0), 16)
+  assert.equal(bound.gap, 16)
+  const laid = layoutDesign({ ...next, screens: [frame] }).screens[0]
+  assert.equal(laid.children?.[1].x, 36)
+}
+
+{
+  const doc = emptyDesign()
+  const home = createNode('frame', 'home', 0, 0)
+  const overlay = createNode('frame', 'overlay', 400, 0)
+  overlay.interactions = [{ trigger: 'click', action: 'prev-screen' }]
+  home.interactions = [{ trigger: 'click', action: 'open-overlay', target: 'overlay', overlayX: 8, overlayY: 12 }]
+  doc.screens = [home, overlay]
+  const started = emptyPlayState(doc)
+  const opened = runPlayAction(doc, started, home.interactions[0])
+  assert.equal(opened.overlays[0]?.id, 'overlay')
+  const closed = runPlayAction(doc, opened, { trigger: 'click', action: 'close-overlay' })
+  assert.equal(closed.overlays.length, 0)
+}
+
+{
+  const mask = createNode('rect', 'm', 10, 10)
+  mask.w = 40
+  mask.h = 20
+  assert.equal(maskClipCss(mask, 100, 80), 'inset(10px 50px 50px 10px)')
+}
+
+{
+  const a = createNode('frame', 'a', 0, 0)
+  const b = createNode('frame', 'b', 400, 0)
+  const doc = { ...emptyDesign(), screens: [a, b], activePage: 'b' }
+  assert.equal(visibleDesignScreens(doc).length, 1)
+  assert.equal(visibleDesignScreens(doc)[0].id, 'b')
+}
+
+{
+  const imported = nodeChangesToDesign([
+    { guid: { sessionID: 1, localID: 1 }, type: 'FRAME', name: 'Page', size: { x: 320, y: 200 }, fillPaints: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0, a: 1 } }] },
+    { guid: { sessionID: 1, localID: 2 }, type: 'TEXT', name: 'Title', parentIndex: { guid: { sessionID: 1, localID: 1 } }, textData: { characters: 'Hello' }, fontSize: 18 },
+  ])
+  assert.equal(imported.error, null)
+  assert.equal(imported.doc.screens[0].name, 'Page')
+  assert.equal(imported.doc.screens[0].fill, '#ff0000')
+  assert.equal(imported.doc.screens[0].children?.[0].text, 'Hello')
 }

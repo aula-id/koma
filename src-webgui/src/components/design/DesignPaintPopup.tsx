@@ -7,14 +7,17 @@ import {
   designImageUrl,
   hashBytes,
   hexToHsb,
+  hexToRgba,
   hsbToHex,
   imagePaint,
   mimeForName,
   nodeFillCss,
   resolveColor,
+  rgbaToHex,
   solidPaint,
   type DesignDoc,
   type DesignGradientKind,
+  type DesignImageScale,
   type DesignPaint,
 } from '../../lib/design'
 import { SHAPE_FILL } from './tabShared'
@@ -82,7 +85,6 @@ export function DesignPaintPopup({
   const hex = mode === 'gradient' ? stop?.color ?? fallback : solid
   const picker = colorInputHex(hex, fallback)
   const imageUrl = paint.hash ? designImageUrl(paint.hash) : ''
-  const keepAspect = paint.scale === 'fit'
   const opacity = Math.round((paint.opacity ?? 1) * 100)
   const rect = anchor?.getBoundingClientRect()
   const width = 284
@@ -169,14 +171,20 @@ export function DesignPaintPopup({
             {imageUrl ? <img src={imageUrl} alt="" className="max-h-full max-w-full object-contain" /> : null}
           </div>
           {paint.hash ? (
-            <label className="my-3 flex items-center gap-2 text-[12px] text-koma-fg">
-              <input
-                type="checkbox"
-                checked={keepAspect}
-                onChange={(event) => onChange({ ...paint, type: 'image', scale: event.target.checked ? 'fit' : 'fill' })}
-              />
-              Keep aspect ratio
-            </label>
+            <div className="mb-2 grid grid-cols-4 gap-0.5">
+              {(['fill', 'fit', 'crop', 'tile'] as DesignImageScale[]).map((scale) => (
+                <button
+                  key={scale}
+                  type="button"
+                  title={scale}
+                  aria-pressed={(paint.scale ?? 'fill') === scale}
+                  onClick={() => onChange({ ...paint, type: 'image', scale })}
+                  className={`h-8 rounded-lg text-[11px] capitalize ${((paint.scale ?? 'fill') === scale) ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover'}`}
+                >
+                  {scale}
+                </button>
+              ))}
+            </div>
           ) : null}
           <button
             type="button"
@@ -204,16 +212,7 @@ export function DesignPaintPopup({
       ) : null}
       {mode === 'solid' || mode === 'gradient' ? (
         <div className="flex flex-col gap-2">
-          <label className="relative h-[140px] overflow-hidden rounded-lg bg-koma-bg">
-            <span className="absolute inset-0" style={{ background: picker }} />
-            <input
-              type="color"
-              aria-label="Color"
-              value={picker}
-              onChange={(event) => applyHex(event.target.value)}
-              className="absolute inset-0 cursor-pointer opacity-0"
-            />
-          </label>
+          <HsvaWell hex={picker} onChange={applyHex} />
           {picker.startsWith('#') ? (
             <div className="grid grid-cols-[16px_1fr] items-center gap-1 text-[11px] text-koma-dim">
               {(['h', 's', 'b'] as const).map((key) => {
@@ -278,6 +277,42 @@ export function DesignPaintPopup({
               />
             </div>
           </div>
+          {picker.startsWith('#') ? (
+            <div className="grid grid-cols-4 gap-1">
+              {(['r', 'g', 'b'] as const).map((key) => {
+                const rgba = hexToRgba(picker)
+                return (
+                  <label key={key} className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-1.5">
+                    <span className="text-[11px] uppercase text-koma-dim">{key}</span>
+                    <input
+                      aria-label={key.toUpperCase()}
+                      defaultValue={String(rgba[key])}
+                      key={`${key}-${rgba[key]}`}
+                      onBlur={(event) => {
+                        const value = Number(event.target.value)
+                        if (!Number.isFinite(value)) return
+                        applyHex(rgbaToHex(key === 'r' ? value : rgba.r, key === 'g' ? value : rgba.g, key === 'b' ? value : rgba.b))
+                      }}
+                      className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                    />
+                  </label>
+                )
+              })}
+              <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-1.5">
+                <span className="text-[11px] text-koma-dim">A</span>
+                <input
+                  aria-label="Alpha"
+                  defaultValue={String(opacity)}
+                  key={`a-${opacity}`}
+                  onBlur={(event) => {
+                    const value = Number(event.target.value)
+                    if (Number.isFinite(value)) setOpacity(value)
+                  }}
+                  className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                />
+              </label>
+            </div>
+          ) : null}
           {tokens?.length ? (
             <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto">
               {tokens.map((token) => (
@@ -312,6 +347,41 @@ export function DesignPaintPopup({
       />
     </div>,
     document.body,
+  )
+}
+
+function HsvaWell({ hex, onChange }: { hex: string; onChange: (hex: string) => void }) {
+  const wellRef = useRef<HTMLDivElement>(null)
+  const hsb = hexToHsb(hex)
+  const hue = hsbToHex(hsb.h, 100, 100)
+  const pick = (clientX: number, clientY: number) => {
+    const box = wellRef.current?.getBoundingClientRect()
+    if (!box || box.width <= 0 || box.height <= 0) return
+    const s = Math.max(0, Math.min(100, ((clientX - box.left) / box.width) * 100))
+    const b = Math.max(0, Math.min(100, (1 - (clientY - box.top) / box.height) * 100))
+    onChange(hsbToHex(hsb.h, s, b))
+  }
+  return (
+    <div
+      ref={wellRef}
+      role="slider"
+      aria-label="Saturation and brightness"
+      className="relative h-[140px] cursor-crosshair overflow-hidden rounded-lg"
+      style={{ background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hue})` }}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId)
+        pick(event.clientX, event.clientY)
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+        pick(event.clientX, event.clientY)
+      }}
+    >
+      <span
+        className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow"
+        style={{ left: `${hsb.s}%`, top: `${100 - hsb.b}%`, background: hex }}
+      />
+    </div>
   )
 }
 

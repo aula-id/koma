@@ -23,6 +23,19 @@ export function clonePaint(paint: DesignPaint): DesignPaint {
   if (paint.transform) next.transform = paint.transform.slice()
   if (paint.hash) next.hash = paint.hash
   if (paint.scale) next.scale = paint.scale
+  if (paint.width != null) next.width = paint.width
+  if (paint.align) next.align = paint.align
+  if (paint.dash != null) next.dash = paint.dash
+  if (paint.gap != null) next.gap = paint.gap
+  if (paint.capStart) next.capStart = paint.capStart
+  if (paint.capEnd) next.capEnd = paint.capEnd
+  if (paint.join) next.join = paint.join
+  if (paint.markerStart) next.markerStart = paint.markerStart
+  if (paint.markerEnd) next.markerEnd = paint.markerEnd
+  if (paint.top != null) next.top = paint.top
+  if (paint.right != null) next.right = paint.right
+  if (paint.bottom != null) next.bottom = paint.bottom
+  if (paint.left != null) next.left = paint.left
   return next
 }
 
@@ -138,6 +151,18 @@ function stopCss(doc: DesignDoc, stop: DesignPaintStop): string {
   return `${color} ${Math.round(at * 1000) / 10}%`
 }
 
+export function paintGradientAngle(paint: DesignPaint): number {
+  const angle = paint.transform?.[0]
+  return Number.isFinite(angle) ? ((angle % 360) + 360) % 360 : 180
+}
+
+export function paintGradientCenter(paint: DesignPaint): { x: number; y: number } {
+  return {
+    x: Number.isFinite(paint.transform?.[1]) ? paint.transform![1] : 0.5,
+    y: Number.isFinite(paint.transform?.[2]) ? paint.transform![2] : 0.5,
+  }
+}
+
 function gradientCss(doc: DesignDoc, paint: DesignPaint): string {
   const stops = (paint.stops?.length ? paint.stops : [{ color: paint.color ?? '#000000', at: 0 }, { color: paint.color ?? '#ffffff', at: 1 }])
     .slice()
@@ -145,9 +170,11 @@ function gradientCss(doc: DesignDoc, paint: DesignPaint): string {
     .map((stop) => stopCss(doc, stop))
     .join(', ')
   const kind = paint.kind ?? 'linear'
-  if (kind === 'radial' || kind === 'diamond') return `radial-gradient(circle at 50% 50%, ${stops})`
-  if (kind === 'angular') return `conic-gradient(from 0deg at 50% 50%, ${stops})`
-  return `linear-gradient(180deg, ${stops})`
+  const center = paintGradientCenter(paint)
+  const at = `${Math.round(center.x * 1000) / 10}% ${Math.round(center.y * 1000) / 10}%`
+  if (kind === 'radial' || kind === 'diamond') return `radial-gradient(circle at ${at}, ${stops})`
+  if (kind === 'angular') return `conic-gradient(from 0deg at ${at}, ${stops})`
+  return `linear-gradient(${paintGradientAngle(paint)}deg, ${stops})`
 }
 
 export function imageAssetUrl(doc: DesignDoc, hash: string | null | undefined): string {
@@ -207,6 +234,32 @@ export function nodeStrokeCss(doc: DesignDoc, node: DesignNode, fallback: string
   if (!first) return fallback
   if (paintAlias(first) === 'none') return 'transparent'
   return resolvePaintCss(doc, first, fallback)
+}
+
+export function strokePaintWidth(paint: DesignPaint | null | undefined, fallback = 1): number {
+  return paint?.width != null && paint.width > 0 ? paint.width : fallback
+}
+
+export function strokePaintDash(paint: DesignPaint | null | undefined, fallback?: number[]): string | undefined {
+  if (paint?.dash != null && paint.dash > 0) return `${paint.dash} ${paint.gap ?? paint.dash}`
+  if (fallback?.length) return fallback.join(' ')
+  return undefined
+}
+
+export function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } {
+  const body = hex.startsWith('#') ? hex.slice(1) : hex
+  const full = body.length === 3 ? body.split('').map((item) => item + item).join('') : body.slice(0, 8)
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16) || 0,
+    g: Number.parseInt(full.slice(2, 4), 16) || 0,
+    b: Number.parseInt(full.slice(4, 6), 16) || 0,
+    a: full.length >= 8 ? (Number.parseInt(full.slice(6, 8), 16) || 0) / 255 : 1,
+  }
+}
+
+export function rgbaToHex(r: number, g: number, b: number): string {
+  const hex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
+  return `#${hex(r)}${hex(g)}${hex(b)}`
 }
 
 export function defaultGradient(kind: NonNullable<DesignPaint['kind']> = 'linear'): DesignPaint {

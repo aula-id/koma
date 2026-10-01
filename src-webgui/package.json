@@ -35,7 +35,13 @@
     "react-dom": "^19.0.0",
     "streamdown": "^2.5.0",
     "three": "^0.185.1",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.14",
+    "culori": "^4.0.2",
+    "es-toolkit": "^1.51.0",
+    "fzstd": "^0.1.1",
+    "js-base64": "^3.9.3",
+    "nanoevents": "^9.1.0",
+    "svgpath": "^2.6.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
