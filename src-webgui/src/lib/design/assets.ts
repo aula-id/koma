@@ -1,5 +1,5 @@
 import { bytesToBase64 } from '../diagramNotes'
-import { bytesToObjectUrl } from '../filePreview'
+import { bytesToObjectUrl, requestFileBytes } from '../filePreview'
 import { mintRequestId } from '../../store/coding'
 import type { DesignDoc, DesignImageScale, DesignNode } from './types'
 
@@ -63,6 +63,24 @@ export function rememberDesignImages(doc: DesignDoc | null | undefined) {
   for (const hash of Object.keys(doc.images)) {
     if (!urls.has(hash)) urls.set(hash, '')
   }
+}
+
+export async function hydrateDesignImages(
+  doc: DesignDoc | null | undefined,
+  req: (body: { r: 'FileDownloadBytes'; root: string; path: string; requestId: string }) => void,
+  root: string,
+): Promise<boolean> {
+  if (!doc?.images) return false
+  const jobs = Object.entries(doc.images).flatMap(([hash, asset]) => {
+    if (!hash || !asset.path || urls.get(hash)) return []
+    return [requestFileBytes(req, root, asset.path).then((bytes) => {
+      cacheDesignImage(hash, bytes, asset.mime)
+      return true
+    }).catch(() => false)]
+  })
+  if (!jobs.length) return false
+  const results = await Promise.all(jobs)
+  return results.some(Boolean)
 }
 
 export function putDesignImage(doc: DesignDoc, hash: string, mime: string, path: string): DesignDoc {

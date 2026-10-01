@@ -3,10 +3,12 @@ import {
   cornerPixels,
   designLayerName,
   nodeChrome,
-  designImageUrl,
   firstVisiblePaint,
+  isPaintVisible,
   nodeFillCss,
+  nodeFillLayers,
   nodePaints,
+  paintAlias,
   nodeStrokeCss,
   resolveInstanceTree,
   resolveRef,
@@ -70,17 +72,14 @@ export function DesignNodeView({
   const strokeOff = chrome.stroke === 'none' || ((node.kind === 'rect' || node.kind === 'ellipse') && node.stroke == null)
   const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
   const painted = visual ?? node
-  const fillPaint = firstVisiblePaint(nodePaints(painted, 'fill'))
-  const fill = bareFill ? 'transparent' : nodeFillCss(doc, painted, paintCss(doc, chrome.fill, fillFallback))
+  const fillPaints = nodePaints(painted, 'fill').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none')
+  const fillPaint = firstVisiblePaint(fillPaints)
+  const fillFallbackCss = paintCss(doc, chrome.fill, fillFallback)
+  const fill = bareFill ? 'transparent' : nodeFillCss(doc, painted, fillFallbackCss)
   const stroke = nodeStrokeCss(doc, painted, paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)'))
-  const imageUrl = fillPaint?.type === 'image' ? designImageUrl(fillPaint.hash) : ''
-  const imageScale = fillPaint?.scale ?? 'fill'
-  const fillLayer = node.kind === 'line' || node.kind === 'vector' ? 'transparent' : imageUrl ? undefined : fill
-  const fillImage = imageUrl
-    ? `url("${imageUrl}")`
-    : fill.startsWith('linear-gradient') || fill.startsWith('radial-gradient') || fill.startsWith('conic-gradient')
-      ? fill
-      : undefined
+  const fillLayers = bareFill || node.kind === 'line' || node.kind === 'vector' ? [] : nodeFillLayers(doc, painted, fillFallbackCss)
+  const fillSizes = fillPaints.map((paint) => paint.type === 'image' ? (paint.scale === 'tile' ? 'auto' : paint.scale === 'fit' ? 'contain' : 'cover') : '100% 100%')
+  const fillRepeats = fillPaints.map((paint) => paint.type === 'image' && paint.scale === 'tile' ? 'repeat' : 'no-repeat')
   const corners = cornerPixels(doc, visual ?? node)
   const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
   const unit = 1 / Math.max(zoom, 0.25)
@@ -148,28 +147,38 @@ export function DesignNodeView({
       <div
         className={`absolute inset-0 ${overrideMark ? 'ring-2 ring-inset ring-[#9747ff]' : ''}`}
         style={{
-          background: fillLayer,
-          backgroundImage: node.kind === 'line' || node.kind === 'vector' ? undefined : fillImage,
-          backgroundSize: imageUrl ? (imageScale === 'tile' ? 'auto' : imageScale === 'fit' ? 'contain' : 'cover') : undefined,
-          backgroundRepeat: imageUrl ? (imageScale === 'tile' ? 'repeat' : 'no-repeat') : undefined,
-          backgroundPosition: imageUrl ? 'center' : undefined,
-          border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
+          border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px ${painted.strokeDash?.length ? ((painted.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed') : 'solid'} ${stroke}`,
           borderRadius: radius,
           overflow: clips ? 'hidden' : undefined,
-          boxShadow: painted.effects?.filter((item) => item.visible !== false && item.kind === 'drop-shadow').map((item) => `${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${item.color && item.color !== 'none' ? item.color : 'rgba(0,0,0,0.25)'}`).join(', ') || undefined,
+          boxShadow: painted.effects?.filter((item) => item.visible !== false && (item.kind === 'drop-shadow' || item.kind === 'inner-shadow')).map((item) => `${item.kind === 'inner-shadow' ? 'inset ' : ''}${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${item.color && item.color !== 'none' ? item.color : 'rgba(0,0,0,0.25)'}`).join(', ') || undefined,
           filter: painted.effects?.some((item) => item.visible !== false && item.kind === 'layer-blur') ? `blur(${painted.effects.find((item) => item.kind === 'layer-blur')?.blur ?? 4}px)` : undefined,
+          backdropFilter: painted.effects?.some((item) => item.visible !== false && item.kind === 'background-blur') ? `blur(${painted.effects.find((item) => item.kind === 'background-blur')?.blur ?? 8}px)` : undefined,
           mixBlendMode: painted.blend && painted.blend !== 'normal' && painted.blend !== 'pass-through' ? painted.blend : undefined,
           WebkitMaskImage: painted.mask ? fill : undefined,
         }}
       >
+        {node.kind !== 'line' && node.kind !== 'vector' ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{
+              backgroundImage: fillLayers.length ? fillLayers.join(', ') : undefined,
+              backgroundSize: fillLayers.length ? fillSizes.join(', ') : undefined,
+              backgroundRepeat: fillLayers.length ? fillRepeats.join(', ') : undefined,
+              backgroundPosition: fillLayers.length ? fillPaints.map(() => 'center').join(', ') : undefined,
+              opacity: fillPaints.length === 1 ? fillPaint?.opacity ?? 1 : 1,
+              borderRadius: 'inherit',
+            }}
+          />
+        ) : null}
         {node.kind === 'line' ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
-            <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} />
+            <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeDasharray={painted.strokeDash?.join(' ')} />
           </svg>
         ) : null}
         {node.kind === 'vector' && node.vector ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
-            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} />
+            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} />
           </svg>
         ) : null}
         {node.kind === 'text' && editing === node.id ? (

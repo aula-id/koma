@@ -78,9 +78,12 @@ import {
   setDesignMode,
   setDesignTokenValue,
   setInstanceVariant,
+  appendNodePaint,
   applyImageFill,
   applyDesignToken,
   putDesignImage,
+  resolvePaintCss,
+  solidPaint,
   createImageRect,
   createPolygonNode,
   createStarNode,
@@ -161,6 +164,22 @@ assert.equal(isDesignPath('.koma/auth.diag'), false)
   const round = parseDesign(serializeDesign({ ...doc, screens: [rect] }))
   assert.equal(round.error, null)
   assert.equal(round.doc.images?.[hashed]?.mime, 'image/png')
+}
+
+{
+  const rect = createNode('rect', 'r', 0, 0)
+  const first = appendNodePaint(rect, 'fill', solidPaint('#ff0000'), solidPaint('#4f46e5'))
+  assert.equal(first.fills?.length, 2)
+  assert.equal(first.fills?.[0].color, '#d9d9d9')
+  assert.equal(first.fills?.[1].color, '#ff0000')
+  const stacked = appendNodePaint(first, 'fill', solidPaint('#00ff00'))
+  assert.equal(stacked.fills?.length, 3)
+  const empty = { id: 'bare', kind: 'rect' as const, x: 0, y: 0, w: 10, h: 10 }
+  const seeded = appendNodePaint(empty, 'fill', solidPaint('#ff0000'), solidPaint('#4f46e5'))
+  assert.equal(seeded.fills?.[0].color, '#4f46e5')
+  assert.equal(seeded.fills?.[1].color, '#ff0000')
+  const faded = { type: 'solid' as const, color: '#112233', opacity: 0.5 }
+  assert.equal(resolvePaintCss(emptyDesign(), faded), 'rgba(17, 34, 51, 0.5)')
 }
 
 function button(): DesignComponent {

@@ -11,27 +11,20 @@ import {
   ArrowDown,
   ArrowRight,
   Blend,
-  Cloud,
   Component,
   Crop,
-  Droplets,
   FlipHorizontal2,
   FlipVertical2,
   Layers,
   MessageSquare,
   Move,
-  MoveHorizontal,
-  MoveVertical,
   Plus,
   RotateCcw,
   RotateCw,
-  Scaling,
   Square,
   TextAlignCenter,
   TextAlignEnd,
   TextAlignStart,
-  UnfoldHorizontal,
-  UnfoldVertical,
   WrapText,
   X,
 } from 'lucide-react'
@@ -42,10 +35,12 @@ import {
   designLayerName,
   designQueryNode,
   mergeDesignOverride,
+  appendNodePaint,
   nodeChrome,
   resolveRef,
   setNodeSolid,
   sharedValue,
+  solidPaint,
   textStyle,
   type DesignAlignAxis,
   type DesignAlignEdge,
@@ -57,6 +52,8 @@ import { InstanceOverrides } from './DesignPropertyFields'
 import {
   AlignButton,
   Choices,
+  ColorRow,
+  ConstraintWidget,
   GeomField,
   KindMark,
   FillEditor,
@@ -64,7 +61,6 @@ import {
   RadiusField,
   Section,
   SizeMode,
-  StrokeAlignIcon,
   containerPaint,
 } from './DesignPropertyFields'
 
@@ -90,6 +86,7 @@ export function NodeSettings({
   onTypeBlur,
   onOverrideTarget,
   onPickImage,
+  onStoreImage,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -112,6 +109,7 @@ export function NodeSettings({
   onTypeBlur: () => void
   onOverrideTarget?: (childId: string | null) => void
   onPickImage?: () => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -203,7 +201,7 @@ export function NodeSettings({
   const cornerField = (pick: (item: DesignNode) => number) => numberOf(pick)
   const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
   return (
-    <div className="flex flex-col gap-3 px-3 pb-3 text-[12px]">
+    <div className="flex flex-col gap-1 px-2 pb-2 text-[12px]">
       {onMakeComponent || onAddToChat ? (
         <div className="flex items-center gap-1">
           {onMakeComponent ? (
@@ -397,6 +395,12 @@ export function NodeSettings({
           <AlignButton label="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
         </div>
       ) : null}
+      {!layoutField.mixed && layoutField.value === 'grid' ? (
+        <div className="grid grid-cols-2 gap-1">
+          <GeomField label="Cols" ariaLabel="Grid columns" value={node.gridColumns?.[0]?.count ?? 2} onChange={(count) => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: Math.max(1, Math.round(count)) }] })} />
+          <GeomField label="Rows" ariaLabel="Grid rows" value={node.gridRows?.[0]?.count ?? 2} onChange={(count) => setField({ layout: 'grid', gridRows: [{ size: 'fr', count: Math.max(1, Math.round(count)) }] })} />
+        </div>
+      ) : null}
       {flows ? (
         <>
           <div className="grid grid-cols-2 gap-1">
@@ -529,92 +533,8 @@ export function NodeSettings({
             <GeomField label="BL" ariaLabel="Bottom left radius" value={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).mixed} onChange={(value) => setCorner('radiusBL', value)} />
           </div>
         ) : null}
-      </Section>
-      <Section title="Fill">
-        {multi ? (
-          <PaintRow
-            label="Fill"
-            mixed={fillField.mixed}
-            value={fillField.value}
-            fallback="#1a1d27"
-            resolved={resolveRef(doc, chrome.fill)}
-            tokens={colorTokens}
-            onChange={(next) => paintChange('fill', next)}
-          />
-        ) : (
-          <FillEditor label="Fill" doc={doc} node={node} field="fill" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onPickImage={onPickImage} />
-        )}
-      </Section>
-      <Section title="Stroke">
-        {multi ? (
-          <PaintRow
-            label="Stroke"
-            mixed={strokeField.mixed}
-            value={strokeField.value}
-            fallback="#8b93b8"
-            resolved={resolveRef(doc, chrome.stroke)}
-            tokens={colorTokens}
-            weight={strokeWidthField}
-            onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
-            onChange={(next) => paintChange('stroke', next)}
-          />
-        ) : (
-          <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} />
-        )}
         <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <GeomField label="W" ariaLabel="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
-          </div>
-          <Choices
-            label="Align"
-            grow={false}
-            value={node.strokeAlign ?? 'center'}
-            options={[
-              { value: 'inside', label: 'Inside', icon: <StrokeAlignIcon mode="inside" /> },
-              { value: 'center', label: 'Center', icon: <StrokeAlignIcon mode="center" /> },
-              { value: 'outside', label: 'Outside', icon: <StrokeAlignIcon mode="outside" /> },
-            ]}
-            onChange={(strokeAlign) => setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])}
-          />
-        </div>
-      </Section>
-      {hasParent && !sizeModes ? (
-        <Section title="Constraints">
-          <div className="flex items-center gap-1">
-            <span title="Horizontal" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><MoveHorizontal size={13} /></span>
-            <Choices
-              label="Horizontal"
-              value={node.constraintH ?? 'start'}
-              options={[
-                { value: 'start', label: 'Left', icon: <AlignStartVertical size={13} /> },
-                { value: 'center', label: 'Center', icon: <AlignCenterVertical size={13} /> },
-                { value: 'end', label: 'Right', icon: <AlignEndVertical size={13} /> },
-                { value: 'stretch', label: 'Stretch', icon: <UnfoldHorizontal size={13} /> },
-                { value: 'scale', label: 'Scale', icon: <Scaling size={13} /> },
-              ]}
-              onChange={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])}
-            />
-          </div>
-          <div className="flex items-center gap-1">
-            <span title="Vertical" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><MoveVertical size={13} /></span>
-            <Choices
-              label="Vertical"
-              value={node.constraintV ?? 'start'}
-              options={[
-                { value: 'start', label: 'Top', icon: <AlignStartHorizontal size={13} /> },
-                { value: 'center', label: 'Center', icon: <AlignCenterHorizontal size={13} /> },
-                { value: 'end', label: 'Bottom', icon: <AlignEndHorizontal size={13} /> },
-                { value: 'stretch', label: 'Stretch', icon: <UnfoldVertical size={13} /> },
-                { value: 'scale', label: 'Scale', icon: <Scaling size={13} /> },
-              ]}
-              onChange={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])}
-            />
-          </div>
-        </Section>
-      ) : null}
-      <Section title="Effects">
-        <div className="flex items-center gap-1">
-          <span title="Blend" className="flex h-7 w-5 flex-none items-center justify-center text-koma-dim"><Blend size={13} /></span>
+          <span title="Blend" className="flex h-8 w-8 flex-none items-center justify-center text-koma-dim"><Blend size={13} /></span>
           <KomaSelect
             aria-label="Blend"
             title="Blend"
@@ -623,7 +543,7 @@ export function NodeSettings({
               const blend = event.target.value
               setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])
             }}
-            className="h-7 min-w-0 flex-1 px-1.5 text-[12px]"
+            className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
           >
             <option value="normal">Normal</option>
             <option value="multiply">Multiply</option>
@@ -638,51 +558,240 @@ export function NodeSettings({
             <option value="difference">Difference</option>
             <option value="exclusion">Exclusion</option>
           </KomaSelect>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <AlignButton
-            label="Add drop shadow"
-            onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000' }] }))}
-          >
-            <Cloud size={14} />
-          </AlignButton>
-          <AlignButton
-            label="Add layer blur"
-            onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'layer-blur', blur: 4 }] }))}
-          >
-            <Droplets size={14} />
-          </AlignButton>
-          <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask'] : [])}>
+          <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask', 'maskType'] : [])}>
             <Layers size={14} />
           </AlignButton>
         </div>
-        {(node.effects ?? []).map((effect, index) => (
-          <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
-            <span title={effect.kind === 'drop-shadow' ? 'Drop shadow' : 'Layer blur'} className="flex h-7 w-7 flex-none items-center justify-center text-koma-dim">
-              {effect.kind === 'drop-shadow' ? <Cloud size={13} /> : <Droplets size={13} />}
-            </span>
-            {effect.kind === 'drop-shadow' ? (
-              <>
-                <div className="min-w-0 flex-1">
-                  <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, x } : item)) }))} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, y } : item)) }))} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <GeomField label="B" ariaLabel="Shadow blur" value={effect.blur ?? 8} onChange={(blur) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, blur } : item)) }))} />
-                </div>
-              </>
-            ) : (
-              <div className="min-w-0 flex-1">
-                <GeomField label="B" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, blur } : item)) }))} />
-              </div>
-            )}
-            <button type="button" title="Remove" aria-label="Remove effect" className="flex h-7 w-7 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>
-              <X size={13} />
-            </button>
+        {node.mask ? (
+          <Choices
+            label="Mask type"
+            value={node.maskType ?? 'alpha'}
+            options={[
+              { value: 'alpha', label: 'Alpha' },
+              { value: 'luminance', label: 'Luma' },
+              { value: 'vector', label: 'Vector' },
+            ]}
+            onChange={(maskType) => setField({ mask: true, ...(maskType === 'alpha' ? {} : { maskType }) }, maskType === 'alpha' ? ['maskType'] : [])}
+          />
+        ) : null}
+      </Section>
+      <Section
+        title="Fill"
+        action={(
+          <AlignButton label="Add fill" onClick={() => onPatch((current) => {
+            const color = current.kind === 'frame' ? '#ffffff' : SHAPE_FILL
+            return appendNodePaint(current, 'fill', solidPaint(color), solidPaint(color))
+          })}>
+            <Plus size={14} />
+          </AlignButton>
+        )}
+      >
+        {multi ? (
+          <PaintRow
+            label="Fill"
+            doc={doc}
+            mixed={fillField.mixed}
+            value={fillField.value}
+            fallback="#1a1d27"
+            resolved={resolveRef(doc, chrome.fill)}
+            tokens={colorTokens}
+            onChange={(next) => paintChange('fill', next)}
+          />
+        ) : (
+          <FillEditor label="Fill" doc={doc} node={node} field="fill" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onPickImage={onPickImage} onStoreImage={onStoreImage} />
+        )}
+      </Section>
+      <Section
+        title="Stroke"
+        action={(
+          <AlignButton label="Add stroke" onClick={() => onPatch((current) => appendNodePaint(current, 'stroke', solidPaint('#1c1c1c'), solidPaint('#1c1c1c')))}>
+            <Plus size={14} />
+          </AlignButton>
+        )}
+      >
+        {multi ? (
+          <PaintRow
+            label="Stroke"
+            doc={doc}
+            mixed={strokeField.mixed}
+            value={strokeField.value}
+            fallback="#8b93b8"
+            resolved={resolveRef(doc, chrome.stroke)}
+            tokens={colorTokens}
+            weight={strokeWidthField}
+            onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
+            onChange={(next) => paintChange('stroke', next)}
+          />
+        ) : (
+          <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onStoreImage={onStoreImage} />
+        )}
+        <div className="grid grid-cols-[1fr_1fr] gap-1">
+          <GeomField label="W" ariaLabel="Width" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
+          <KomaSelect
+            aria-label="Alignment"
+            value={node.strokeAlign ?? 'center'}
+            onChange={(event) => {
+              const strokeAlign = event.target.value
+              if (strokeAlign !== 'inside' && strokeAlign !== 'center' && strokeAlign !== 'outside') return
+              setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])
+            }}
+            className="h-8 px-1.5 text-[12px]"
+          >
+            <option value="inside">Inside</option>
+            <option value="center">Center</option>
+            <option value="outside">Outside</option>
+          </KomaSelect>
+          <KomaSelect
+            aria-label="Style"
+            value={!node.strokeDash?.length ? 'solid' : (node.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed'}
+            onChange={(event) => {
+              const style = event.target.value
+              if (style === 'solid') setField({}, ['strokeDash'])
+              else if (style === 'dotted') setField({ strokeDash: [1, 3] })
+              else setField({ strokeDash: [4, 4] })
+            }}
+            className="h-8 px-1.5 text-[12px]"
+          >
+            <option value="solid">Solid</option>
+            <option value="dashed">Dashed</option>
+            <option value="dotted">Dotted</option>
+          </KomaSelect>
+          <KomaSelect
+            aria-label="Cap"
+            value={node.strokeCap ?? 'none'}
+            onChange={(event) => {
+              const strokeCap = event.target.value
+              if (strokeCap !== 'none' && strokeCap !== 'round' && strokeCap !== 'square') return
+              setField(strokeCap === 'none' ? {} : { strokeCap }, strokeCap === 'none' ? ['strokeCap'] : [])
+            }}
+            className="h-8 px-1.5 text-[12px]"
+          >
+            <option value="none">None</option>
+            <option value="round">Round</option>
+            <option value="square">Square</option>
+          </KomaSelect>
+        </div>
+      </Section>
+      {hasParent && !sizeModes ? (
+        <Section title="Constraints">
+          <div className="flex items-start gap-1">
+            <ConstraintWidget
+              horizontal={node.constraintH ?? 'start'}
+              vertical={node.constraintV ?? 'start'}
+              onHorizontal={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])}
+              onVertical={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])}
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <KomaSelect
+                aria-label="Horizontal"
+                title="Horizontal"
+                value={node.constraintH ?? 'start'}
+                onChange={(event) => {
+                  const constraintH = event.target.value
+                  if (constraintH !== 'start' && constraintH !== 'center' && constraintH !== 'end' && constraintH !== 'stretch' && constraintH !== 'scale') return
+                  setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])
+                }}
+                className="h-8 w-full px-1.5 text-[12px]"
+              >
+                <option value="start">Left</option>
+                <option value="center">Center</option>
+                <option value="end">Right</option>
+                <option value="stretch">Left & right</option>
+                <option value="scale">Scale</option>
+              </KomaSelect>
+              <KomaSelect
+                aria-label="Vertical"
+                title="Vertical"
+                value={node.constraintV ?? 'start'}
+                onChange={(event) => {
+                  const constraintV = event.target.value
+                  if (constraintV !== 'start' && constraintV !== 'center' && constraintV !== 'end' && constraintV !== 'stretch' && constraintV !== 'scale') return
+                  setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])
+                }}
+                className="h-8 w-full px-1.5 text-[12px]"
+              >
+                <option value="start">Top</option>
+                <option value="center">Center</option>
+                <option value="end">Bottom</option>
+                <option value="stretch">Top & bottom</option>
+                <option value="scale">Scale</option>
+              </KomaSelect>
+            </div>
           </div>
-        ))}
+        </Section>
+      ) : null}
+      <Section
+        title="Effects"
+        action={(
+          <AlignButton label="Add drop shadow" onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 4, y: 4, blur: 4, spread: 0, color: '#000000' }] }))}>
+            <Plus size={14} />
+          </AlignButton>
+        )}
+      >
+        {(node.effects ?? []).map((effect, index) => {
+          const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
+          const removeEffect = () => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))
+          if (effect.kind === 'drop-shadow' || effect.kind === 'inner-shadow') {
+            return (
+              <div key={`${effect.kind}-${index}`} className="flex flex-col gap-1">
+                <div className="flex items-center gap-1">
+                  <KomaSelect
+                    aria-label="Shadow type"
+                    value={effect.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value
+                      if (kind === 'drop-shadow' || kind === 'inner-shadow') patchEffect({ kind })
+                    }}
+                    className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
+                  >
+                    <option value="drop-shadow">Drop shadow</option>
+                    <option value="inner-shadow">Inner shadow</option>
+                  </KomaSelect>
+                  <button type="button" title="Remove" aria-label="Remove shadow" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
+                    <X size={13} />
+                  </button>
+                </div>
+                <ColorRow
+                  doc={doc}
+                  paint={solidPaint(effect.color && effect.color !== 'none' ? effect.color : '#000000')}
+                  fallback="#000000"
+                  tokens={colorTokens}
+                  allowImage={false}
+                  allowGradient={false}
+                  onChange={(paint) => patchEffect({ color: paint.color && paint.color !== 'none' ? paint.color : '#000000' })}
+                />
+                <div className="grid grid-cols-4 gap-1">
+                  <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => patchEffect({ x })} />
+                  <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => patchEffect({ y })} />
+                  <GeomField label="B" ariaLabel="Shadow blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+                  <GeomField label="S" ariaLabel="Shadow spread" value={effect.spread ?? 0} onChange={(spread) => patchEffect({ spread })} />
+                </div>
+              </div>
+            )
+          }
+          return (
+            <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
+              <KomaSelect
+                aria-label="Blur type"
+                value={effect.kind}
+                onChange={(event) => {
+                  const kind = event.target.value
+                  if (kind === 'layer-blur' || kind === 'background-blur') patchEffect({ kind })
+                }}
+                className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
+              >
+                <option value="layer-blur">Layer blur</option>
+                <option value="background-blur">Background blur</option>
+              </KomaSelect>
+              <div className="w-16 flex-none">
+                <GeomField label="B" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+              </div>
+              <button type="button" title="Remove" aria-label="Remove blur" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
+                <X size={13} />
+              </button>
+            </div>
+          )
+        })}
       </Section>
       {allText ? (
         <Section title="Text">
@@ -744,6 +853,7 @@ export function NodeSettings({
           <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'Aa' }, { value: 'upper', label: 'AA' }, { value: 'lower', label: 'aa' }, { value: 'title', label: 'Aa' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
           <PaintRow
             label="Color"
+            doc={doc}
             mixed={colorField.mixed}
             value={colorField.value}
             fallback="#c8d3f5"

@@ -100,6 +100,7 @@ import {
   cacheDesignImage,
   createImageRect,
   hashBytes,
+  hydrateDesignImages,
   imageNaturalSize,
   mimeForName,
   putDesignImage,
@@ -268,6 +269,19 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   useEffect(() => {
     if (active) setDesignPanelTab(tab.id)
   }, [active, setDesignPanelTab, tab.id])
+
+  const imageSig = file?.doc.images ? Object.keys(file.doc.images).sort().join('|') : ''
+  useEffect(() => {
+    const doc = useKoma.getState().design?.docs?.[key]?.doc
+    if (!doc?.images) return
+    let cancelled = false
+    void hydrateDesignImages(doc, useKoma.getState().req, tab.root).then((changed) => {
+      if (!cancelled && changed) setRev((value) => value + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [imageSig, key, tab.root])
 
   useEffect(() => {
     setDesignFileUi(tab.root, tab.path, { selection, focusId, overrideTargetId })
@@ -2154,7 +2168,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         </div>
       </div>
       {propsOpen ? (
-        <aside className="flex w-[260px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
+        <aside className="flex w-[296px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
           <div className="flex h-8 flex-none items-center gap-1 px-3 text-[12px] text-koma-fg">
             <span className="min-w-0 flex-1 truncate">{multi ? `${selectedNodes.length} selected` : selected ? designLayerName(selected) : 'Styles'}</span>
             {selection.length || focusId ? (
@@ -2229,6 +2243,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 setOverrideTargetId(childId)
               }}
               onPickImage={() => imageInputRef.current?.click()}
+              onStoreImage={(hash, bytes, mime) => {
+                const path = designAssetPath(hash, mime)
+                cacheDesignImage(hash, bytes, mime)
+                writeDesignAsset(useKoma.getState().req, tab.root, path, bytes)
+                const stored = useKoma.getState().design?.docs?.[key]?.doc
+                if (!stored || stored.images?.[hash]) return
+                updateDesign(tab.root, tab.path, putDesignImage(stored, hash, mime, path))
+              }}
             />
           ) : (
             <TokenEditor root={tab.root} path={tab.path} doc={storedDoc} onCommit={(next) => commitStored(next)} />

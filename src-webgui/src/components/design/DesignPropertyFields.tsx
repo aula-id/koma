@@ -1,31 +1,21 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  Ban,
-  Blend,
   ChevronRight,
   Circle,
   Component,
-  Contrast,
-  Crop,
-  Droplet,
   Eye,
   EyeOff,
   Frame,
-  Grid3x3,
   Group,
-  Image,
   Maximize2,
   Minus,
-  Scaling,
   Square,
   Spline,
   Type,
 } from 'lucide-react'
 import {
-  defaultGradient,
   designLayerName,
   effectiveInstanceChild,
-  firstVisiblePaint,
   mergeDesignOverride,
   nodePaints,
   pickVariant,
@@ -33,13 +23,13 @@ import {
   setNodeSolid,
   solidPaint,
   type DesignDoc,
-  type DesignGradientKind,
-  type DesignImageScale,
+  type DesignConstraint,
   type DesignNode,
   type DesignPaint,
   type DesignPenPoint,
 } from '../../lib/design'
 import { DESIGN_PATCH_DEBOUNCE_MS, SELECTION, SHAPE_FILL, type PenDraft } from './tabShared'
+import { DesignPaintPopup, paintRowLabel, paintSwatch } from './DesignPaintPopup'
 
 function instanceDescendants(node: DesignNode, into: DesignNode[]) {
   for (const child of node.children ?? []) {
@@ -131,19 +121,22 @@ export function InstanceOverrides({
   )
 }
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+export function Section({ title, action, children }: { title: string; action?: ReactNode; children?: ReactNode }) {
   const [open, setOpen] = useState(true)
   return (
-    <section className="flex flex-col border-t border-koma-border">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-[22px] items-center gap-1 bg-koma-head px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100"
-      >
-        <ChevronRight size={14} strokeWidth={2} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
-        <span className="truncate">{title}</span>
-      </button>
-      {open ? <div className="flex flex-col gap-2 px-2 py-2">{children}</div> : null}
+    <section className="flex flex-col">
+      <div className="flex h-8 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-lg px-1 text-left text-[12px] font-medium text-koma-fg hover:bg-koma-hover"
+        >
+          <ChevronRight size={14} strokeWidth={2} className={`flex-none text-koma-dim transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="truncate">{title}</span>
+        </button>
+        {action}
+      </div>
+      {open ? <div className="flex flex-col gap-1 pb-2">{children}</div> : null}
     </section>
   )
 }
@@ -180,8 +173,8 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: 
   }
   const shown = mixed ? '' : draft ?? formatBareNumber(value)
   return (
-    <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
-      <span className="flex-none text-[11px] text-koma-dim">{label}</span>
+    <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+      <span className="w-3 flex-none text-center text-[11px] text-koma-dim">{label}</span>
       <input
         type="text"
         inputMode="decimal"
@@ -222,7 +215,7 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, onChange }: 
 
 export function AlignButton({ label, pressed, onClick, children }: { label: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick} className={`flex h-7 w-7 flex-none items-center justify-center rounded ${pressed ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
+    <button type="button" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick} className={`flex h-8 w-8 flex-none items-center justify-center rounded-lg ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
       {children}
     </button>
   )
@@ -280,6 +273,73 @@ export function StrokeAlignIcon({ mode }: { mode: 'inside' | 'center' | 'outside
   )
 }
 
+function toggleConstraint(current: DesignConstraint, edge: 'start' | 'end' | 'center'): DesignConstraint {
+  if (edge === 'center') return current === 'center' ? 'scale' : 'center'
+  if (edge === 'start') {
+    if (current === 'start') return 'scale'
+    if (current === 'stretch') return 'end'
+    if (current === 'end') return 'stretch'
+    return 'start'
+  }
+  if (current === 'end') return 'scale'
+  if (current === 'stretch') return 'start'
+  if (current === 'start') return 'stretch'
+  return 'end'
+}
+
+function ConstraintBar({ active, vertical, label, onClick }: { active: boolean; vertical?: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      className="flex h-full w-full items-center justify-center"
+    >
+      <span className={`rounded-full ${vertical ? 'h-8 w-[3px]' : 'h-[3px] w-8'} ${active ? 'bg-koma-accent' : 'bg-koma-grip'}`} />
+    </button>
+  )
+}
+
+export function ConstraintWidget({
+  horizontal,
+  vertical,
+  onHorizontal,
+  onVertical,
+}: {
+  horizontal: DesignConstraint
+  vertical: DesignConstraint
+  onHorizontal: (value: DesignConstraint) => void
+  onVertical: (value: DesignConstraint) => void
+}) {
+  return (
+    <div
+      className="grid h-[108px] w-[108px] flex-none rounded-lg bg-koma-bg"
+      style={{ gridTemplate: '"top top top" 24px "left center right" 60px "bottom bottom bottom" 24px / 24px 60px 24px' }}
+    >
+      <div style={{ gridArea: 'top' }}>
+        <ConstraintBar active={vertical === 'start' || vertical === 'stretch'} label="Top" onClick={() => onVertical(toggleConstraint(vertical, 'start'))} />
+      </div>
+      <div style={{ gridArea: 'left' }}>
+        <ConstraintBar vertical active={horizontal === 'start' || horizontal === 'stretch'} label="Left" onClick={() => onHorizontal(toggleConstraint(horizontal, 'start'))} />
+      </div>
+      <div className="relative rounded-lg bg-koma-panel" style={{ gridArea: 'center' }}>
+        <ConstraintBar active={vertical === 'center'} label="Vertical center" onClick={() => onVertical(toggleConstraint(vertical, 'center'))} />
+        <div className="absolute inset-0">
+          <ConstraintBar vertical active={horizontal === 'center'} label="Horizontal center" onClick={() => onHorizontal(toggleConstraint(horizontal, 'center'))} />
+        </div>
+      </div>
+      <div style={{ gridArea: 'right' }}>
+        <ConstraintBar vertical active={horizontal === 'end' || horizontal === 'stretch'} label="Right" onClick={() => onHorizontal(toggleConstraint(horizontal, 'end'))} />
+      </div>
+      <div style={{ gridArea: 'bottom' }}>
+        <ConstraintBar active={vertical === 'end' || vertical === 'stretch'} label="Bottom" onClick={() => onVertical(toggleConstraint(vertical, 'end'))} />
+      </div>
+    </div>
+  )
+}
+
 export function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: { name: string }[]; onChange: (radius: number | string | null) => void }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
@@ -303,7 +363,7 @@ export function RadiusField({ value, mixed, resolved, tokens, onChange }: { valu
   }
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
+      <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
         <span className="flex-none text-[11px] text-koma-dim">R</span>
         {tokens.length ? (
           <button
@@ -460,129 +520,147 @@ export function NumberField({ label, value, onChange }: { label: string; value: 
   )
 }
 
-function colorInputHex(value: string, fallback: string): string {
-  const source = /^#[0-9a-fA-F]{3,8}$/.test(value) ? value : fallback
-  const body = source.slice(1)
-  if (/^[0-9a-fA-F]{6}$/.test(body) || /^[0-9a-fA-F]{8}$/.test(body)) return `#${body.slice(0, 6).toLowerCase()}`
-  if (/^[0-9a-fA-F]{3}$/.test(body)) return `#${body[0]}${body[0]}${body[1]}${body[1]}${body[2]}${body[2]}`.toLowerCase()
-  return '#000000'
-}
-
-export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weight, onWeight, onChange }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: { name: string }[]; weight?: { value: number; mixed?: boolean }; onWeight?: (value: number) => void; onChange: (next: string | null) => void }) {
+export function ColorRow({
+  doc,
+  paint,
+  fallback,
+  tokens,
+  mixed,
+  allowImage = true,
+  allowGradient = true,
+  onChange,
+  onRemove,
+  onStoreImage,
+}: {
+  doc: DesignDoc
+  paint: DesignPaint
+  fallback: string
+  tokens?: { name: string }[]
+  mixed?: boolean
+  allowImage?: boolean
+  allowGradient?: boolean
+  onChange: (paint: DesignPaint) => void
+  onRemove?: () => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+}) {
   const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState<string | null>(null)
-  const on = !mixed && value !== 'none'
-  const hex = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : fallback
-  const picker = colorInputHex(hex, fallback)
-  const swatch = value.startsWith('#') ? value : resolved?.startsWith('#') ? resolved : on ? 'var(--color-koma-panel)' : 'transparent'
-  const shown = mixed ? '' : value === 'none' ? '' : value
-  const commitText = (raw: string) => {
+  const [hexDraft, setHexDraft] = useState<string | null>(null)
+  const swatchRef = useRef<HTMLButtonElement>(null)
+  const named = paint.type === 'image' || paint.type === 'gradient'
+  const token = paint.type === 'solid' && paint.color && !paint.color.startsWith('#') && paint.color !== 'none' ? paint.color : ''
+  const hex = paint.type === 'solid' && paint.color?.startsWith('#') ? paint.color.slice(1).toUpperCase() : ''
+  const opacity = mixed ? '' : String(Math.round((paint.opacity ?? 1) * 100))
+  const swatch = mixed ? 'transparent' : paintSwatch(doc, paint, fallback)
+  const label = mixed ? '' : paintRowLabel(paint) || token
+  const commitHex = (raw: string) => {
+    setHexDraft(null)
     const trimmed = raw.trim()
-    setDraft(null)
-    if (!trimmed || trimmed.toLowerCase() === 'none') {
-      onChange('none')
-      return
-    }
-    const named = tokens?.find((token) => token.name === trimmed)
-    if (named) {
-      onChange(named.name)
+    const namedToken = tokens?.find((item) => item.name === trimmed)
+    if (namedToken) {
+      onChange({ ...solidPaint(namedToken.name), opacity: paint.opacity })
       return
     }
     const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
-    if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/.test(body)) onChange(`#${body.toLowerCase()}`)
+    if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(body)) {
+      const color = body.length === 3 ? `#${body.split('').map((item) => item + item).join('')}`.toLowerCase() : `#${body.toLowerCase()}`
+      onChange({ ...solidPaint(color), opacity: paint.opacity })
+    }
   }
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1">
-        {tokens?.length ? (
+    <div className="flex items-center gap-1">
+      <div className="grid h-8 min-w-0 flex-1 grid-cols-[1fr_auto] items-center gap-0.5">
+        <div className={`flex h-8 min-w-0 items-center bg-koma-bg ${named || token ? 'rounded-l-lg' : 'rounded-l-lg'} focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent`}>
           <button
+            ref={swatchRef}
             type="button"
-            aria-label={`${label} swatch`}
+            title="Color"
+            aria-label="Color"
             aria-expanded={open}
             onClick={() => setOpen((current) => !current)}
-            className="h-7 w-7 flex-none rounded border border-koma-border"
+            className="ml-2 h-4 w-4 flex-none rounded-full border border-koma-border"
             style={{ background: swatch }}
           />
-        ) : (
-          <label className="relative h-7 w-7 flex-none overflow-hidden rounded border border-koma-border">
-            <span className="absolute inset-0" style={{ background: swatch }} />
+          {named || token ? (
+            <span className="min-w-0 flex-1 truncate px-1.5 text-[12px] text-koma-fg">{mixed ? '—' : label}</span>
+          ) : (
             <input
-              type="color"
-              aria-label={`${label} color`}
-              value={picker}
-              onChange={(event) => onChange(event.target.value.toLowerCase())}
-              className="absolute inset-0 cursor-pointer opacity-0"
-            />
-          </label>
-        )}
-        <input
-          aria-label={`${label} hex`}
-          value={draft ?? shown}
-          placeholder={mixed ? 'Mixed' : value === 'none' ? 'None' : '#hex'}
-          onChange={(event) => {
-            const raw = event.target.value
-            const trimmed = raw.trim()
-            const named = tokens?.find((token) => token.name === trimmed)
-            const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
-            if (named) {
-              setDraft(null)
-              onChange(named.name)
-              return
-            }
-            if (/^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/.test(body)) {
-              setDraft(null)
-              onChange(`#${body.toLowerCase()}`)
-              return
-            }
-            setDraft(raw)
-          }}
-          onBlur={() => {
-            if (draft != null) commitText(draft)
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && draft != null) commitText(draft)
-          }}
-          className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
-        />
-        <button
-          type="button"
-          aria-label={`${label} visibility`}
-          aria-pressed={on}
-          title={mixed ? 'Mixed' : on ? 'On' : 'Off'}
-          onClick={() => onChange(mixed || on ? 'none' : null)}
-          className={`flex h-7 w-7 flex-none items-center justify-center rounded ${on ? 'text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
-        >
-          {on ? <Eye size={14} /> : <EyeOff size={14} />}
-        </button>
-        {weight && onWeight ? (
-          <div className="w-16 flex-none">
-            <GeomField label="W" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
-          </div>
-        ) : null}
-      </div>
-      {open && tokens?.length ? (
-        <div className="flex flex-col gap-1 rounded border border-koma-border p-1">
-          <input
-            type="color"
-            aria-label={`${label} color`}
-            value={picker}
-            onChange={(event) => onChange(event.target.value.toLowerCase())}
-            className="h-7 w-full cursor-pointer bg-transparent"
-          />
-          {tokens.map((token) => (
-            <button
-              key={token.name}
-              type="button"
-              aria-pressed={value === token.name}
-              onClick={() => {
-                onChange(token.name)
-                setOpen(false)
+              aria-label="Hex"
+              value={mixed ? '' : hexDraft ?? hex}
+              placeholder={mixed ? '—' : '000000'}
+              onChange={(event) => {
+                const raw = event.target.value
+                const body = raw.startsWith('#') ? raw.slice(1) : raw
+                if (/^[0-9a-fA-F]{6}$/.test(body)) {
+                  setHexDraft(null)
+                  onChange({ ...solidPaint(`#${body.toLowerCase()}`), opacity: paint.opacity })
+                  return
+                }
+                setHexDraft(raw)
               }}
-              className={`h-6 rounded px-1 text-left text-[12px] ${value === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}
-            >
-              {token.name}
-            </button>
-          ))}
+              onBlur={() => {
+                if (hexDraft != null) commitHex(hexDraft)
+              }}
+              className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[12px] uppercase text-koma-fg outline-none"
+            />
+          )}
+        </div>
+        <div className="flex h-8 w-[60px] items-center rounded-r-lg bg-koma-bg pl-1.5 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+          <span className="text-[11px] text-koma-dim">%</span>
+          <input
+            aria-label="Opacity"
+            defaultValue={opacity}
+            key={opacity}
+            placeholder={mixed ? '—' : undefined}
+            onBlur={(event) => {
+              const value = Number(event.target.value)
+              if (!Number.isFinite(value)) return
+              const next = Math.max(0, Math.min(100, value)) / 100
+              onChange({ ...paint, opacity: next >= 1 ? undefined : next })
+            }}
+            className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[12px] text-koma-fg outline-none"
+          />
+        </div>
+      </div>
+      {onRemove ? (
+        <button type="button" title="Remove" aria-label="Remove color" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={onRemove}>
+          <Minus size={14} />
+        </button>
+      ) : null}
+      {open ? (
+        <DesignPaintPopup
+          doc={doc}
+          paint={paint}
+          fallback={fallback}
+          tokens={tokens}
+          allowImage={allowImage}
+          allowGradient={allowGradient}
+          anchor={swatchRef.current}
+          onChange={onChange}
+          onClose={() => setOpen(false)}
+          onStoreImage={onStoreImage}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weight, onWeight, onChange, doc }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: { name: string }[]; weight?: { value: number; mixed?: boolean }; onWeight?: (value: number) => void; onChange: (next: string | null) => void; doc?: DesignDoc }) {
+  const paint = solidPaint(value && value !== 'none' ? value : fallback)
+  return (
+    <div className="flex flex-col gap-1">
+      <ColorRow
+        doc={doc ?? { version: 2, modes: ['light'], mode: 'light', grid: 8, tokens: [], screens: [], components: [] }}
+        paint={value === 'none' ? solidPaint('none') : paint}
+        fallback={resolved?.startsWith('#') ? resolved : fallback}
+        tokens={tokens}
+        mixed={mixed}
+        allowImage={false}
+        allowGradient={false}
+        onChange={(next) => onChange(next.color && next.color !== 'none' ? next.color : 'none')}
+      />
+      {weight && onWeight ? (
+        <div className="w-16">
+          <GeomField label="W" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
         </div>
       ) : null}
     </div>
@@ -607,7 +685,7 @@ export function Choices<T extends string>({
   const iconic = options.every((option) => option.icon)
   return (
     <div className={`flex flex-col gap-1 ${grow ? 'min-w-0 flex-1' : 'flex-none'}`} role="group" aria-label={mixed ? `${label} · Mixed` : label}>
-      <div className={`flex ${iconic ? 'h-7 rounded border border-koma-border bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
+      <div className={`flex ${iconic ? 'h-8 rounded-lg bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
         {options.map((option) => {
           const pressed = !mixed && option.value === value
           return (
@@ -620,8 +698,8 @@ export function Choices<T extends string>({
               onClick={() => onChange(option.value)}
               className={
                 iconic
-                  ? `flex h-6 items-center justify-center rounded ${grow ? 'min-w-0 flex-1' : 'w-6 flex-none'} ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
-                  : `h-7 min-w-0 flex-1 rounded px-1 text-[12px] ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+                  ? `flex h-7 items-center justify-center rounded-md ${grow ? 'min-w-0 flex-1' : 'w-7 flex-none'} ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+                  : `h-8 min-w-0 flex-1 rounded-lg px-1 text-[12px] ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
               }
             >
               {option.icon ?? option.label}
@@ -641,7 +719,7 @@ export function FillEditor({
   mixed,
   tokens,
   onChange,
-  onPickImage,
+  onStoreImage,
 }: {
   label: string
   doc: DesignDoc
@@ -651,141 +729,31 @@ export function FillEditor({
   tokens?: { name: string }[]
   onChange: (node: DesignNode) => void
   onPickImage?: () => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
-  const paints = nodePaints(node, field)
-  const current = firstVisiblePaint(paints)
-  const kind = current?.type === 'gradient' ? 'gradient' : current?.type === 'image' ? 'image' : current && paintAliasSafe(current) === 'none' ? 'none' : 'solid'
-  const solid = kind === 'solid' ? current?.color ?? (field === 'fill' ? SHAPE_FILL : '#1c1c1c') : field === 'fill' ? SHAPE_FILL : '#1c1c1c'
+  const fallback = field === 'fill' ? SHAPE_FILL : '#1c1c1c'
+  const stored = nodePaints(node, field)
+  const paints = stored.length ? stored : [solidPaint(fallback)]
+  const implicit = !stored.length
+  if (mixed) {
+    return <PaintRow label={label} doc={doc} value="" mixed fallback={fallback} tokens={tokens} onChange={(next) => onChange(setNodeSolid(node, field, next))} />
+  }
   return (
-    <div className="flex flex-col gap-1">
-      <Choices
-        label={label}
-        value={kind}
-        mixed={mixed}
-        options={[
-          { value: 'solid', label: 'Solid', icon: <Droplet size={13} /> },
-          { value: 'gradient', label: 'Gradient', icon: <Blend size={13} /> },
-          { value: 'image', label: 'Image', icon: <Image size={13} /> },
-          { value: 'none', label: 'None', icon: <Ban size={13} /> },
-        ]}
-        onChange={(next) => {
-          if (next === 'none') onChange(setNodeSolid(node, field, 'none'))
-          else if (next === 'solid') onChange(setNodeSolid(node, field, solid.startsWith('#') || tokens?.some((token) => token.name === solid) ? solid : SHAPE_FILL))
-          else if (next === 'gradient') onChange(setNodePaints(node, field, [defaultGradient(current?.kind ?? 'linear')]))
-          else if (next === 'image') onPickImage?.()
-        }}
-      />
-      {kind === 'solid' ? (
-        <PaintRow
-          label={label}
-          value={solid}
-          mixed={mixed}
-          fallback={field === 'fill' ? SHAPE_FILL : '#1c1c1c'}
-          resolved={solid.startsWith('#') ? solid : undefined}
+    <div className="flex flex-col gap-2">
+      {paints.map((paint, index) => (
+        <ColorRow
+          key={`${paint.type}-${index}`}
+          doc={doc}
+          paint={paint}
+          fallback={fallback}
           tokens={tokens}
-          onChange={(next) => onChange(setNodeSolid(node, field, next))}
+          allowImage={field === 'fill'}
+          onChange={(next) => onChange(setNodePaints(node, field, implicit ? [next] : paints.map((item, at) => (at === index ? next : item))))}
+          onRemove={() => onChange(implicit || paints.length <= 1 ? setNodeSolid(node, field, 'none') : setNodePaints(node, field, paints.filter((_, at) => at !== index)))}
+          onStoreImage={onStoreImage}
         />
-      ) : null}
-      {kind === 'gradient' && current ? (
-        <GradientEditor
-          paint={current}
-          tokens={tokens}
-          onChange={(paint) => onChange(setNodePaints(node, field, [paint]))}
-        />
-      ) : null}
-      {kind === 'image' && current ? (
-        <div className="flex flex-col gap-1">
-          <button type="button" title="Replace image" aria-label="Replace image" className="flex h-7 items-center justify-center rounded border border-koma-border text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPickImage?.()}>
-            <Image size={13} />
-          </button>
-          <Choices
-            label="Scale"
-            value={current.scale ?? 'fill'}
-            options={[
-              { value: 'fill', label: 'Fill', icon: <Maximize2 size={13} /> },
-              { value: 'fit', label: 'Fit', icon: <MinimizeIcon /> },
-              { value: 'crop', label: 'Crop', icon: <Crop size={13} /> },
-              { value: 'tile', label: 'Tile', icon: <Grid3x3 size={13} /> },
-            ]}
-            onChange={(scale: DesignImageScale) => onChange(setNodePaints(node, field, [{ ...current, scale }]))}
-          />
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function paintAliasSafe(paint: DesignPaint): string {
-  if (paint.visible === false) return 'none'
-  if (paint.type === 'solid') return paint.color && paint.color !== 'none' ? paint.color : 'none'
-  return ''
-}
-
-export function GradientEditor({
-  paint,
-  tokens,
-  onChange,
-}: {
-  paint: DesignPaint
-  tokens?: { name: string }[]
-  onChange: (paint: DesignPaint) => void
-}) {
-  const stops = paint.stops?.length ? paint.stops : [{ color: '#4f46e5', at: 0 }, { color: '#22d3ee', at: 1 }]
-  return (
-    <div className="flex flex-col gap-1">
-      <Choices
-        label="Kind"
-        value={paint.kind ?? 'linear'}
-        options={[
-          { value: 'linear', label: 'Linear', icon: <Minus size={13} /> },
-          { value: 'radial', label: 'Radial', icon: <Circle size={13} /> },
-          { value: 'angular', label: 'Angular', icon: <Contrast size={13} /> },
-          { value: 'diamond', label: 'Diamond', icon: <Scaling size={13} /> },
-        ]}
-        onChange={(kind: DesignGradientKind) => onChange({ ...paint, type: 'gradient', kind })}
-      />
-      {stops.map((stop, index) => (
-        <div key={`${stop.at}-${index}`} className="flex items-center gap-1">
-          <PaintRow
-            label={`Stop ${index + 1}`}
-            value={stop.color}
-            fallback="#000000"
-            tokens={tokens}
-            onChange={(color) => {
-              if (!color || color === 'none') return
-              const next = stops.map((item, at) => (at === index ? { ...item, color } : item))
-              onChange({ ...paint, type: 'gradient', stops: next })
-            }}
-          />
-          <div className="w-14 flex-none">
-            <GeomField
-              label="%"
-              value={Math.round((Number.isFinite(stop.at) ? stop.at : 0) * 100)}
-              onChange={(value) => {
-                const next = stops.map((item, at) => (at === index ? { ...item, at: Math.max(0, Math.min(1, value / 100)) } : item))
-                onChange({ ...paint, type: 'gradient', stops: next })
-              }}
-            />
-          </div>
-          {stops.length > 2 ? (
-            <button
-              type="button"
-              aria-label="Remove stop"
-              className="h-7 w-7 flex-none rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-              onClick={() => onChange({ ...paint, type: 'gradient', stops: stops.filter((_, at) => at !== index) })}
-            >
-              <Minus size={12} />
-            </button>
-          ) : null}
-        </div>
       ))}
-      <button
-        type="button"
-        className="h-7 rounded border border-koma-border text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-        onClick={() => onChange({ ...paint, type: 'gradient', stops: [...stops, { color: '#ffffff', at: 1 }] })}
-      >
-        Add stop
-      </button>
     </div>
   )
 }
+

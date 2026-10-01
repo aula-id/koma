@@ -103,6 +103,26 @@ export function setNodeSolid(node: DesignNode, field: 'fill' | 'stroke', color: 
   return setNodePaints(node, field, [solidPaint(color)])
 }
 
+export function appendNodePaint(node: DesignNode, field: 'fill' | 'stroke', paint: DesignPaint, implicit?: DesignPaint): DesignNode {
+  const existing = nodePaints(node, field)
+  const base = existing.length ? existing : implicit ? [clonePaint(implicit)] : []
+  return setNodePaints(node, field, [...base, clonePaint(paint)])
+}
+
+function hexRgba(hex: string, opacity: number): string {
+  const body = hex.slice(1)
+  const r = Number.parseInt(body.slice(0, 2), 16)
+  const g = Number.parseInt(body.slice(2, 4), 16)
+  const b = Number.parseInt(body.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${Math.round(opacity * 1000) / 1000})`
+}
+
+function cssWithOpacity(css: string, opacity: number | undefined): string {
+  if (opacity == null || opacity >= 1) return css
+  if (/^#[0-9a-fA-F]{6}$/i.test(css)) return hexRgba(css, opacity)
+  return css
+}
+
 export function resolveColor(doc: DesignDoc, ref: string | null | undefined, fallback = ''): string {
   if (ref == null || ref === '' || ref === 'none') return fallback
   const resolved = tokenColor(doc, ref)
@@ -140,15 +160,13 @@ export function imageAssetUrl(doc: DesignDoc, hash: string | null | undefined): 
 
 export function resolvePaintCss(doc: DesignDoc, paint: DesignPaint | null | undefined, fallback = 'transparent'): string {
   if (!paint || paint.visible === false) return 'transparent'
-  if (paint.type === 'gradient') return gradientCss(doc, paint)
+  if (paint.type === 'gradient') return cssWithOpacity(gradientCss(doc, paint), paint.opacity)
   if (paint.type === 'image') {
     const url = imageAssetUrl(doc, paint.hash)
     if (!url) return fallback
-    const scale = paint.scale ?? 'fill'
-    if (scale === 'tile') return `url("${url}")`
     return `url("${url}")`
   }
-  return resolveColor(doc, paint.color, fallback) || fallback
+  return cssWithOpacity(resolveColor(doc, paint.color, fallback) || fallback, paint.opacity)
 }
 
 export function resolvePaintHex(doc: DesignDoc, paint: DesignPaint | null | undefined, fallback = ''): string {
@@ -161,12 +179,26 @@ export function resolvePaintHex(doc: DesignDoc, paint: DesignPaint | null | unde
   return resolveColor(doc, paint.color, fallback)
 }
 
+export function resolvePaintLayer(doc: DesignDoc, paint: DesignPaint, fallback: string): string {
+  const css = resolvePaintCss(doc, paint, fallback)
+  if (paint.type === 'image' || paint.type === 'gradient') return css
+  return `linear-gradient(${css}, ${css})`
+}
+
+export function nodeFillLayers(doc: DesignDoc, node: DesignNode, fallback: string): string[] {
+  return nodePaints(node, 'fill')
+    .filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none')
+    .map((paint) => resolvePaintLayer(doc, paint, fallback))
+}
+
 export function nodeFillCss(doc: DesignDoc, node: DesignNode, fallback: string): string {
-  const paints = nodePaints(node, 'fill')
-  const first = firstVisiblePaint(paints)
-  if (!first) return fallback
-  if (paintAlias(first) === 'none') return 'transparent'
-  return resolvePaintCss(doc, first, fallback)
+  const layers = nodeFillLayers(doc, node, fallback)
+  if (!layers.length) {
+    const first = firstVisiblePaint(nodePaints(node, 'fill'))
+    if (first && paintAlias(first) === 'none') return 'transparent'
+    return fallback
+  }
+  return layers.join(', ')
 }
 
 export function nodeStrokeCss(doc: DesignDoc, node: DesignNode, fallback: string): string {
