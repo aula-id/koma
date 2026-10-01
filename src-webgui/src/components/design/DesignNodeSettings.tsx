@@ -39,6 +39,7 @@ import {
   mergeDesignOverride,
   appendNodePaint,
   applyFramePreset,
+  applyTextRun,
   bindNodeField,
   collectDocFrames,
   FRAME_PRESETS,
@@ -53,7 +54,10 @@ import {
   type DesignAlignEdge,
   type DesignDoc,
   type DesignInteraction,
+  type DesignLayoutGrid,
   type DesignNode,
+  type DesignOverlayPlace,
+  type DesignTextRun,
 } from '../../lib/design'
 import { SHAPE_FILL } from './tabShared'
 import { InstanceOverrides } from './DesignPropertyFields'
@@ -98,6 +102,7 @@ export function NodeSettings({
   onOverrideTarget,
   onPickImage,
   onStoreImage,
+  textRange,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -124,6 +129,7 @@ export function NodeSettings({
   onOverrideTarget?: (childId: string | null) => void
   onPickImage?: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+  textRange?: { start: number; end: number } | null
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -153,6 +159,27 @@ export function NodeSettings({
       for (const key of clear) delete next[key]
       return next
     })
+  }
+  const selectedText = !multi && node.kind === 'text' && textRange && textRange.end > textRange.start
+    ? { start: textRange.start, end: textRange.end }
+    : null
+  const applyType = (patch: Partial<DesignNode>, clear: (keyof DesignNode)[] = []) => {
+    if (selectedText) {
+      const runPatch: Omit<Partial<DesignTextRun>, 'start' | 'end'> = {}
+      if (patch.fontSize != null) runPatch.fontSize = patch.fontSize
+      if (patch.weight != null) runPatch.weight = patch.weight
+      if (patch.italic != null) runPatch.italic = patch.italic
+      if (patch.underline != null) runPatch.underline = patch.underline
+      if (patch.strike != null) runPatch.strike = patch.strike
+      if (patch.fontFamily != null) runPatch.fontFamily = patch.fontFamily
+      if (typeof patch.color === 'string') runPatch.color = patch.color
+      if (Object.keys(runPatch).length) {
+        const runs = applyTextRun(node.runs, selectedText.start, selectedText.end, runPatch, (node.text ?? '').length)
+        setField(runs.length ? { runs } : {}, runs.length ? [] : ['runs'])
+        return
+      }
+    }
+    setField(patch, clear)
   }
   const paintChange = (field: 'fill' | 'stroke', next: string | null) => {
     onPatch((current) => {
@@ -700,11 +727,60 @@ export function NodeSettings({
           >
             <Square size={14} />
           </AlignButton>
-          {node.layoutGrids?.[0] ? (
-            <div className="grid grid-cols-2 gap-1">
-              <GeomField label="Size" ariaLabel="Grid size" value={node.layoutGrids[0].size ?? 8} onChange={(size) => setField({ layoutGrids: [{ ...node.layoutGrids![0], size }] })} />
-              <GeomField label="Count" ariaLabel="Grid count" value={node.layoutGrids[0].count ?? 0} onChange={(count) => setField({ layoutGrids: [{ ...node.layoutGrids![0], count: count > 0 ? count : undefined }] })} />
-            </div>
+          {(node.layoutGrids ?? []).map((grid, index) => {
+            const patchGrid = (next: Partial<DesignLayoutGrid>) => setField({ layoutGrids: (node.layoutGrids ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) })
+            return (
+              <div key={`${grid.kind}-${index}`} className="flex flex-col gap-1 rounded-lg bg-koma-bg p-1">
+                <div className="flex items-center gap-1">
+                  <KomaSelect
+                    aria-label="Grid kind"
+                    value={grid.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value
+                      if (kind === 'square' || kind === 'column' || kind === 'row') patchGrid({ kind })
+                    }}
+                    className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
+                  >
+                    <option value="square">Square</option>
+                    <option value="column">Columns</option>
+                    <option value="row">Rows</option>
+                  </KomaSelect>
+                  <button
+                    type="button"
+                    title="Remove grid"
+                    aria-label="Remove grid"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover"
+                    onClick={() => {
+                      const layoutGrids = (node.layoutGrids ?? []).filter((_, at) => at !== index)
+                      setField(layoutGrids.length ? { layoutGrids } : {}, layoutGrids.length ? [] : ['layoutGrids'])
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <GeomField label="Size" ariaLabel="Grid size" value={grid.size ?? 8} onChange={(size) => patchGrid({ size })} />
+                  <GeomField label="Count" ariaLabel="Grid count" value={grid.count ?? 0} onChange={(count) => patchGrid({ count: count > 0 ? Math.round(count) : undefined })} />
+                  <GeomField label="Gut" ariaLabel="Grid gutter" value={grid.gutter ?? 0} onChange={(gutter) => patchGrid({ gutter: gutter > 0 ? gutter : undefined })} />
+                  <GeomField label="Off" ariaLabel="Grid offset" value={grid.offset ?? 0} onChange={(offset) => patchGrid({ offset })} />
+                </div>
+                <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-panel px-2">
+                  <span className="text-[11px] text-koma-dim">Color</span>
+                  <input
+                    aria-label="Grid color"
+                    value={grid.color ?? ''}
+                    placeholder="auto"
+                    onChange={(event) => patchGrid({ color: event.target.value || undefined })}
+                    className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+                  />
+                </label>
+              </div>
+            )
+          })}
+          {node.layoutGrids?.length ? (
+            <AlignButton label="Add board grid" onClick={() => setField({ layoutGrids: [...(node.layoutGrids ?? []), { kind: 'column', count: 12, gutter: 16, offset: 0 }] })}>
+              <Plus size={14} />
+            </AlignButton>
           ) : null}
         </div>
       ) : null}
@@ -1039,8 +1115,8 @@ export function NodeSettings({
           <div className="flex items-center gap-1">
             <div className="min-w-0 flex-1">
               <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} tokens={typeTokens} bound={node.bindings?.fontSize} onBind={(token) => bindField('fontSize', token)} onChange={(fontSize) => {
-                if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) setField({}, ['fontSize'])
-                else setField({ fontSize })
+                if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) applyType({}, ['fontSize'])
+                else applyType({ fontSize })
               }} />
             </div>
             <KomaSelect
@@ -1049,7 +1125,7 @@ export function NodeSettings({
               onChange={(event) => {
                 const weight = event.target.value
                 if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
-                setField(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
+                applyType(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
               }}
               className="h-7 flex-none px-1 text-[12px]"
             >
@@ -1068,8 +1144,8 @@ export function NodeSettings({
               onChange={(event) => {
                 const family = event.target.value
                 setFontQuery(family)
-                if (!family.trim()) setField({}, ['fontFamily'])
-                else if (/^[\w][\w\s,-]{0,80}$/.test(family)) setField({ fontFamily: family })
+                if (!family.trim()) applyType({}, ['fontFamily'])
+                else if (/^[\w][\w\s,-]{0,80}$/.test(family)) applyType({ fontFamily: family })
               }}
               className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
             />
@@ -1077,7 +1153,7 @@ export function NodeSettings({
           {fontChoices.length ? (
             <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto">
               {fontChoices.map((name) => (
-                <button key={name} type="button" title={name} onClick={() => { setFontQuery(''); setField({ fontFamily: name }) }} className={`h-7 truncate rounded px-1.5 text-left text-[12px] ${node.fontFamily === name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>
+                <button key={name} type="button" title={name} onClick={() => { setFontQuery(''); applyType({ fontFamily: name }) }} className={`h-7 truncate rounded px-1.5 text-left text-[12px] ${node.fontFamily === name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>
                   {name}
                 </button>
               ))}
@@ -1098,9 +1174,9 @@ export function NodeSettings({
             <AlignButton label="Hug width" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'width'} onClick={() => setField({ textHug: 'width' })}><span className="text-[10px]">W</span></AlignButton>
           </div>
           <div className="flex gap-0.5">
-            <AlignButton label="Italic" pressed={!!node.italic} onClick={() => setField(node.italic ? {} : { italic: true }, node.italic ? ['italic'] : [])}><span className="text-[10px] italic">I</span></AlignButton>
-            <AlignButton label="Underline" pressed={!!node.underline} onClick={() => setField(node.underline ? {} : { underline: true }, node.underline ? ['underline'] : [])}><span className="text-[10px] underline">U</span></AlignButton>
-            <AlignButton label="Strike" pressed={!!node.strike} onClick={() => setField(node.strike ? {} : { strike: true }, node.strike ? ['strike'] : [])}><span className="text-[10px] line-through">S</span></AlignButton>
+            <AlignButton label="Italic" pressed={!!node.italic} onClick={() => applyType(node.italic ? {} : { italic: true }, node.italic ? ['italic'] : [])}><span className="text-[10px] italic">I</span></AlignButton>
+            <AlignButton label="Underline" pressed={!!node.underline} onClick={() => applyType(node.underline ? {} : { underline: true }, node.underline ? ['underline'] : [])}><span className="text-[10px] underline">U</span></AlignButton>
+            <AlignButton label="Strike" pressed={!!node.strike} onClick={() => applyType(node.strike ? {} : { strike: true }, node.strike ? ['strike'] : [])}><span className="text-[10px] line-through">S</span></AlignButton>
           </div>
           <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'Aa' }, { value: 'upper', label: 'AA' }, { value: 'lower', label: 'aa' }, { value: 'title', label: 'Aa' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
           <PaintRow
@@ -1111,7 +1187,7 @@ export function NodeSettings({
             fallback="#c8d3f5"
             resolved={resolveRef(doc, style.color)}
             tokens={colorTokens}
-            onChange={(next) => setField(next && next !== 'none' ? { color: next, fill: next } : {}, next && next !== 'none' ? [] : ['color'])}
+            onChange={(next) => applyType(next && next !== 'none' ? { color: next, fill: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
           <div className="grid grid-cols-2 gap-1">
             <Choices
@@ -1122,20 +1198,30 @@ export function NodeSettings({
             />
             <GeomField label="Lines" ariaLabel="Max lines" value={node.maxLines ?? 0} onChange={(maxLines) => setField(maxLines > 0 ? { maxLines: Math.round(maxLines) } : {}, maxLines > 0 ? [] : ['maxLines'])} />
           </div>
+          {selectedText ? (
+            <p className="truncate text-[11px] text-koma-dim" title={(node.text ?? '').slice(selectedText.start, selectedText.end)}>
+              Selection: {(node.text ?? '').slice(selectedText.start, selectedText.end) || '…'}
+            </p>
+          ) : (
+            <p className="text-[11px] text-koma-dim">Select text on the canvas to style a run</p>
+          )}
           {(node.runs ?? []).map((run, index) => (
-            <div key={`${run.start}-${index}`} className="grid grid-cols-[1fr_1fr_1fr_32px] gap-1">
-              <GeomField label="A" ariaLabel="Run start" value={run.start} onChange={(start) => setField({ runs: (node.runs ?? []).map((item, at) => (at === index ? { ...item, start: Math.max(0, Math.round(start)) } : item)) })} />
-              <GeomField label="B" ariaLabel="Run end" value={run.end} onChange={(end) => setField({ runs: (node.runs ?? []).map((item, at) => (at === index ? { ...item, end: Math.max(0, Math.round(end)) } : item)) })} />
-              <GeomField label="Sz" ariaLabel="Run size" value={run.fontSize ?? node.fontSize ?? 13} onChange={(fontSize) => setField({ runs: (node.runs ?? []).map((item, at) => (at === index ? { ...item, fontSize } : item)) })} />
+            <div key={`${run.start}-${index}`} className="flex items-center gap-1">
+              <span className="min-w-0 flex-1 truncate rounded-lg bg-koma-bg px-2 py-1 text-[11px] text-koma-fg" title={(node.text ?? '').slice(run.start, run.end)}>
+                {(node.text ?? '').slice(run.start, run.end) || '…'}
+                {run.fontSize ? ` · ${run.fontSize}` : ''}
+              </span>
               <button type="button" title="Remove run" aria-label="Remove run" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
                 const runs = (node.runs ?? []).filter((_, at) => at !== index)
                 setField(runs.length ? { runs } : {}, runs.length ? [] : ['runs'])
               }}><X size={12} /></button>
             </div>
           ))}
-          <AlignButton label="Add text run" onClick={() => setField({ runs: [...(node.runs ?? []), { start: 0, end: (node.text ?? '').length, fontSize: node.fontSize ?? 13 }] })}>
-            <Plus size={14} />
-          </AlignButton>
+          {selectedText ? (
+            <AlignButton label="Style selection" onClick={() => applyType({ fontSize: node.fontSize ?? 13 })}>
+              <Plus size={14} />
+            </AlignButton>
+          ) : null}
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Line" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
               if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
@@ -1226,9 +1312,7 @@ export function NodeSettings({
                   <X size={13} />
                 </button>
               </div>
-              {item.trigger === 'after-delay' ? (
-                <GeomField label="Ms" ariaLabel="Delay" value={item.delay ?? 300} onChange={(delay) => patch({ delay })} />
-              ) : null}
+              <GeomField label="Ms" ariaLabel="Delay" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
               {item.action === 'open-url' ? (
                 <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-8 rounded-lg bg-koma-bg px-2 text-[12px] text-koma-fg outline-none" />
               ) : null}
@@ -1241,10 +1325,32 @@ export function NodeSettings({
                 </KomaSelect>
               ) : null}
               {item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-                <div className="grid grid-cols-2 gap-1">
-                  <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
-                  <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />
-                </div>
+                <>
+                  <KomaSelect
+                    aria-label="Overlay place"
+                    value={item.overlayPlace ?? 'manual'}
+                    onChange={(event) => {
+                      const overlayPlace = event.target.value as DesignOverlayPlace
+                      patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
+                    }}
+                    className="h-8 px-1.5 text-[12px]"
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="center">Center</option>
+                    <option value="top-left">Top left</option>
+                    <option value="top">Top</option>
+                    <option value="top-right">Top right</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="bottom">Bottom</option>
+                    <option value="bottom-right">Bottom right</option>
+                  </KomaSelect>
+                  <div className="grid grid-cols-2 gap-1">
+                    <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
+                    <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />
+                  </div>
+                </>
               ) : null}
             </div>
             )

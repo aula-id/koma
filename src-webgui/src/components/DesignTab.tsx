@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ChevronRight, Frame, Hand, MousePointer2, PenTool, Play, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { ChevronRight, Frame, Hand, Minus, MousePointer2, PenTool, Play, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { KomaSelect } from './KomaSelect'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
@@ -102,6 +102,7 @@ import {
   outlineStrokeNode,
   detachInstance,
   emptyPlayState,
+  retargetTextRuns,
   firstVisiblePaint,
   nodePaints,
   openVectorEndpoints,
@@ -235,6 +236,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [overrideTargetId, setOverrideTargetId] = useState<string | null>(null)
   const [enteredContainerId, setEnteredContainerId] = useState<string | null>(null)
   const [vectorEditId, setVectorEditId] = useState<string | null>(null)
+  const [textRange, setTextRange] = useState<{ id: string; start: number; end: number } | null>(null)
   const [playMode, setPlayMode] = useState(false)
   const playModeRef = useRef(false)
   playModeRef.current = playMode
@@ -1227,6 +1229,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   }
 
   const applyPlay = (doc: DesignDoc, interaction: DesignInteraction) => {
+    if ((interaction.delay ?? 0) > 0 && interaction.trigger !== 'after-delay') {
+      delayTimers.current.push(window.setTimeout(() => applyPlay({ ...doc }, { ...interaction, delay: undefined }), interaction.delay))
+      return
+    }
     const current = playStateRef.current ?? emptyPlayState(doc)
     const next = runPlayAction(doc, current, interaction)
     playStateRef.current = next
@@ -1243,9 +1249,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     delayTimers.current.forEach((id) => window.clearTimeout(id))
     delayTimers.current = []
     const screen = dest ?? findDesignNode(doc, next.screenId)
-    for (const item of screen?.interactions ?? []) {
-      if (item.trigger !== 'after-delay') continue
-      delayTimers.current.push(window.setTimeout(() => applyPlay(doc, item), item.delay ?? 300))
+    const hosts = [screen, ...next.overlays.map((overlay) => findDesignNode(doc, overlay.id))]
+    for (const host of hosts) {
+      for (const item of host?.interactions ?? []) {
+        if (item.trigger !== 'after-delay') continue
+        delayTimers.current.push(window.setTimeout(() => applyPlay(doc, item), item.delay ?? 300))
+      }
     }
   }
   applyPlayRef.current = applyPlay
@@ -2176,7 +2185,13 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 onText={(id, text) => {
                   const stored = useKoma.getState().design?.docs?.[key]?.doc
                   if (!stored) return
-                  const view = updateDesignNode(editingDoc(stored, focusRef.current), id, (node) => ({ ...node, text }))
+                  const view = updateDesignNode(editingDoc(stored, focusRef.current), id, (node) => {
+                    const runs = retargetTextRuns(node.runs, node.text ?? '', text)
+                    const next = { ...node, text }
+                    if (runs.length) next.runs = runs
+                    else delete next.runs
+                    return next
+                  })
                   const next = projectDoc(stored, focusRef.current, layoutDesign(view))
                   if (serializeDesign(next) === serializeDesign(stored)) return
                   if (!labelNoted.current) {
@@ -2185,9 +2200,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   }
                   updateDesign(tab.root, tab.path, next)
                 }}
+                onTextRange={(id, start, end) => setTextRange({ id, start, end })}
                 onTextBlur={() => {
                   labelNoted.current = false
                   setEditing(null)
+                  setTextRange(null)
                 }}
               />
             ))}
@@ -2587,6 +2604,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               nodes={selectedNodes}
               hasParent={everyParent}
               sizeModes={sizeModes}
+              textRange={textRange && selectedId === textRange.id ? textRange : null}
               componentName={!multi && selectedVariant ? focusedComponent?.name ?? null : null}
               variantProps={!multi && selectedVariant ? selectedVariant.props : null}
               axes={!multi && selected?.kind === 'instance' ? instanceAxes(storedDoc, selected) : null}
@@ -2628,8 +2646,12 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 commitStored(resetInstanceOverrides(stored, selected.id))
               } : undefined}
               onGoToMain={!multi && selected?.kind === 'instance' && selected.component ? () => {
-                setFocusId(selected.component ?? null)
-                setSelection([])
+                const componentId = selected.component ?? null
+                const main = storedDoc.components.find((item) => item.id === componentId)?.variants[0]?.node
+                focusRef.current = componentId
+                setFocusId(componentId)
+                setSelection(main ? [main.id] : [])
+                if (main) window.requestAnimationFrame(() => zoomTo([main.id]))
               } : undefined}
               onSwapInstance={!multi && selected?.kind === 'instance' ? (componentId) => {
                 patchSelected((node) => ({ ...node, component: componentId }))

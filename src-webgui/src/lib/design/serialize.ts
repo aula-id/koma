@@ -44,6 +44,7 @@ const ALIGNS = ['start', 'center', 'end', 'stretch'] as const
 const JUSTIFIES = ['start', 'center', 'end', 'space', 'around', 'evenly'] as const
 const INTERACTION_TRIGGERS = ['click', 'mouse-enter', 'mouse-leave', 'after-delay'] as const
 const INTERACTION_ACTIONS = ['navigate', 'open-overlay', 'toggle-overlay', 'close-overlay', 'prev-screen', 'open-url'] as const
+const OVERLAY_PLACES = ['manual', 'center', 'top-left', 'top', 'top-right', 'left', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const
 const SIZES = ['hug', 'fill', 'fixed'] as const
 const WEIGHTS = ['regular', 'medium', 'bold'] as const
 const TEXT_ALIGNS = ['left', 'center', 'right', 'justify'] as const
@@ -376,6 +377,8 @@ function parseNode(value: unknown): DesignNode | null {
       const overlayY = num(rowItem.overlayY)
       if (overlayX != null) next.overlayX = overlayX
       if (overlayY != null) next.overlayY = overlayY
+      const overlayPlace = oneOf(rowItem.overlayPlace, OVERLAY_PLACES)
+      if (overlayPlace && overlayPlace !== 'manual') next.overlayPlace = overlayPlace
       interactions.push(next)
     }
     if (interactions.length) node.interactions = interactions

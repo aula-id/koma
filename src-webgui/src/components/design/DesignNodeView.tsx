@@ -9,7 +9,8 @@ import {
   nodeFillLayers,
   nodePaints,
   paintAlias,
-  maskClipCss,
+  siblingMaskStyle,
+  splitTextByRuns,
   nodeStrokeCss,
   resolveInstanceTree,
   resolvePaintCss,
@@ -43,10 +44,12 @@ export function DesignNodeView({
   onCorner,
   onEdit,
   onText,
+  onTextRange,
   onTextBlur,
   onMenu,
   onEnterContainer,
   clipPath,
+  maskStyle,
 }: {
   doc: DesignDoc
   node: DesignNode
@@ -65,9 +68,11 @@ export function DesignNodeView({
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
   onText: (id: string, text: string) => void
+  onTextRange?: (id: string, start: number, end: number) => void
   onTextBlur: () => void
   onMenu: (id: string, clientX: number, clientY: number) => void
   clipPath?: string
+  maskStyle?: { clipPath?: string; maskImage?: string; WebkitMaskImage?: string; maskSize?: string; WebkitMaskSize?: string; maskPosition?: string; WebkitMaskPosition?: string; maskRepeat?: string; WebkitMaskRepeat?: string; maskMode?: string }
 }) {
   if (node.visible === false) return null
   const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
@@ -117,7 +122,16 @@ export function DesignNodeView({
         height: boxH,
         opacity: chrome.opacity,
         transform,
-        clipPath,
+        clipPath: maskStyle?.clipPath ?? clipPath,
+        maskImage: maskStyle?.maskImage,
+        WebkitMaskImage: maskStyle?.WebkitMaskImage,
+        maskSize: maskStyle?.maskSize,
+        WebkitMaskSize: maskStyle?.WebkitMaskSize,
+        maskPosition: maskStyle?.maskPosition,
+        WebkitMaskPosition: maskStyle?.WebkitMaskPosition,
+        maskRepeat: maskStyle?.maskRepeat,
+        WebkitMaskRepeat: maskStyle?.WebkitMaskRepeat,
+        maskMode: maskStyle?.maskMode,
         outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
         cursor: !hitHere || node.locked || dragCursor ? undefined : 'grab',
       }}
@@ -208,6 +222,9 @@ export function DesignNodeView({
             autoFocus
             value={node.text ?? ''}
             onChange={(event) => onText(node.id, event.target.value)}
+            onSelect={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
+            onKeyUp={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
+            onMouseUp={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
             onBlur={onTextBlur}
             onPointerDown={(event) => event.stopPropagation()}
             onKeyDown={(event) => {
@@ -224,7 +241,23 @@ export function DesignNodeView({
             className="flex h-full w-full px-1"
             style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start', textAlign: style.align, alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color || chrome.fill, 'var(--color-koma-fg)') }}
           >
-            <span className="whitespace-pre-wrap">{node.text || 'Text'}</span>
+            <span className="whitespace-pre-wrap">
+              {splitTextByRuns(node.text || 'Text', node.runs).map((part, index) => (
+                <span
+                  key={`${part.text}-${index}`}
+                  style={{
+                    fontSize: part.run?.fontSize,
+                    fontWeight: part.run?.weight ? weightCss(part.run.weight) : undefined,
+                    fontStyle: part.run?.italic ? 'italic' : undefined,
+                    textDecoration: [part.run?.underline ? 'underline' : '', part.run?.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined,
+                    fontFamily: part.run?.fontFamily || undefined,
+                    color: part.run?.color ? paintCss(doc, part.run.color, 'inherit') : undefined,
+                  }}
+                >
+                  {part.text}
+                </span>
+              ))}
+            </span>
           </div>
         ) : node.kind === 'instance' && !visual ? (
           <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
@@ -269,7 +302,7 @@ export function DesignNodeView({
             locked={lockChildren}
             enteredContainerId={enteredContainerId}
             overrideTargetId={overrideTargetId}
-            clipPath={mask && !child.mask ? maskClipCss(mask, boxW, boxH) : undefined}
+            maskStyle={mask && !child.mask ? siblingMaskStyle(mask, child, doc) : undefined}
             onEnterContainer={onEnterContainer}
             onSelect={onSelect}
             onResize={onResize}
@@ -277,6 +310,7 @@ export function DesignNodeView({
             onCorner={onCorner}
             onEdit={onEdit}
             onText={onText}
+            onTextRange={onTextRange}
             onTextBlur={onTextBlur}
             onMenu={onMenu}
           />

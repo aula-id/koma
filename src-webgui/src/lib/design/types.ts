@@ -31,12 +31,14 @@ export type DesignEffectKind = 'drop-shadow' | 'inner-shadow' | 'layer-blur' | '
 export type DesignStrokeMarker = 'none' | 'arrow' | 'dot'
 export type DesignInteractionTrigger = 'click' | 'mouse-enter' | 'mouse-leave' | 'after-delay'
 export type DesignInteractionAction = 'navigate' | 'open-overlay' | 'toggle-overlay' | 'close-overlay' | 'prev-screen' | 'open-url'
+export type DesignOverlayPlace = 'manual' | 'center' | 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right'
 export type DesignInteraction = {
   trigger: DesignInteractionTrigger
   action: DesignInteractionAction
   target?: string
   delay?: number
   url?: string
+  overlayPlace?: DesignOverlayPlace
   overlayX?: number
   overlayY?: number
 }

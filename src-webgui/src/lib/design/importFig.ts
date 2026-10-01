@@ -1,6 +1,8 @@
 import { unzipSync } from 'fflate'
+import { cacheDesignImage, designAssetPath, mimeForName, putDesignImage } from './assets'
+import { decodeVectorNetworkBlob } from './fig/vectorNetwork'
 import { emptyDesign } from './model'
-import type { DesignDoc, DesignLayout, DesignNode, DesignPaint, DesignToken } from './types'
+import type { DesignDoc, DesignLayout, DesignLayoutGrid, DesignNode, DesignPaint, DesignTextRun, DesignToken, DesignVector } from './types'
 
 export type DesignImportResult = { doc: DesignDoc; error: string | null }
 
@@ -231,12 +233,18 @@ function figPaint(paint: Record<string, unknown>): DesignPaint | null {
   }
   if (type === 'IMAGE') {
     const image = paint.image && typeof paint.image === 'object' ? paint.image as Record<string, unknown> : null
-    const hash = typeof image?.hash === 'string' ? image.hash : typeof paint.hash === 'string' ? paint.hash : ''
+    const hash = figBytesHash(image?.hash) || figBytesHash(paint.hash) || figBytesHash(paint.imageHash)
     if (!hash) return null
     return { type: 'image', hash, scale: 'fill', opacity }
   }
   const color = colorHex(paint.color as { r?: number; g?: number; b?: number } | undefined)
   return color ? { type: 'solid', color, opacity } : null
+}
+
+function figBytesHash(value: unknown): string {
+  if (typeof value === 'string' && value) return value
+  if (value instanceof Uint8Array && value.length) return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return ''
 }
 
 function figKind(type: string | undefined): DesignNode['kind'] {
@@ -251,11 +259,112 @@ function figKind(type: string | undefined): DesignNode['kind'] {
   return 'frame'
 }
 
-export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): DesignImportResult {
+function figVector(row: Record<string, unknown>, blobs: Uint8Array[]): DesignVector | undefined {
+  const data = row.vectorData && typeof row.vectorData === 'object' ? row.vectorData as Record<string, unknown> : null
+  if (data && Array.isArray(data.vertices) && data.vertices.length) {
+    const vertices = data.vertices.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const point = item as { x?: number; y?: number }
+      return typeof point.x === 'number' && typeof point.y === 'number' ? [{ x: point.x, y: point.y }] : []
+    })
+    const segments = Array.isArray(data.segments)
+      ? data.segments.flatMap((item) => {
+          if (!item || typeof item !== 'object') return []
+          const segment = item as { start?: number; end?: number; tangentStart?: { x?: number; y?: number }; tangentEnd?: { x?: number; y?: number } }
+          if (typeof segment.start !== 'number' || typeof segment.end !== 'number') return []
+          return [{
+            start: segment.start,
+            end: segment.end,
+            tangentStart: { x: segment.tangentStart?.x ?? 0, y: segment.tangentStart?.y ?? 0 },
+            tangentEnd: { x: segment.tangentEnd?.x ?? 0, y: segment.tangentEnd?.y ?? 0 },
+          }]
+        })
+      : []
+    if (vertices.length) return { vertices, segments, regions: [] }
+  }
+  const blobRef = data?.vectorNetworkBlob
+  const blob = blobRef instanceof Uint8Array
+    ? blobRef
+    : typeof blobRef === 'number' && blobs[blobRef]
+      ? blobs[blobRef]
+      : null
+  if (!blob) return undefined
+  try {
+    const vector = decodeVectorNetworkBlob(blob)
+    return vector.vertices.length ? vector : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function figTextRuns(textData: Record<string, unknown>): DesignTextRun[] | undefined {
+  const ids = Array.isArray(textData.characterStyleIDs) ? textData.characterStyleIDs : []
+  const table = Array.isArray(textData.styleOverrideTable) ? textData.styleOverrideTable : []
+  if (!ids.length || !table.length) return undefined
+  const styles = new Map<number, Record<string, unknown>>()
+  table.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return
+    const row = item as Record<string, unknown>
+    const id = typeof row.styleID === 'number' ? row.styleID : index
+    styles.set(id, row)
+  })
+  const runs: DesignTextRun[] = []
+  let start = 0
+  let current = typeof ids[0] === 'number' ? ids[0] : 0
+  for (let i = 1; i <= ids.length; i++) {
+    const next = i < ids.length && typeof ids[i] === 'number' ? ids[i] as number : current
+    if (i < ids.length && next === current) continue
+    const style = styles.get(current)
+    if (style && current) {
+      const run: DesignTextRun = { start, end: i }
+      if (typeof style.fontSize === 'number') run.fontSize = style.fontSize
+      if (typeof style.fontName === 'object' && style.fontName && typeof (style.fontName as { family?: string }).family === 'string') {
+        run.fontFamily = (style.fontName as { family: string }).family
+      }
+      const fills = Array.isArray(style.fillPaints) ? style.fillPaints.map((item) => figPaint(item as Record<string, unknown>)).find((item) => item?.color) : null
+      if (fills?.color) run.color = fills.color
+      runs.push(run)
+    }
+    start = i
+    current = next
+  }
+  return runs.length ? runs : undefined
+}
+
+function figLayoutGrids(value: unknown): DesignLayoutGrid[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const grids: DesignLayoutGrid[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const pattern = typeof row.pattern === 'string' ? row.pattern.toUpperCase() : typeof row.kind === 'string' ? row.kind.toUpperCase() : ''
+    const kind = pattern.includes('COL') ? 'column' : pattern.includes('ROW') ? 'row' : 'square'
+    const next: DesignLayoutGrid = { kind }
+    const size = num(row.sectionSize ?? row.size)
+    const gutter = num(row.gutterSize ?? row.gutter)
+    const count = num(row.count)
+    const offset = num(row.offset)
+    if (size != null && size > 0) next.size = size
+    if (gutter != null && gutter >= 0) next.gutter = gutter
+    if (count != null && count > 0) next.count = Math.round(count)
+    if (offset != null) next.offset = offset
+    const color = colorHex(row.color as { r?: number; g?: number; b?: number } | undefined)
+    if (color) next.color = color
+    grids.push(next)
+  }
+  return grids.length ? grids : undefined
+}
+
+export function nodeChangesToDesign(
+  changes: Array<Record<string, unknown>>,
+  extras?: { blobs?: Uint8Array[]; images?: Array<[string, Uint8Array]> },
+): DesignImportResult {
   const doc = emptyDesign()
   doc.version = 2
+  const blobs = extras?.blobs ?? []
   const nodes = new Map<string, DesignNode>()
   const children = new Map<string, string[]>()
+  const components: DesignDoc['components'] = []
   for (const row of changes) {
     if (row.phase === 'REMOVED') continue
     const id = guidId(row.guid as { sessionID?: number; localID?: number } | string | undefined) || mint('fig', { i: nodes.size })
@@ -263,7 +372,8 @@ export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): De
     const transform = row.transform && typeof row.transform === 'object' ? row.transform as { m02?: number; m12?: number } : {}
     const fills = Array.isArray(row.fillPaints) ? row.fillPaints.map((item) => figPaint(item as Record<string, unknown>)).filter((item): item is DesignPaint => !!item) : []
     const strokes = Array.isArray(row.strokePaints) ? row.strokePaints.map((item) => figPaint(item as Record<string, unknown>)).filter((item): item is DesignPaint => !!item) : []
-    const kind = figKind(typeof row.type === 'string' ? row.type : undefined)
+    const rawType = typeof row.type === 'string' ? row.type.toUpperCase() : ''
+    const kind = figKind(rawType)
     const node: DesignNode = {
       id,
       kind,
@@ -287,15 +397,57 @@ export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): De
     if (row.visible === false) node.visible = false
     if (row.locked === true) node.locked = true
     if (row.mask === true) node.mask = true
+    const maskType = typeof row.maskType === 'string' ? row.maskType.toUpperCase() : ''
+    if (maskType.includes('LUM')) node.maskType = 'luminance'
+    else if (maskType.includes('VECTOR') || row.maskIsOutline === true) node.maskType = 'vector'
     if (row.stackMode === 'HORIZONTAL') node.layout = 'row'
     if (row.stackMode === 'VERTICAL') node.layout = 'column'
     if (typeof row.stackSpacing === 'number') node.gap = row.stackSpacing
     if (typeof row.fontSize === 'number') node.fontSize = row.fontSize
+    if (typeof row.fontName === 'object' && row.fontName && typeof (row.fontName as { family?: string }).family === 'string') {
+      node.fontFamily = (row.fontName as { family: string }).family
+    }
     if (row.textData && typeof row.textData === 'object') {
-      const text = (row.textData as { characters?: string }).characters
-      if (typeof text === 'string') node.text = text
+      const textData = row.textData as Record<string, unknown>
+      const text = typeof textData.characters === 'string' ? textData.characters : undefined
+      if (text != null) node.text = text
+      const runs = figTextRuns(textData)
+      if (runs) node.runs = runs
+    }
+    const vector = figVector(row, blobs)
+    if (vector && (kind === 'vector' || rawType.includes('BOOLEAN') || rawType.includes('STAR') || rawType.includes('POLYGON'))) {
+      node.kind = 'vector'
+      node.vector = vector
+    } else if (kind === 'vector' && !node.vector) {
+      node.vector = {
+        vertices: [{ x: 0, y: 0 }, { x: node.w, y: 0 }, { x: node.w, y: node.h }, { x: 0, y: node.h }],
+        segments: [
+          { start: 0, end: 1, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+          { start: 1, end: 2, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+          { start: 2, end: 3, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+          { start: 3, end: 0, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+        ],
+        regions: [{ winding: 'nonzero', loops: [[0, 1, 2, 3]] }],
+      }
+    }
+    if (kind === 'instance') {
+      const symbol = row.symbolData && typeof row.symbolData === 'object' ? (row.symbolData as { symbolID?: { sessionID?: number; localID?: number } | string }).symbolID : undefined
+      const component = guidId(symbol)
+      if (component) node.component = component
+    }
+    const grids = figLayoutGrids(row.layoutGrids)
+    if (grids) node.layoutGrids = grids
+    if (rawType.includes('BOOLEAN')) {
+      const op = typeof row.booleanOperation === 'string' ? row.booleanOperation.toUpperCase() : ''
+      if (op === 'UNION') node.booleanOp = 'union'
+      else if (op === 'SUBTRACT') node.booleanOp = 'subtract'
+      else if (op === 'INTERSECT') node.booleanOp = 'intersect'
+      else if (op === 'XOR') node.booleanOp = 'exclude'
     }
     nodes.set(id, node)
+    if (rawType === 'COMPONENT' || rawType === 'SYMBOL' || rawType.includes('COMPONENT')) {
+      components.push({ id, name: node.name ?? 'Component', variants: [{ props: {}, node: { ...node, kind: 'frame' } }] })
+    }
     const parent = row.parentIndex && typeof row.parentIndex === 'object' ? guidId((row.parentIndex as { guid?: { sessionID?: number; localID?: number } }).guid) : ''
     if (parent) {
       const list = children.get(parent) ?? []
@@ -309,6 +461,24 @@ export function nodeChangesToDesign(changes: Array<Record<string, unknown>>): De
   }
   const roots = [...nodes.values()].filter((node) => ![...children.values()].some((list) => list.includes(node.id)))
   doc.screens = (roots.length ? roots : [...nodes.values()]).map(attach)
+  if (components.length) {
+    doc.components = components.map((component) => {
+      const live = nodes.get(component.id)
+      const tree = live ? attach(live) : component.variants[0].node
+      return { ...component, variants: [{ props: {}, node: { ...tree, kind: 'frame', x: 0, y: 0 } }] }
+    })
+  }
+  if (extras?.images?.length) {
+    let next = doc
+    for (const [name, data] of extras.images) {
+      const hash = name.replace(/^images\//, '').replace(/\.[^.]+$/, '')
+      if (!hash || !data?.length) continue
+      const mime = mimeForName(name) ?? 'image/png'
+      cacheDesignImage(hash, data, mime)
+      next = putDesignImage(next, hash, mime, designAssetPath(hash, mime))
+    }
+    doc.images = next.images
+  }
   if (!doc.screens.length) return { doc, error: 'No pages or nodes to import' }
   return { doc, error: null }
 }
@@ -317,7 +487,12 @@ export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImpo
   try {
     const { parseFigBuffer } = await import('./fig/parseFigBuffer')
     const parsed = parseFigBuffer(buffer)
-    if (parsed?.nodeChanges?.length) return nodeChangesToDesign(parsed.nodeChanges as Array<Record<string, unknown>>)
+    if (parsed?.nodeChanges?.length) {
+      return nodeChangesToDesign(parsed.nodeChanges as Array<Record<string, unknown>>, {
+        blobs: parsed.blobs,
+        images: parsed.images,
+      })
+    }
   } catch {
     /* fallback */
   }

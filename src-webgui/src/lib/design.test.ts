@@ -95,9 +95,14 @@ import {
   emptyPlayState,
   graphToDesign,
   hexToHsb,
+  applyTextRun,
   maskClipCss,
   nodeChangesToDesign,
+  playOverlayPosition,
+  retargetTextRuns,
   runPlayAction,
+  siblingMaskStyle,
+  splitTextByRuns,
   visibleDesignScreens,
   hsbToHex,
   insertVertexOnSegment,
@@ -1479,4 +1484,81 @@ function sample(): DesignDoc {
   assert.equal(imported.doc.screens[0].name, 'Page')
   assert.equal(imported.doc.screens[0].fill, '#ff0000')
   assert.equal(imported.doc.screens[0].children?.[0].text, 'Hello')
+}
+
+{
+  const runs = applyTextRun([], 1, 4, { fontSize: 20 }, 7)
+  assert.equal(runs.length, 1)
+  assert.equal(runs[0].start, 1)
+  assert.equal(runs[0].end, 4)
+  assert.equal(runs[0].fontSize, 20)
+  const shifted = retargetTextRuns(runs, 'Hello!!', 'HeXlo!!')
+  assert.equal(shifted[0].start, 1)
+  assert.equal(splitTextByRuns('Hello', runs).some((part) => part.run?.fontSize === 20), true)
+}
+
+{
+  const screen = createNode('frame', 'home', 0, 0)
+  screen.w = 200
+  screen.h = 100
+  const overlay = createNode('frame', 'overlay', 0, 0)
+  overlay.w = 40
+  overlay.h = 20
+  const at = playOverlayPosition(screen, overlay, { trigger: 'click', action: 'open-overlay', overlayPlace: 'center', overlayX: 4, overlayY: 2 })
+  assert.equal(at.x, 84)
+  assert.equal(at.y, 42)
+}
+
+{
+  const mask = createNode('vector', 'm', 10, 10)
+  mask.w = 20
+  mask.h = 20
+  mask.mask = true
+  mask.maskType = 'vector'
+  mask.vector = {
+    vertices: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }],
+    segments: [
+      { start: 0, end: 1, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+      { start: 1, end: 2, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+      { start: 2, end: 3, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+      { start: 3, end: 0, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+    ],
+    regions: [{ winding: 'nonzero', loops: [[0, 1, 2, 3]] }],
+  }
+  const child = createNode('rect', 'c', 0, 0)
+  child.w = 40
+  child.h = 40
+  const style = siblingMaskStyle(mask, child)
+  assert.ok(style.clipPath?.startsWith('path('))
+  mask.maskType = 'luminance'
+  const luma = siblingMaskStyle(mask, child)
+  assert.ok(luma.maskImage)
+  assert.equal(luma.maskMode, 'luminance')
+}
+
+{
+  const blob = new Uint8Array(12 + 24 + 28)
+  const view = new DataView(blob.buffer)
+  view.setUint32(0, 2, true)
+  view.setUint32(4, 1, true)
+  view.setUint32(8, 0, true)
+  view.setFloat32(16, 0, true)
+  view.setFloat32(20, 0, true)
+  view.setFloat32(28, 10, true)
+  view.setFloat32(32, 0, true)
+  view.setUint32(40, 0, true)
+  view.setUint32(52, 1, true)
+  const imported = nodeChangesToDesign([
+    { guid: { sessionID: 1, localID: 1 }, type: 'FRAME', name: 'Page', size: { x: 320, y: 200 } },
+    { guid: { sessionID: 1, localID: 2 }, type: 'COMPONENT', name: 'Button', size: { x: 80, y: 32 }, parentIndex: { guid: { sessionID: 1, localID: 1 } } },
+    { guid: { sessionID: 1, localID: 3 }, type: 'INSTANCE', name: 'Use', size: { x: 80, y: 32 }, symbolData: { symbolID: { sessionID: 1, localID: 2 } }, parentIndex: { guid: { sessionID: 1, localID: 1 } } },
+    { guid: { sessionID: 1, localID: 4 }, type: 'VECTOR', name: 'Path', size: { x: 10, y: 10 }, vectorData: { vectorNetworkBlob: 0 }, parentIndex: { guid: { sessionID: 1, localID: 1 } } },
+    { guid: { sessionID: 1, localID: 5 }, type: 'RECTANGLE', name: 'Photo', size: { x: 40, y: 40 }, fillPaints: [{ type: 'IMAGE', hash: 'abc123' }], parentIndex: { guid: { sessionID: 1, localID: 1 } } },
+  ], { blobs: [blob] })
+  assert.equal(imported.error, null)
+  assert.equal(imported.doc.components[0]?.name, 'Button')
+  const kids = imported.doc.screens[0].children ?? []
+  assert.equal(kids.find((item) => item.kind === 'instance')?.component, '1:2')
+  assert.equal(kids.find((item) => item.kind === 'vector')?.vector?.vertices.length, 2)
+  assert.equal(kids.find((item) => item.name === 'Photo')?.fills?.[0].type, 'image')
 }

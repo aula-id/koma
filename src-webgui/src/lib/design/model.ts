@@ -10,6 +10,7 @@ import {
   type DesignDrawKind,
   type DesignHandle,
   type DesignInteraction,
+  type DesignOverlayPlace,
   type DesignKind,
   type DesignLayout,
   type DesignMeasure,
@@ -22,6 +23,7 @@ import {
   type DesignSize,
   type DesignSnap,
   type DesignStyle,
+  type DesignTextRun,
   type DesignTextAlign,
   type DesignTextHug,
   type DesignTextVertical,
@@ -340,6 +342,184 @@ export function maskClipCss(mask: DesignNode, parentW: number, parentH: number):
   return `inset(${mask.y}px ${Math.max(0, parentW - mask.x - mask.w)}px ${Math.max(0, parentH - mask.y - mask.h)}px ${mask.x}px)`
 }
 
+export type SiblingMaskStyle = {
+  clipPath?: string
+  maskImage?: string
+  WebkitMaskImage?: string
+  maskSize?: string
+  WebkitMaskSize?: string
+  maskPosition?: string
+  WebkitMaskPosition?: string
+  maskRepeat?: string
+  WebkitMaskRepeat?: string
+  maskMode?: string
+}
+
+function maskFillColor(doc: DesignDoc | undefined, mask: DesignNode): string {
+  const paint = firstVisiblePaint(nodePaints(mask, 'fill'))
+  if (paint?.type === 'solid' && paint.color && paint.color !== 'none') {
+    return doc ? resolveRef(doc, paint.color) || paint.color : paint.color
+  }
+  if (typeof mask.fill === 'string' && mask.fill && mask.fill !== 'none') {
+    return doc ? resolveRef(doc, mask.fill) || mask.fill : mask.fill
+  }
+  return '#ffffff'
+}
+
+/** Clip or luminance-mask a sibling in the child's local box. */
+export function siblingMaskStyle(mask: DesignNode, child: DesignNode, doc?: DesignDoc): SiblingMaskStyle {
+  const dx = mask.x - child.x
+  const dy = mask.y - child.y
+  if (mask.maskType === 'luminance') {
+    const fill = maskFillColor(doc, mask)
+    const image = mask.kind === 'vector' && mask.vector
+      ? `url("data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${mask.w}" height="${mask.h}"><path d="${vectorSvgPath(mask.vector)}" fill="${fill}"/></svg>`)})`
+      : mask.kind === 'ellipse'
+        ? `radial-gradient(ellipse ${mask.w / 2}px ${mask.h / 2}px at center, ${fill} 99%, transparent 100%)`
+        : `linear-gradient(${fill}, ${fill})`
+    return {
+      maskImage: image,
+      WebkitMaskImage: image,
+      maskSize: `${mask.w}px ${mask.h}px`,
+      WebkitMaskSize: `${mask.w}px ${mask.h}px`,
+      maskPosition: `${dx}px ${dy}px`,
+      WebkitMaskPosition: `${dx}px ${dy}px`,
+      maskRepeat: 'no-repeat',
+      WebkitMaskRepeat: 'no-repeat',
+      maskMode: 'luminance',
+    }
+  }
+  if ((mask.maskType === 'vector' || mask.kind === 'vector') && mask.vector) {
+    const shifted: DesignVector = {
+      ...mask.vector,
+      vertices: mask.vector.vertices.map((vertex) => ({ x: vertex.x + dx, y: vertex.y + dy })),
+    }
+    return { clipPath: `path('${vectorSvgPath(shifted)}')` }
+  }
+  if (mask.kind === 'ellipse') {
+    return { clipPath: `ellipse(${mask.w / 2}px ${mask.h / 2}px at ${dx + mask.w / 2}px ${dy + mask.h / 2}px)` }
+  }
+  return {
+    clipPath: `inset(${dy}px ${child.w - dx - mask.w}px ${child.h - dy - mask.h}px ${dx}px)`,
+  }
+}
+
+export function playOverlayPosition(screen: DesignNode | undefined, frame: DesignNode, interaction: DesignInteraction): { x: number; y: number } {
+  const ox = interaction.overlayX ?? 0
+  const oy = interaction.overlayY ?? 0
+  const place: DesignOverlayPlace = interaction.overlayPlace ?? 'manual'
+  const originX = screen?.x ?? 0
+  const originY = screen?.y ?? 0
+  if (!screen || place === 'manual') return { x: originX + ox, y: originY + oy }
+  const left = screen.x
+  const top = screen.y
+  const cx = screen.x + (screen.w - frame.w) / 2
+  const cy = screen.y + (screen.h - frame.h) / 2
+  const right = screen.x + screen.w - frame.w
+  const bottom = screen.y + screen.h - frame.h
+  const at = {
+    center: { x: cx, y: cy },
+    'top-left': { x: left, y: top },
+    top: { x: cx, y: top },
+    'top-right': { x: right, y: top },
+    left: { x: left, y: cy },
+    right: { x: right, y: cy },
+    'bottom-left': { x: left, y: bottom },
+    bottom: { x: cx, y: bottom },
+    'bottom-right': { x: right, y: bottom },
+  }[place] ?? { x: left, y: top }
+  return { x: at.x + ox, y: at.y + oy }
+}
+
+function sameTextRunStyle(a: DesignTextRun, b: DesignTextRun): boolean {
+  return a.weight === b.weight && a.italic === b.italic && a.underline === b.underline && a.strike === b.strike && a.fontSize === b.fontSize && a.color === b.color && a.fontFamily === b.fontFamily
+}
+
+export function applyTextRun(
+  runs: DesignTextRun[] | undefined,
+  start: number,
+  end: number,
+  patch: Omit<Partial<DesignTextRun>, 'start' | 'end'>,
+  length: number,
+): DesignTextRun[] {
+  const a = Math.max(0, Math.min(start, end, length))
+  const b = Math.min(length, Math.max(start, end, 0))
+  if (b <= a) return (runs ?? []).map((run) => ({ ...run }))
+  const pieces: DesignTextRun[] = []
+  const push = (run: DesignTextRun) => {
+    if (run.end <= run.start) return
+    const last = pieces[pieces.length - 1]
+    if (last && last.end === run.start && sameTextRunStyle(last, run)) last.end = run.end
+    else pieces.push(run)
+  }
+  for (const run of runs ?? []) {
+    if (run.end <= a || run.start >= b) {
+      push({ ...run })
+      continue
+    }
+    if (run.start < a) push({ ...run, end: a })
+    if (run.end > b) push({ ...run, start: b })
+  }
+  push({ start: a, end: b, ...patch })
+  pieces.sort((left, right) => left.start - right.start || left.end - right.end)
+  return pieces
+}
+
+export function shiftTextRuns(runs: DesignTextRun[], at: number, delta: number): DesignTextRun[] {
+  return runs.flatMap((run) => {
+    let start = run.start
+    let end = run.end
+    if (delta < 0) {
+      const cutStart = at
+      const cutEnd = at - delta
+      if (end <= cutStart) return [{ ...run }]
+      if (start >= cutEnd) return [{ ...run, start: start + delta, end: end + delta }]
+      start = start >= cutStart ? cutStart : start
+      end = end <= cutEnd ? cutStart : end + delta
+      return end > start ? [{ ...run, start, end }] : []
+    }
+    if (start >= at) start += delta
+    if (end >= at) end += delta
+    return [{ ...run, start, end }]
+  })
+}
+
+export function retargetTextRuns(runs: DesignTextRun[] | undefined, prev: string, next: string): DesignTextRun[] {
+  if (!runs?.length) return []
+  let i = 0
+  while (i < prev.length && i < next.length && prev[i] === next[i]) i += 1
+  let prevEnd = prev.length
+  let nextEnd = next.length
+  while (prevEnd > i && nextEnd > i && prev[prevEnd - 1] === next[nextEnd - 1]) {
+    prevEnd -= 1
+    nextEnd -= 1
+  }
+  const delta = nextEnd - i - (prevEnd - i)
+  return shiftTextRuns(runs, i, delta)
+    .map((run) => ({ ...run, start: Math.max(0, Math.min(run.start, next.length)), end: Math.max(0, Math.min(run.end, next.length)) }))
+    .filter((run) => run.end > run.start)
+}
+
+export function splitTextByRuns(text: string, runs: DesignTextRun[] | undefined): { text: string; run?: DesignTextRun }[] {
+  if (!text) return [{ text: '' }]
+  if (!runs?.length) return [{ text }]
+  const cuts = new Set<number>([0, text.length])
+  for (const run of runs) {
+    cuts.add(Math.max(0, Math.min(text.length, run.start)))
+    cuts.add(Math.max(0, Math.min(text.length, run.end)))
+  }
+  const points = [...cuts].sort((a, b) => a - b)
+  const parts: { text: string; run?: DesignTextRun }[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const start = points[i]
+    const end = points[i + 1]
+    if (end <= start) continue
+    const run = runs.find((item) => item.start <= start && item.end >= end)
+    parts.push({ text: text.slice(start, end), run })
+  }
+  return parts.length ? parts : [{ text }]
+}
+
 export type DesignPlayState = {
   screenId: string
   overlays: { id: string; x: number; y: number }[]
@@ -369,16 +549,20 @@ export function runPlayAction(
     return { ...state, overlays: state.overlays.slice(0, -1) }
   }
   const target = interaction.target && findDesignNode(doc, interaction.target) ? interaction.target : ''
-  if (interaction.action === 'open-overlay' && target) {
-    return { ...state, overlays: [...state.overlays, { id: target, x: interaction.overlayX ?? 0, y: interaction.overlayY ?? 0 }] }
+  const screen = findDesignNode(doc, state.screenId)
+  const frame = target ? findDesignNode(doc, target) : null
+  if (interaction.action === 'open-overlay' && target && frame) {
+    const at = playOverlayPosition(screen, frame, interaction)
+    return { ...state, overlays: [...state.overlays, { id: target, x: at.x, y: at.y }] }
   }
-  if (interaction.action === 'toggle-overlay' && target) {
+  if (interaction.action === 'toggle-overlay' && target && frame) {
     const open = state.overlays.some((item) => item.id === target)
+    const at = playOverlayPosition(screen, frame, interaction)
     return {
       ...state,
       overlays: open
         ? state.overlays.filter((item) => item.id !== target)
-        : [...state.overlays, { id: target, x: interaction.overlayX ?? 0, y: interaction.overlayY ?? 0 }],
+        : [...state.overlays, { id: target, x: at.x, y: at.y }],
     }
   }
   if (interaction.action === 'navigate' && target) {

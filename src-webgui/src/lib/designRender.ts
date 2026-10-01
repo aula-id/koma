@@ -8,6 +8,7 @@ import {
   resolveColor,
   resolveInstanceTree,
   resolvePaintHex,
+  splitTextByRuns,
   textStyle,
   vectorSvgPath,
   type DesignDoc,
@@ -161,21 +162,37 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
   }
   if (node.kind === 'text') {
     const style = textStyle(node)
-    const weight = style.weight === 'bold' ? 700 : style.weight === 'medium' ? 500 : 400
-    ctx.fillStyle = paintOfColor(doc, style.color)
     const family = fontFamilyCss(node)
-    ctx.font = `${weight} ${style.fontSize}px ${family || 'sans-serif'}`
     ctx.textAlign = style.align === 'center' ? 'center' : style.align === 'right' ? 'right' : 'left'
     const x = style.align === 'center' ? node.w / 2 : style.align === 'right' ? node.w - 4 : 4
-    if (node.textVertical === 'top') {
-      ctx.textBaseline = 'top'
-      ctx.fillText(style.text || 'Text', x, 0)
-    } else if (node.textVertical === 'bottom') {
-      ctx.textBaseline = 'bottom'
-      ctx.fillText(style.text || 'Text', x, node.h)
+    ctx.textBaseline = node.textVertical === 'top' ? 'top' : node.textVertical === 'bottom' ? 'bottom' : 'middle'
+    const y = node.textVertical === 'top' ? 0 : node.textVertical === 'bottom' ? node.h : node.h / 2
+    const parts = splitTextByRuns(style.text || 'Text', node.runs)
+    if (parts.length === 1 && !parts[0].run) {
+      const weight = style.weight === 'bold' ? 700 : style.weight === 'medium' ? 500 : 400
+      ctx.fillStyle = paintOfColor(doc, style.color)
+      ctx.font = `${weight} ${style.fontSize}px ${family || 'sans-serif'}`
+      ctx.fillText(parts[0].text, x, y)
     } else {
-      ctx.textBaseline = 'middle'
-      ctx.fillText(style.text || 'Text', x, node.h / 2)
+      let cursor = x
+      if (style.align === 'center' || style.align === 'right') {
+        const width = parts.reduce((sum, part) => {
+          const size = part.run?.fontSize ?? style.fontSize
+          const weight = (part.run?.weight ?? style.weight) === 'bold' ? 700 : (part.run?.weight ?? style.weight) === 'medium' ? 500 : 400
+          ctx.font = `${weight} ${size}px ${part.run?.fontFamily || family || 'sans-serif'}`
+          return sum + ctx.measureText(part.text).width
+        }, 0)
+        cursor = style.align === 'center' ? x - width / 2 : x - width
+        ctx.textAlign = 'left'
+      }
+      for (const part of parts) {
+        const size = part.run?.fontSize ?? style.fontSize
+        const weight = (part.run?.weight ?? style.weight) === 'bold' ? 700 : (part.run?.weight ?? style.weight) === 'medium' ? 500 : 400
+        ctx.fillStyle = paintOfColor(doc, part.run?.color ?? style.color)
+        ctx.font = `${weight} ${size}px ${part.run?.fontFamily || family || 'sans-serif'}`
+        ctx.fillText(part.text, cursor, y)
+        cursor += ctx.measureText(part.text).width
+      }
     }
   }
   if (node.kind === 'frame' && node.clip !== false) {

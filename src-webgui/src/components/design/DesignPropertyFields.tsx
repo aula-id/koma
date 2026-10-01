@@ -33,6 +33,74 @@ import {
 import { DESIGN_PATCH_DEBOUNCE_MS, SELECTION, SHAPE_FILL, type PenDraft } from './tabShared'
 import { DesignPaintPopup, paintRowLabel, paintSwatch } from './DesignPaintPopup'
 
+function TokenBindControl({
+  tokens,
+  bound,
+  onBind,
+  compact,
+}: {
+  tokens: { name: string }[]
+  bound?: string
+  onBind: (token: string | null) => void
+  compact?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+  return (
+    <div ref={rootRef} className="relative flex-none">
+      <button
+        type="button"
+        title={bound ? `Bound to ${bound}` : 'Bind token'}
+        aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
+        aria-pressed={!!bound}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className={compact
+          ? `h-4 w-4 rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`
+          : `flex h-8 w-8 items-center justify-center rounded-lg ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+      >
+        {compact ? null : <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />}
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-50 mt-1 max-h-40 min-w-32 overflow-y-auto rounded-lg border border-koma-border bg-koma-panel py-1 shadow-lg">
+          <button
+            type="button"
+            className={`flex h-7 w-full items-center px-2 text-left text-[12px] ${bound ? 'text-koma-dim hover:bg-koma-hover' : 'bg-koma-hover text-koma-fg'}`}
+            onClick={() => {
+              onBind(null)
+              setOpen(false)
+            }}
+          >
+            None
+          </button>
+          {tokens.map((token) => (
+            <button
+              key={token.name}
+              type="button"
+              title={token.name}
+              className={`flex h-7 w-full items-center px-2 text-left text-[12px] ${bound === token.name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-fg hover:bg-koma-hover'}`}
+              onClick={() => {
+                onBind(token.name)
+                setOpen(false)
+              }}
+            >
+              <span className="truncate">{token.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function instanceDescendants(node: DesignNode, into: DesignNode[]) {
   for (const child of node.children ?? []) {
     into.push(child)
@@ -237,19 +305,7 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, boun
         className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
       />
       {suffix ? <span className="flex-none text-[11px] text-koma-dim">{suffix}</span> : null}
-      {tokens?.length && onBind ? (
-        <button
-          type="button"
-          title={bound ? `Bound to ${bound}` : 'Bind token'}
-          aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
-          aria-pressed={!!bound}
-          onClick={() => {
-            if (bound) onBind(null)
-            else onBind(tokens[0].name)
-          }}
-          className={`h-4 w-4 flex-none rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`}
-        />
-      ) : null}
+      {tokens?.length && onBind ? <TokenBindControl tokens={tokens} bound={bound} onBind={onBind} compact /> : null}
     </label>
   )
 }
@@ -675,18 +731,7 @@ export function ColorRow({
           />
         </div>
       </div>
-      {tokens?.length && onBind ? (
-        <button
-          type="button"
-          title={bound ? `Bound to ${bound}` : 'Bind token'}
-          aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
-          aria-pressed={!!bound}
-          onClick={() => onBind(bound ? null : tokens[0].name)}
-          className={`flex h-8 w-8 flex-none items-center justify-center rounded-lg ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
-        >
-          <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />
-        </button>
-      ) : null}
+      {tokens?.length && onBind ? <TokenBindControl tokens={tokens} bound={bound} onBind={onBind} /> : null}
       {onRemove ? (
         <button type="button" title="Remove" aria-label="Remove color" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={onRemove}>
           <Minus size={14} />
