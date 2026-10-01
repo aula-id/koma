@@ -50,6 +50,7 @@ const WEIGHTS = ['regular', 'medium', 'bold'] as const
 const TEXT_ALIGNS = ['left', 'center', 'right', 'justify'] as const
 const STROKE_MARKERS = ['none', 'arrow', 'dot'] as const
 const GRID_KINDS = ['square', 'column', 'row'] as const
+const GRID_ALIGNS = ['stretch', 'start', 'center', 'end'] as const
 const TEXT_VERTICAL = ['top', 'center', 'bottom'] as const
 const TEXT_HUGS = ['height', 'width'] as const
 const FONT_FAMILY = /^[\w][\w\s,-]{0,80}$/
@@ -427,6 +428,8 @@ function parseNode(value: unknown): DesignNode | null {
         if (count != null && count > 0) next.count = Math.round(count)
         if (offset != null) next.offset = offset
         if (typeof grid.color === 'string') next.color = grid.color
+        const align = oneOf(grid.align, GRID_ALIGNS)
+        if (align && align !== 'stretch') next.align = align
         grids.push(next)
       }
       if (grids.length) node.layoutGrids = grids
@@ -913,8 +916,6 @@ export function serializeDesign(doc: DesignDoc): string {
   if (doc.images && Object.keys(doc.images).length) row.images = { ...doc.images }
   if (doc.guides?.length) row.guides = doc.guides.map((guide) => ({ ...guide }))
   if (doc.libraries?.length) row.libraries = doc.libraries.slice()
-  if (doc.activePage) row.activePage = doc.activePage
-  if (doc.pageViews && Object.keys(doc.pageViews).length) row.pageViews = { ...doc.pageViews }
   if (doc.tokens.length) {
     row.tokens = doc.tokens.map((token) => ({ name: token.name, kind: token.kind, values: { ...token.values } }))
   }

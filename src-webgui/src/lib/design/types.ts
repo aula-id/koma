@@ -42,7 +42,7 @@ export type DesignInteraction = {
   overlayX?: number
   overlayY?: number
 }
-export type DesignLayoutGrid = { kind: 'square' | 'column' | 'row'; size?: number; color?: string; gutter?: number; count?: number; offset?: number }
+export type DesignLayoutGrid = { kind: 'square' | 'column' | 'row'; align?: 'stretch' | 'start' | 'center' | 'end'; size?: number; color?: string; gutter?: number; count?: number; offset?: number }
 export type DesignPageView = { panX: number; panY: number; zoom: number }
 export type DesignBindingMap = Record<string, string>
 

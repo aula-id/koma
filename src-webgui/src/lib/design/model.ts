@@ -316,11 +316,9 @@ export function applyNodeBindings(doc: DesignDoc, node: DesignNode): DesignNode 
   return next
 }
 
+/** Every top-level frame stays on the one canvas. `activePage` is ignored. */
 export function visibleDesignScreens(doc: DesignDoc): DesignNode[] {
-  const id = doc.activePage
-  if (!id) return doc.screens
-  const found = doc.screens.filter((screen) => screen.id === id)
-  return found.length ? found : doc.screens
+  return doc.screens
 }
 
 export function collectDesignFrames(node: DesignNode, into: DesignNode[] = []): DesignNode[] {

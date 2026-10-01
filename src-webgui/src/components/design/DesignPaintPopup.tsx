@@ -20,7 +20,8 @@ import {
   type DesignImageScale,
   type DesignPaint,
 } from '../../lib/design'
-import { SHAPE_FILL } from './tabShared'
+import { TokenMenu } from './DesignTokenMenu'
+import type { DesignToken } from '../../lib/design'
 
 const KINDS: { value: DesignGradientKind; label: string }[] = [
   { value: 'linear', label: 'Linear' },
@@ -43,7 +44,7 @@ function rampCss(stops: { color: string; at: number }[]): string {
   return `linear-gradient(90deg, ${sorted.map((stop) => `${stop.color} ${Math.round(stop.at * 1000) / 10}%`).join(', ')})`
 }
 
-function parseHex(raw: string, tokens?: { name: string }[]): string | null {
+function parseHex(raw: string, tokens?: DesignToken[]): string | null {
   const trimmed = raw.trim()
   if (tokens?.some((token) => token.name === trimmed)) return trimmed
   const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
@@ -67,7 +68,7 @@ export function DesignPaintPopup({
   doc: DesignDoc
   paint: DesignPaint
   fallback: string
-  tokens?: { name: string }[]
+  tokens?: DesignToken[]
   allowGradient?: boolean
   allowImage?: boolean
   anchor: HTMLElement | null
@@ -313,25 +314,7 @@ export function DesignPaintPopup({
               </label>
             </div>
           ) : null}
-          {tokens?.length ? (
-            <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto">
-              {tokens.map((token) => (
-                <button
-                  key={token.name}
-                  type="button"
-                  title={token.name}
-                  onClick={() => applyHex(token.name)}
-                  className="flex h-7 items-center gap-2 rounded-lg px-1.5 text-left text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-                >
-                  <span
-                    className="h-3.5 w-3.5 flex-none rounded-full border border-koma-border"
-                    style={{ background: nodeFillCss(doc, { id: token.name, kind: 'rect', x: 0, y: 0, w: 1, h: 1, fill: token.name }, SHAPE_FILL) }}
-                  />
-                  <span className="truncate">{token.name}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <TokenMenu tokens={tokens ?? []} selected={paint.color} onPick={(name) => { if (name) applyHex(name) }} />
         </div>
       ) : null}
       <input

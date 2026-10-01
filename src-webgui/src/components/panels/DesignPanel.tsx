@@ -21,6 +21,7 @@ import {
   importFigToDesign,
   isDesignPath,
   serializeDesign,
+  writeDesignAsset,
   resolveRef,
   setDesignMode,
   setDesignTokenValue,
@@ -463,6 +464,7 @@ export function DesignPanel() {
                     void file.arrayBuffer().then(async (buffer) => {
                       const imported = await importFigToDesign(buffer)
                       if (imported.error) return
+                      for (const image of imported.images ?? []) writeDesignAsset(req, activeRoot, image.path, image.bytes)
                       const name = designFileName(file.name.replace(/\.fig$/i, '')) ?? `import-${Date.now()}.kdsgn`
                       const path = name.startsWith('.koma/') ? name : `.koma/${name}`
                       req({

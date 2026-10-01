@@ -4,7 +4,9 @@ import { decodeVectorNetworkBlob } from './fig/vectorNetwork'
 import { emptyDesign } from './model'
 import type { DesignDoc, DesignLayout, DesignLayoutGrid, DesignNode, DesignPaint, DesignTextRun, DesignToken, DesignVector } from './types'
 
-export type DesignImportResult = { doc: DesignDoc; error: string | null }
+export type DesignImportImage = { hash: string; mime: string; bytes: Uint8Array; path: string }
+
+export type DesignImportResult = { doc: DesignDoc; error: string | null; images?: DesignImportImage[] }
 
 function mint(prefix: string, n: { i: number }): string {
   n.i += 1
@@ -338,8 +340,12 @@ function figLayoutGrids(value: unknown): DesignLayoutGrid[] | undefined {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
     const pattern = typeof row.pattern === 'string' ? row.pattern.toUpperCase() : typeof row.kind === 'string' ? row.kind.toUpperCase() : ''
-    const kind = pattern.includes('COL') ? 'column' : pattern.includes('ROW') ? 'row' : 'square'
+    const axis = typeof row.axis === 'string' ? row.axis.toUpperCase() : ''
+    const kind = pattern.includes('COL') || axis === 'X' ? 'column' : pattern.includes('ROW') || axis === 'Y' ? 'row' : pattern === 'GRID' || !pattern ? 'square' : 'square'
+    const alignName = typeof row.type === 'string' ? row.type.toUpperCase() : ''
+    const align = alignName === 'MIN' ? 'start' : alignName === 'CENTER' ? 'center' : alignName === 'MAX' ? 'end' : alignName === 'STRETCH' ? 'stretch' : undefined
     const next: DesignLayoutGrid = { kind }
+    if (align && align !== 'stretch' && kind !== 'square') next.align = align
     const size = num(row.sectionSize ?? row.size)
     const gutter = num(row.gutterSize ?? row.gutter)
     const count = num(row.count)
@@ -468,19 +474,22 @@ export function nodeChangesToDesign(
       return { ...component, variants: [{ props: {}, node: { ...tree, kind: 'frame', x: 0, y: 0 } }] }
     })
   }
+  const images: DesignImportImage[] = []
   if (extras?.images?.length) {
     let next = doc
     for (const [name, data] of extras.images) {
       const hash = name.replace(/^images\//, '').replace(/\.[^.]+$/, '')
       if (!hash || !data?.length) continue
       const mime = mimeForName(name) ?? 'image/png'
+      const path = designAssetPath(hash, mime)
       cacheDesignImage(hash, data, mime)
-      next = putDesignImage(next, hash, mime, designAssetPath(hash, mime))
+      next = putDesignImage(next, hash, mime, path)
+      images.push({ hash, mime, bytes: data, path })
     }
     doc.images = next.images
   }
-  if (!doc.screens.length) return { doc, error: 'No pages or nodes to import' }
-  return { doc, error: null }
+  if (!doc.screens.length) return { doc, error: 'No pages or nodes to import', images }
+  return { doc, error: null, images }
 }
 
 export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImportResult> {

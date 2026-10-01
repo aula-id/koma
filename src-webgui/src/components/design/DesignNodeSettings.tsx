@@ -31,6 +31,7 @@ import {
   X,
 } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
+import { DesignModeContext } from './DesignTokenMenu'
 import {
   designChatText,
   designChatTitle,
@@ -253,6 +254,7 @@ export function NodeSettings({
   const cornerField = (pick: (item: DesignNode) => number) => numberOf(pick)
   const resolvedCorner = (value: number | string | undefined) => (typeof value === 'number' ? value : Number(resolveRef(doc, value ?? '')) || 0)
   return (
+    <DesignModeContext.Provider value={doc.mode}>
     <div className="flex flex-col gap-1 px-2 pb-2 text-[12px]">
       {onMakeComponent || onAddToChat ? (
         <div className="flex items-center gap-1">
@@ -513,12 +515,12 @@ export function NodeSettings({
       {allFrames || hasParent ? (
       <Section title="Layout">
       {allFrames ? (
-        <div className="flex gap-0.5">
-          <AlignButton label="Free" pressed={!layoutField.mixed && layoutField.value === 'free'} onClick={() => setField({}, ['layout'])}><Square size={14} /></AlignButton>
-          <AlignButton label="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
-          <AlignButton label="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
-          <AlignButton label="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
-          <AlignButton label="Reverse" pressed={nodes.every((item) => item.reverse)} onClick={() => {
+        <div className="flex flex-wrap gap-0.5">
+          <AlignButton label="Free" caption="Free" pressed={!layoutField.mixed && layoutField.value === 'free'} onClick={() => setField({}, ['layout'])}><Square size={14} /></AlignButton>
+          <AlignButton label="Row" caption="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
+          <AlignButton label="Column" caption="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
+          <AlignButton label="Grid" caption="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
+          <AlignButton label="Reverse" caption="Reverse" pressed={nodes.every((item) => item.reverse)} onClick={() => {
             const allOn = nodes.every((item) => item.reverse)
             onPatch((current) => {
               const next = { ...current }
@@ -581,11 +583,11 @@ export function NodeSettings({
             <GeomField label="GY" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapY} onBind={(token) => bindField('gapY', token)} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
             <GeomField label="Pad" value={padField.value} mixed={padField.mixed} tokens={spaceTokens} bound={node.bindings?.pad} onBind={(token) => bindField('pad', token)} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
           </div>
-          <div className="grid grid-cols-4 gap-1">
-            <GeomField label="T" ariaLabel="Padding top" value={padTopField.value} mixed={padTopField.mixed} onChange={(value) => setSide('padTop', value)} />
-            <GeomField label="R" ariaLabel="Padding right" value={padRightField.value} mixed={padRightField.mixed} onChange={(value) => setSide('padRight', value)} />
-            <GeomField label="B" ariaLabel="Padding bottom" value={padBottomField.value} mixed={padBottomField.mixed} onChange={(value) => setSide('padBottom', value)} />
-            <GeomField label="L" ariaLabel="Padding left" value={padLeftField.value} mixed={padLeftField.mixed} onChange={(value) => setSide('padLeft', value)} />
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Top" ariaLabel="Padding top" value={padTopField.value} mixed={padTopField.mixed} onChange={(value) => setSide('padTop', value)} />
+            <GeomField label="Right" ariaLabel="Padding right" value={padRightField.value} mixed={padRightField.mixed} onChange={(value) => setSide('padRight', value)} />
+            <GeomField label="Bottom" ariaLabel="Padding bottom" value={padBottomField.value} mixed={padBottomField.mixed} onChange={(value) => setSide('padBottom', value)} />
+            <GeomField label="Left" ariaLabel="Padding left" value={padLeftField.value} mixed={padLeftField.mixed} onChange={(value) => setSide('padLeft', value)} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex gap-0.5">
@@ -730,7 +732,7 @@ export function NodeSettings({
           {(node.layoutGrids ?? []).map((grid, index) => {
             const patchGrid = (next: Partial<DesignLayoutGrid>) => setField({ layoutGrids: (node.layoutGrids ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) })
             return (
-              <div key={`${grid.kind}-${index}`} className="flex flex-col gap-1 rounded-lg bg-koma-bg p-1">
+              <div key={`${grid.kind}-${index}`} className="flex flex-col gap-1 rounded border border-koma-border bg-koma-bg p-1">
                 <div className="flex items-center gap-1">
                   <KomaSelect
                     aria-label="Grid kind"
@@ -761,10 +763,27 @@ export function NodeSettings({
                 <div className="grid grid-cols-2 gap-1">
                   <GeomField label="Size" ariaLabel="Grid size" value={grid.size ?? 8} onChange={(size) => patchGrid({ size })} />
                   <GeomField label="Count" ariaLabel="Grid count" value={grid.count ?? 0} onChange={(count) => patchGrid({ count: count > 0 ? Math.round(count) : undefined })} />
-                  <GeomField label="Gut" ariaLabel="Grid gutter" value={grid.gutter ?? 0} onChange={(gutter) => patchGrid({ gutter: gutter > 0 ? gutter : undefined })} />
-                  <GeomField label="Off" ariaLabel="Grid offset" value={grid.offset ?? 0} onChange={(offset) => patchGrid({ offset })} />
+                  <GeomField label="Gutter" ariaLabel="Grid gutter" value={grid.gutter ?? 0} onChange={(gutter) => patchGrid({ gutter: gutter > 0 ? gutter : undefined })} />
+                  <GeomField label="Offset" ariaLabel="Grid offset" value={grid.offset ?? 0} onChange={(offset) => patchGrid({ offset })} />
                 </div>
-                <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-panel px-2">
+                {grid.kind !== 'square' ? (
+                  <KomaSelect
+                    aria-label="Grid align"
+                    value={grid.align ?? 'stretch'}
+                    onChange={(event) => {
+                      const align = event.target.value
+                      if (align !== 'stretch' && align !== 'start' && align !== 'center' && align !== 'end') return
+                      patchGrid({ align: align === 'stretch' ? undefined : align })
+                    }}
+                    className="h-7 w-full px-1.5 text-[12px]"
+                  >
+                    <option value="stretch">Stretch</option>
+                    <option value="start">Start</option>
+                    <option value="center">Center</option>
+                    <option value="end">End</option>
+                  </KomaSelect>
+                ) : null}
+                <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-panel px-1.5">
                   <span className="text-[11px] text-koma-dim">Color</span>
                   <input
                     aria-label="Grid color"
@@ -1260,13 +1279,13 @@ export function NodeSettings({
                   if (nextKey) svgAttrs[nextKey] = value
                   setField(Object.keys(svgAttrs).length ? { svgAttrs } : {}, Object.keys(svgAttrs).length ? [] : ['svgAttrs'])
                 }}
-                className="h-8 w-20 flex-none rounded-lg bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
+                className="h-7 w-20 flex-none rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
               />
               <input
                 aria-label="SVG attribute value"
                 value={value}
                 onChange={(event) => setField({ svgAttrs: { ...(node.svgAttrs ?? {}), [key]: event.target.value } })}
-                className="h-8 min-w-0 flex-1 rounded-lg bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none"
+                className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
               />
               <button type="button" title="Remove" aria-label="Remove SVG attribute" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
                 const svgAttrs = { ...(node.svgAttrs ?? {}) }
@@ -1314,7 +1333,7 @@ export function NodeSettings({
               </div>
               <GeomField label="Ms" ariaLabel="Delay" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
               {item.action === 'open-url' ? (
-                <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-8 rounded-lg bg-koma-bg px-2 text-[12px] text-koma-fg outline-none" />
+                <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40" />
               ) : null}
               {item.action === 'navigate' || item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
                 <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-8 px-1.5 text-[12px]">
@@ -1388,5 +1407,6 @@ export function NodeSettings({
         />
       ) : null}
     </div>
+    </DesignModeContext.Provider>
   )
 }

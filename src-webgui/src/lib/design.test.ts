@@ -44,6 +44,7 @@ import {
   hitGroupChild,
   dropDesignToken,
   layoutDesign,
+  layoutGridBands,
   makeInstance,
   measureTextBox,
   mergeDesignOverride,
@@ -1470,9 +1471,16 @@ function sample(): DesignDoc {
 {
   const a = createNode('frame', 'a', 0, 0)
   const b = createNode('frame', 'b', 400, 0)
-  const doc = { ...emptyDesign(), screens: [a, b], activePage: 'b' }
-  assert.equal(visibleDesignScreens(doc).length, 1)
-  assert.equal(visibleDesignScreens(doc)[0].id, 'b')
+  const doc = { ...emptyDesign(), screens: [a, b], activePage: 'b', pageViews: { b: { panX: 1, panY: 2, zoom: 1 } } }
+  assert.equal(visibleDesignScreens(doc).length, 2)
+  assert.equal(visibleDesignScreens(doc)[0].id, 'a')
+  assert.equal(visibleDesignScreens(doc)[1].id, 'b')
+  const saved = JSON.parse(serializeDesign(doc)) as Record<string, unknown>
+  assert.equal(saved.activePage, undefined)
+  assert.equal(saved.pageViews, undefined)
+  const reopened = parseDesign(JSON.stringify({ ...saved, activePage: 'b' })).doc
+  assert.equal(reopened.activePage, 'b')
+  assert.equal(visibleDesignScreens(reopened).length, 2)
 }
 
 {
@@ -1484,6 +1492,48 @@ function sample(): DesignDoc {
   assert.equal(imported.doc.screens[0].name, 'Page')
   assert.equal(imported.doc.screens[0].fill, '#ff0000')
   assert.equal(imported.doc.screens[0].children?.[0].text, 'Hello')
+}
+
+{
+  const png = new Uint8Array([137, 80, 78, 71])
+  const imported = nodeChangesToDesign(
+    [{ guid: { sessionID: 1, localID: 1 }, type: 'FRAME', name: 'Board', size: { x: 100, y: 80 } }],
+    { images: [['images/abc123.png', png]] },
+  )
+  assert.equal(imported.error, null)
+  assert.equal(imported.doc.images?.abc123.path, '.koma/assets/abc123.png')
+  assert.equal(imported.images?.[0]?.hash, 'abc123')
+  assert.equal(imported.images?.[0]?.mime, 'image/png')
+  assert.equal(imported.images?.[0]?.path, '.koma/assets/abc123.png')
+  assert.equal(imported.images?.[0]?.bytes, png)
+}
+
+{
+  const stretch = layoutGridBands({ kind: 'column', count: 3, gutter: 10, offset: 0 }, 300, 100)
+  assert.equal(stretch.length, 3)
+  assert.equal(stretch[0].x, 0)
+  assert.ok(Math.abs(stretch[0].w - (300 - 20) / 3) < 0.01)
+  const start = layoutGridBands({ kind: 'column', align: 'start', count: 3, size: 40, gutter: 10, offset: 0 }, 300, 100)
+  assert.equal(start[0].x, 0)
+  assert.equal(start[0].w, 40)
+  assert.equal(start[2].x, 100)
+  const center = layoutGridBands({ kind: 'column', align: 'center', count: 3, size: 40, gutter: 10, offset: 0 }, 300, 100)
+  assert.equal(center[0].x, (300 - 140) / 2)
+  const end = layoutGridBands({ kind: 'column', align: 'end', count: 3, size: 40, gutter: 10, offset: 0 }, 300, 100)
+  assert.equal(end[0].x, 300 - 140)
+  const fitted = layoutGridBands({ kind: 'column', align: 'start', count: 0, size: 40, gutter: 10, offset: 0 }, 300, 100)
+  assert.equal(fitted.length, 6)
+  const imported = nodeChangesToDesign([{
+    guid: { sessionID: 1, localID: 1 },
+    type: 'FRAME',
+    name: 'Board',
+    size: { x: 300, y: 100 },
+    layoutGrids: [{ pattern: 'STRIPES', axis: 'X', type: 'MIN', sectionSize: 40, count: 3, gutterSize: 10, offset: 0 }],
+  }])
+  assert.equal(imported.doc.screens[0].layoutGrids?.[0].align, 'start')
+  assert.equal(imported.doc.screens[0].layoutGrids?.[0].kind, 'column')
+  const saved = parseDesign(serializeDesign({ ...emptyDesign(), screens: [{ ...createNode('frame', 'f', 0, 0), layoutGrids: [{ kind: 'column', align: 'center', count: 3, size: 40 }] }] })).doc
+  assert.equal(saved.screens[0].layoutGrids?.[0].align, 'center')
 }
 
 {

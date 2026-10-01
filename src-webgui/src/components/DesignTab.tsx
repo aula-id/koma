@@ -177,7 +177,6 @@ import {
 } from './design/tabShared'
 import { canvasBackdrop, DesignRulers, designMenuItems, ToolButton } from './design/DesignRulers'
 import { DesignNodeView } from './design/DesignNodeView'
-import { DesignPages } from './design/DesignPages'
 import { FrameToolFlyout, ShapeToolFlyout } from './design/DesignTools'
 import { NodeSettings } from './design/DesignNodeSettings'
 import { PenOverlay } from './design/DesignPropertyFields'
@@ -2546,45 +2545,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             </button>
           </div>
         </div>
-        <DesignPages
-          doc={doc}
-          activeId={doc.activePage ?? selection[0] ?? doc.screens[0]?.id}
-          onSelect={(id) => {
-            const screen = doc.screens.find((item) => item.id === id)
-            if (!screen) return
-            const currentId = doc.activePage ?? doc.screens[0]?.id
-            const pageViews = { ...(doc.pageViews ?? {}) }
-            if (currentId) pageViews[currentId] = view
-            const saved = pageViews[id]
-            commit({ ...doc, activePage: id, pageViews })
-            setSelection([id])
-            if (saved) applyView(saved)
-            else {
-              const box = { x: screen.x, y: screen.y, w: screen.w, h: screen.h }
-              const rect = canvasRef.current?.getBoundingClientRect()
-              if (rect) {
-                const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min((rect.width - 80) / Math.max(box.w, 1), (rect.height - 80) / Math.max(box.h, 1))))
-                applyView({ zoom, panX: rect.width / 2 - (box.x + box.w / 2) * zoom, panY: rect.height / 2 - (box.y + box.h / 2) * zoom })
-              }
-            }
-          }}
-          onAdd={() => {
-            const node = createNode('frame', mintId('f'), 40 + doc.screens.length * 40, 40)
-            commit({ ...insertDesignNode(doc, null, node), activePage: node.id })
-            setSelection([node.id])
-          }}
-          onRename={(id, name) => commit(updateDesignNode(doc, id, (node) => ({ ...node, name: name || node.name })))}
-          onDelete={(id) => {
-            if (doc.screens.length <= 1) return
-            const next = deleteDesignNode(doc, id)
-            const activePage = next.activePage === id ? next.screens[0]?.id : next.activePage
-            commit({ ...next, activePage })
-          }}
-        />
       </div>
       {propsOpen ? (
         <aside className="flex w-[296px] flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel">
-          <div className="flex h-8 flex-none items-center gap-1 px-3 text-[12px] text-koma-fg">
+          <div className="flex h-[22px] flex-none items-center gap-1 bg-koma-head px-2 text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75">
             <span className="min-w-0 flex-1 truncate">{multi ? `${selectedNodes.length} selected` : selected ? designLayerName(selected) : 'Styles'}</span>
             {selection.length || focusId ? (
               <button

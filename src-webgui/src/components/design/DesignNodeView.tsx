@@ -10,6 +10,7 @@ import {
   nodePaints,
   paintAlias,
   siblingMaskStyle,
+  layoutGridBands,
   splitTextByRuns,
   nodeStrokeCss,
   resolveInstanceTree,
@@ -273,17 +274,9 @@ export function DesignNodeView({
                 for (let y = grid.offset ?? 0; y < boxH; y += size) lines.push(<line key={`h${index}-${y}`} x1={0} y1={y} x2={boxW} y2={y} stroke={color} strokeWidth={1} />)
                 return lines
               }
-              const count = grid.count ?? 3
-              const gutter = grid.gutter ?? 16
-              const offset = grid.offset ?? 0
-              const span = grid.kind === 'column' ? boxW : boxH
-              const cell = Math.max(1, (span - offset * 2 - gutter * Math.max(0, count - 1)) / count)
-              return Array.from({ length: count }, (_, at) => {
-                const start = offset + at * (cell + gutter)
-                return grid.kind === 'column'
-                  ? <rect key={`c${index}-${at}`} x={start} y={0} width={cell} height={boxH} fill={color} />
-                  : <rect key={`r${index}-${at}`} x={0} y={start} width={boxW} height={cell} fill={color} />
-              })
+              return layoutGridBands(grid, boxW, boxH).map((band, at) => (
+                <rect key={`${grid.kind}${index}-${at}`} x={band.x} y={band.y} width={band.w} height={band.h} fill={color} />
+              ))
             })}
           </svg>
         ) : null}
