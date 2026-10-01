@@ -620,7 +620,7 @@ function zoneHighlightClass(zone: DropZone): string {
   }
 }
 
-/** Paint-only drop affordance — never receives pointer events. */
+/** Split-drop paint. The parent shield blocks the editor for the drag only. */
 function EditorDropHighlight({
   groupId,
   hover,
@@ -631,7 +631,7 @@ function EditorDropHighlight({
   if (hover?.groupId !== groupId) return null
   return (
     <div
-      className={`pointer-events-none absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
+      className={`absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
     />
   )
 }
@@ -654,6 +654,7 @@ function TabbedMain() {
   const [dropHover, setDropHover] = useState<DropHover | null>(null)
   const dropHoverRef = useRef<DropHover | null>(null)
   const sessionRef = useRef(false)
+  const [dragArmed, setDragArmed] = useState(false)
   const moveTab = useKoma((s) => s.moveTabToGroup)
   const openCodingFile = useKoma((s) => s.openCodingFile)
   // splitTab already selected above for the keyboard shortcut.
@@ -704,6 +705,7 @@ function TabbedMain() {
     sessionRef.current = false
     dropHoverRef.current = null
     setDropHover(null)
+    setDragArmed(false)
   }
 
   const hitTestPane = (clientX: number, clientY: number): DropHover | null => {
@@ -729,13 +731,11 @@ function TabbedMain() {
 
   useEffect(() => {
     const arm = (e: DragEvent) => {
-      // Tab moves and coding-tree file opens arm document-level drop handling
-      // so Monaco never sees the bare text/plain path fallback — and so we never
-      // need a full-pane hit layer that can stick and steal focus.
       if (!isEditorBodyDrag(e.dataTransfer)) return
       sessionRef.current = true
       dropHoverRef.current = null
       setDropHover(null)
+      setDragArmed(true)
     }
 
     const stop = () => {
@@ -753,8 +753,9 @@ function TabbedMain() {
         }
         return
       }
-      // Accept the drop so the OS cursor shows move/copy over the pane.
+      // Capture before Monaco/xterm/Lexical so text/plain never lands in the buffer.
       e.preventDefault()
+      e.stopPropagation()
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME)
           ? 'move'
@@ -825,15 +826,15 @@ function TabbedMain() {
 
     window.addEventListener('dragstart', arm)
     window.addEventListener('dragend', stop)
-    window.addEventListener('dragover', onDragOver)
-    window.addEventListener('drop', onDrop)
+    window.addEventListener('dragover', onDragOver, true)
+    window.addEventListener('drop', onDrop, true)
     window.addEventListener('blur', stop)
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('dragstart', arm)
       window.removeEventListener('dragend', stop)
-      window.removeEventListener('dragover', onDragOver)
-      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragover', onDragOver, true)
+      window.removeEventListener('drop', onDrop, true)
       window.removeEventListener('blur', stop)
       window.removeEventListener('keydown', onKey)
     }
@@ -955,14 +956,12 @@ function TabbedMain() {
           )
         })}
 
-        {/* Measure + paint only. Never pointer-events — document drag listeners
-            hit-test these boxes so a stuck session cannot block Monaco typing. */}
         {layout.cells.map((cell) => (
           <div
             key={`drop:${cell.id}`}
             ref={(el) => setPaneEl(cell.id, el)}
             style={cell.content}
-            className="pointer-events-none relative z-40 min-h-0 min-w-0"
+            className={`relative z-40 min-h-0 min-w-0 ${dragArmed ? 'pointer-events-auto' : 'pointer-events-none'}`}
           >
             <EditorDropHighlight groupId={cell.id} hover={dropHover} />
           </div>
