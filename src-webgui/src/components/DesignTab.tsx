@@ -2567,6 +2567,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               doc={doc}
               nodes={selectedNodes}
               hasParent={everyParent}
+              parentLayout={parentNode?.layout ?? null}
               sizeModes={sizeModes}
               textRange={textRange && selectedId === textRange.id ? textRange : null}
               componentName={!multi && selectedVariant ? focusedComponent?.name ?? null : null}

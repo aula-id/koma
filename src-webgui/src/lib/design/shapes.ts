@@ -20,6 +20,96 @@ export function createPolygonNode(id: string, x: number, y: number, size = 100, 
   return { ...node, name: 'Polygon', pointCount: sides }
 }
 
+const SHAPE_KINDS = ['rect', 'ellipse', 'line', 'polygon', 'star'] as const
+export type DesignReshapeKind = (typeof SHAPE_KINDS)[number]
+
+export function shapeKindOf(node: DesignNode): DesignReshapeKind | null {
+  if (node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'line') return node.kind
+  if (node.kind === 'vector' && node.innerRadius != null) return 'star'
+  if (node.kind === 'vector' && node.pointCount != null) return 'polygon'
+  return null
+}
+
+/** Keep box and paints; switch rect / ellipse / line / polygon / star. */
+export function reshapeDesignNode(node: DesignNode, kind: DesignReshapeKind): DesignNode {
+  if (shapeKindOf(node) === kind) return node
+  const size = Math.max(8, Math.min(node.w, node.h) || 100)
+  const shared: Partial<DesignNode> = {
+    id: node.id,
+    x: node.x,
+    y: node.y,
+    w: kind === 'line' ? Math.max(node.w, 8) : node.w,
+    h: kind === 'line' ? Math.max(node.strokeWidth ?? 2, 1) : node.h,
+    fill: node.fill,
+    fills: node.fills,
+    stroke: node.stroke,
+    strokes: node.strokes,
+    strokeWidth: node.strokeWidth,
+    opacity: node.opacity,
+    rotation: node.rotation,
+    visible: node.visible,
+    locked: node.locked,
+    constraintH: node.constraintH,
+    constraintV: node.constraintV,
+    name: node.name,
+  }
+  if (kind === 'polygon') {
+    const made = createPolygonNode(node.id, node.x, node.y, size, node.pointCount && node.pointCount >= 3 ? node.pointCount : 6)
+    return { ...made, ...shared, kind: 'vector', name: node.name || 'Polygon' }
+  }
+  if (kind === 'star') {
+    const made = createStarNode(node.id, node.x, node.y, size, node.pointCount && node.pointCount >= 3 ? node.pointCount : 5, node.innerRadius ?? 0.38)
+    return { ...made, ...shared, kind: 'vector', name: node.name || 'Star' }
+  }
+  const next: DesignNode = {
+    ...node,
+    kind,
+    name: node.name || (kind === 'ellipse' ? 'Ellipse' : kind === 'line' ? 'Line' : 'Rectangle'),
+    w: shared.w ?? node.w,
+    h: shared.h ?? node.h,
+  }
+  delete next.vector
+  delete next.pointCount
+  delete next.innerRadius
+  if (kind === 'line') {
+    next.stroke = next.stroke && next.stroke !== 'none' ? next.stroke : '#1c1c1c'
+    next.strokeWidth = next.strokeWidth ?? 2
+  }
+  return next
+}
+
+/** Rebuild a polygon or star after changing sides / inner radius. */
+export function retuneDesignShape(node: DesignNode, patch: { pointCount?: number; innerRadius?: number }): DesignNode {
+  const kind = shapeKindOf(node)
+  if (kind !== 'polygon' && kind !== 'star') return node
+  const count = Math.max(3, Math.round(patch.pointCount ?? node.pointCount ?? (kind === 'star' ? 5 : 6)))
+  const inner = Math.max(0.05, Math.min(0.95, patch.innerRadius ?? node.innerRadius ?? 0.38))
+  const size = Math.max(8, Math.min(node.w, node.h) || 100)
+  const made = kind === 'star'
+    ? createStarNode(node.id, node.x, node.y, size, count, inner)
+    : createPolygonNode(node.id, node.x, node.y, size, count)
+  return {
+    ...made,
+    id: node.id,
+    x: node.x,
+    y: node.y,
+    w: node.w,
+    h: node.h,
+    name: node.name,
+    fill: node.fill,
+    fills: node.fills,
+    stroke: node.stroke,
+    strokes: node.strokes,
+    strokeWidth: node.strokeWidth,
+    opacity: node.opacity,
+    rotation: node.rotation,
+    visible: node.visible,
+    locked: node.locked,
+    constraintH: node.constraintH,
+    constraintV: node.constraintV,
+  }
+}
+
 export function createStarNode(id: string, x: number, y: number, size = 100, points = 5, inner = 0.38): DesignNode {
   const n = Math.max(3, Math.round(points))
   const outer = size / 2

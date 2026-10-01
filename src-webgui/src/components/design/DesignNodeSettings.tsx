@@ -8,9 +8,6 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalSpaceBetween,
-  ArrowDown,
-  ArrowRight,
-  Blend,
   Component,
   Crop,
   Eye,
@@ -18,12 +15,14 @@ import {
   FlipHorizontal2,
   FlipVertical2,
   Layers,
+  Lock,
   MessageSquare,
   Move,
   Plus,
   RotateCcw,
   RotateCw,
   Square,
+  Unlock,
   TextAlignCenter,
   TextAlignEnd,
   TextAlignStart,
@@ -42,6 +41,9 @@ import {
   applyFramePreset,
   applyTextRun,
   bindNodeField,
+  reshapeDesignNode,
+  retuneDesignShape,
+  shapeKindOf,
   collectDocFrames,
   FRAME_PRESETS,
   nodeChrome,
@@ -55,8 +57,10 @@ import {
   type DesignAlignEdge,
   type DesignDoc,
   type DesignInteraction,
+  type DesignLayout,
   type DesignLayoutGrid,
   type DesignNode,
+  type DesignReshapeKind,
   type DesignOverlayPlace,
   type DesignTextRun,
 } from '../../lib/design'
@@ -67,9 +71,11 @@ import {
   Choices,
   ColorRow,
   ConstraintWidget,
+  FieldGroup,
   GeomField,
   KindMark,
   FillEditor,
+  LabeledControl,
   PaintRow,
   RadiusField,
   Section,
@@ -104,6 +110,7 @@ export function NodeSettings({
   onPickImage,
   onStoreImage,
   textRange,
+  parentLayout,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -131,6 +138,7 @@ export function NodeSettings({
   onPickImage?: () => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
   textRange?: { start: number; end: number } | null
+  parentLayout?: DesignLayout | null
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -330,29 +338,31 @@ export function NodeSettings({
         />
       ))}
       {node.kind === 'instance' ? (
-        <div className="flex flex-wrap items-center gap-1">
-          {onGoToMain ? (
-            <button type="button" title="Go to main" aria-label="Go to main" onClick={onGoToMain} className="h-7 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Main</button>
-          ) : null}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-1">
+            {onGoToMain ? (
+              <button type="button" title="Go to main" aria-label="Go to main" onClick={onGoToMain} className="h-7 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Main</button>
+            ) : null}
+            {onResetInstance ? (
+              <button type="button" title="Reset overrides" aria-label="Reset overrides" onClick={onResetInstance} className="h-7 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Reset</button>
+            ) : null}
+            {onDetachInstance ? (
+              <button type="button" title="Detach instance" aria-label="Detach instance" onClick={onDetachInstance} className="h-7 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Detach</button>
+            ) : null}
+          </div>
           {onSwapInstance && doc.components.length ? (
-            <KomaSelect
-              aria-label="Swap component"
-              value={node.component ?? ''}
-              onChange={(event) => onSwapInstance(event.target.value)}
-              className="h-7 min-w-0 flex-1 px-1.5 text-[12px]"
-            >
-              {doc.components.map((component) => (
-                <option key={component.id} value={component.id}>{component.name}</option>
-              ))}
-            </KomaSelect>
-          ) : null}
-          {onResetInstance ? (
-            <button type="button" title="Reset overrides" aria-label="Reset overrides" onClick={onResetInstance} className="flex h-7 w-7 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg">
-              <RotateCcw size={14} />
-            </button>
-          ) : null}
-          {onDetachInstance ? (
-            <button type="button" title="Detach instance" aria-label="Detach instance" onClick={onDetachInstance} className="h-7 rounded px-2 text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg">Detach</button>
+            <LabeledControl label="Swap">
+              <KomaSelect
+                aria-label="Swap component"
+                value={node.component ?? ''}
+                onChange={(event) => onSwapInstance(event.target.value)}
+                className="h-7 w-full px-1.5 text-[12px]"
+              >
+                {doc.components.map((component) => (
+                  <option key={component.id} value={component.id}>{component.name}</option>
+                ))}
+              </KomaSelect>
+            </LabeledControl>
           ) : null}
         </div>
       ) : null}
@@ -406,7 +416,11 @@ export function NodeSettings({
       ) : null}
       <Section title="Layer">
         <div className="flex items-center gap-1">
-          <AlignButton label={nodes.every((item) => item.visible === false) ? 'Show' : 'Hide'} pressed={nodes.every((item) => item.visible === false)} onClick={() => {
+          <AlignButton
+            label={nodes.every((item) => item.visible === false) ? 'Show' : 'Hide'}
+            caption={nodes.every((item) => item.visible === false) ? 'Hidden' : 'Visible'}
+            pressed={nodes.every((item) => item.visible === false)}
+            onClick={() => {
             const show = nodes.some((item) => item.visible === false)
             onPatch((current) => {
               const next = { ...current }
@@ -414,8 +428,12 @@ export function NodeSettings({
               else next.visible = false
               return next
             })
-          }}><Layers size={14} /></AlignButton>
-          <AlignButton label={nodes.every((item) => item.locked) ? 'Unlock' : 'Lock'} pressed={nodes.every((item) => !!item.locked)} onClick={() => {
+          }}>{nodes.every((item) => item.visible === false) ? <EyeOff size={14} /> : <Eye size={14} />}</AlignButton>
+          <AlignButton
+            label={nodes.every((item) => item.locked) ? 'Unlock' : 'Lock'}
+            caption={nodes.every((item) => item.locked) ? 'Locked' : 'Unlocked'}
+            pressed={nodes.every((item) => !!item.locked)}
+            onClick={() => {
             const unlock = nodes.every((item) => item.locked)
             onPatch((current) => {
               const next = { ...current }
@@ -423,14 +441,55 @@ export function NodeSettings({
               else next.locked = true
               return next
             })
-          }}><Square size={14} /></AlignButton>
+          }}>{nodes.every((item) => item.locked) ? <Lock size={14} /> : <Unlock size={14} />}</AlignButton>
         </div>
-        <GeomField label="Op" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} tokens={spaceTokens} bound={node.bindings?.opacity} onBind={(token) => bindField('opacity', token)} onChange={(value) => {
+        <GeomField label="Opacity" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} tokens={spaceTokens} bound={node.bindings?.opacity} onBind={(token) => bindField('opacity', token)} onChange={(value) => {
           const opacity = Math.min(100, Math.max(0, value)) / 100
           setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
         }} />
       </Section>
       <Section title="Measures">
+        {!multi && shapeKindOf(node) ? (
+          <label className="flex h-8 items-center gap-2 rounded-lg bg-koma-bg px-2">
+            <KindMark kind={node.kind} />
+            <span className="flex-none text-[11px] text-koma-dim">Shape</span>
+            <KomaSelect
+              aria-label="Shape"
+              value={shapeKindOf(node) ?? 'rect'}
+              onChange={(event) => {
+                const kind = event.target.value as DesignReshapeKind
+                if (kind !== 'rect' && kind !== 'ellipse' && kind !== 'line' && kind !== 'polygon' && kind !== 'star') return
+                onPatch((current) => reshapeDesignNode(current, kind))
+              }}
+              className="h-7 min-w-0 flex-1 px-1.5 text-[12px]"
+            >
+              <option value="rect">Rectangle</option>
+              <option value="ellipse">Ellipse</option>
+              <option value="line">Line</option>
+              <option value="polygon">Polygon</option>
+              <option value="star">Star</option>
+            </KomaSelect>
+          </label>
+        ) : null}
+        {!multi && (shapeKindOf(node) === 'polygon' || shapeKindOf(node) === 'star') ? (
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField
+              label="Sides"
+              ariaLabel={shapeKindOf(node) === 'star' ? 'Star points' : 'Polygon sides'}
+              value={node.pointCount ?? (shapeKindOf(node) === 'star' ? 5 : 6)}
+              onChange={(value) => onPatch((current) => retuneDesignShape(current, { pointCount: value }))}
+            />
+            {shapeKindOf(node) === 'star' ? (
+              <GeomField
+                label="Inset"
+                ariaLabel="Star inset"
+                suffix="%"
+                value={Math.round((node.innerRadius ?? 0.38) * 100)}
+                onChange={(value) => onPatch((current) => retuneDesignShape(current, { innerRadius: Math.min(95, Math.max(5, value)) / 100 }))}
+              />
+            ) : null}
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-1">
           <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
           <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
@@ -453,7 +512,7 @@ export function NodeSettings({
         </div>
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
-            <GeomField label="R" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
+            <GeomField label="Angle" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
               const wrapped = ((rotation % 360) + 360) % 360
               setField(wrapped ? { rotation: wrapped } : {}, wrapped ? [] : ['rotation'])
             }} />
@@ -488,72 +547,100 @@ export function NodeSettings({
           })}><RotateCw size={14} /></AlignButton>
         </div>
         {allFrames ? (
-          <KomaSelect
-            aria-label="Frame preset"
-            value=""
-            onChange={(event) => {
-              const preset = FRAME_PRESETS.find((item) => item.name === event.target.value)
-              if (preset) onPatch((current) => applyFramePreset(current, preset))
-            }}
-            className="h-8 px-1.5 text-[12px]"
-          >
-            <option value="">Preset</option>
-            {FRAME_PRESETS.map((preset) => (
-              <option key={preset.name} value={preset.name}>{preset.name}</option>
-            ))}
-          </KomaSelect>
+          <LabeledControl label="Preset" wide>
+            <KomaSelect
+              aria-label="Frame preset"
+              value=""
+              onChange={(event) => {
+                const preset = FRAME_PRESETS.find((item) => item.name === event.target.value)
+                if (preset) onPatch((current) => applyFramePreset(current, preset))
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="">Choose size</option>
+              {FRAME_PRESETS.map((preset) => (
+                <option key={preset.name} value={preset.name}>{preset.name}</option>
+              ))}
+            </KomaSelect>
+          </LabeledControl>
         ) : null}
         {sizeModes || allFrames ? (
           <div className="grid grid-cols-2 gap-1">
-            <GeomField label="Min" ariaLabel="Minimum width" value={minWField.value} mixed={minWField.mixed} onChange={(minW) => setField(minW > 0 ? { minW } : {}, minW > 0 ? [] : ['minW'])} />
-            <GeomField label="Max" ariaLabel="Maximum width" value={maxWField.value} mixed={maxWField.mixed} onChange={(maxW) => setField(maxW > 0 ? { maxW } : {}, maxW > 0 ? [] : ['maxW'])} />
-            <GeomField label="Min" ariaLabel="Minimum height" value={minHField.value} mixed={minHField.mixed} onChange={(minH) => setField(minH > 0 ? { minH } : {}, minH > 0 ? [] : ['minH'])} />
-            <GeomField label="Max" ariaLabel="Maximum height" value={maxHField.value} mixed={maxHField.mixed} onChange={(maxH) => setField(maxH > 0 ? { maxH } : {}, maxH > 0 ? [] : ['maxH'])} />
+            <GeomField label="Min W" ariaLabel="Minimum width" value={minWField.value} mixed={minWField.mixed} onChange={(minW) => setField(minW > 0 ? { minW } : {}, minW > 0 ? [] : ['minW'])} />
+            <GeomField label="Max W" ariaLabel="Maximum width" value={maxWField.value} mixed={maxWField.mixed} onChange={(maxW) => setField(maxW > 0 ? { maxW } : {}, maxW > 0 ? [] : ['maxW'])} />
+            <GeomField label="Min H" ariaLabel="Minimum height" value={minHField.value} mixed={minHField.mixed} onChange={(minH) => setField(minH > 0 ? { minH } : {}, minH > 0 ? [] : ['minH'])} />
+            <GeomField label="Max H" ariaLabel="Maximum height" value={maxHField.value} mixed={maxHField.mixed} onChange={(maxH) => setField(maxH > 0 ? { maxH } : {}, maxH > 0 ? [] : ['maxH'])} />
           </div>
         ) : null}
       </Section>
       {allFrames || hasParent ? (
       <Section title="Layout">
       {allFrames ? (
-        <div className="flex flex-wrap gap-0.5">
-          <AlignButton label="Free" caption="Free" pressed={!layoutField.mixed && layoutField.value === 'free'} onClick={() => setField({}, ['layout'])}><Square size={14} /></AlignButton>
-          <AlignButton label="Row" caption="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
-          <AlignButton label="Column" caption="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
-          <AlignButton label="Grid" caption="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
-          <AlignButton label="Reverse" caption="Reverse" pressed={nodes.every((item) => item.reverse)} onClick={() => {
-            const allOn = nodes.every((item) => item.reverse)
-            onPatch((current) => {
-              const next = { ...current }
-              if (allOn) delete next.reverse
-              else next.reverse = true
-              return next
-            })
-          }}><RotateCcw size={14} /></AlignButton>
+        <div className="flex flex-col gap-1.5">
+          <LabeledControl label="Type">
+            <KomaSelect
+              aria-label="Layout"
+              value={layoutField.mixed ? '' : layoutField.value}
+              onChange={(event) => {
+                const layout = event.target.value
+                if (layout === 'free') setField({}, ['layout', 'gridColumns', 'gridRows'])
+                else if (layout === 'row' || layout === 'column') setField({ layout }, ['gridColumns', 'gridRows'])
+                else if (layout === 'grid') setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              {layoutField.mixed ? <option value="">Mixed</option> : null}
+              <option value="free">Free</option>
+              <option value="row">Row</option>
+              <option value="column">Column</option>
+              <option value="grid">Grid</option>
+            </KomaSelect>
+          </LabeledControl>
+          {layoutField.value === 'row' || layoutField.value === 'column' ? (
+            <AlignButton
+              label="Reverse"
+              caption="Reverse direction"
+              pressed={nodes.every((item) => item.reverse)}
+              onClick={() => {
+                const allOn = nodes.every((item) => item.reverse)
+                onPatch((current) => {
+                  const next = { ...current }
+                  if (allOn) delete next.reverse
+                  else next.reverse = true
+                  return next
+                })
+              }}
+            >
+              <RotateCcw size={14} />
+            </AlignButton>
+          ) : null}
         </div>
       ) : null}
       {!layoutField.mixed && layoutField.value === 'grid' ? (
         <div className="flex flex-col gap-1">
           {(['gridColumns', 'gridRows'] as const).map((key) => (
-            <div key={key} className="flex flex-col gap-1">
+            <FieldGroup key={key} label={key === 'gridColumns' ? 'Columns' : 'Rows'}>
               {(node[key]?.length ? node[key]! : [{ size: 'fr' as const, count: 2 }]).map((track, index) => (
-                <div key={`${key}-${index}`} className="grid grid-cols-[1fr_64px_48px] gap-1">
-                  <KomaSelect
-                    aria-label={key === 'gridColumns' ? 'Column track' : 'Row track'}
-                    value={typeof track.size === 'number' ? 'px' : track.size}
-                    onChange={(event) => {
-                      const unit = event.target.value
-                      const tracks = (node[key] ?? [{ size: 'fr' as const, count: 2 }]).slice()
-                      tracks[index] = { ...track, size: unit === 'px' ? 80 : unit === 'auto' ? 'auto' : 'fr' }
-                      setField({ layout: 'grid', [key]: tracks })
-                    }}
-                    className="h-8 px-1.5 text-[12px]"
-                  >
-                    <option value="fr">fr</option>
-                    <option value="px">px</option>
-                    <option value="auto">auto</option>
-                  </KomaSelect>
+                <div key={`${key}-${index}`} className="grid grid-cols-[1fr_72px_32px] gap-1">
+                  <LabeledControl label="Unit">
+                    <KomaSelect
+                      aria-label={key === 'gridColumns' ? 'Column track' : 'Row track'}
+                      value={typeof track.size === 'number' ? 'px' : track.size}
+                      onChange={(event) => {
+                        const unit = event.target.value
+                        const tracks = (node[key] ?? [{ size: 'fr' as const, count: 2 }]).slice()
+                        tracks[index] = { ...track, size: unit === 'px' ? 80 : unit === 'auto' ? 'auto' : 'fr' }
+                        setField({ layout: 'grid', [key]: tracks })
+                      }}
+                      className="h-7 w-full px-1.5 text-[12px]"
+                    >
+                      <option value="fr">Fraction</option>
+                      <option value="px">Pixels</option>
+                      <option value="auto">Auto</option>
+                    </KomaSelect>
+                  </LabeledControl>
                   <GeomField
-                    label={typeof track.size === 'number' ? 'Px' : 'N'}
+                    label={typeof track.size === 'number' ? 'Size' : 'Count'}
                     ariaLabel={typeof track.size === 'number' ? 'Track size' : 'Track count'}
                     value={typeof track.size === 'number' ? track.size : track.count ?? 1}
                     onChange={(value) => {
@@ -568,10 +655,10 @@ export function NodeSettings({
                   }}><X size={12} /></AlignButton>
                 </div>
               ))}
-              <AlignButton label={key === 'gridColumns' ? 'Add column track' : 'Add row track'} onClick={() => setField({ layout: 'grid', [key]: [...(node[key] ?? []), { size: 'fr', count: 1 }] })}>
+              <AlignButton label={key === 'gridColumns' ? 'Add column track' : 'Add row track'} caption={key === 'gridColumns' ? 'Add column' : 'Add row'} onClick={() => setField({ layout: 'grid', [key]: [...(node[key] ?? []), { size: 'fr', count: 1 }] })}>
                 <Plus size={12} />
               </AlignButton>
-            </div>
+            </FieldGroup>
           ))}
         </div>
       ) : null}
@@ -579,26 +666,31 @@ export function NodeSettings({
         <>
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} tokens={spaceTokens} bound={node.bindings?.gap} onBind={(token) => bindField('gap', token)} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
-            <GeomField label="GX" ariaLabel="Column gap" value={numberOf((item) => item.gapX ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapX ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapX} onBind={(token) => bindField('gapX', token)} onChange={(gapX) => setField(gapX > 0 ? { gapX } : {}, gapX > 0 ? [] : ['gapX'])} />
-            <GeomField label="GY" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapY} onBind={(token) => bindField('gapY', token)} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
-            <GeomField label="Pad" value={padField.value} mixed={padField.mixed} tokens={spaceTokens} bound={node.bindings?.pad} onBind={(token) => bindField('pad', token)} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
+            <GeomField label="Padding" value={padField.value} mixed={padField.mixed} tokens={spaceTokens} bound={node.bindings?.pad} onBind={(token) => bindField('pad', token)} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
           </div>
+          {nodes.every((item) => item.wrap) ? (
+            <div className="grid grid-cols-2 gap-1">
+              <GeomField label="Col gap" ariaLabel="Column gap" value={numberOf((item) => item.gapX ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapX ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapX} onBind={(token) => bindField('gapX', token)} onChange={(gapX) => setField(gapX > 0 ? { gapX } : {}, gapX > 0 ? [] : ['gapX'])} />
+              <GeomField label="Row gap" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapY} onBind={(token) => bindField('gapY', token)} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Top" ariaLabel="Padding top" value={padTopField.value} mixed={padTopField.mixed} onChange={(value) => setSide('padTop', value)} />
             <GeomField label="Right" ariaLabel="Padding right" value={padRightField.value} mixed={padRightField.mixed} onChange={(value) => setSide('padRight', value)} />
             <GeomField label="Bottom" ariaLabel="Padding bottom" value={padBottomField.value} mixed={padBottomField.mixed} onChange={(value) => setSide('padBottom', value)} />
             <GeomField label="Left" ariaLabel="Padding left" value={padLeftField.value} mixed={padLeftField.mixed} onChange={(value) => setSide('padLeft', value)} />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex gap-0.5">
+          <div className="flex flex-col gap-1.5">
+            <FieldGroup label="Justify">
+              <div className="flex flex-wrap gap-0.5">
               {columnLayout ? (
                 <>
                   <AlignButton label="Align top" pressed={!justifyField.mixed && justifyField.value === 'start'} onClick={() => setJustify('start')}><AlignStartHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align middle" pressed={!justifyField.mixed && justifyField.value === 'center'} onClick={() => setJustify('center')}><AlignCenterHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align bottom" pressed={!justifyField.mixed && justifyField.value === 'end'} onClick={() => setJustify('end')}><AlignEndHorizontal size={14} /></AlignButton>
                   <AlignButton label="Space between" pressed={!justifyField.mixed && justifyField.value === 'space'} onClick={() => setJustify('space')}><AlignVerticalSpaceBetween size={14} /></AlignButton>
-                  <AlignButton label="Space around" pressed={!justifyField.mixed && justifyField.value === 'around'} onClick={() => setJustify('around')}><span className="text-[10px]">A</span></AlignButton>
-                  <AlignButton label="Space evenly" pressed={!justifyField.mixed && justifyField.value === 'evenly'} onClick={() => setJustify('evenly')}><span className="text-[10px]">E</span></AlignButton>
+                  <AlignButton label="Space around" caption="Around" pressed={!justifyField.mixed && justifyField.value === 'around'} onClick={() => setJustify('around')}><AlignVerticalSpaceBetween size={14} /></AlignButton>
+                  <AlignButton label="Space evenly" caption="Even" pressed={!justifyField.mixed && justifyField.value === 'evenly'} onClick={() => setJustify('evenly')}><AlignVerticalSpaceBetween size={14} /></AlignButton>
                 </>
               ) : (
                 <>
@@ -606,53 +698,68 @@ export function NodeSettings({
                   <AlignButton label="Align center" pressed={!justifyField.mixed && justifyField.value === 'center'} onClick={() => setJustify('center')}><AlignCenterVertical size={14} /></AlignButton>
                   <AlignButton label="Align right" pressed={!justifyField.mixed && justifyField.value === 'end'} onClick={() => setJustify('end')}><AlignEndVertical size={14} /></AlignButton>
                   <AlignButton label="Space between" pressed={!justifyField.mixed && justifyField.value === 'space'} onClick={() => setJustify('space')}><AlignHorizontalSpaceBetween size={14} /></AlignButton>
-                  <AlignButton label="Space around" pressed={!justifyField.mixed && justifyField.value === 'around'} onClick={() => setJustify('around')}><span className="text-[10px]">A</span></AlignButton>
-                  <AlignButton label="Space evenly" pressed={!justifyField.mixed && justifyField.value === 'evenly'} onClick={() => setJustify('evenly')}><span className="text-[10px]">E</span></AlignButton>
+                  <AlignButton label="Space around" caption="Around" pressed={!justifyField.mixed && justifyField.value === 'around'} onClick={() => setJustify('around')}><AlignHorizontalSpaceBetween size={14} /></AlignButton>
+                  <AlignButton label="Space evenly" caption="Even" pressed={!justifyField.mixed && justifyField.value === 'evenly'} onClick={() => setJustify('evenly')}><AlignHorizontalSpaceBetween size={14} /></AlignButton>
                 </>
               )}
-            </div>
-            <div className="flex gap-0.5">
+              </div>
+            </FieldGroup>
+            <FieldGroup label="Align">
+              <div className="flex flex-wrap gap-0.5">
               {columnLayout ? (
                 <>
                   <AlignButton label="Align left" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartVertical size={14} /></AlignButton>
                   <AlignButton label="Align center" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterVertical size={14} /></AlignButton>
                   <AlignButton label="Align right" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndVertical size={14} /></AlignButton>
-                  <AlignButton label="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↔</span></AlignButton>
+                  <AlignButton label="Stretch" caption="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↔</span></AlignButton>
                 </>
               ) : (
                 <>
                   <AlignButton label="Align top" pressed={!alignField.mixed && alignField.value === 'start'} onClick={() => setCross('start')}><AlignStartHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align middle" pressed={!alignField.mixed && alignField.value === 'center'} onClick={() => setCross('center')}><AlignCenterHorizontal size={14} /></AlignButton>
                   <AlignButton label="Align bottom" pressed={!alignField.mixed && alignField.value === 'end'} onClick={() => setCross('end')}><AlignEndHorizontal size={14} /></AlignButton>
-                  <AlignButton label="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↕</span></AlignButton>
+                  <AlignButton label="Stretch" caption="Stretch" pressed={!alignField.mixed && alignField.value === 'stretch'} onClick={() => setCross('stretch')}><span className="text-[11px] font-semibold">↕</span></AlignButton>
                 </>
               )}
-            </div>
+              </div>
+            </FieldGroup>
           </div>
           {nodes.every((item) => item.wrap) ? (
-            <div className="flex gap-0.5">
-              <AlignButton label="Content start" pressed={(node.alignContent ?? 'start') === 'start'} onClick={() => setField({}, ['alignContent'])}><span className="text-[10px]">Cs</span></AlignButton>
-              <AlignButton label="Content center" pressed={node.alignContent === 'center'} onClick={() => setField({ alignContent: 'center' })}><span className="text-[10px]">Cc</span></AlignButton>
-              <AlignButton label="Content end" pressed={node.alignContent === 'end'} onClick={() => setField({ alignContent: 'end' })}><span className="text-[10px]">Ce</span></AlignButton>
-              <AlignButton label="Content space" pressed={node.alignContent === 'space'} onClick={() => setField({ alignContent: 'space' })}><span className="text-[10px]">Cb</span></AlignButton>
-              <AlignButton label="Content around" pressed={node.alignContent === 'around'} onClick={() => setField({ alignContent: 'around' })}><span className="text-[10px]">Ca</span></AlignButton>
-              <AlignButton label="Content evenly" pressed={node.alignContent === 'evenly'} onClick={() => setField({ alignContent: 'evenly' })}><span className="text-[10px]">Cv</span></AlignButton>
-            </div>
+            <LabeledControl label="Content" wide>
+              <KomaSelect
+                aria-label="Content alignment"
+                value={node.alignContent ?? 'start'}
+                onChange={(event) => {
+                  const alignContent = event.target.value
+                  if (alignContent === 'start') setField({}, ['alignContent'])
+                  else if (alignContent === 'center' || alignContent === 'end' || alignContent === 'space' || alignContent === 'around' || alignContent === 'evenly') setField({ alignContent })
+                }}
+                className="h-7 w-full px-1.5 text-[12px]"
+              >
+                <option value="start">Start</option>
+                <option value="center">Center</option>
+                <option value="end">End</option>
+                <option value="space">Space between</option>
+                <option value="around">Space around</option>
+                <option value="evenly">Space evenly</option>
+              </KomaSelect>
+            </LabeledControl>
           ) : null}
         </>
       ) : null}
-      {hasParent ? (
-        <div className="grid grid-cols-4 gap-1">
-          <GeomField label="CS" ariaLabel="Column start" value={node.colStart ?? 0} onChange={(colStart) => setField(colStart > 0 ? { colStart: Math.round(colStart) } : {}, colStart > 0 ? [] : ['colStart'])} />
-          <GeomField label="C+" ariaLabel="Column span" value={node.colSpan ?? 1} onChange={(colSpan) => setField(colSpan > 1 ? { colSpan: Math.round(colSpan) } : {}, colSpan > 1 ? [] : ['colSpan'])} />
-          <GeomField label="RS" ariaLabel="Row start" value={node.rowStart ?? 0} onChange={(rowStart) => setField(rowStart > 0 ? { rowStart: Math.round(rowStart) } : {}, rowStart > 0 ? [] : ['rowStart'])} />
-          <GeomField label="R+" ariaLabel="Row span" value={node.rowSpan ?? 1} onChange={(rowSpan) => setField(rowSpan > 1 ? { rowSpan: Math.round(rowSpan) } : {}, rowSpan > 1 ? [] : ['rowSpan'])} />
+      {hasParent && parentLayout === 'grid' ? (
+        <div className="grid grid-cols-2 gap-1">
+          <GeomField label="Col" ariaLabel="Column start" value={node.colStart ?? 0} onChange={(colStart) => setField(colStart > 0 ? { colStart: Math.round(colStart) } : {}, colStart > 0 ? [] : ['colStart'])} />
+          <GeomField label="Span" ariaLabel="Column span" value={node.colSpan ?? 1} onChange={(colSpan) => setField(colSpan > 1 ? { colSpan: Math.round(colSpan) } : {}, colSpan > 1 ? [] : ['colSpan'])} />
+          <GeomField label="Row" ariaLabel="Row start" value={node.rowStart ?? 0} onChange={(rowStart) => setField(rowStart > 0 ? { rowStart: Math.round(rowStart) } : {}, rowStart > 0 ? [] : ['rowStart'])} />
+          <GeomField label="Span" ariaLabel="Row span" value={node.rowSpan ?? 1} onChange={(rowSpan) => setField(rowSpan > 1 ? { rowSpan: Math.round(rowSpan) } : {}, rowSpan > 1 ? [] : ['rowSpan'])} />
         </div>
       ) : null}
-      <div className="flex items-center gap-0.5">
+      <div className="flex flex-wrap items-center gap-1">
       {flows ? (
         <AlignButton
           label={textOf((item) => (item.wrap ? 'on' : 'off')).mixed ? 'Wrap · Mixed' : nodes.every((item) => item.wrap) ? 'Wrap on' : 'Wrap off'}
+          caption="Wrap"
           pressed={nodes.every((item) => item.wrap === true)}
           onClick={() => {
             const allOn = nodes.every((item) => item.wrap === true)
@@ -670,6 +777,7 @@ export function NodeSettings({
       {nodes.every((item) => item.kind === 'frame' || item.kind === 'instance') ? (
         <AlignButton
           label={nodes.every((item) => item.clip !== false) ? 'Clip on' : 'Clip off'}
+          caption="Clip"
           pressed={nodes.every((item) => item.clip !== false)}
           onClick={() => {
             const allOn = nodes.every((item) => item.clip !== false)
@@ -687,6 +795,7 @@ export function NodeSettings({
       {hasParent ? (
         <AlignButton
           label={absoluteField.mixed ? 'Absolute · Mixed' : absoluteField.value === 'on' ? 'Absolute on' : 'Absolute off'}
+          caption="Absolute"
           pressed={absoluteField.value === 'on' && !absoluteField.mixed}
           onClick={() => {
             const allOn = nodes.every((item) => item.absolute === true)
@@ -702,28 +811,38 @@ export function NodeSettings({
         </AlignButton>
       ) : null}
       </div>
-      {hasParent ? (
-        <div className="grid grid-cols-2 gap-1">
-          <Choices
-            label="Align self"
+      {hasParent && (parentLayout === 'row' || parentLayout === 'column' || parentLayout === 'grid') ? (
+        <LabeledControl label="Align">
+          <KomaSelect
+            aria-label="Align self"
             value={node.alignSelf ?? 'start'}
-            options={[{ value: 'start', label: 'Start' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'End' }, { value: 'stretch', label: 'Stretch' }]}
-            onChange={(alignSelf) => setField(alignSelf === 'start' ? {} : { alignSelf }, alignSelf === 'start' ? ['alignSelf'] : [])}
-          />
-        </div>
+            onChange={(event) => {
+              const alignSelf = event.target.value
+              if (alignSelf !== 'start' && alignSelf !== 'center' && alignSelf !== 'end' && alignSelf !== 'stretch') return
+              setField(alignSelf === 'start' ? {} : { alignSelf }, alignSelf === 'start' ? ['alignSelf'] : [])
+            }}
+            className="h-7 w-full px-1.5 text-[12px]"
+          >
+            <option value="start">Start</option>
+            <option value="center">Center</option>
+            <option value="end">End</option>
+            <option value="stretch">Stretch</option>
+          </KomaSelect>
+        </LabeledControl>
       ) : null}
       {hasParent ? (
-        <div className="grid grid-cols-4 gap-1">
-          <GeomField label="MT" ariaLabel="Margin top" value={numberOf((item) => item.marginTop ?? item.margin ?? 0).value} onChange={(marginTop) => setField(marginTop ? { marginTop } : {}, marginTop ? [] : ['marginTop'])} />
-          <GeomField label="MR" ariaLabel="Margin right" value={numberOf((item) => item.marginRight ?? item.margin ?? 0).value} onChange={(marginRight) => setField(marginRight ? { marginRight } : {}, marginRight ? [] : ['marginRight'])} />
-          <GeomField label="MB" ariaLabel="Margin bottom" value={numberOf((item) => item.marginBottom ?? item.margin ?? 0).value} onChange={(marginBottom) => setField(marginBottom ? { marginBottom } : {}, marginBottom ? [] : ['marginBottom'])} />
-          <GeomField label="ML" ariaLabel="Margin left" value={numberOf((item) => item.marginLeft ?? item.margin ?? 0).value} onChange={(marginLeft) => setField(marginLeft ? { marginLeft } : {}, marginLeft ? [] : ['marginLeft'])} />
+        <div className="grid grid-cols-2 gap-1">
+          <GeomField label="Top" ariaLabel="Margin top" value={numberOf((item) => item.marginTop ?? item.margin ?? 0).value} onChange={(marginTop) => setField(marginTop ? { marginTop } : {}, marginTop ? [] : ['marginTop'])} />
+          <GeomField label="Right" ariaLabel="Margin right" value={numberOf((item) => item.marginRight ?? item.margin ?? 0).value} onChange={(marginRight) => setField(marginRight ? { marginRight } : {}, marginRight ? [] : ['marginRight'])} />
+          <GeomField label="Bottom" ariaLabel="Margin bottom" value={numberOf((item) => item.marginBottom ?? item.margin ?? 0).value} onChange={(marginBottom) => setField(marginBottom ? { marginBottom } : {}, marginBottom ? [] : ['marginBottom'])} />
+          <GeomField label="Left" ariaLabel="Margin left" value={numberOf((item) => item.marginLeft ?? item.margin ?? 0).value} onChange={(marginLeft) => setField(marginLeft ? { marginLeft } : {}, marginLeft ? [] : ['marginLeft'])} />
         </div>
       ) : null}
       {allFrames ? (
         <div className="flex flex-col gap-1">
           <AlignButton
             label="Board grid"
+            caption={node.layoutGrids?.length ? 'Board grid on' : 'Board grid'}
             pressed={!!node.layoutGrids?.length}
             onClick={() => setField(node.layoutGrids?.length ? {} : { layoutGrids: [{ kind: 'square', size: 8 }] }, node.layoutGrids?.length ? ['layoutGrids'] : [])}
           >
@@ -762,26 +881,34 @@ export function NodeSettings({
                 </div>
                 <div className="grid grid-cols-2 gap-1">
                   <GeomField label="Size" ariaLabel="Grid size" value={grid.size ?? 8} onChange={(size) => patchGrid({ size })} />
-                  <GeomField label="Count" ariaLabel="Grid count" value={grid.count ?? 0} onChange={(count) => patchGrid({ count: count > 0 ? Math.round(count) : undefined })} />
-                  <GeomField label="Gutter" ariaLabel="Grid gutter" value={grid.gutter ?? 0} onChange={(gutter) => patchGrid({ gutter: gutter > 0 ? gutter : undefined })} />
-                  <GeomField label="Offset" ariaLabel="Grid offset" value={grid.offset ?? 0} onChange={(offset) => patchGrid({ offset })} />
+                  {grid.kind !== 'square' ? (
+                    <GeomField label="Count" ariaLabel="Grid count" value={grid.count ?? 0} onChange={(count) => patchGrid({ count: count > 0 ? Math.round(count) : undefined })} />
+                  ) : null}
+                  {grid.kind !== 'square' ? (
+                    <GeomField label="Gutter" ariaLabel="Grid gutter" value={grid.gutter ?? 0} onChange={(gutter) => patchGrid({ gutter: gutter > 0 ? gutter : undefined })} />
+                  ) : null}
+                  {grid.kind !== 'square' ? (
+                    <GeomField label="Offset" ariaLabel="Grid offset" value={grid.offset ?? 0} onChange={(offset) => patchGrid({ offset })} />
+                  ) : null}
                 </div>
                 {grid.kind !== 'square' ? (
-                  <KomaSelect
-                    aria-label="Grid align"
-                    value={grid.align ?? 'stretch'}
-                    onChange={(event) => {
-                      const align = event.target.value
-                      if (align !== 'stretch' && align !== 'start' && align !== 'center' && align !== 'end') return
-                      patchGrid({ align: align === 'stretch' ? undefined : align })
-                    }}
-                    className="h-7 w-full px-1.5 text-[12px]"
-                  >
-                    <option value="stretch">Stretch</option>
-                    <option value="start">Start</option>
-                    <option value="center">Center</option>
-                    <option value="end">End</option>
-                  </KomaSelect>
+                  <LabeledControl label="Align">
+                    <KomaSelect
+                      aria-label="Grid align"
+                      value={grid.align ?? 'stretch'}
+                      onChange={(event) => {
+                        const align = event.target.value
+                        if (align !== 'stretch' && align !== 'start' && align !== 'center' && align !== 'end') return
+                        patchGrid({ align: align === 'stretch' ? undefined : align })
+                      }}
+                      className="h-7 w-full px-1.5 text-[12px]"
+                    >
+                      <option value="stretch">Stretch</option>
+                      <option value="start">Start</option>
+                      <option value="center">Center</option>
+                      <option value="end">End</option>
+                    </KomaSelect>
+                  </LabeledControl>
                 ) : null}
                 <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-panel px-1.5">
                   <span className="text-[11px] text-koma-dim">Color</span>
@@ -806,46 +933,44 @@ export function NodeSettings({
       </Section>
       ) : null}
       <Section title="Appearance">
-        <div className={`grid gap-1 ${showRadius ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {showRadius ? (
-            <RadiusField
-              value={radiusField.mixed ? undefined : node.radius}
-              mixed={radiusField.mixed}
-              resolved={typeof node.radius === 'number' ? String(node.radius) : resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')}
-              tokens={radiusTokens}
-              onChange={(radius) => {
-                if (radius == null) setField({}, ['radius'])
-                else setField({ radius })
-              }}
-            />
-          ) : null}
-        </div>
         {showRadius ? (
-          <AlignButton label={radiusSplit ? 'One radius' : 'Four corners'} pressed={radiusSplit} onClick={() => {
+          <RadiusField
+            value={radiusField.mixed ? undefined : node.radius}
+            mixed={radiusField.mixed}
+            resolved={typeof node.radius === 'number' ? String(node.radius) : resolveRef(doc, typeof node.radius === 'string' ? node.radius : '')}
+            tokens={radiusTokens}
+            onChange={(radius) => {
+              if (radius == null) setField({}, ['radius'])
+              else setField({ radius })
+            }}
+          />
+        ) : null}
+        {showRadius ? (
+          <AlignButton label={radiusSplit ? 'One radius' : 'Four corners'} caption={radiusSplit ? 'One radius' : 'Four corners'} pressed={radiusSplit} onClick={() => {
             setRadiusSplit((current) => !current)
             if (radiusSplit) setField({}, ['radiusTL', 'radiusTR', 'radiusBR', 'radiusBL'])
           }}><Crop size={14} /></AlignButton>
         ) : null}
         {showRadius && radiusSplit ? (
-          <div className="grid grid-cols-4 gap-1">
-            <GeomField label="TL" ariaLabel="Top left radius" value={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusTL} onBind={(token) => bindField('radiusTL', token)} onChange={(value) => setCorner('radiusTL', value)} />
-            <GeomField label="TR" ariaLabel="Top right radius" value={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusTR} onBind={(token) => bindField('radiusTR', token)} onChange={(value) => setCorner('radiusTR', value)} />
-            <GeomField label="BR" ariaLabel="Bottom right radius" value={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusBR} onBind={(token) => bindField('radiusBR', token)} onChange={(value) => setCorner('radiusBR', value)} />
-            <GeomField label="BL" ariaLabel="Bottom left radius" value={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusBL} onBind={(token) => bindField('radiusBL', token)} onChange={(value) => setCorner('radiusBL', value)} />
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Top L" ariaLabel="Top left radius" value={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTL ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusTL} onBind={(token) => bindField('radiusTL', token)} onChange={(value) => setCorner('radiusTL', value)} />
+            <GeomField label="Top R" ariaLabel="Top right radius" value={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusTR ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusTR} onBind={(token) => bindField('radiusTR', token)} onChange={(value) => setCorner('radiusTR', value)} />
+            <GeomField label="Bot R" ariaLabel="Bottom right radius" value={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBR ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusBR} onBind={(token) => bindField('radiusBR', token)} onChange={(value) => setCorner('radiusBR', value)} />
+            <GeomField label="Bot L" ariaLabel="Bottom left radius" value={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).value} mixed={cornerField((item) => resolvedCorner(item.radiusBL ?? item.radius)).mixed} tokens={radiusTokens} bound={node.bindings?.radiusBL} onBind={(token) => bindField('radiusBL', token)} onChange={(value) => setCorner('radiusBL', value)} />
           </div>
         ) : null}
         <div className="flex items-center gap-1">
-          <span title="Blend" className="flex h-8 w-8 flex-none items-center justify-center text-koma-dim"><Blend size={13} /></span>
-          <KomaSelect
-            aria-label="Blend"
-            title="Blend"
-            value={node.blend ?? 'normal'}
-            onChange={(event) => {
-              const blend = event.target.value
-              setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])
-            }}
-            className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
-          >
+          <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-koma-bg px-2">
+            <span className="flex-none text-[11px] text-koma-dim">Blend</span>
+            <KomaSelect
+              aria-label="Blend"
+              value={node.blend ?? 'normal'}
+              onChange={(event) => {
+                const blend = event.target.value
+                setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])
+              }}
+              className="h-7 min-w-0 flex-1 px-1.5 text-[12px]"
+            >
             <option value="normal">Normal</option>
             <option value="multiply">Multiply</option>
             <option value="screen">Screen</option>
@@ -863,8 +988,9 @@ export function NodeSettings({
             <option value="color">Color</option>
             <option value="luminosity">Luminosity</option>
             <option value="pass-through">Pass through</option>
-          </KomaSelect>
-          <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask', 'maskType'] : [])}>
+            </KomaSelect>
+          </label>
+          <AlignButton label="Use as mask" caption="Mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask', 'maskType'] : [])}>
             <Layers size={14} />
           </AlignButton>
         </div>
@@ -932,98 +1058,108 @@ export function NodeSettings({
           <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onStoreImage={onStoreImage} />
         )}
         {multi ? (
-        <div className="grid grid-cols-[1fr_1fr] gap-1">
-          <GeomField label="W" ariaLabel="Width" value={strokeWidthField.value} mixed={strokeWidthField.mixed} tokens={spaceTokens} bound={node.bindings?.strokeWidth} onBind={(token) => bindField('strokeWidth', token)} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
-          <KomaSelect
-            aria-label="Alignment"
-            value={node.strokeAlign ?? 'center'}
-            onChange={(event) => {
-              const strokeAlign = event.target.value
-              if (strokeAlign !== 'inside' && strokeAlign !== 'center' && strokeAlign !== 'outside') return
-              setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])
-            }}
-            className="h-8 px-1.5 text-[12px]"
-          >
-            <option value="inside">Inside</option>
-            <option value="center">Center</option>
-            <option value="outside">Outside</option>
-          </KomaSelect>
-          <KomaSelect
-            aria-label="Style"
-            value={!node.strokeDash?.length ? 'solid' : (node.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed'}
-            onChange={(event) => {
-              const style = event.target.value
-              if (style === 'solid') setField({}, ['strokeDash'])
-              else if (style === 'dotted') setField({ strokeDash: [1, 3] })
-              else setField({ strokeDash: [4, 4] })
-            }}
-            className="h-8 px-1.5 text-[12px]"
-          >
-            <option value="solid">Solid</option>
-            <option value="dashed">Dashed</option>
-            <option value="dotted">Dotted</option>
-          </KomaSelect>
-          <KomaSelect
-            aria-label="Cap"
-            value={node.strokeCap ?? 'none'}
-            onChange={(event) => {
-              const strokeCap = event.target.value
-              if (strokeCap !== 'none' && strokeCap !== 'round' && strokeCap !== 'square') return
-              setField(strokeCap === 'none' ? {} : { strokeCap }, strokeCap === 'none' ? ['strokeCap'] : [])
-            }}
-            className="h-8 px-1.5 text-[12px]"
-          >
-            <option value="none">None</option>
-            <option value="round">Round</option>
-            <option value="square">Square</option>
-          </KomaSelect>
+        <div className="flex flex-col gap-1.5">
+          <GeomField label="Width" ariaLabel="Width" value={strokeWidthField.value} mixed={strokeWidthField.mixed} tokens={spaceTokens} bound={node.bindings?.strokeWidth} onBind={(token) => bindField('strokeWidth', token)} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
+          <LabeledControl label="Align">
+            <KomaSelect
+              aria-label="Alignment"
+              value={node.strokeAlign ?? 'center'}
+              onChange={(event) => {
+                const strokeAlign = event.target.value
+                if (strokeAlign !== 'inside' && strokeAlign !== 'center' && strokeAlign !== 'outside') return
+                setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="inside">Inside</option>
+              <option value="center">Center</option>
+              <option value="outside">Outside</option>
+            </KomaSelect>
+          </LabeledControl>
+          <LabeledControl label="Style">
+            <KomaSelect
+              aria-label="Style"
+              value={!node.strokeDash?.length ? 'solid' : (node.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed'}
+              onChange={(event) => {
+                const style = event.target.value
+                if (style === 'solid') setField({}, ['strokeDash'])
+                else if (style === 'dotted') setField({ strokeDash: [1, 3] })
+                else setField({ strokeDash: [4, 4] })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="dotted">Dotted</option>
+            </KomaSelect>
+          </LabeledControl>
+          <LabeledControl label="Cap">
+            <KomaSelect
+              aria-label="Cap"
+              value={node.strokeCap ?? 'none'}
+              onChange={(event) => {
+                const strokeCap = event.target.value
+                if (strokeCap !== 'none' && strokeCap !== 'round' && strokeCap !== 'square') return
+                setField(strokeCap === 'none' ? {} : { strokeCap }, strokeCap === 'none' ? ['strokeCap'] : [])
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="none">None</option>
+              <option value="round">Round</option>
+              <option value="square">Square</option>
+            </KomaSelect>
+          </LabeledControl>
         </div>
         ) : null}
       </Section>
-      {hasParent && !sizeModes ? (
+      {hasParent && (!sizeModes || node.absolute) ? (
         <Section title="Constraints">
-          <div className="flex items-start gap-1">
+          <div className="flex items-start gap-2">
             <ConstraintWidget
               horizontal={node.constraintH ?? 'start'}
               vertical={node.constraintV ?? 'start'}
               onHorizontal={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])}
               onVertical={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])}
             />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <KomaSelect
-                aria-label="Horizontal"
-                title="Horizontal"
-                value={node.constraintH ?? 'start'}
-                onChange={(event) => {
-                  const constraintH = event.target.value
-                  if (constraintH !== 'start' && constraintH !== 'center' && constraintH !== 'end' && constraintH !== 'stretch' && constraintH !== 'scale') return
-                  setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])
-                }}
-                className="h-8 w-full px-1.5 text-[12px]"
-              >
-                <option value="start">Left</option>
-                <option value="center">Center</option>
-                <option value="end">Right</option>
-                <option value="stretch">Left & right</option>
-                <option value="scale">Scale</option>
-              </KomaSelect>
-              <KomaSelect
-                aria-label="Vertical"
-                title="Vertical"
-                value={node.constraintV ?? 'start'}
-                onChange={(event) => {
-                  const constraintV = event.target.value
-                  if (constraintV !== 'start' && constraintV !== 'center' && constraintV !== 'end' && constraintV !== 'stretch' && constraintV !== 'scale') return
-                  setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])
-                }}
-                className="h-8 w-full px-1.5 text-[12px]"
-              >
-                <option value="start">Top</option>
-                <option value="center">Center</option>
-                <option value="end">Bottom</option>
-                <option value="stretch">Top & bottom</option>
-                <option value="scale">Scale</option>
-              </KomaSelect>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[11px] text-koma-dim">Horizontal</span>
+                <KomaSelect
+                  aria-label="Horizontal constraint"
+                  value={node.constraintH ?? 'start'}
+                  onChange={(event) => {
+                    const constraintH = event.target.value
+                    if (constraintH !== 'start' && constraintH !== 'center' && constraintH !== 'end' && constraintH !== 'stretch' && constraintH !== 'scale') return
+                    setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])
+                  }}
+                  className="h-8 w-full px-1.5 text-[12px]"
+                >
+                  <option value="start">Left</option>
+                  <option value="center">Center</option>
+                  <option value="end">Right</option>
+                  <option value="stretch">Left and right</option>
+                  <option value="scale">Scale</option>
+                </KomaSelect>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[11px] text-koma-dim">Vertical</span>
+                <KomaSelect
+                  aria-label="Vertical constraint"
+                  value={node.constraintV ?? 'start'}
+                  onChange={(event) => {
+                    const constraintV = event.target.value
+                    if (constraintV !== 'start' && constraintV !== 'center' && constraintV !== 'end' && constraintV !== 'stretch' && constraintV !== 'scale') return
+                    setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])
+                  }}
+                  className="h-8 w-full px-1.5 text-[12px]"
+                >
+                  <option value="start">Top</option>
+                  <option value="center">Center</option>
+                  <option value="end">Bottom</option>
+                  <option value="stretch">Top and bottom</option>
+                  <option value="scale">Scale</option>
+                </KomaSelect>
+              </label>
             </div>
           </div>
         </Section>
@@ -1078,11 +1214,11 @@ export function NodeSettings({
                   allowGradient={false}
                   onChange={(paint) => patchEffect({ color: paint.color && paint.color !== 'none' ? paint.color : '#000000' })}
                 />
-                <div className="grid grid-cols-4 gap-1">
+                <div className="grid grid-cols-2 gap-1">
                   <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => patchEffect({ x })} />
                   <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => patchEffect({ y })} />
-                  <GeomField label="B" ariaLabel="Shadow blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
-                  <GeomField label="S" ariaLabel="Shadow spread" value={effect.spread ?? 0} onChange={(spread) => patchEffect({ spread })} />
+                  <GeomField label="Blur" ariaLabel="Shadow blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+                  <GeomField label="Spread" ariaLabel="Shadow spread" value={effect.spread ?? 0} onChange={(spread) => patchEffect({ spread })} />
                 </div>
               </div>
             )
@@ -1103,56 +1239,60 @@ export function NodeSettings({
           const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
           const removeEffect = () => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))
           return (
-            <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
-              <AlignButton label={effect.visible === false ? 'Show blur' : 'Hide blur'} pressed={effect.visible === false} onClick={() => patchEffect({ visible: effect.visible === false ? undefined : false })}>
-                {effect.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
-              </AlignButton>
-              <KomaSelect
-                aria-label="Blur type"
-                value={effect.kind}
-                onChange={(event) => {
-                  const kind = event.target.value
-                  if (kind === 'layer-blur' || kind === 'background-blur') patchEffect({ kind })
-                }}
-                className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
-              >
-                <option value="layer-blur">Layer blur</option>
-                <option value="background-blur">Background blur</option>
-              </KomaSelect>
-              <div className="w-16 flex-none">
-                <GeomField label="B" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+            <div key={`${effect.kind}-${index}`} className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1">
+                <AlignButton label={effect.visible === false ? 'Show blur' : 'Hide blur'} pressed={effect.visible === false} onClick={() => patchEffect({ visible: effect.visible === false ? undefined : false })}>
+                  {effect.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
+                </AlignButton>
+                <div className="min-w-0 flex-1">
+                  <LabeledControl label="Type">
+                    <KomaSelect
+                      aria-label="Blur type"
+                      value={effect.kind}
+                      onChange={(event) => {
+                        const kind = event.target.value
+                        if (kind === 'layer-blur' || kind === 'background-blur') patchEffect({ kind })
+                      }}
+                      className="h-7 w-full px-1.5 text-[12px]"
+                    >
+                      <option value="layer-blur">Layer</option>
+                      <option value="background-blur">Background</option>
+                    </KomaSelect>
+                  </LabeledControl>
+                </div>
+                <button type="button" title="Remove" aria-label="Remove blur" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
+                  <X size={13} />
+                </button>
               </div>
-              <button type="button" title="Remove" aria-label="Remove blur" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
-                <X size={13} />
-              </button>
+              <GeomField label="Blur" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
             </div>
           )
         })}
       </Section>
       {allText ? (
         <Section title="Text">
-          <div className="flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} tokens={typeTokens} bound={node.bindings?.fontSize} onBind={(token) => bindField('fontSize', token)} onChange={(fontSize) => {
-                if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) applyType({}, ['fontSize'])
-                else applyType({ fontSize })
-              }} />
-            </div>
-            <KomaSelect
-              aria-label="Weight"
-              value={weightField.mixed ? '' : weightField.value}
-              onChange={(event) => {
-                const weight = event.target.value
-                if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
-                applyType(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
-              }}
-              className="h-7 flex-none px-1 text-[12px]"
-            >
-              {weightField.mixed ? <option value="">Mixed</option> : null}
-              <option value="regular">Regular</option>
-              <option value="medium">Medium</option>
-              <option value="bold">Bold</option>
-            </KomaSelect>
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} tokens={typeTokens} bound={node.bindings?.fontSize} onBind={(token) => bindField('fontSize', token)} onChange={(fontSize) => {
+              if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) applyType({}, ['fontSize'])
+              else applyType({ fontSize })
+            }} />
+            <LabeledControl label="Weight">
+              <KomaSelect
+                aria-label="Weight"
+                value={weightField.mixed ? '' : weightField.value}
+                onChange={(event) => {
+                  const weight = event.target.value
+                  if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
+                  applyType(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
+                }}
+                className="h-7 w-full px-1.5 text-[12px]"
+              >
+                {weightField.mixed ? <option value="">Mixed</option> : null}
+                <option value="regular">Regular</option>
+                <option value="medium">Medium</option>
+                <option value="bold">Bold</option>
+              </KomaSelect>
+            </LabeledControl>
           </div>
           <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
             <span className="flex-none text-[11px] text-koma-dim">Font</span>
@@ -1178,26 +1318,52 @@ export function NodeSettings({
               ))}
             </div>
           ) : null}
-          <div className="flex gap-0.5">
-            <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
-            <AlignButton label="Align center" pressed={!textAlignField.mixed && textAlignField.value === 'center'} onClick={() => setField({ textAlign: 'center' })}><TextAlignCenter size={14} /></AlignButton>
-            <AlignButton label="Align right" pressed={!textAlignField.mixed && textAlignField.value === 'right'} onClick={() => setField({ textAlign: 'right' })}><TextAlignEnd size={14} /></AlignButton>
-            <AlignButton label="Justify" pressed={!textAlignField.mixed && textAlignField.value === 'justify'} onClick={() => setField({ textAlign: 'justify' })}><span className="text-[10px]">J</span></AlignButton>
-            <AlignButton label="Align top" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'top'} onClick={() => setField({ textVertical: 'top' })}><span className="text-[10px]">T</span></AlignButton>
-            <AlignButton label="Align middle" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'center'} onClick={() => setField({}, ['textVertical'])}><span className="text-[10px]">M</span></AlignButton>
-            <AlignButton label="Align bottom" pressed={!textOf((item) => item.textVertical ?? 'center').mixed && (node.textVertical ?? 'center') === 'bottom'} onClick={() => setField({ textVertical: 'bottom' })}><span className="text-[10px]">B</span></AlignButton>
-          </div>
-          <div className="flex gap-0.5">
-            <AlignButton label="Fixed text box" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && !node.textHug} onClick={() => setField({}, ['textHug'])}><span className="text-[10px]">Fix</span></AlignButton>
-            <AlignButton label="Hug height" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'height'} onClick={() => setField({ textHug: 'height' })}><span className="text-[10px]">H</span></AlignButton>
-            <AlignButton label="Hug width" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'width'} onClick={() => setField({ textHug: 'width' })}><span className="text-[10px]">W</span></AlignButton>
-          </div>
+          <FieldGroup label="Align">
+            <div className="flex flex-wrap gap-0.5">
+              <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
+              <AlignButton label="Align center" pressed={!textAlignField.mixed && textAlignField.value === 'center'} onClick={() => setField({ textAlign: 'center' })}><TextAlignCenter size={14} /></AlignButton>
+              <AlignButton label="Align right" pressed={!textAlignField.mixed && textAlignField.value === 'right'} onClick={() => setField({ textAlign: 'right' })}><TextAlignEnd size={14} /></AlignButton>
+              <AlignButton label="Justify" caption="Justify" pressed={!textAlignField.mixed && textAlignField.value === 'justify'} onClick={() => setField({ textAlign: 'justify' })}><span className="text-[10px]">J</span></AlignButton>
+            </div>
+          </FieldGroup>
+          <LabeledControl label="Vertical" wide>
+            <KomaSelect
+              aria-label="Vertical align"
+              value={node.textVertical ?? 'center'}
+              onChange={(event) => {
+                const textVertical = event.target.value
+                if (textVertical === 'center') setField({}, ['textVertical'])
+                else if (textVertical === 'top' || textVertical === 'bottom') setField({ textVertical })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="top">Top</option>
+              <option value="center">Middle</option>
+              <option value="bottom">Bottom</option>
+            </KomaSelect>
+          </LabeledControl>
+          <LabeledControl label="Resize" wide>
+            <KomaSelect
+              aria-label="Text resize"
+              value={node.textHug ?? 'fixed'}
+              onChange={(event) => {
+                const textHug = event.target.value
+                if (textHug === 'fixed') setField({}, ['textHug'])
+                else if (textHug === 'height' || textHug === 'width') setField({ textHug })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="fixed">Fixed box</option>
+              <option value="height">Hug height</option>
+              <option value="width">Hug width</option>
+            </KomaSelect>
+          </LabeledControl>
           <div className="flex gap-0.5">
             <AlignButton label="Italic" pressed={!!node.italic} onClick={() => applyType(node.italic ? {} : { italic: true }, node.italic ? ['italic'] : [])}><span className="text-[10px] italic">I</span></AlignButton>
             <AlignButton label="Underline" pressed={!!node.underline} onClick={() => applyType(node.underline ? {} : { underline: true }, node.underline ? ['underline'] : [])}><span className="text-[10px] underline">U</span></AlignButton>
             <AlignButton label="Strike" pressed={!!node.strike} onClick={() => applyType(node.strike ? {} : { strike: true }, node.strike ? ['strike'] : [])}><span className="text-[10px] line-through">S</span></AlignButton>
           </div>
-          <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'Aa' }, { value: 'upper', label: 'AA' }, { value: 'lower', label: 'aa' }, { value: 'title', label: 'Aa' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
+          <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'As typed' }, { value: 'upper', label: 'UPPER' }, { value: 'lower', label: 'lower' }, { value: 'title', label: 'Title' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
           <PaintRow
             label="Color"
             doc={doc}
@@ -1242,11 +1408,11 @@ export function NodeSettings({
             </AlignButton>
           ) : null}
           <div className="grid grid-cols-2 gap-1">
-            <GeomField label="Line" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
+            <GeomField label="Line" ariaLabel="Line height" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
               if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
               else setField({ lineHeight })
             }} />
-            <GeomField label="Spacing" value={trackingField.value} mixed={trackingField.mixed} onChange={(letterSpacing) => {
+            <GeomField label="Track" ariaLabel="Letter spacing" value={trackingField.value} mixed={trackingField.mixed} onChange={(letterSpacing) => {
               if (!Number.isFinite(letterSpacing) || letterSpacing === 0) setField({}, ['letterSpacing'])
               else setField({ letterSpacing })
             }} />
@@ -1308,22 +1474,28 @@ export function NodeSettings({
           {(node.interactions ?? []).map((item, index) => {
             const patch = (next: Partial<DesignInteraction>) => setField({ interactions: (node.interactions ?? []).map((row, at) => (at === index ? { ...row, ...next } : row)) })
             return (
-            <div key={`${item.trigger}-${item.action}-${index}`} className="flex flex-col gap-1">
-              <div className="grid grid-cols-[1fr_1fr_32px] gap-1">
-                <KomaSelect aria-label="Trigger" value={item.trigger} onChange={(event) => patch({ trigger: event.target.value as DesignInteraction['trigger'] })} className="h-8 px-1.5 text-[12px]">
-                  <option value="click">Click</option>
-                  <option value="mouse-enter">Mouse enter</option>
-                  <option value="mouse-leave">Mouse leave</option>
-                  <option value="after-delay">After delay</option>
-                </KomaSelect>
-                <KomaSelect aria-label="Action" value={item.action} onChange={(event) => patch({ action: event.target.value as DesignInteraction['action'] })} className="h-8 px-1.5 text-[12px]">
-                  <option value="navigate">Navigate</option>
-                  <option value="open-overlay">Open overlay</option>
-                  <option value="toggle-overlay">Toggle overlay</option>
-                  <option value="close-overlay">Close overlay</option>
-                  <option value="prev-screen">Previous</option>
-                  <option value="open-url">Open URL</option>
-                </KomaSelect>
+            <div key={`${item.trigger}-${item.action}-${index}`} className="flex flex-col gap-1.5">
+              <div className="flex items-start gap-1">
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <LabeledControl label="When">
+                    <KomaSelect aria-label="Trigger" value={item.trigger} onChange={(event) => patch({ trigger: event.target.value as DesignInteraction['trigger'] })} className="h-7 w-full px-1.5 text-[12px]">
+                      <option value="click">Click</option>
+                      <option value="mouse-enter">Mouse enter</option>
+                      <option value="mouse-leave">Mouse leave</option>
+                      <option value="after-delay">After delay</option>
+                    </KomaSelect>
+                  </LabeledControl>
+                  <LabeledControl label="Do">
+                    <KomaSelect aria-label="Action" value={item.action} onChange={(event) => patch({ action: event.target.value as DesignInteraction['action'] })} className="h-7 w-full px-1.5 text-[12px]">
+                      <option value="navigate">Navigate</option>
+                      <option value="open-overlay">Open overlay</option>
+                      <option value="toggle-overlay">Toggle overlay</option>
+                      <option value="close-overlay">Close overlay</option>
+                      <option value="prev-screen">Previous</option>
+                      <option value="open-url">Open URL</option>
+                    </KomaSelect>
+                  </LabeledControl>
+                </div>
                 <button type="button" title="Remove" aria-label="Remove interaction" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
                   const next = (node.interactions ?? []).filter((_, at) => at !== index)
                   setField(next.length ? { interactions: next } : {}, next.length ? [] : ['interactions'])
@@ -1331,40 +1503,46 @@ export function NodeSettings({
                   <X size={13} />
                 </button>
               </div>
-              <GeomField label="Ms" ariaLabel="Delay" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
+              <GeomField label="Delay" ariaLabel="Delay" suffix="ms" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
               {item.action === 'open-url' ? (
-                <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40" />
+                <LabeledControl label="URL">
+                  <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 w-full bg-transparent text-[12px] text-koma-fg outline-none" />
+                </LabeledControl>
               ) : null}
               {item.action === 'navigate' || item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-                <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-8 px-1.5 text-[12px]">
-                  <option value="">Frame</option>
-                  {frames.map((frame) => (
-                    <option key={frame.id} value={frame.id}>{designLayerName(frame)}</option>
-                  ))}
-                </KomaSelect>
+                <LabeledControl label="Frame" wide>
+                  <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="">Choose frame</option>
+                    {frames.map((frame) => (
+                      <option key={frame.id} value={frame.id}>{designLayerName(frame)}</option>
+                    ))}
+                  </KomaSelect>
+                </LabeledControl>
               ) : null}
               {item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
                 <>
-                  <KomaSelect
-                    aria-label="Overlay place"
-                    value={item.overlayPlace ?? 'manual'}
-                    onChange={(event) => {
-                      const overlayPlace = event.target.value as DesignOverlayPlace
-                      patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
-                    }}
-                    className="h-8 px-1.5 text-[12px]"
-                  >
-                    <option value="manual">Manual</option>
-                    <option value="center">Center</option>
-                    <option value="top-left">Top left</option>
-                    <option value="top">Top</option>
-                    <option value="top-right">Top right</option>
-                    <option value="left">Left</option>
-                    <option value="right">Right</option>
-                    <option value="bottom-left">Bottom left</option>
-                    <option value="bottom">Bottom</option>
-                    <option value="bottom-right">Bottom right</option>
-                  </KomaSelect>
+                  <LabeledControl label="Place">
+                    <KomaSelect
+                      aria-label="Overlay place"
+                      value={item.overlayPlace ?? 'manual'}
+                      onChange={(event) => {
+                        const overlayPlace = event.target.value as DesignOverlayPlace
+                        patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
+                      }}
+                      className="h-7 w-full px-1.5 text-[12px]"
+                    >
+                      <option value="manual">Manual</option>
+                      <option value="center">Center</option>
+                      <option value="top-left">Top left</option>
+                      <option value="top">Top</option>
+                      <option value="top-right">Top right</option>
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
+                      <option value="bottom-left">Bottom left</option>
+                      <option value="bottom">Bottom</option>
+                      <option value="bottom-right">Bottom right</option>
+                    </KomaSelect>
+                  </LabeledControl>
                   <div className="grid grid-cols-2 gap-1">
                     <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
                     <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />

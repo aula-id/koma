@@ -88,6 +88,9 @@ import {
   createImageRect,
   createPolygonNode,
   createStarNode,
+  reshapeDesignNode,
+  retuneDesignShape,
+  shapeKindOf,
   booleanDesignNodes,
   outlineStrokeNode,
   detachInstance,
@@ -1611,4 +1614,25 @@ function sample(): DesignDoc {
   assert.equal(kids.find((item) => item.kind === 'instance')?.component, '1:2')
   assert.equal(kids.find((item) => item.kind === 'vector')?.vector?.vertices.length, 2)
   assert.equal(kids.find((item) => item.name === 'Photo')?.fills?.[0].type, 'image')
+}
+
+{
+  const rect = createNode('rect', 's', 10, 20)
+  rect.w = 80
+  rect.h = 40
+  rect.fill = '#ff0000'
+  const ellipse = reshapeDesignNode(rect, 'ellipse')
+  assert.equal(ellipse.kind, 'ellipse')
+  assert.equal(ellipse.x, 10)
+  assert.equal(ellipse.w, 80)
+  assert.equal(ellipse.fill, '#ff0000')
+  assert.equal(shapeKindOf(ellipse), 'ellipse')
+  const star = reshapeDesignNode(ellipse, 'star')
+  assert.equal(star.kind, 'vector')
+  assert.equal(shapeKindOf(star), 'star')
+  assert.ok(star.vector?.vertices.length)
+  const retuned = retuneDesignShape(star, { pointCount: 7, innerRadius: 0.5 })
+  assert.equal(retuned.pointCount, 7)
+  assert.equal(retuned.innerRadius, 0.5)
+  assert.equal(shapeKindOf(retuned), 'star')
 }

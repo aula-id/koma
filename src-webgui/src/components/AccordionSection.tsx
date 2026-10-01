@@ -23,7 +23,7 @@ export function AccordionSection({ title, open, onToggle, action, children, fill
       <div className="group flex h-[22px] flex-none items-center bg-koma-head pr-1 hover:bg-koma-hover">
         <button
           onClick={onToggle}
-          className="flex h-full flex-1 items-center gap-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75 hover:opacity-100"
+          className="flex h-full flex-1 items-center gap-1 px-2 text-[11px] font-semibold uppercase text-koma-fg opacity-75 hover:opacity-100"
         >
           <ChevronRight
             size={14}

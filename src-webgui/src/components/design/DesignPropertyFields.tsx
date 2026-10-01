@@ -192,11 +192,11 @@ export function InstanceOverrides({
                 onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { color: event.target.value.trim() || null }))}
                 className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
-              <GeomField label="Op" ariaLabel={`${name} opacity`} suffix="%" value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
-              <GeomField label="R" ariaLabel={`${name} radius`} value={typeof effective.radius === 'number' ? effective.radius : 0} onChange={(radius) => onPatch((current) => mergeDesignOverride(current, child.id, { radius: radius > 0 ? radius : null }))} />
-              <GeomField label="Sz" ariaLabel={`${name} font size`} value={effective.fontSize} onChange={(fontSize) => onPatch((current) => mergeDesignOverride(current, child.id, { fontSize: fontSize > 0 ? fontSize : null }))} />
-              <GeomField label="Sw" ariaLabel={`${name} stroke width`} value={effective.strokeWidth} onChange={(strokeWidth) => onPatch((current) => mergeDesignOverride(current, child.id, { strokeWidth: strokeWidth > 0 ? strokeWidth : null }))} />
-              <GeomField label="Rot" ariaLabel={`${name} rotation`} value={effective.rotation} onChange={(rotation) => onPatch((current) => mergeDesignOverride(current, child.id, { rotation: rotation ? rotation : null }))} />
+              <GeomField label="Opacity" ariaLabel={`${name} opacity`} suffix="%" value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
+              <GeomField label="Radius" ariaLabel={`${name} radius`} value={typeof effective.radius === 'number' ? effective.radius : 0} onChange={(radius) => onPatch((current) => mergeDesignOverride(current, child.id, { radius: radius > 0 ? radius : null }))} />
+              <GeomField label="Size" ariaLabel={`${name} font size`} value={effective.fontSize} onChange={(fontSize) => onPatch((current) => mergeDesignOverride(current, child.id, { fontSize: fontSize > 0 ? fontSize : null }))} />
+              <GeomField label="Width" ariaLabel={`${name} stroke width`} value={effective.strokeWidth} onChange={(strokeWidth) => onPatch((current) => mergeDesignOverride(current, child.id, { strokeWidth: strokeWidth > 0 ? strokeWidth : null }))} />
+              <GeomField label="Angle" ariaLabel={`${name} rotation`} value={effective.rotation} onChange={(rotation) => onPatch((current) => mergeDesignOverride(current, child.id, { rotation: rotation ? rotation : null }))} />
             </div>
           </div>
         )
@@ -209,8 +209,26 @@ export function Section({ title, action, children }: { title: string; action?: R
   const [open, setOpen] = useState(true)
   return (
     <AccordionSection title={title} open={open} onToggle={() => setOpen((value) => !value)} action={action} fill={false}>
-      <div className="flex flex-col gap-1 px-2 pt-1">{children}</div>
+      <div className="flex flex-col gap-1.5 px-2 pt-1.5">{children}</div>
     </AccordionSection>
+  )
+}
+
+export function LabeledControl({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2">
+      <span className={`${wide ? 'w-[4.75rem]' : 'w-14'} flex-none truncate text-[11px] text-koma-dim`}>{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </label>
+  )
+}
+
+export function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="px-0.5 text-[11px] text-koma-dim">{label}</span>
+      {children}
+    </div>
   )
 }
 
@@ -246,7 +264,7 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, boun
   }
   const shown = mixed ? '' : draft ?? formatBareNumber(value)
   return (
-    <label className="flex h-7 min-w-0 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5 focus-within:border-koma-fg/40">
+    <label className="flex h-8 min-w-0 items-center gap-1.5 overflow-hidden rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
       <span className="flex-none text-[11px] text-koma-dim">{label}</span>
       <input
         type="text"
@@ -416,7 +434,6 @@ export function ConstraintWidget({
 }
 
 export function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: DesignToken[]; onChange: (radius: number | string | null) => void }) {
-  const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<string | null>(null)
   const focused = useRef(false)
   const token = !mixed && typeof value === 'string' ? value : ''
@@ -438,18 +455,8 @@ export function RadiusField({ value, mixed, resolved, tokens, onChange }: { valu
   }
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5 focus-within:border-koma-fg/40">
-        <span className="flex-none text-[11px] text-koma-dim">Radius</span>
-        {tokens.length ? (
-          <button
-            type="button"
-            aria-label="Corner radius token"
-            aria-expanded={open}
-            aria-pressed={!!token}
-            onClick={() => setOpen((current) => !current)}
-            className={`h-4 w-4 flex-none rounded-full border border-koma-border ${token ? 'bg-koma-accent' : 'bg-transparent'}`}
-          />
-        ) : null}
+      <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+        <span className="w-12 flex-none text-[11px] text-koma-dim">Radius</span>
         <input
           type="text"
           inputMode={token ? 'text' : 'decimal'}
@@ -477,30 +484,22 @@ export function RadiusField({ value, mixed, resolved, tokens, onChange }: { valu
           }}
           className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
         />
-      </label>
-      {open ? (
-        <div className="flex flex-col gap-0.5 rounded border border-koma-border p-1">
-          <button
-            type="button"
-            onClick={() => {
-              const radius = Number(resolved)
-              onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
-              setOpen(false)
-            }}
-            className="h-6 rounded px-1 text-left text-[12px] text-koma-dim hover:bg-koma-hover"
-          >
-            Number
-          </button>
-          <TokenMenu
+        {tokens.length ? (
+          <TokenBindControl
             tokens={tokens}
-            selected={token}
-            onPick={(name) => {
-              if (name) onChange(name)
-              setOpen(false)
+            bound={token || undefined}
+            onBind={(name) => {
+              if (!name) {
+                const radius = Number(resolved)
+                onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
+                return
+              }
+              onChange(name)
             }}
+            compact
           />
-        </div>
-      ) : null}
+        ) : null}
+      </label>
     </div>
   )
 }
@@ -742,9 +741,7 @@ export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weig
         onChange={(next) => onChange(next.color && next.color !== 'none' ? next.color : 'none')}
       />
       {weight && onWeight ? (
-        <div className="w-16">
-          <GeomField label="W" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
-        </div>
+        <GeomField label="Width" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
       ) : null}
     </div>
   )
@@ -768,7 +765,8 @@ export function Choices<T extends string>({
   const iconic = options.every((option) => option.icon)
   return (
     <div className={`flex flex-col gap-1 ${grow ? 'min-w-0 flex-1' : 'flex-none'}`} role="group" aria-label={mixed ? `${label} · Mixed` : label}>
-      <div className={`flex ${iconic ? 'h-7 rounded border border-koma-border bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
+      {iconic ? null : <span className="px-0.5 text-[11px] text-koma-dim">{label}</span>}
+      <div className={`flex ${iconic ? 'h-8 rounded-lg bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
         {options.map((option) => {
           const pressed = !mixed && option.value === value
           return (
@@ -818,6 +816,7 @@ export function FillEditor({
   const stored = nodePaints(node, field)
   const paints = stored.length ? stored : [solidPaint(fallback)]
   const implicit = !stored.length
+  const [strokeSides, setStrokeSides] = useState(paints.some((paint) => paint.top != null || paint.right != null || paint.bottom != null || paint.left != null || node.strokeTop != null || node.strokeRight != null || node.strokeBottom != null || node.strokeLeft != null))
   if (mixed) {
     return <PaintRow label={label} doc={doc} value="" mixed fallback={fallback} tokens={tokens} onChange={(next) => onChange(setNodeSolid(node, field, next))} />
   }
@@ -845,53 +844,77 @@ export function FillEditor({
               onStoreImage={onStoreImage}
             />
             {field === 'stroke' ? (
-              <div className="mt-1 grid grid-cols-2 gap-1">
+              <div className="mt-1 flex flex-col gap-1.5">
                 <GeomField label="Width" ariaLabel="Stroke width" value={paint.width ?? node.strokeWidth ?? 1} onChange={(width) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, width } : item))))} />
-                <GeomField label="Dash" ariaLabel="Dash" value={paint.dash ?? 0} onChange={(dash) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, dash: dash > 0 ? dash : undefined } : item))))} />
-                <GeomField label="Gap" ariaLabel="Gap" value={paint.gap ?? 0} onChange={(gap) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, gap: gap > 0 ? gap : undefined } : item))))} />
-                <KomaSelect
-                  aria-label="Align"
-                  value={paint.align ?? node.strokeAlign ?? 'center'}
-                  onChange={(event) => {
-                    const align = event.target.value
-                    if (align !== 'inside' && align !== 'center' && align !== 'outside') return
-                    onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, align: align === 'center' ? undefined : align } : item))))
-                  }}
-                  className="h-7 w-full px-1.5 text-[12px]"
-                >
-                  <option value="inside">Inside</option>
-                  <option value="center">Center</option>
-                  <option value="outside">Outside</option>
-                </KomaSelect>
-                <GeomField label="Top" ariaLabel="Stroke top" value={paint.top ?? node.strokeTop ?? paint.width ?? node.strokeWidth ?? 1} onChange={(top) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top } : item))))} />
-                <GeomField label="Right" ariaLabel="Stroke right" value={paint.right ?? node.strokeRight ?? paint.width ?? node.strokeWidth ?? 1} onChange={(right) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, right } : item))))} />
-                <GeomField label="Bottom" ariaLabel="Stroke bottom" value={paint.bottom ?? node.strokeBottom ?? paint.width ?? node.strokeWidth ?? 1} onChange={(bottom) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, bottom } : item))))} />
-                <GeomField label="Left" ariaLabel="Stroke left" value={paint.left ?? node.strokeLeft ?? paint.width ?? node.strokeWidth ?? 1} onChange={(left) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, left } : item))))} />
-                <KomaSelect aria-label="Cap" value={paint.capStart ?? node.strokeStart ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                  <option value="none">Cap none</option>
-                  <option value="round">Cap round</option>
-                  <option value="square">Cap square</option>
-                </KomaSelect>
-                <KomaSelect aria-label="End cap" value={paint.capEnd ?? node.strokeEnd ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                  <option value="none">End none</option>
-                  <option value="round">End round</option>
-                  <option value="square">End square</option>
-                </KomaSelect>
-                <KomaSelect aria-label="Start marker" value={paint.markerStart ?? node.strokeMarkerStart ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                  <option value="none">Start none</option>
-                  <option value="arrow">Start arrow</option>
-                  <option value="dot">Start dot</option>
-                </KomaSelect>
-                <KomaSelect aria-label="End marker" value={paint.markerEnd ?? node.strokeMarkerEnd ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                  <option value="none">End none</option>
-                  <option value="arrow">End arrow</option>
-                  <option value="dot">End dot</option>
-                </KomaSelect>
-                <KomaSelect aria-label="Join" value={paint.join ?? node.strokeJoin ?? 'miter'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, join: event.target.value === 'miter' ? undefined : event.target.value as DesignPaint['join'] } : item))))} className="col-span-2 h-7 w-full px-1.5 text-[12px]">
-                  <option value="miter">Join miter</option>
-                  <option value="round">Join round</option>
-                  <option value="bevel">Join bevel</option>
-                </KomaSelect>
+                <LabeledControl label="Align">
+                  <KomaSelect
+                    aria-label="Align"
+                    value={paint.align ?? node.strokeAlign ?? 'center'}
+                    onChange={(event) => {
+                      const align = event.target.value
+                      if (align !== 'inside' && align !== 'center' && align !== 'outside') return
+                      onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, align: align === 'center' ? undefined : align } : item))))
+                    }}
+                    className="h-7 w-full px-1.5 text-[12px]"
+                  >
+                    <option value="inside">Inside</option>
+                    <option value="center">Center</option>
+                    <option value="outside">Outside</option>
+                  </KomaSelect>
+                </LabeledControl>
+                <div className="grid grid-cols-2 gap-1">
+                  <GeomField label="Dash" ariaLabel="Dash" value={paint.dash ?? 0} onChange={(dash) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, dash: dash > 0 ? dash : undefined } : item))))} />
+                  <GeomField label="Gap" ariaLabel="Gap" value={paint.gap ?? 0} onChange={(gap) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, gap: gap > 0 ? gap : undefined } : item))))} />
+                </div>
+                <AlignButton label={strokeSides ? 'One width' : 'Per-side widths'} caption={strokeSides ? 'One width' : 'Per side'} pressed={strokeSides} onClick={() => {
+                  setStrokeSides((current) => !current)
+                  if (strokeSides) onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top: undefined, right: undefined, bottom: undefined, left: undefined } : item))))
+                }}>
+                  <Square size={14} />
+                </AlignButton>
+                {strokeSides ? (
+                  <div className="grid grid-cols-2 gap-1">
+                    <GeomField label="Top" ariaLabel="Stroke top" value={paint.top ?? node.strokeTop ?? paint.width ?? node.strokeWidth ?? 1} onChange={(top) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top } : item))))} />
+                    <GeomField label="Right" ariaLabel="Stroke right" value={paint.right ?? node.strokeRight ?? paint.width ?? node.strokeWidth ?? 1} onChange={(right) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, right } : item))))} />
+                    <GeomField label="Bottom" ariaLabel="Stroke bottom" value={paint.bottom ?? node.strokeBottom ?? paint.width ?? node.strokeWidth ?? 1} onChange={(bottom) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, bottom } : item))))} />
+                    <GeomField label="Left" ariaLabel="Stroke left" value={paint.left ?? node.strokeLeft ?? paint.width ?? node.strokeWidth ?? 1} onChange={(left) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, left } : item))))} />
+                  </div>
+                ) : null}
+                <LabeledControl label="Cap">
+                  <KomaSelect aria-label="Cap" value={paint.capStart ?? node.strokeStart ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="none">None</option>
+                    <option value="round">Round</option>
+                    <option value="square">Square</option>
+                  </KomaSelect>
+                </LabeledControl>
+                <LabeledControl label="End cap">
+                  <KomaSelect aria-label="End cap" value={paint.capEnd ?? node.strokeEnd ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="none">None</option>
+                    <option value="round">Round</option>
+                    <option value="square">Square</option>
+                  </KomaSelect>
+                </LabeledControl>
+                <LabeledControl label="Start" wide>
+                  <KomaSelect aria-label="Start marker" value={paint.markerStart ?? node.strokeMarkerStart ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="none">None</option>
+                    <option value="arrow">Arrow</option>
+                    <option value="dot">Dot</option>
+                  </KomaSelect>
+                </LabeledControl>
+                <LabeledControl label="End" wide>
+                  <KomaSelect aria-label="End marker" value={paint.markerEnd ?? node.strokeMarkerEnd ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="none">None</option>
+                    <option value="arrow">Arrow</option>
+                    <option value="dot">Dot</option>
+                  </KomaSelect>
+                </LabeledControl>
+                <LabeledControl label="Join">
+                  <KomaSelect aria-label="Join" value={paint.join ?? node.strokeJoin ?? 'miter'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, join: event.target.value === 'miter' ? undefined : event.target.value as DesignPaint['join'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
+                    <option value="miter">Miter</option>
+                    <option value="round">Round</option>
+                    <option value="bevel">Bevel</option>
+                  </KomaSelect>
+                </LabeledControl>
               </div>
             ) : null}
           </div>

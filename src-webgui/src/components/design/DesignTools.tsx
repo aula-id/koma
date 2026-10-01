@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Circle, Frame, Hexagon, Minus, Square, Star } from 'lucide-react'
+import { Frame, Square } from 'lucide-react'
 import { FRAME_PRESETS, type FramePreset } from '../../lib/design'
 import { ToolButton } from './DesignRulers'
 import type { Tool } from './tabShared'
@@ -84,21 +84,9 @@ export function FrameToolFlyout({
 }
 
 export function ShapeToolFlyout({ tool, onTool }: { tool: Tool; onTool: (tool: Tool) => void }) {
-  const current = tool === 'line' || tool === 'ellipse' || tool === 'polygon' || tool === 'star' ? tool : 'rect'
   return (
-    <ToolFlyout
-      label={current === 'ellipse' ? 'Ellipse (O)' : current === 'line' ? 'Line (L)' : current === 'polygon' ? 'Polygon' : current === 'star' ? 'Star' : 'Rectangle (R)'}
-      selected={tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'polygon' || tool === 'star'}
-      onClick={() => onTool(current)}
-      items={[
-        { label: 'Rectangle', run: () => onTool('rect') },
-        { label: 'Line', run: () => onTool('line') },
-        { label: 'Ellipse', run: () => onTool('ellipse') },
-        { label: 'Polygon', run: () => onTool('polygon') },
-        { label: 'Star', run: () => onTool('star') },
-      ]}
-    >
-      {current === 'ellipse' ? <Circle size={15} strokeWidth={2.25} /> : current === 'line' ? <Minus size={15} strokeWidth={2.25} /> : current === 'star' ? <Star size={15} strokeWidth={2.25} /> : current === 'polygon' ? <Hexagon size={15} strokeWidth={2.25} /> : <Square size={15} strokeWidth={2.25} />}
-    </ToolFlyout>
+    <ToolButton label="Rectangle (R)" selected={tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'polygon' || tool === 'star'} onClick={() => onTool('rect')}>
+      <Square size={15} strokeWidth={2.25} />
+    </ToolButton>
   )
 }
