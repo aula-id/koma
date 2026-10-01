@@ -78,6 +78,17 @@ import {
   setDesignMode,
   setDesignTokenValue,
   setInstanceVariant,
+  applyImageFill,
+  applyDesignToken,
+  putDesignImage,
+  createImageRect,
+  createPolygonNode,
+  createStarNode,
+  booleanDesignNodes,
+  outlineStrokeNode,
+  detachInstance,
+  graphToDesign,
+  moveVectorVertex,
   setVariantProps,
   updateDesignNode,
   writeComponentView,
@@ -118,7 +129,37 @@ assert.equal(isDesignPath('.koma/auth.diag'), false)
 
 {
   const parsed = parseDesign('{"version":2}')
-  assert.equal(parsed.error, 'This file is not a design')
+  assert.equal(parsed.error, null)
+  assert.equal(parsed.doc.version, 2)
+}
+
+{
+  const doc = emptyDesign()
+  const rect = createNode('rect', 'r', 0, 0)
+  rect.fills = [{ type: 'gradient', kind: 'linear', stops: [{ color: 'color.fg', at: 0 }, { color: '#22d3ee', at: 1 }] }]
+  doc.tokens = [{ name: 'color.fg', kind: 'color', values: { light: '#112233', dark: '#ffffff' } }]
+  doc.screens = [rect]
+  const parsed = parseDesign(serializeDesign(doc))
+  assert.equal(parsed.error, null)
+  assert.equal(parsed.doc.version, 2)
+  assert.equal(parsed.doc.screens[0].fills?.[0].type, 'gradient')
+  assert.equal(parsed.doc.screens[0].fills?.[0].stops?.[0].color, 'color.fg')
+  const chrome = nodeChrome(parsed.doc.screens[0])
+  assert.equal(chrome.fill, '')
+}
+
+{
+  const hashed = 'a'.repeat(64)
+  let doc = emptyDesign()
+  doc = putDesignImage(doc, hashed, 'image/png', `.koma/assets/${hashed}.png`)
+  const rect = createImageRect('img', 0, 0, 120, 80, hashed)
+  assert.equal(rect.fills?.[0].type, 'image')
+  assert.equal(rect.fills?.[0].hash, hashed)
+  const attached = applyImageFill(createNode('rect', 'r', 0, 0), hashed, 'fit')
+  assert.equal(attached.fills?.[0].scale, 'fit')
+  const round = parseDesign(serializeDesign({ ...doc, screens: [rect] }))
+  assert.equal(round.error, null)
+  assert.equal(round.doc.images?.[hashed]?.mime, 'image/png')
 }
 
 function button(): DesignComponent {
@@ -1150,4 +1191,76 @@ function sample(): DesignDoc {
   const afterPage = layoutDesign({ ...emptyDesign(), components: [component], screens: [page] })
   assert.equal(afterPage.components[0].variants[0].node.w, 80)
   assert.equal(afterPage.components[0].variants[0].node.h, 40)
+}
+
+{
+  const poly = createPolygonNode('poly', 0, 0, 100, 3)
+  assert.equal(poly.kind, 'vector')
+  assert.equal(poly.pointCount, 3)
+  assert.ok(poly.vector?.vertices.length === 3)
+  const star = createStarNode('star', 0, 0, 100, 5)
+  assert.equal(star.kind, 'vector')
+  assert.equal(star.vector?.vertices.length, 10)
+  const outlined = outlineStrokeNode({ ...poly, stroke: '#112233' })
+  assert.equal(outlined.fill, '#112233')
+}
+
+{
+  const a = createNode('rect', 'a', 0, 0)
+  const b = createNode('rect', 'b', 20, 0)
+  const host = createNode('frame', 'host', 0, 0)
+  host.children = [a, b]
+  const next = booleanDesignNodes({ ...emptyDesign(), screens: [host] }, ['a', 'b'], 'union', () => 'bool')
+  assert.ok(next)
+  const group = next!.screens[0].children?.find((child) => child.id === 'bool')
+  assert.equal(group?.booleanOp, 'union')
+}
+
+{
+  const child = createNode('rect', 'kid', 10, 10)
+  child.constraintH = 'scale'
+  child.constraintV = 'end'
+  child.w = 20
+  child.h = 20
+  const frame = createNode('frame', 'box', 0, 0)
+  frame.w = 100
+  frame.h = 100
+  frame.children = [child]
+  const grown = resizeDesignNode(frame, 'se', 100, 50, 1, false)
+  assert.equal(grown.w, 200)
+  assert.equal(grown.children?.[0].w, 40)
+  assert.equal(grown.children?.[0].y, 60)
+}
+
+{
+  const frame = createNode('frame', 'btn', 0, 0)
+  frame.w = 80
+  frame.h = 40
+  const component: DesignComponent = { id: 'btn', name: 'Btn', variants: [{ props: {}, node: frame }] }
+  const inst = makeInstance({ ...emptyDesign(), components: [component] }, 'btn', 'inst', 4, 8)
+  assert.ok(inst)
+  const detached = detachInstance({ ...emptyDesign(), components: [component], screens: [inst!] }, 'inst', () => 'd1')
+  assert.equal(detached?.screens[0].kind, 'frame')
+  assert.equal(detached?.screens[0].id, 'd1')
+}
+
+{
+  const doc = addDesignToken(emptyDesign(), 'color.brand', 'color')!
+  const rect = createNode('rect', 'r', 0, 0)
+  const painted = applyDesignToken({ ...doc, screens: [rect] }, ['r'], 'color.brand')
+  assert.equal(painted.screens[0].fill, 'color.brand')
+}
+
+{
+  const imported = graphToDesign({ pages: [{ id: 'p', type: 'FRAME', name: 'Home', width: 320, height: 480, children: [{ type: 'TEXT', characters: 'Hi', width: 40, height: 16 }] }] })
+  assert.equal(imported.error, null)
+  assert.equal(imported.doc.screens[0].name, 'Home')
+  assert.equal(imported.doc.screens[0].children?.[0].kind, 'text')
+  assert.equal(imported.doc.screens[0].children?.[0].text, 'Hi')
+}
+
+{
+  const node = createPolygonNode('v', 0, 0, 80, 4)
+  const moved = moveVectorVertex(node, 0, 12, 16)
+  assert.ok(moved.vector?.vertices.some((point) => point.x === 0 || point.y === 0))
 }

@@ -86,6 +86,25 @@ import {
   writeComponentView,
   unwrapDesignNode,
   wrapDesignNodes,
+  moveVectorVertex,
+  deleteVectorVertex,
+  insertVectorVertex,
+  applyDesignToken,
+  applyImageFill,
+  booleanDesignNodes,
+  createPolygonNode,
+  createStarNode,
+  flattenBooleanNode,
+  outlineStrokeNode,
+  detachInstance,
+  cacheDesignImage,
+  createImageRect,
+  hashBytes,
+  imageNaturalSize,
+  mimeForName,
+  putDesignImage,
+  writeDesignAsset,
+  designAssetPath,
   type DesignAlignAxis,
   type DesignAlignEdge,
   type DesignDoc,
@@ -182,6 +201,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const stepOutRef = useRef<() => void>(() => {})
   const layerOpsRef = useRef<(action: DesignLayerOp) => void>(() => {})
   const penApplyRef = useRef<(draft: PenDraft, closed?: boolean) => void>(() => {})
+  const finishPenRef = useRef<(closed: boolean) => void>(() => {})
+  const cancelPenRef = useRef<() => void>(() => {})
+  const chooseToolRef = useRef<(next: Tool) => void>(() => {})
   const penRef = useRef<PenDraft | null>(null)
   const penNoted = useRef(false)
   const selectionRef = useRef<string[]>([])
@@ -193,6 +215,10 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [focusId, setFocusId] = useState<string | null>(null)
   const [overrideTargetId, setOverrideTargetId] = useState<string | null>(null)
   const [enteredContainerId, setEnteredContainerId] = useState<string | null>(null)
+  const [vectorEditId, setVectorEditId] = useState<string | null>(null)
+  const [palette, setPalette] = useState(false)
+  const vectorEditRef = useRef<string | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const focusRef = useRef<string | null>(null)
   const overrideTargetRef = useRef<string | null>(null)
   const enteredContainerRef = useRef<string | null>(null)
@@ -320,6 +346,42 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     note(stored)
     updateDesign(tab.root, tab.path, next)
   }
+  const importImages = async (files: File[], point?: { x: number; y: number }) => {
+    const stored = useKoma.getState().design?.docs?.[key]?.doc
+    if (!stored || !files.length) return
+    const req = useKoma.getState().req
+    let next = stored
+    const ids: string[] = []
+    let cursor = point ?? { x: 40, y: 40 }
+    for (const file of files) {
+      const mime = file.type || mimeForName(file.name)
+      if (!mime?.startsWith('image/')) continue
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const hash = await hashBytes(bytes)
+      const path = designAssetPath(hash, mime)
+      cacheDesignImage(hash, bytes, mime)
+      writeDesignAsset(req, tab.root, path, bytes)
+      next = putDesignImage(next, hash, mime, path)
+      const size = await imageNaturalSize(bytes, mime)
+      const selected = selectionRef.current[0]
+      const target = selected ? findDesignNode(next, selected) : null
+      if (target && (target.kind === 'rect' || target.kind === 'frame' || target.kind === 'ellipse')) {
+        next = updateDesignNode(next, target.id, (node) => applyImageFill(node, hash, 'fill'))
+        ids.push(target.id)
+      } else {
+        const node = createImageRect(mintId('img'), cursor.x, cursor.y, size.w, size.h, hash)
+        next = insertDesignNode(next, null, node)
+        ids.push(node.id)
+        cursor = { x: cursor.x + 24, y: cursor.y + 24 }
+      }
+    }
+    if (ids.length) {
+      commitStored(next)
+      setSelection(ids)
+      setTool('select')
+    }
+  }
+
   const commitStored = (next: DesignDoc, noteOnce = false) => {
     const stored = useKoma.getState().design?.docs?.[key]?.doc
     if (!stored) return
@@ -532,6 +594,18 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         penApplyRef.current(next)
         return
       }
+      if (drag.kind === 'vertex' && point) {
+        const stored = useKoma.getState().design?.docs?.[key]?.doc
+        if (!stored) return
+        const focus = focusRef.current
+        const doc = editingDoc(stored, focus)
+        const origin = nodeOrigin(doc, drag.id)
+        if (!origin) return
+        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, (node) => moveVectorVertex(node, drag.index, point.x - origin.x, point.y - origin.y))))
+        if (serializeDesign(next) === serializeDesign(stored)) return
+        updateRef.current(tab.root, tab.path, next)
+        return
+      }
       if (drag.kind !== 'move' && drag.kind !== 'resize' && drag.kind !== 'radius') return
       const stored = useKoma.getState().design?.docs?.[key]?.doc
       if (!stored) return
@@ -696,13 +770,25 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       noteRef.current(stored)
       updateRef.current(tab.root, tab.path, detail.doc)
     }
+    const onApplyToken = (event: Event) => {
+      const detail = (event as CustomEvent<{ root: string; path: string; name: string }>).detail
+      if (!detail || detail.root !== tab.root || detail.path !== tab.path) return
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
+      if (!stored || !selectionRef.current.length) return
+      const next = applyDesignToken(stored, selectionRef.current, detail.name)
+      if (serializeDesign(next) === serializeDesign(stored)) return
+      noteRef.current(stored)
+      updateRef.current(tab.root, tab.path, next)
+    }
     window.addEventListener('koma-design-commit', onCommit)
+    window.addEventListener('koma-design-apply-token', onApplyToken)
     window.addEventListener('koma-design-restore', onRestore)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
     return () => {
       window.removeEventListener('koma-design-commit', onCommit)
+      window.removeEventListener('koma-design-apply-token', onApplyToken)
       window.removeEventListener('koma-design-restore', onRestore)
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -746,6 +832,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       if (event.type !== 'keydown') return
       if (typing) return
       const meta = event.metaKey || event.ctrlKey
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPalette((open) => !open)
+        return
+      }
       if (meta && !event.altKey && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         if (event.shiftKey) redoRef.current()
@@ -842,19 +933,32 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const next = tools[event.key.toLowerCase()]
         if (next) {
           event.preventDefault()
-          setTool(next)
+          chooseToolRef.current(next)
           return
         }
       }
+      if (event.key === 'Enter' && !meta) {
+        event.preventDefault()
+        if (toolRef.current === 'pen' && penRef.current) finishPenRef.current(false)
+        else setVectorEditId(null)
+        return
+      }
       if (event.key === 'Escape') {
         setEditing(null)
+        if (toolRef.current === 'pen' && penRef.current) {
+          cancelPenRef.current()
+          return
+        }
+        if (vectorEditRef.current) {
+          setVectorEditId(null)
+          return
+        }
         setPen(null)
         setPenHover(null)
         setPenHandle(null)
         penRef.current = null
         penNoted.current = false
-        if (toolRef.current === 'pen') setTool('select')
-        else stepOutRef.current()
+        stepOutRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -936,6 +1040,45 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     setSelection([draft.id])
   }
   penApplyRef.current = applyPen
+
+  const finishPen = (closed: boolean) => {
+    const draft = penRef.current
+    if (!draft || draft.points.length < 2) {
+      cancelPen()
+      return
+    }
+    applyPen(draft, closed)
+    penRef.current = null
+    setPen(null)
+    setPenHover(null)
+    setPenHandle(null)
+    penNoted.current = false
+    setTool('select')
+    setSelection([draft.id])
+  }
+
+  const cancelPen = () => {
+    const draft = penRef.current
+    penRef.current = null
+    setPen(null)
+    setPenHover(null)
+    setPenHandle(null)
+    if (draft?.id && penNoted.current) {
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
+      if (stored && locateDesign(stored, draft.id)) commitStored(deleteDesignNode(stored, draft.id))
+    }
+    penNoted.current = false
+    setTool('select')
+  }
+
+  const chooseTool = (next: Tool) => {
+    if (toolRef.current === 'pen' && next !== 'pen' && next !== 'pan' && penRef.current) finishPen(false)
+    setTool(next)
+  }
+  finishPenRef.current = finishPen
+  cancelPenRef.current = cancelPen
+  chooseToolRef.current = chooseTool
+  vectorEditRef.current = vectorEditId
 
   const viewDoc = () => {
     const stored = useKoma.getState().design?.docs?.[key]?.doc
@@ -1156,6 +1299,30 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       setSelection([id])
       setPropsOpen(true)
     },
+    boolean: (op) => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || ids.length < 2) return
+      if (op === 'flatten') {
+        mutate(ids.reduce((doc, id) => updateDesignNode(doc, id, flattenBooleanNode), open.doc))
+        return
+      }
+      const next = booleanDesignNodes(open.doc, ids, op, () => mintId('b'))
+      if (next) commit(next)
+    },
+    outline: () => {
+      const open = viewDoc()
+      const ids = selectionRef.current
+      if (!open || !ids.length) return
+      mutate(ids.reduce((doc, id) => updateDesignNode(doc, id, outlineStrokeNode), open.doc))
+    },
+    detach: () => {
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
+      const id = selectionRef.current[0]
+      if (!stored || !id) return
+      const next = detachInstance(stored, id, () => mintId('n'))
+      if (next) commitStored(next)
+    },
   }
 
   layerOpsRef.current = (action) => {
@@ -1212,7 +1379,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     const zero = { x: 0, y: 0 }
     if (draft && draft.points.length >= 3) {
       const first = draft.points[0]
-      if (Math.hypot(first.x - point.x, first.y - point.y) <= 8) {
+      const threshold = 8 / Math.max(viewRef.current.zoom, 0.25)
+      if (Math.hypot(first.x - point.x, first.y - point.y) <= threshold) {
         applyPen(draft, true)
         penRef.current = null
         setPen(null)
@@ -1260,6 +1428,16 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (tool === 'pen') {
       event.preventDefault()
       beginPen(point)
+      return
+    }
+    if (tool === 'polygon' || tool === 'star') {
+      event.preventDefault()
+      const stored = useKoma.getState().design?.docs?.[key]?.doc
+      if (!stored) return
+      const node = tool === 'star' ? createStarNode(mintId('s'), point.x, point.y) : createPolygonNode(mintId('p'), point.x, point.y)
+      commit(insertDesignNode(editingDoc(stored, focusRef.current), null, node))
+      setSelection([node.id])
+      setTool('select')
       return
     }
     if (tool === 'frame' || tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'text') {
@@ -1363,6 +1541,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!point) return
     if (componentId) {
       placeInstance(componentId, point)
+      return
+    }
+    const files = [...(event.dataTransfer.files ?? [])]
+    if (files.some((file) => (file.type || mimeForName(file.name))?.startsWith('image/'))) {
+      void importImages(files, point)
       return
     }
     const kind = event.dataTransfer.getData(DESIGN_MIME)
@@ -1506,6 +1689,18 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 bg-koma-bg text-koma-fg" onContextMenu={(event) => event.preventDefault()}>
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+        hidden
+        multiple
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])]
+          event.target.value = ''
+          if (files.length) void importImages(files)
+        }}
+      />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <EditorChrome
           path={tab.path}
@@ -1618,6 +1813,13 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 onEnterContainer={(id, event) => {
                   event.preventDefault()
                   event.stopPropagation()
+                  const hit = findDesignNode(doc, id)
+                  if (hit?.kind === 'vector') {
+                    setSelection([id])
+                    setVectorEditId(id)
+                    setTool('select')
+                    return
+                  }
                   enterContainerAt(id, event.clientX, event.clientY)
                 }}
                 onCorner={(id, corner, event) => {
@@ -1781,6 +1983,45 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             </div>
           ) : null}
           {pen ? <PenOverlay draft={pen} hover={penHandle == null ? penHover : null} zoom={view.zoom} /> : null}
+          {vectorEditId ? (() => {
+            const edited = findDesignNode(doc, vectorEditId)
+            const origin = nodeOrigin(doc, vectorEditId)
+            const vertices = edited?.vector?.vertices
+            if (!edited || !origin || !vertices?.length) return null
+            const unit = 7 / Math.max(view.zoom, 0.25)
+            return vertices.map((point, index) => (
+              <button
+                key={`${vectorEditId}-${index}`}
+                type="button"
+                aria-label={`Vertex ${index + 1}`}
+                className="absolute z-20 border-0 p-0"
+                style={{
+                  left: origin.x + point.x,
+                  top: origin.y + point.y,
+                  width: unit,
+                  height: unit,
+                  background: '#ffffff',
+                  border: `${1 / Math.max(view.zoom, 0.25)}px solid ${SELECTION}`,
+                  transform: 'translate(-50%, -50%)',
+                  cursor: 'pointer',
+                }}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (event.altKey) {
+                    patchSelected((node) => node.id === vectorEditId ? deleteVectorVertex(node, index) : node)
+                    return
+                  }
+                  dragRef.current = { kind: 'vertex', id: vectorEditId, index, startX: event.clientX, startY: event.clientY }
+                }}
+                onDoubleClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  patchSelected((node) => node.id === vectorEditId ? insertVectorVertex(node, index, point.x + 8, point.y) : node)
+                }}
+              />
+            ))
+          })() : null}
           </div>
           {doc.screens.length === 0 && !file.loading ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-koma-fg opacity-35">
@@ -1790,25 +2031,31 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         </div>
         </div>
         <div className="flex h-8 flex-none items-center gap-1 border-t border-koma-border bg-koma-panel px-2">
-          <ToolButton label="Move (V)" selected={tool === 'select'} onClick={() => setTool('select')}>
+          <ToolButton label="Move (V)" selected={tool === 'select'} onClick={() => chooseTool('select')}>
             <MousePointer2 size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Frame (F)" selected={tool === 'frame'} onClick={() => setTool('frame')}>
+          <ToolButton label="Frame (F)" selected={tool === 'frame'} onClick={() => chooseTool('frame')}>
             <Frame size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Rectangle (R)" selected={tool === 'rect'} onClick={() => setTool('rect')}>
+          <ToolButton label="Rectangle (R)" selected={tool === 'rect'} onClick={() => chooseTool('rect')}>
             <Square size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Ellipse (O)" selected={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
+          <ToolButton label="Ellipse (O)" selected={tool === 'ellipse'} onClick={() => chooseTool('ellipse')}>
             <Circle size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Line (L)" selected={tool === 'line'} onClick={() => setTool('line')}>
+          <ToolButton label="Line (L)" selected={tool === 'line'} onClick={() => chooseTool('line')}>
             <Minus size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Pen (P)" selected={tool === 'pen'} onClick={() => setTool('pen')}>
+          <ToolButton label="Polygon" selected={tool === 'polygon'} onClick={() => chooseTool('polygon')}>
+            <Spline size={14} />
+          </ToolButton>
+          <ToolButton label="Star" selected={tool === 'star'} onClick={() => chooseTool('star')}>
+            <Plus size={14} />
+          </ToolButton>
+          <ToolButton label="Pen (P)" selected={tool === 'pen'} onClick={() => chooseTool('pen')}>
             <PenTool size={15} strokeWidth={2.25} />
           </ToolButton>
-          <ToolButton label="Text (T)" selected={tool === 'text'} onClick={() => setTool('text')}>
+          <ToolButton label="Text (T)" selected={tool === 'text'} onClick={() => chooseTool('text')}>
             <Type size={15} strokeWidth={2.25} />
           </ToolButton>
           <ToolButton label="Hand (H)" selected={tool === 'pan'} onClick={() => setTool('pan')}>
@@ -1981,11 +2228,40 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 if (childId && selected) setSelection([selected.id])
                 setOverrideTargetId(childId)
               }}
+              onPickImage={() => imageInputRef.current?.click()}
             />
           ) : (
             <TokenEditor root={tab.root} path={tab.path} doc={storedDoc} onCommit={(next) => commitStored(next)} />
           )}
         </aside>
+      ) : null}
+      {palette ? (
+        <div className="absolute inset-0 z-50 flex items-start justify-center bg-black/30 pt-16" onClick={() => setPalette(false)}>
+          <div className="w-80 rounded border border-koma-border bg-koma-panel p-2 shadow-lg" onClick={(event) => event.stopPropagation()}>
+            <p className="px-1 pb-1 text-[11px] text-koma-dim">Commands</p>
+            {[
+              { id: 'select', label: 'Move tool', run: () => chooseTool('select') },
+              { id: 'pen', label: 'Pen tool', run: () => chooseTool('pen') },
+              { id: 'union', label: 'Boolean union', run: () => commandsRef.current?.boolean('union') },
+              { id: 'outline', label: 'Outline stroke', run: () => commandsRef.current?.outline() },
+              { id: 'detach', label: 'Detach instance', run: () => commandsRef.current?.detach() },
+              { id: 'image', label: 'Import image', run: () => imageInputRef.current?.click() },
+              { id: 'component', label: 'Create component', run: () => commandsRef.current?.component() },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="flex h-7 w-full items-center rounded px-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                onClick={() => {
+                  item.run()
+                  setPalette(false)
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
       ) : null}
       {menu ? (
         <DesignMenu
@@ -2010,6 +2286,9 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             else if (id === 'frame-selection') commands.wrap('frame')
             else if (id === 'auto') commands.auto()
             else if (id === 'component') commands.component()
+            else if (id === 'detach') commands.detach()
+            else if (id === 'union' || id === 'subtract' || id === 'intersect' || id === 'exclude' || id === 'flatten') commands.boolean(id)
+            else if (id === 'outline') commands.outline()
             else if (id === 'hide') commands.hide()
             else if (id === 'lock') commands.lock()
             else if (id === 'flip-x') commands.flip('x')

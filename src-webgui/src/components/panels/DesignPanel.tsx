@@ -7,7 +7,7 @@ import { DesignLayers } from '../DesignLayers'
 import { Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
-import { fileKey, type FileTreeEntry } from '../../store/coding'
+import { fileKey, mintRequestId, type FileTreeEntry } from '../../store/coding'
 import {
   COMPONENT_MIME,
   addDesignToken,
@@ -18,7 +18,10 @@ import {
   designFileName,
   designQueryNode,
   dropDesignToken,
+  importFigToDesign,
+  importPenToDesign,
   isDesignPath,
+  serializeDesign,
   resolveRef,
   setDesignMode,
   setDesignTokenValue,
@@ -30,6 +33,7 @@ import {
 import { resolveDesignPanelTab } from '../../lib/designPanelTab'
 import { emitDesignLayer } from '../../lib/designUi'
 import { designPngBase64 } from '../../lib/designRender'
+import { utf8ToBase64 } from '../../lib/diagramNotes'
 import type { DesignFileState } from '../../store/design'
 
 const EMPTY_ROOTS: string[] = []
@@ -168,6 +172,11 @@ export function TokenEditor({ root, path, doc, query = '', onCommit }: { root: s
                     if (next) onCommit(next)
                   }}
                 />
+                <IconBtn label={`Apply ${token.name}`} onClick={() => {
+                  window.dispatchEvent(new CustomEvent('koma-design-apply-token', { detail: { root, path, name: token.name } }))
+                }}>
+                  <Check size={12} />
+                </IconBtn>
                 <IconBtn label={`Delete ${token.name}`} tone="red" onClick={() => onCommit(dropDesignToken(doc, token.name))}>
                   <Trash2 size={12} />
                 </IconBtn>
@@ -271,6 +280,7 @@ export function DesignPanel() {
   const [filesOpen, setFilesOpen] = useState(false)
   const [fileSearchOpen, setFileSearchOpen] = useState(false)
   const [fileQuery, setFileQuery] = useState('')
+  const importInputRef = useRef<HTMLInputElement | null>(null)
   const [layersOpen, setLayersOpen] = useState(true)
   const [assetQuery, setAssetQuery] = useState('')
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null)
@@ -432,6 +442,43 @@ export function DesignPanel() {
                 >
                   <Search size={13} />
                 </button>
+                <button
+                  type="button"
+                  aria-label="Import .fig or .pen"
+                  title="Import .fig or .pen"
+                  onClick={() => importInputRef.current?.click()}
+                  className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                >
+                  <File size={13} />
+                </button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".fig,.pen,application/octet-stream"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (!file || !activeRoot) return
+                    void file.arrayBuffer().then(async (buffer) => {
+                      const imported = file.name.toLowerCase().endsWith('.pen')
+                        ? await importPenToDesign(new TextDecoder().decode(buffer))
+                        : await importFigToDesign(buffer)
+                      if (imported.error) return
+                      const name = designFileName(file.name.replace(/\.(fig|pen)$/i, '')) ?? `import-${Date.now()}.kdsgn`
+                      const path = name.startsWith('.koma/') ? name : `.koma/${name}`
+                      req({
+                        r: 'FileWriteBytes',
+                        root: activeRoot,
+                        path,
+                        bytesB64: utf8ToBase64(serializeDesign(imported.doc)),
+                        overwrite: false,
+                        requestId: mintRequestId(),
+                      })
+                      openDesignTab(activeRoot, path)
+                    })
+                  }}
+                />
                 <button
                   type="button"
                   aria-label="New design"

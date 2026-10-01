@@ -6,7 +6,7 @@ export const DESIGN_MIN_W = 8
 export const DESIGN_MIN_H = 8
 
 export type DesignKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'instance'
-export type DesignLayout = 'row' | 'column'
+export type DesignLayout = 'row' | 'column' | 'grid'
 export type DesignAlign = 'start' | 'center' | 'end' | 'space' | 'stretch'
 export type DesignSize = 'hug' | 'fill' | 'fixed'
 export type DesignWeight = 'regular' | 'medium' | 'bold'
@@ -16,7 +16,18 @@ export type DesignTextVertical = 'top' | 'center' | 'bottom'
 export type DesignTextHug = 'height' | 'width'
 export type DesignTokenKind = 'color' | 'space' | 'type' | 'radius'
 export type DesignOrder = 'front' | 'forward' | 'backward' | 'back'
-export type DesignDrawKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text'
+export type DesignDrawKind = 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'vector' | 'text' | 'polygon' | 'star'
+export type DesignBlend = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-burn' | 'color-dodge' | 'soft-light' | 'hard-light' | 'difference' | 'exclusion' | 'hue' | 'saturation' | 'color' | 'luminosity' | 'pass-through'
+export type DesignGradientKind = 'linear' | 'radial' | 'angular' | 'diamond'
+export type DesignImageScale = 'fill' | 'fit' | 'crop' | 'tile'
+export type DesignStrokeAlign = 'inside' | 'center' | 'outside'
+export type DesignStrokeCap = 'none' | 'round' | 'square'
+export type DesignStrokeJoin = 'miter' | 'bevel' | 'round'
+export type DesignConstraint = 'start' | 'center' | 'end' | 'stretch' | 'scale'
+export type DesignTextCase = 'original' | 'upper' | 'lower' | 'title'
+export type DesignTextTruncate = 'off' | 'end'
+export type DesignBooleanOp = 'union' | 'subtract' | 'intersect' | 'exclude'
+export type DesignEffectKind = 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur'
 
 export type DesignVectorPoint = { x: number; y: number }
 
@@ -48,7 +59,7 @@ export type DesignPenPoint = {
 }
 
 const KINDS: readonly DesignKind[] = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance']
-const LAYOUTS: readonly DesignLayout[] = ['row', 'column']
+const LAYOUTS: readonly DesignLayout[] = ['row', 'column', 'grid']
 const ALIGNS: readonly DesignAlign[] = ['start', 'center', 'end', 'stretch']
 const JUSTIFIES: readonly DesignAlign[] = ['start', 'center', 'end', 'space']
 const SIZES: readonly DesignSize[] = ['hug', 'fill', 'fixed']
@@ -62,6 +73,52 @@ export const TOKEN_NAME = /^[a-zA-Z][a-zA-Z0-9._-]*$/
 
 /** A `#rrggbb`, a token name, or `none` when paint is explicitly off. */
 export type DesignRef = string
+
+export type DesignPaintStop = { color: DesignRef; at: number }
+
+export type DesignPaint = {
+  type: 'solid' | 'gradient' | 'image'
+  visible?: boolean
+  opacity?: number
+  blend?: DesignBlend
+  color?: DesignRef
+  kind?: DesignGradientKind
+  stops?: DesignPaintStop[]
+  transform?: number[]
+  hash?: string
+  scale?: DesignImageScale
+}
+
+export type DesignImageAsset = {
+  mime: string
+  path: string
+}
+
+export type DesignEffect = {
+  kind: DesignEffectKind
+  visible?: boolean
+  x?: number
+  y?: number
+  blur?: number
+  spread?: number
+  color?: DesignRef
+}
+
+export type DesignTextRun = {
+  start: number
+  end: number
+  weight?: DesignWeight
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  fontSize?: number
+  color?: DesignRef
+  fontFamily?: string
+}
+
+export type DesignGridTrack = { size: number | 'fr' | 'auto'; count?: number }
+
+export type DesignGuide = { axis: 'x' | 'y'; at: number }
 
 export type DesignNode = {
   id: string
@@ -99,7 +156,36 @@ export type DesignNode = {
   clip?: boolean
   fill?: DesignRef
   stroke?: DesignRef
+  fills?: DesignPaint[]
+  strokes?: DesignPaint[]
   strokeWidth?: number
+  strokeAlign?: DesignStrokeAlign
+  strokeCap?: DesignStrokeCap
+  strokeJoin?: DesignStrokeJoin
+  strokeDash?: number[]
+  blend?: DesignBlend
+  effects?: DesignEffect[]
+  mask?: boolean
+  maskType?: 'alpha' | 'vector' | 'luminance'
+  constraintH?: DesignConstraint
+  constraintV?: DesignConstraint
+  gridColumns?: DesignGridTrack[]
+  gridRows?: DesignGridTrack[]
+  colStart?: number
+  colSpan?: number
+  rowStart?: number
+  rowSpan?: number
+  pointCount?: number
+  innerRadius?: number
+  booleanOp?: DesignBooleanOp
+  section?: boolean
+  runs?: DesignTextRun[]
+  textCase?: DesignTextCase
+  truncate?: DesignTextTruncate
+  maxLines?: number
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
   radius?: number | string
   /** One corner. Omitted uses `radius`. `0` is a square corner. */
   radiusTL?: number | string
@@ -143,7 +229,12 @@ export type DesignOverride = {
   id: string
   text?: string
   fill?: DesignRef
+  fills?: DesignPaint[]
+  stroke?: DesignRef
+  strokes?: DesignPaint[]
+  radius?: number | string
   visible?: boolean
+  component?: string
 }
 
 export type DesignVariant = {
@@ -151,11 +242,18 @@ export type DesignVariant = {
   node: DesignNode
 }
 
+export type DesignComponentProp = {
+  name: string
+  kind: 'boolean' | 'text' | 'swap'
+  nodeId?: string
+}
+
 export type DesignComponent = {
   id: string
   name: string
   axes?: Record<string, string[]>
   variants: DesignVariant[]
+  props?: DesignComponentProp[]
 }
 
 export type DesignToken = {
@@ -165,7 +263,7 @@ export type DesignToken = {
 }
 
 export type DesignDoc = {
-  version: 1
+  version: 1 | 2
   modes: string[]
   mode: string
   snap: boolean
@@ -173,4 +271,7 @@ export type DesignDoc = {
   tokens: DesignToken[]
   components: DesignComponent[]
   screens: DesignNode[]
+  images?: Record<string, DesignImageAsset>
+  guides?: DesignGuide[]
+  libraries?: string[]
 }

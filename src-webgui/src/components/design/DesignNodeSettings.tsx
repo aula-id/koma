@@ -28,6 +28,7 @@ import {
   mergeDesignOverride,
   nodeChrome,
   resolveRef,
+  setNodeSolid,
   sharedValue,
   textStyle,
   type DesignAlignAxis,
@@ -42,6 +43,7 @@ import {
   Choices,
   GeomField,
   KindMark,
+  FillEditor,
   PaintRow,
   RadiusField,
   Section,
@@ -70,6 +72,7 @@ export function NodeSettings({
   onTypeFocus,
   onTypeBlur,
   onOverrideTarget,
+  onPickImage,
 }: {
   doc: DesignDoc
   nodes: DesignNode[]
@@ -91,6 +94,7 @@ export function NodeSettings({
   onTypeFocus: () => void
   onTypeBlur: () => void
   onOverrideTarget?: (childId: string | null) => void
+  onPickImage?: () => void
 }) {
   const [propName, setPropName] = useState('variant')
   const [propValue, setPropValue] = useState('')
@@ -122,13 +126,9 @@ export function NodeSettings({
     onPatch((current) => {
       const fallback = field === 'fill' ? (current.kind === 'frame' ? '#ffffff' : SHAPE_FILL) : '#1c1c1c'
       const themedFill = field === 'fill' && (current.kind === 'rect' || current.kind === 'ellipse' || (current.kind === 'vector' && !!current.vector?.regions.length))
-      const copy: DesignNode = { ...current }
-      if (next === 'none') copy[field] = 'none'
-      else if (next == null) {
-        if (themedFill) delete copy[field]
-        else copy[field] = fallback
-      } else copy[field] = next
-      return copy
+      if (next === 'none') return setNodeSolid(current, field, 'none')
+      if (next == null) return themedFill ? setNodeSolid(current, field, null) : setNodeSolid(current, field, fallback)
+      return setNodeSolid(current, field, next)
     })
   }
   const xField = numberOf((item) => item.x)
@@ -374,6 +374,7 @@ export function NodeSettings({
           <AlignButton label="Free" pressed={!layoutField.mixed && layoutField.value === 'free'} onClick={() => setField({}, ['layout'])}><Square size={14} /></AlignButton>
           <AlignButton label="Row" pressed={!layoutField.mixed && layoutField.value === 'row'} onClick={() => setField({ layout: 'row' })}><ArrowRight size={14} /></AlignButton>
           <AlignButton label="Column" pressed={!layoutField.mixed && layoutField.value === 'column'} onClick={() => setField({ layout: 'column' })}><ArrowDown size={14} /></AlignButton>
+          <AlignButton label="Grid" pressed={!layoutField.mixed && layoutField.value === 'grid'} onClick={() => setField({ layout: 'grid', gridColumns: [{ size: 'fr', count: 2 }], gridRows: [{ size: 'fr', count: 2 }] })}><Square size={14} /></AlignButton>
         </div>
       ) : null}
       {flows ? (
@@ -518,28 +519,70 @@ export function NodeSettings({
         ) : null}
       </Section>
       <Section title="Fill">
-        <PaintRow
-          label="Fill"
-          mixed={fillField.mixed}
-          value={fillField.value}
-          fallback="#1a1d27"
-          resolved={resolveRef(doc, chrome.fill)}
-          tokens={colorTokens}
-          onChange={(next) => paintChange('fill', next)}
-        />
+        {multi ? (
+          <PaintRow
+            label="Fill"
+            mixed={fillField.mixed}
+            value={fillField.value}
+            fallback="#1a1d27"
+            resolved={resolveRef(doc, chrome.fill)}
+            tokens={colorTokens}
+            onChange={(next) => paintChange('fill', next)}
+          />
+        ) : (
+          <FillEditor label="Fill" doc={doc} node={node} field="fill" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onPickImage={onPickImage} />
+        )}
       </Section>
       <Section title="Stroke">
-        <PaintRow
-          label="Stroke"
-          mixed={strokeField.mixed}
-          value={strokeField.value}
-          fallback="#8b93b8"
-          resolved={resolveRef(doc, chrome.stroke)}
-          tokens={colorTokens}
-          weight={strokeWidthField}
-          onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
-          onChange={(next) => paintChange('stroke', next)}
-        />
+        {multi ? (
+          <PaintRow
+            label="Stroke"
+            mixed={strokeField.mixed}
+            value={strokeField.value}
+            fallback="#8b93b8"
+            resolved={resolveRef(doc, chrome.stroke)}
+            tokens={colorTokens}
+            weight={strokeWidthField}
+            onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
+            onChange={(next) => paintChange('stroke', next)}
+          />
+        ) : (
+          <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} />
+        )}
+        <div className="mt-1 grid grid-cols-2 gap-1">
+          <GeomField label="W" ariaLabel="Weight" value={strokeWidthField.value} mixed={strokeWidthField.mixed} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
+          <Choices label="Align" value={node.strokeAlign ?? 'center'} options={[{ value: 'inside', label: 'In' }, { value: 'center', label: 'Ctr' }, { value: 'outside', label: 'Out' }]} onChange={(strokeAlign) => setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])} />
+        </div>
+      </Section>
+      {hasParent && !sizeModes ? (
+        <Section title="Constraints">
+          <Choices label="Horizontal" value={node.constraintH ?? 'start'} options={[{ value: 'start', label: 'Left' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'Right' }, { value: 'stretch', label: 'Stretch' }, { value: 'scale', label: 'Scale' }]} onChange={(constraintH) => setField(constraintH === 'start' ? {} : { constraintH }, constraintH === 'start' ? ['constraintH'] : [])} />
+          <Choices label="Vertical" value={node.constraintV ?? 'start'} options={[{ value: 'start', label: 'Top' }, { value: 'center', label: 'Center' }, { value: 'end', label: 'Bottom' }, { value: 'stretch', label: 'Stretch' }, { value: 'scale', label: 'Scale' }]} onChange={(constraintV) => setField(constraintV === 'start' ? {} : { constraintV }, constraintV === 'start' ? ['constraintV'] : [])} />
+        </Section>
+      ) : null}
+      <Section title="Effects">
+        <Choices label="Blend" value={node.blend ?? 'normal'} options={[{ value: 'normal', label: 'Norm' }, { value: 'multiply', label: 'Mul' }, { value: 'screen', label: 'Scr' }, { value: 'overlay', label: 'Ovl' }]} onChange={(blend) => setField(blend === 'normal' ? {} : { blend }, blend === 'normal' ? ['blend'] : [])} />
+        <button
+          type="button"
+          className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover"
+          onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'drop-shadow', x: 0, y: 4, blur: 8, color: '#000000' }] }))}
+        >
+          Add drop shadow
+        </button>
+        <button
+          type="button"
+          className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover"
+          onClick={() => onPatch((current) => ({ ...current, effects: [...(current.effects ?? []), { kind: 'layer-blur', blur: 4 }] }))}
+        >
+          Add layer blur
+        </button>
+        {(node.effects ?? []).map((effect, index) => (
+          <div key={`${effect.kind}-${index}`} className="flex items-center gap-1 text-[11px] text-koma-dim">
+            <span className="flex-1 truncate">{effect.kind}</span>
+            <button type="button" className="h-6 px-1" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>Remove</button>
+          </div>
+        ))}
+        <AlignButton label="Use as mask" pressed={!!node.mask} onClick={() => setField(node.mask ? {} : { mask: true }, node.mask ? ['mask'] : [])}><Square size={14} /></AlignButton>
       </Section>
       {allText ? (
         <Section title="Text">
@@ -593,6 +636,12 @@ export function NodeSettings({
             <AlignButton label="Hug height" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'height'} onClick={() => setField({ textHug: 'height' })}><span className="text-[10px]">H</span></AlignButton>
             <AlignButton label="Hug width" pressed={!textOf((item) => item.textHug ?? 'fixed').mixed && node.textHug === 'width'} onClick={() => setField({ textHug: 'width' })}><span className="text-[10px]">W</span></AlignButton>
           </div>
+          <div className="flex gap-0.5">
+            <AlignButton label="Italic" pressed={!!node.italic} onClick={() => setField(node.italic ? {} : { italic: true }, node.italic ? ['italic'] : [])}><span className="text-[10px] italic">I</span></AlignButton>
+            <AlignButton label="Underline" pressed={!!node.underline} onClick={() => setField(node.underline ? {} : { underline: true }, node.underline ? ['underline'] : [])}><span className="text-[10px] underline">U</span></AlignButton>
+            <AlignButton label="Strike" pressed={!!node.strike} onClick={() => setField(node.strike ? {} : { strike: true }, node.strike ? ['strike'] : [])}><span className="text-[10px] line-through">S</span></AlignButton>
+          </div>
+          <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'Aa' }, { value: 'upper', label: 'AA' }, { value: 'lower', label: 'aa' }, { value: 'title', label: 'Aa' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
           <PaintRow
             label="Color"
             mixed={colorField.mixed}

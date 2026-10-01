@@ -3,6 +3,11 @@ import {
   cornerPixels,
   designLayerName,
   nodeChrome,
+  designImageUrl,
+  firstVisiblePaint,
+  nodeFillCss,
+  nodePaints,
+  nodeStrokeCss,
   resolveInstanceTree,
   resolveRef,
   textStyle,
@@ -64,8 +69,18 @@ export function DesignNodeView({
   const bareStroke = (node.kind === 'frame' || node.kind === 'group') && (!node.stroke || node.stroke === 'none')
   const strokeOff = chrome.stroke === 'none' || ((node.kind === 'rect' || node.kind === 'ellipse') && node.stroke == null)
   const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
-  const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, fillFallback)
-  const stroke = paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)')
+  const painted = visual ?? node
+  const fillPaint = firstVisiblePaint(nodePaints(painted, 'fill'))
+  const fill = bareFill ? 'transparent' : nodeFillCss(doc, painted, paintCss(doc, chrome.fill, fillFallback))
+  const stroke = nodeStrokeCss(doc, painted, paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)'))
+  const imageUrl = fillPaint?.type === 'image' ? designImageUrl(fillPaint.hash) : ''
+  const imageScale = fillPaint?.scale ?? 'fill'
+  const fillLayer = node.kind === 'line' || node.kind === 'vector' ? 'transparent' : imageUrl ? undefined : fill
+  const fillImage = imageUrl
+    ? `url("${imageUrl}")`
+    : fill.startsWith('linear-gradient') || fill.startsWith('radial-gradient') || fill.startsWith('conic-gradient')
+      ? fill
+      : undefined
   const corners = cornerPixels(doc, visual ?? node)
   const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
   const unit = 1 / Math.max(zoom, 0.25)
@@ -108,7 +123,7 @@ export function DesignNodeView({
           onEdit(node.id)
           return
         }
-        if ((node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance') && onEnterContainer) {
+        if ((node.kind === 'group' || node.kind === 'frame' || node.kind === 'instance' || node.kind === 'vector') && onEnterContainer) {
           event.stopPropagation()
           onEnterContainer(node.id, event)
         }
@@ -133,10 +148,18 @@ export function DesignNodeView({
       <div
         className={`absolute inset-0 ${overrideMark ? 'ring-2 ring-inset ring-[#9747ff]' : ''}`}
         style={{
-          background: node.kind === 'line' || node.kind === 'vector' ? 'transparent' : fill,
+          background: fillLayer,
+          backgroundImage: node.kind === 'line' || node.kind === 'vector' ? undefined : fillImage,
+          backgroundSize: imageUrl ? (imageScale === 'tile' ? 'auto' : imageScale === 'fit' ? 'contain' : 'cover') : undefined,
+          backgroundRepeat: imageUrl ? (imageScale === 'tile' ? 'repeat' : 'no-repeat') : undefined,
+          backgroundPosition: imageUrl ? 'center' : undefined,
           border: bareStroke || strokeOff || node.kind === 'line' || node.kind === 'vector' ? undefined : `${chrome.strokeWidth}px solid ${stroke}`,
           borderRadius: radius,
           overflow: clips ? 'hidden' : undefined,
+          boxShadow: painted.effects?.filter((item) => item.visible !== false && item.kind === 'drop-shadow').map((item) => `${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${item.color && item.color !== 'none' ? item.color : 'rgba(0,0,0,0.25)'}`).join(', ') || undefined,
+          filter: painted.effects?.some((item) => item.visible !== false && item.kind === 'layer-blur') ? `blur(${painted.effects.find((item) => item.kind === 'layer-blur')?.blur ?? 4}px)` : undefined,
+          mixBlendMode: painted.blend && painted.blend !== 'normal' && painted.blend !== 'pass-through' ? painted.blend : undefined,
+          WebkitMaskImage: painted.mask ? fill : undefined,
         }}
       >
         {node.kind === 'line' ? (
@@ -150,21 +173,27 @@ export function DesignNodeView({
           </svg>
         ) : null}
         {node.kind === 'text' && editing === node.id ? (
-          <input
+          <textarea
             autoFocus
             value={node.text ?? ''}
             onChange={(event) => onText(node.id, event.target.value)}
             onBlur={onTextBlur}
             onPointerDown={(event) => event.stopPropagation()}
-            className="z-10 h-full w-full border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
-            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), textAlign: style.align, lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                onTextBlur()
+              }
+            }}
+            className="z-10 h-full w-full resize-none border-0 bg-transparent px-1 text-koma-fg shadow-none outline-none"
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textAlign: style.align, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           />
         ) : node.kind === 'text' ? (
           <div
             className="flex h-full w-full px-1"
-            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start', alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, 'var(--color-koma-fg)') }}
           >
-            <span className="truncate">{node.text || 'Text'}</span>
+            <span className="whitespace-pre-wrap">{node.text || 'Text'}</span>
           </div>
         ) : node.kind === 'instance' && !visual ? (
           <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>

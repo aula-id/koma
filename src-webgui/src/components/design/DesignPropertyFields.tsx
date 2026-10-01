@@ -2,12 +2,21 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Minus, Square, Spline, Type } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
 import {
+  defaultGradient,
   designLayerName,
   effectiveInstanceChild,
+  firstVisiblePaint,
   mergeDesignOverride,
+  nodePaints,
   pickVariant,
+  setNodePaints,
+  setNodeSolid,
+  solidPaint,
   type DesignDoc,
+  type DesignGradientKind,
+  type DesignImageScale,
   type DesignNode,
+  type DesignPaint,
   type DesignPenPoint,
 } from '../../lib/design'
 import { DESIGN_PATCH_DEBOUNCE_MS, SELECTION, SHAPE_FILL, type PenDraft } from './tabShared'
@@ -354,11 +363,14 @@ export function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x
   const unit = 1 / Math.max(zoom, 0.25)
   const points = draft.points
   const last = points[points.length - 1]
-  const rubber = hover && last ? `M ${last.x} ${last.y} C ${last.x + last.outgoing.x} ${last.y + last.outgoing.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}` : ''
+  const first = points[0]
+  const close = hover && first && points.length >= 3 && Math.hypot(first.x - hover.x, first.y - hover.y) <= 8 * unit
+  const rubber = hover && last && !close ? `M ${last.x} ${last.y} C ${last.x + last.outgoing.x} ${last.y + last.outgoing.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}` : ''
   return (
     <svg className="pointer-events-none absolute overflow-visible" width={1} height={1}>
       <path d={penCurve(points, false)} fill="none" stroke="#1c1c1c" strokeWidth={2} />
       {rubber ? <path d={rubber} fill="none" stroke={SELECTION} strokeWidth={1.25 * unit} /> : null}
+      {first && points.length >= 3 ? <circle cx={first.x} cy={first.y} r={close ? 7 * unit : 5 * unit} fill={close ? SELECTION : 'transparent'} stroke={SELECTION} strokeWidth={unit} /> : null}
       {points.map((point, index) => {
         const showOut = point.outgoing.x !== 0 || point.outgoing.y !== 0
         const showIn = point.incoming.x !== 0 || point.incoming.y !== 0
@@ -554,6 +566,163 @@ export function Choices<T extends string>({ label, value, mixed, options, onChan
           </button>
         ))}
       </div>
+    </div>
+  )
+}
+
+export function FillEditor({
+  label,
+  doc,
+  node,
+  field,
+  mixed,
+  tokens,
+  onChange,
+  onPickImage,
+}: {
+  label: string
+  doc: DesignDoc
+  node: DesignNode
+  field: 'fill' | 'stroke'
+  mixed?: boolean
+  tokens?: { name: string }[]
+  onChange: (node: DesignNode) => void
+  onPickImage?: () => void
+}) {
+  const paints = nodePaints(node, field)
+  const current = firstVisiblePaint(paints)
+  const kind = current?.type === 'gradient' ? 'gradient' : current?.type === 'image' ? 'image' : current && paintAliasSafe(current) === 'none' ? 'none' : 'solid'
+  const solid = kind === 'solid' ? current?.color ?? (field === 'fill' ? SHAPE_FILL : '#1c1c1c') : field === 'fill' ? SHAPE_FILL : '#1c1c1c'
+  return (
+    <div className="flex flex-col gap-1">
+      <Choices
+        label={label}
+        value={kind}
+        mixed={mixed}
+        options={[
+          { value: 'solid', label: 'Solid' },
+          { value: 'gradient', label: 'Gradient' },
+          { value: 'image', label: 'Image' },
+          { value: 'none', label: 'None' },
+        ]}
+        onChange={(next) => {
+          if (next === 'none') onChange(setNodeSolid(node, field, 'none'))
+          else if (next === 'solid') onChange(setNodeSolid(node, field, solid.startsWith('#') || tokens?.some((token) => token.name === solid) ? solid : SHAPE_FILL))
+          else if (next === 'gradient') onChange(setNodePaints(node, field, [defaultGradient(current?.kind ?? 'linear')]))
+          else if (next === 'image') onPickImage?.()
+        }}
+      />
+      {kind === 'solid' ? (
+        <PaintRow
+          label={label}
+          value={solid}
+          mixed={mixed}
+          fallback={field === 'fill' ? SHAPE_FILL : '#1c1c1c'}
+          resolved={solid.startsWith('#') ? solid : undefined}
+          tokens={tokens}
+          onChange={(next) => onChange(setNodeSolid(node, field, next))}
+        />
+      ) : null}
+      {kind === 'gradient' && current ? (
+        <GradientEditor
+          paint={current}
+          tokens={tokens}
+          onChange={(paint) => onChange(setNodePaints(node, field, [paint]))}
+        />
+      ) : null}
+      {kind === 'image' && current ? (
+        <div className="flex flex-col gap-1">
+          <button type="button" className="h-7 rounded border border-koma-border text-[12px] text-koma-fg hover:bg-koma-hover" onClick={() => onPickImage?.()}>
+            Replace image
+          </button>
+          <Choices
+            label="Scale"
+            value={current.scale ?? 'fill'}
+            options={[
+              { value: 'fill', label: 'Fill' },
+              { value: 'fit', label: 'Fit' },
+              { value: 'crop', label: 'Crop' },
+              { value: 'tile', label: 'Tile' },
+            ]}
+            onChange={(scale: DesignImageScale) => onChange(setNodePaints(node, field, [{ ...current, scale }]))}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function paintAliasSafe(paint: DesignPaint): string {
+  if (paint.visible === false) return 'none'
+  if (paint.type === 'solid') return paint.color && paint.color !== 'none' ? paint.color : 'none'
+  return ''
+}
+
+export function GradientEditor({
+  paint,
+  tokens,
+  onChange,
+}: {
+  paint: DesignPaint
+  tokens?: { name: string }[]
+  onChange: (paint: DesignPaint) => void
+}) {
+  const stops = paint.stops?.length ? paint.stops : [{ color: '#4f46e5', at: 0 }, { color: '#22d3ee', at: 1 }]
+  return (
+    <div className="flex flex-col gap-1">
+      <Choices
+        label="Kind"
+        value={paint.kind ?? 'linear'}
+        options={[
+          { value: 'linear', label: 'Linear' },
+          { value: 'radial', label: 'Radial' },
+          { value: 'angular', label: 'Angular' },
+          { value: 'diamond', label: 'Diamond' },
+        ]}
+        onChange={(kind: DesignGradientKind) => onChange({ ...paint, type: 'gradient', kind })}
+      />
+      {stops.map((stop, index) => (
+        <div key={`${stop.at}-${index}`} className="flex items-center gap-1">
+          <PaintRow
+            label={`Stop ${index + 1}`}
+            value={stop.color}
+            fallback="#000000"
+            tokens={tokens}
+            onChange={(color) => {
+              if (!color || color === 'none') return
+              const next = stops.map((item, at) => (at === index ? { ...item, color } : item))
+              onChange({ ...paint, type: 'gradient', stops: next })
+            }}
+          />
+          <div className="w-14 flex-none">
+            <GeomField
+              label="%"
+              value={Math.round((Number.isFinite(stop.at) ? stop.at : 0) * 100)}
+              onChange={(value) => {
+                const next = stops.map((item, at) => (at === index ? { ...item, at: Math.max(0, Math.min(1, value / 100)) } : item))
+                onChange({ ...paint, type: 'gradient', stops: next })
+              }}
+            />
+          </div>
+          {stops.length > 2 ? (
+            <button
+              type="button"
+              aria-label="Remove stop"
+              className="h-7 w-7 flex-none rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              onClick={() => onChange({ ...paint, type: 'gradient', stops: stops.filter((_, at) => at !== index) })}
+            >
+              <Minus size={12} />
+            </button>
+          ) : null}
+        </div>
+      ))}
+      <button
+        type="button"
+        className="h-7 rounded border border-koma-border text-[12px] text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+        onClick={() => onChange({ ...paint, type: 'gradient', stops: [...stops, { color: '#ffffff', at: 1 }] })}
+      >
+        Add stop
+      </button>
     </div>
   )
 }

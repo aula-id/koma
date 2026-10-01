@@ -33,6 +33,7 @@ import {
   type DesignVectorSegment,
   type DesignWeight,
 } from './types'
+import { clonePaint, firstVisiblePaint, nodePaints, paintAlias } from './paint'
 
 export function emptyDesign(): DesignDoc {
   return {
@@ -279,13 +280,38 @@ export function dropDesignToken(doc: DesignDoc, name: string): DesignDoc {
   return { ...doc, tokens: doc.tokens.filter((token) => token.name !== name) }
 }
 
+export function applyDesignToken(doc: DesignDoc, ids: string[], name: string): DesignDoc {
+  const token = doc.tokens.find((item) => item.name === name)
+  if (!token || !ids.length) return doc
+  let next = doc
+  for (const id of ids) {
+    next = updateDesignNode(next, id, (node) => {
+      if (token.kind === 'color') return { ...node, fill: name, fills: [{ type: 'solid', color: name }] }
+      if (token.kind === 'radius') return { ...node, radius: name }
+      if (token.kind === 'space') return { ...node, gap: Number(token.values[doc.mode] ?? token.values[doc.modes[0]] ?? 8) || 8 }
+      const type = (token.values[doc.mode] ?? token.values[doc.modes[0]] ?? '13/regular').split('/')
+      const fontSize = Number(type[0])
+      const weight = type[1] === 'bold' || type[1] === 'medium' ? type[1] : undefined
+      const copy: DesignNode = { ...node }
+      if (Number.isFinite(fontSize) && fontSize > 0) copy.fontSize = fontSize
+      if (weight === 'bold' || weight === 'medium') copy.weight = weight
+      return copy
+    })
+  }
+  return next
+}
+
 /** Resolved chrome. An empty fill or stroke means the theme color. `none` is off. */
 export function nodeChrome(node: DesignNode): { fill: string; stroke: string; radius: number | string; opacity: number; strokeWidth: number } {
   const shaped = node.kind === 'frame' || node.kind === 'rect' || node.kind === 'ellipse' || (node.kind === 'vector' && !!node.vector?.regions.length)
   const stroked = shaped || node.kind === 'line' || node.kind === 'vector'
+  const fillPaint = firstVisiblePaint(nodePaints(node, 'fill'))
+  const strokePaint = firstVisiblePaint(nodePaints(node, 'stroke'))
+  const fill = fillPaint ? paintAlias(fillPaint) : node.fill ?? (shaped ? '' : 'none')
+  const stroke = strokePaint ? paintAlias(strokePaint) : node.stroke ?? (stroked ? '' : 'none')
   return {
-    fill: node.fill ?? (shaped ? '' : 'none'),
-    stroke: node.stroke ?? (stroked ? '' : 'none'),
+    fill,
+    stroke,
     radius: node.radius ?? 0,
     opacity: node.opacity ?? 1,
     strokeWidth: node.strokeWidth ?? (node.kind === 'line' ? 2 : 1),
@@ -387,7 +413,36 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.justify) next.justify = node.justify
   if (node.fill) next.fill = node.fill
   if (node.stroke) next.stroke = node.stroke
+  if (node.fills?.length) next.fills = node.fills.map(clonePaint)
+  if (node.strokes?.length) next.strokes = node.strokes.map(clonePaint)
   if (node.strokeWidth != null) next.strokeWidth = node.strokeWidth
+  if (node.strokeAlign) next.strokeAlign = node.strokeAlign
+  if (node.strokeCap) next.strokeCap = node.strokeCap
+  if (node.strokeJoin) next.strokeJoin = node.strokeJoin
+  if (node.strokeDash?.length) next.strokeDash = node.strokeDash.slice()
+  if (node.blend) next.blend = node.blend
+  if (node.effects?.length) next.effects = node.effects.map((item) => ({ ...item }))
+  if (node.mask) next.mask = true
+  if (node.maskType) next.maskType = node.maskType
+  if (node.constraintH) next.constraintH = node.constraintH
+  if (node.constraintV) next.constraintV = node.constraintV
+  if (node.gridColumns?.length) next.gridColumns = node.gridColumns.map((item) => ({ ...item }))
+  if (node.gridRows?.length) next.gridRows = node.gridRows.map((item) => ({ ...item }))
+  if (node.colStart != null) next.colStart = node.colStart
+  if (node.colSpan != null) next.colSpan = node.colSpan
+  if (node.rowStart != null) next.rowStart = node.rowStart
+  if (node.rowSpan != null) next.rowSpan = node.rowSpan
+  if (node.pointCount != null) next.pointCount = node.pointCount
+  if (node.innerRadius != null) next.innerRadius = node.innerRadius
+  if (node.booleanOp) next.booleanOp = node.booleanOp
+  if (node.section) next.section = true
+  if (node.runs?.length) next.runs = node.runs.map((item) => ({ ...item }))
+  if (node.textCase) next.textCase = node.textCase
+  if (node.truncate) next.truncate = node.truncate
+  if (node.maxLines != null) next.maxLines = node.maxLines
+  if (node.italic) next.italic = true
+  if (node.underline) next.underline = true
+  if (node.strike) next.strike = true
   if (node.radius != null) next.radius = node.radius
   if (node.radiusTL != null) next.radiusTL = node.radiusTL
   if (node.radiusTR != null) next.radiusTR = node.radiusTR
@@ -473,6 +528,9 @@ export function resizeDesignNode(
   const next: DesignNode = { ...node, x, y, w, h }
   if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.vector = scaleVector(node.vector, w / node.w, h / node.h)
+  }
+  if (node.kind === 'frame' && !node.layout && node.children?.length && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
+    next.children = applyConstraints(node, w, h)
   }
   if (node.kind === 'group' && node.children?.length && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     const sx = w / node.w
@@ -1130,6 +1188,15 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
   return scaleInstanceVisual(laid, sx, sy)
 }
 
+export function detachInstance(doc: DesignDoc, id: string, mint: () => string): DesignDoc | null {
+  const located = locateDesign(doc, id)
+  if (!located || located.node.kind !== 'instance') return null
+  const visual = resolveInstanceTree(doc, located.node)
+  if (!visual) return null
+  const tree = copyTree({ ...visual, x: located.node.x, y: located.node.y }, mint)
+  return updateDesignNode(doc, id, () => tree)
+}
+
 /** Variant frames placed side by side so the canvas can edit them like screens. */
 export function componentView(doc: DesignDoc, componentId: string): DesignDoc | null {
   const component = doc.components.find((item) => item.id === componentId)
@@ -1354,6 +1421,43 @@ export function nodeFromPen(id: string, points: DesignPenPoint[], closed: boolea
       regions,
     },
   })
+}
+
+export function moveVectorVertex(node: DesignNode, index: number, x: number, y: number): DesignNode {
+  const vector = node.vector
+  if (!vector?.vertices[index]) return node
+  const vertices = vector.vertices.map((point, at) => (at === index ? { x, y } : point))
+  return fitVectorNode({ ...node, vector: { ...vector, vertices } })
+}
+
+export function deleteVectorVertex(node: DesignNode, index: number): DesignNode {
+  const vector = node.vector
+  if (!vector || vector.vertices.length <= 2 || !vector.vertices[index]) return node
+  const vertices = vector.vertices.filter((_, at) => at !== index)
+  const segments = vector.segments
+    .filter((segment) => segment.start !== index && segment.end !== index)
+    .map((segment) => ({
+      ...segment,
+      start: segment.start > index ? segment.start - 1 : segment.start,
+      end: segment.end > index ? segment.end - 1 : segment.end,
+    }))
+  return fitVectorNode({ ...node, vector: { ...vector, vertices, segments } })
+}
+
+export function insertVectorVertex(node: DesignNode, after: number, x: number, y: number): DesignNode {
+  const vector = node.vector
+  if (!vector) return node
+  const index = Math.max(0, Math.min(after + 1, vector.vertices.length))
+  const vertices = vector.vertices.slice()
+  vertices.splice(index, 0, { x, y })
+  const segments = vector.segments.map((segment) => ({
+    ...segment,
+    start: segment.start >= index ? segment.start + 1 : segment.start,
+    end: segment.end >= index ? segment.end + 1 : segment.end,
+  }))
+  const prev = index === 0 ? vertices.length - 1 : index - 1
+  segments.push({ start: prev, end: index, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } })
+  return fitVectorNode({ ...node, vector: { ...vector, vertices, segments } })
 }
 
 /** Shift a canvas-space network so its controls sit inside the node box. */
@@ -1752,6 +1856,8 @@ export type DesignSnap = {
 export type DesignStyle = {
   fill?: string
   stroke?: string
+  fills?: DesignNode['fills']
+  strokes?: DesignNode['strokes']
   strokeWidth?: number
   radius?: number | string
   radiusTL?: number | string
@@ -1768,6 +1874,10 @@ export type DesignStyle = {
   lineHeight?: number
   letterSpacing?: number
   color?: string
+  effects?: DesignNode['effects']
+  blend?: DesignNode['blend']
+  strokeAlign?: DesignNode['strokeAlign']
+  strokeDash?: number[]
 }
 
 /** Axis-aligned canvas box, including this node's flip and rotation. */
@@ -1977,6 +2087,12 @@ export function designStyle(node: DesignNode): DesignStyle {
   const style: DesignStyle = {}
   if (node.fill !== undefined) style.fill = node.fill
   if (node.stroke !== undefined) style.stroke = node.stroke
+  if (node.fills?.length) style.fills = node.fills.map(clonePaint)
+  if (node.strokes?.length) style.strokes = node.strokes.map(clonePaint)
+  if (node.effects?.length) style.effects = node.effects.map((item) => ({ ...item }))
+  if (node.blend) style.blend = node.blend
+  if (node.strokeAlign) style.strokeAlign = node.strokeAlign
+  if (node.strokeDash?.length) style.strokeDash = node.strokeDash.slice()
   if (node.strokeWidth !== undefined) style.strokeWidth = node.strokeWidth
   if (node.radius !== undefined) style.radius = node.radius
   if (node.radiusTL !== undefined) style.radiusTL = node.radiusTL
@@ -2005,6 +2121,12 @@ export function applyDesignStyle(doc: DesignDoc, ids: string[], style: DesignSty
       const copy: DesignNode = { ...node }
       if (style.fill !== undefined) copy.fill = style.fill
       if (style.stroke !== undefined) copy.stroke = style.stroke
+      if (style.fills !== undefined) copy.fills = style.fills?.map(clonePaint)
+      if (style.strokes !== undefined) copy.strokes = style.strokes?.map(clonePaint)
+      if (style.effects !== undefined) copy.effects = style.effects?.map((item) => ({ ...item }))
+      if (style.blend !== undefined) copy.blend = style.blend
+      if (style.strokeAlign !== undefined) copy.strokeAlign = style.strokeAlign
+      if (style.strokeDash !== undefined) copy.strokeDash = style.strokeDash?.slice()
       if (style.strokeWidth !== undefined) copy.strokeWidth = style.strokeWidth
       if (style.radius !== undefined) copy.radius = style.radius
       if (style.radiusTL !== undefined) copy.radiusTL = style.radiusTL
@@ -2201,8 +2323,54 @@ function layoutNode(node: DesignNode, frozenId?: string): DesignNode {
   }
   if (next.kind === 'text') next = hugText(next)
   if (next.kind === 'group') next = fitGroup(next)
-  if (next.kind === 'frame' && next.layout) next = placeFlow(next, frozenId)
+  if (next.kind === 'frame' && next.layout === 'grid') next = placeGrid(next, frozenId)
+  else if (next.kind === 'frame' && next.layout) next = placeFlow(next, frozenId)
   return clampNodeBox(next)
+}
+
+function constraintPos(mode: DesignNode['constraintH'], start: number, size: number, oldSpan: number, newSpan: number): { start: number; size: number } {
+  const scale = oldSpan > 0 ? newSpan / oldSpan : 1
+  if (mode === 'end') return { start: start + (newSpan - oldSpan), size }
+  if (mode === 'center') return { start: start + (newSpan - oldSpan) / 2, size }
+  if (mode === 'stretch') return { start, size: Math.max(1, size + (newSpan - oldSpan)) }
+  if (mode === 'scale') return { start: start * scale, size: Math.max(1, size * scale) }
+  return { start, size }
+}
+
+function applyConstraints(frame: DesignNode, newW: number, newH: number): DesignNode[] {
+  return (frame.children ?? []).map((child) => {
+    const x = constraintPos(child.constraintH, child.x, child.w, frame.w, newW)
+    const y = constraintPos(child.constraintV, child.y, child.h, frame.h, newH)
+    if (x.start === child.x && x.size === child.w && y.start === child.y && y.size === child.h) return child
+    return { ...child, x: x.start, y: y.start, w: x.size, h: y.size }
+  })
+}
+
+function placeGrid(frame: DesignNode, frozenId?: string): DesignNode {
+  const columns = Math.max(1, frame.gridColumns?.[0]?.count ?? 2)
+  const rows = Math.max(1, frame.gridRows?.[0]?.count ?? 2)
+  const pad = framePad(frame)
+  const gap = frame.gap ?? 0
+  const innerW = Math.max(0, frame.w - pad.left - pad.right)
+  const innerH = Math.max(0, frame.h - pad.top - pad.bottom)
+  const colW = columns > 0 ? (innerW - gap * (columns - 1)) / columns : innerW
+  const rowH = rows > 0 ? (innerH - gap * (rows - 1)) / rows : innerH
+  const flow = (frame.children ?? []).filter((child) => !child.absolute && child.id !== frozenId)
+  const placed = new Map<string, DesignNode>()
+  flow.forEach((child, index) => {
+    const col = Math.max(0, (child.colStart ?? index % columns + 1) - 1)
+    const row = Math.max(0, (child.rowStart ?? Math.floor(index / columns) + 1) - 1)
+    const spanC = Math.max(1, child.colSpan ?? 1)
+    const spanR = Math.max(1, child.rowSpan ?? 1)
+    const x = pad.left + col * (colW + gap)
+    const y = pad.top + row * (rowH + gap)
+    const w = Math.max(1, colW * spanC + gap * (spanC - 1))
+    const h = Math.max(1, rowH * spanR + gap * (spanR - 1))
+    placed.set(child.id, child.x === x && child.y === y && child.w === w && child.h === h ? child : { ...child, x, y, w, h })
+  })
+  const children = (frame.children ?? []).map((child) => placed.get(child.id) ?? child)
+  if (children.every((child, index) => child === (frame.children ?? [])[index])) return frame
+  return { ...frame, children }
 }
 
 /** Hug a text node to the half-em estimate. Width hug sets both axes. Height hug wraps into the current width. */

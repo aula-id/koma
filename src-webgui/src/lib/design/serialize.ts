@@ -14,11 +14,29 @@ import {
   type DesignVectorPoint,
   type DesignVectorRegion,
   type DesignVectorSegment,
+  type DesignPaint,
+  type DesignImageAsset,
+  type DesignEffect,
+  type DesignTextRun,
+  type DesignGuide,
 } from './types'
 import { emptyDesign, isDesignContainer } from './model'
+import { clonePaint } from './paint'
 
 const KINDS = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance'] as const
-const LAYOUTS = ['row', 'column'] as const
+const LAYOUTS = ['row', 'column', 'grid'] as const
+const BLENDS = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-burn', 'color-dodge', 'soft-light', 'hard-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity', 'pass-through'] as const
+const GRADIENTS = ['linear', 'radial', 'angular', 'diamond'] as const
+const IMAGE_SCALES = ['fill', 'fit', 'crop', 'tile'] as const
+const STROKE_ALIGNS = ['inside', 'center', 'outside'] as const
+const STROKE_CAPS = ['none', 'round', 'square'] as const
+const STROKE_JOINS = ['miter', 'bevel', 'round'] as const
+const CONSTRAINTS = ['start', 'center', 'end', 'stretch', 'scale'] as const
+const EFFECT_KINDS = ['drop-shadow', 'inner-shadow', 'layer-blur', 'background-blur'] as const
+const BOOLEAN_OPS = ['union', 'subtract', 'intersect', 'exclude'] as const
+const TEXT_CASES = ['original', 'upper', 'lower', 'title'] as const
+const TRUNCATES = ['off', 'end'] as const
+const PAINT_TYPES = ['solid', 'gradient', 'image'] as const
 const ALIGNS = ['start', 'center', 'end', 'stretch'] as const
 const JUSTIFIES = ['start', 'center', 'end', 'space'] as const
 const SIZES = ['hug', 'fill', 'fixed'] as const
@@ -53,6 +71,64 @@ function parsePaint(value: unknown): string | undefined {
   if (value === 'none') return 'none'
   if (typeof value !== 'string' || !value) return undefined
   return parseColor(value) ?? parseTokenName(value)
+}
+
+function parsePaintObject(value: unknown): DesignPaint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const type = oneOf(row.type, PAINT_TYPES)
+  if (!type) return null
+  const paint: DesignPaint = { type }
+  if (row.visible === false) paint.visible = false
+  const opacity = num(row.opacity)
+  if (opacity != null && opacity >= 0 && opacity < 1) paint.opacity = opacity
+  const blend = oneOf(row.blend, BLENDS)
+  if (blend && blend !== 'normal') paint.blend = blend
+  if (type === 'solid') {
+    const color = parsePaint(row.color)
+    if (!color || color === 'none') return null
+    paint.color = color
+    return paint
+  }
+  if (type === 'gradient') {
+    const kind = oneOf(row.kind, GRADIENTS) ?? 'linear'
+    paint.kind = kind
+    const stops: { color: string; at: number }[] = []
+    if (Array.isArray(row.stops)) {
+      for (const item of row.stops) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+        const stop = item as Record<string, unknown>
+        const color = parsePaint(stop.color)
+        const at = num(stop.at)
+        if (!color || color === 'none' || at == null) continue
+        stops.push({ color, at: Math.max(0, Math.min(1, at)) })
+      }
+    }
+    if (stops.length < 2) {
+      stops.push({ color: '#000000', at: 0 }, { color: '#ffffff', at: 1 })
+    }
+    paint.stops = stops
+    if (Array.isArray(row.transform) && row.transform.every((item) => typeof item === 'number' && Number.isFinite(item))) {
+      paint.transform = row.transform.slice()
+    }
+    return paint
+  }
+  if (typeof row.hash !== 'string' || !row.hash) return null
+  paint.hash = row.hash
+  const scale = oneOf(row.scale, IMAGE_SCALES)
+  if (scale && scale !== 'fill') paint.scale = scale
+  return paint
+}
+
+function parsePaints(value: unknown): DesignPaint[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const paints: DesignPaint[] = []
+  for (const item of value) {
+    const paint = parsePaintObject(item)
+    if (!paint) return undefined
+    paints.push(paint)
+  }
+  return paints
 }
 
 function parseRadius(value: unknown): number | string | undefined {
@@ -106,6 +182,97 @@ function parseNode(value: unknown): DesignNode | null {
   const stroke = parsePaint(row.stroke)
   if (fill) node.fill = fill
   if (stroke) node.stroke = stroke
+  const fills = parsePaints(row.fills)
+  const strokes = parsePaints(row.strokes)
+  if (fills?.length) node.fills = fills
+  if (strokes?.length) node.strokes = strokes
+  const strokeAlign = oneOf(row.strokeAlign, STROKE_ALIGNS)
+  if (strokeAlign && strokeAlign !== 'center') node.strokeAlign = strokeAlign
+  const strokeCap = oneOf(row.strokeCap, STROKE_CAPS)
+  if (strokeCap && strokeCap !== 'none') node.strokeCap = strokeCap
+  const strokeJoin = oneOf(row.strokeJoin, STROKE_JOINS)
+  if (strokeJoin && strokeJoin !== 'miter') node.strokeJoin = strokeJoin
+  if (Array.isArray(row.strokeDash) && row.strokeDash.every((item) => typeof item === 'number' && Number.isFinite(item))) {
+    node.strokeDash = row.strokeDash.slice()
+  }
+  const blend = oneOf(row.blend, BLENDS)
+  if (blend && blend !== 'normal') node.blend = blend
+  if (Array.isArray(row.effects)) {
+    const effects: DesignEffect[] = []
+    for (const item of row.effects) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const effect = item as Record<string, unknown>
+      const kind = oneOf(effect.kind, EFFECT_KINDS)
+      if (!kind) continue
+      const next: DesignEffect = { kind }
+      if (effect.visible === false) next.visible = false
+      const x = num(effect.x)
+      const y = num(effect.y)
+      const blur = num(effect.blur)
+      const spread = num(effect.spread)
+      if (x) next.x = x
+      if (y) next.y = y
+      if (blur != null && blur > 0) next.blur = blur
+      if (spread) next.spread = spread
+      const color = parsePaint(effect.color)
+      if (color && color !== 'none') next.color = color
+      effects.push(next)
+    }
+    if (effects.length) node.effects = effects
+  }
+  if (row.mask === true) node.mask = true
+  if (row.maskType === 'alpha' || row.maskType === 'vector' || row.maskType === 'luminance') node.maskType = row.maskType
+  const constraintH = oneOf(row.constraintH, CONSTRAINTS)
+  const constraintV = oneOf(row.constraintV, CONSTRAINTS)
+  if (constraintH) node.constraintH = constraintH
+  if (constraintV) node.constraintV = constraintV
+  const pointCount = num(row.pointCount)
+  if (pointCount != null && pointCount >= 3) node.pointCount = Math.round(pointCount)
+  const innerRadius = num(row.innerRadius)
+  if (innerRadius != null && innerRadius > 0) node.innerRadius = innerRadius
+  const booleanOp = oneOf(row.booleanOp, BOOLEAN_OPS)
+  if (booleanOp) node.booleanOp = booleanOp
+  if (row.section === true) node.section = true
+  const textCase = oneOf(row.textCase, TEXT_CASES)
+  if (textCase && textCase !== 'original') node.textCase = textCase
+  const truncate = oneOf(row.truncate, TRUNCATES)
+  if (truncate && truncate !== 'off') node.truncate = truncate
+  const maxLines = num(row.maxLines)
+  if (maxLines != null && maxLines > 0) node.maxLines = Math.round(maxLines)
+  if (row.italic === true) node.italic = true
+  if (row.underline === true) node.underline = true
+  if (row.strike === true) node.strike = true
+  if (Array.isArray(row.runs)) {
+    const runs: DesignTextRun[] = []
+    for (const item of row.runs) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const run = item as Record<string, unknown>
+      const start = num(run.start)
+      const end = num(run.end)
+      if (start == null || end == null || end <= start) continue
+      const next: DesignTextRun = { start, end }
+      const weight = oneOf(run.weight, WEIGHTS)
+      if (weight) next.weight = weight
+      if (run.italic === true) next.italic = true
+      if (run.underline === true) next.underline = true
+      if (run.strike === true) next.strike = true
+      const fontSize = num(run.fontSize)
+      if (fontSize != null && fontSize > 0) next.fontSize = fontSize
+      const color = parsePaint(run.color)
+      if (color && color !== 'none') next.color = color
+      if (typeof run.fontFamily === 'string' && FONT_FAMILY.test(run.fontFamily.trim())) next.fontFamily = run.fontFamily.trim()
+      runs.push(next)
+    }
+    if (runs.length) node.runs = runs
+  }
+  const colStart = num(row.colStart)
+  const colSpan = num(row.colSpan)
+  const rowStart = num(row.rowStart)
+  const rowSpan = num(row.rowSpan)
+  if (colStart != null && colStart > 0) node.colStart = Math.round(colStart)
+  if (colSpan != null && colSpan > 1) node.colSpan = Math.round(colSpan)
+  if (rowStart != null && rowStart > 0) node.rowStart = Math.round(rowStart)
+  if (rowSpan != null && rowSpan > 1) node.rowSpan = Math.round(rowSpan)
   const radius = parseRadius(row.radius)
   if (typeof radius === 'number' ? radius > 0 : radius != null) node.radius = radius
   const opacity = num(row.opacity)
@@ -215,8 +382,17 @@ function parseOverrides(value: unknown): DesignOverride[] | null {
     if (typeof row.text === 'string') next.text = row.text
     const fill = parsePaint(row.fill)
     if (fill) next.fill = fill
+    const fills = parsePaints(row.fills)
+    if (fills?.length) next.fills = fills
+    const stroke = parsePaint(row.stroke)
+    if (stroke) next.stroke = stroke
+    const strokes = parsePaints(row.strokes)
+    if (strokes?.length) next.strokes = strokes
+    const radius = parseRadius(row.radius)
+    if (radius != null) next.radius = radius
+    if (typeof row.component === 'string' && row.component) next.component = row.component
     if (row.visible === false || row.visible === true) next.visible = row.visible
-    if (next.text == null && next.fill == null && next.visible == null) continue
+    if (next.text == null && next.fill == null && next.fills == null && next.stroke == null && next.strokes == null && next.radius == null && next.visible == null && next.component == null) continue
     rows.push(next)
   }
   return rows
@@ -298,7 +474,7 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
   }
   const raw = value as Record<string, unknown>
   const version = raw.version === undefined ? 1 : raw.version
-  if (version !== 1) return { doc: emptyDesign(), error: 'This file is not a design' }
+  if (version !== 1 && version !== 2) return { doc: emptyDesign(), error: 'This file is not a design' }
   const modes = parseModes(raw.modes)
   if (!modes) return { doc: emptyDesign(), error: 'This file is not a design' }
   const mode = typeof raw.mode === 'string' && modes.includes(raw.mode) ? raw.mode : modes[0]
@@ -333,19 +509,51 @@ export function parseDesign(text: string): { doc: DesignDoc; error: string | nul
   if (raw.version === undefined && tokens.length === 0 && components.length === 0 && screens.length === 0) {
     return { doc: emptyDesign(), error: 'This file is not a design' }
   }
-  return {
-    doc: {
-      version: 1,
-      modes,
-      mode,
-      snap: raw.snap === true,
-      grid: grid != null && grid > 0 ? grid : DESIGN_GRID,
-      tokens,
-      components,
-      screens,
-    },
-    error: null,
+  const images: Record<string, DesignImageAsset> = {}
+  if (raw.images !== undefined) {
+    if (!raw.images || typeof raw.images !== 'object' || Array.isArray(raw.images)) return { doc: emptyDesign(), error: 'This file is not a design' }
+    for (const [hash, item] of Object.entries(raw.images)) {
+      if (!hash || !item || typeof item !== 'object' || Array.isArray(item)) return { doc: emptyDesign(), error: 'This file is not a design' }
+      const asset = item as Record<string, unknown>
+      if (typeof asset.mime !== 'string' || !asset.mime || typeof asset.path !== 'string' || !asset.path) {
+        return { doc: emptyDesign(), error: 'This file is not a design' }
+      }
+      images[hash] = { mime: asset.mime, path: asset.path }
+    }
   }
+  const guides: DesignGuide[] = []
+  if (raw.guides !== undefined) {
+    if (!Array.isArray(raw.guides)) return { doc: emptyDesign(), error: 'This file is not a design' }
+    for (const item of raw.guides) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const row = item as Record<string, unknown>
+      const axis = row.axis === 'x' || row.axis === 'y' ? row.axis : null
+      const at = num(row.at)
+      if (!axis || at == null) continue
+      guides.push({ axis, at })
+    }
+  }
+  const libraries: string[] = []
+  if (raw.libraries !== undefined) {
+    if (!Array.isArray(raw.libraries)) return { doc: emptyDesign(), error: 'This file is not a design' }
+    for (const item of raw.libraries) {
+      if (typeof item === 'string' && item && !libraries.includes(item)) libraries.push(item)
+    }
+  }
+  const doc: DesignDoc = {
+    version: version === 2 ? 2 : 1,
+    modes,
+    mode,
+    snap: raw.snap === true,
+    grid: grid != null && grid > 0 ? grid : DESIGN_GRID,
+    tokens,
+    components,
+    screens,
+  }
+  if (Object.keys(images).length) doc.images = images
+  if (guides.length) doc.guides = guides
+  if (libraries.length) doc.libraries = libraries
+  return { doc, error: null }
 }
 
 export function writeNode(node: DesignNode): DesignNode {
@@ -371,7 +579,36 @@ export function writeNode(node: DesignNode): DesignNode {
   if (node.justify && node.justify !== 'start') row.justify = node.justify
   if (node.fill) row.fill = node.fill
   if (node.stroke) row.stroke = node.stroke
+  if (node.fills?.length) row.fills = node.fills.map(clonePaint)
+  if (node.strokes?.length) row.strokes = node.strokes.map(clonePaint)
   if (node.strokeWidth != null && node.strokeWidth !== 1) row.strokeWidth = node.strokeWidth
+  if (node.strokeAlign && node.strokeAlign !== 'center') row.strokeAlign = node.strokeAlign
+  if (node.strokeCap && node.strokeCap !== 'none') row.strokeCap = node.strokeCap
+  if (node.strokeJoin && node.strokeJoin !== 'miter') row.strokeJoin = node.strokeJoin
+  if (node.strokeDash?.length) row.strokeDash = node.strokeDash.slice()
+  if (node.blend && node.blend !== 'normal') row.blend = node.blend
+  if (node.effects?.length) row.effects = node.effects.map((item) => ({ ...item }))
+  if (node.mask) row.mask = true
+  if (node.maskType) row.maskType = node.maskType
+  if (node.constraintH) row.constraintH = node.constraintH
+  if (node.constraintV) row.constraintV = node.constraintV
+  if (node.gridColumns?.length) row.gridColumns = node.gridColumns.map((item) => ({ ...item }))
+  if (node.gridRows?.length) row.gridRows = node.gridRows.map((item) => ({ ...item }))
+  if (node.colStart != null) row.colStart = node.colStart
+  if (node.colSpan != null) row.colSpan = node.colSpan
+  if (node.rowStart != null) row.rowStart = node.rowStart
+  if (node.rowSpan != null) row.rowSpan = node.rowSpan
+  if (node.pointCount != null) row.pointCount = node.pointCount
+  if (node.innerRadius != null) row.innerRadius = node.innerRadius
+  if (node.booleanOp) row.booleanOp = node.booleanOp
+  if (node.section) row.section = true
+  if (node.runs?.length) row.runs = node.runs.map((item) => ({ ...item }))
+  if (node.textCase && node.textCase !== 'original') row.textCase = node.textCase
+  if (node.truncate && node.truncate !== 'off') row.truncate = node.truncate
+  if (node.maxLines != null) row.maxLines = node.maxLines
+  if (node.italic) row.italic = true
+  if (node.underline) row.underline = true
+  if (node.strike) row.strike = true
   if (typeof node.radius === 'number' ? node.radius > 0 : node.radius) row.radius = node.radius
   if (node.radiusTL != null) row.radiusTL = node.radiusTL
   if (node.radiusTR != null) row.radiusTR = node.radiusTR
@@ -401,6 +638,11 @@ export function writeNode(node: DesignNode): DesignNode {
       const copy: DesignOverride = { id: item.id }
       if (item.text != null) copy.text = item.text
       if (item.fill) copy.fill = item.fill
+      if (item.fills?.length) copy.fills = item.fills.map(clonePaint)
+      if (item.stroke) copy.stroke = item.stroke
+      if (item.strokes?.length) copy.strokes = item.strokes.map(clonePaint)
+      if (item.radius != null) copy.radius = item.radius
+      if (item.component) copy.component = item.component
       if (item.visible != null) copy.visible = item.visible
       return copy
     })
@@ -467,12 +709,28 @@ function parseVector(value: unknown): DesignVector | null {
   return { vertices, segments, regions }
 }
 
+function designNeedsV2(doc: DesignDoc): boolean {
+  if (doc.version === 2) return true
+  if (doc.images && Object.keys(doc.images).length) return true
+  if (doc.guides?.length || doc.libraries?.length) return true
+  const walk = (node: DesignNode): boolean => {
+    if (node.fills?.length || node.strokes?.length || node.effects?.length || node.runs?.length) return true
+    if (node.blend || node.mask || node.constraintH || node.constraintV || node.booleanOp || node.section) return true
+    if (node.layout === 'grid' || node.pointCount != null) return true
+    return (node.children ?? []).some(walk)
+  }
+  return doc.screens.some(walk) || doc.components.some((component) => component.variants.some((variant) => walk(variant.node)))
+}
+
 export function serializeDesign(doc: DesignDoc): string {
-  const row: Record<string, unknown> = { version: 1 }
+  const row: Record<string, unknown> = { version: designNeedsV2(doc) ? 2 : 1 }
   if (doc.modes.length !== 2 || doc.modes[0] !== 'light' || doc.modes[1] !== 'dark') row.modes = doc.modes
   if (doc.mode !== doc.modes[0]) row.mode = doc.mode
   if (doc.snap) row.snap = true
   if (doc.grid !== DESIGN_GRID) row.grid = doc.grid
+  if (doc.images && Object.keys(doc.images).length) row.images = { ...doc.images }
+  if (doc.guides?.length) row.guides = doc.guides.map((guide) => ({ ...guide }))
+  if (doc.libraries?.length) row.libraries = doc.libraries.slice()
   if (doc.tokens.length) {
     row.tokens = doc.tokens.map((token) => ({ name: token.name, kind: token.kind, values: { ...token.values } }))
   }

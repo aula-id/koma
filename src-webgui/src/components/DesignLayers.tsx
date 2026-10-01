@@ -226,6 +226,7 @@ function LayerRow({
       onDragStart={(event) => {
         layerDrag = { x: event.clientX, y: event.clientY }
         event.dataTransfer.setData(LAYER_MIME, node.id)
+        event.dataTransfer.setData('application/x-koma-design', node.kind === 'frame' || node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'line' || node.kind === 'text' ? node.kind : 'rect')
         event.dataTransfer.setData('text/plain', node.id)
         event.dataTransfer.effectAllowed = 'move'
       }}
