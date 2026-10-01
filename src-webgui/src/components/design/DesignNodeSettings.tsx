@@ -493,23 +493,19 @@ export function NodeSettings({
         <div className="grid grid-cols-2 gap-1">
           <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
           <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
-          <div className="flex min-w-0 gap-1">
-            <div className="min-w-0 flex-1">
-              <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
-            </div>
-            {sizeModes ? (
-              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])} />
-            ) : null}
-          </div>
-          <div className="flex min-w-0 gap-1">
-            <div className="min-w-0 flex-1">
-              <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
-            </div>
-            {sizeModes ? (
-              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])} />
-            ) : null}
-          </div>
+          <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+          <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
         </div>
+        {sizeModes ? (
+          <div className="grid grid-cols-2 gap-1">
+            <FieldGroup label="Width">
+              <SizeMode label="Width sizing" value={wModeField.value} mixed={wModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { wMode: mode }, mode === 'fixed' ? ['wMode'] : [])} />
+            </FieldGroup>
+            <FieldGroup label="Height">
+              <SizeMode label="Height sizing" value={hModeField.value} mixed={hModeField.mixed} onChange={(mode) => setField(mode === 'fixed' ? {} : { hMode: mode }, mode === 'fixed' ? ['hMode'] : [])} />
+            </FieldGroup>
+          </div>
+        ) : null}
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
             <GeomField label="Angle" suffix="°" value={rotationField.value} mixed={rotationField.mixed} onChange={(rotation) => {
@@ -621,7 +617,7 @@ export function NodeSettings({
           {(['gridColumns', 'gridRows'] as const).map((key) => (
             <FieldGroup key={key} label={key === 'gridColumns' ? 'Columns' : 'Rows'}>
               {(node[key]?.length ? node[key]! : [{ size: 'fr' as const, count: 2 }]).map((track, index) => (
-                <div key={`${key}-${index}`} className="grid grid-cols-[1fr_72px_32px] gap-1">
+                <div key={`${key}-${index}`} className="flex flex-col gap-1">
                   <LabeledControl label="Unit">
                     <KomaSelect
                       aria-label={key === 'gridColumns' ? 'Column track' : 'Row track'}
@@ -639,20 +635,24 @@ export function NodeSettings({
                       <option value="auto">Auto</option>
                     </KomaSelect>
                   </LabeledControl>
-                  <GeomField
-                    label={typeof track.size === 'number' ? 'Size' : 'Count'}
-                    ariaLabel={typeof track.size === 'number' ? 'Track size' : 'Track count'}
-                    value={typeof track.size === 'number' ? track.size : track.count ?? 1}
-                    onChange={(value) => {
-                      const tracks = (node[key] ?? [{ size: 'fr' as const, count: 2 }]).slice()
-                      tracks[index] = typeof track.size === 'number' ? { ...track, size: Math.max(1, value) } : { ...track, count: Math.max(1, Math.round(value)) }
-                      setField({ layout: 'grid', [key]: tracks })
-                    }}
-                  />
-                  <AlignButton label="Remove track" onClick={() => {
-                    const tracks = (node[key] ?? []).filter((_, at) => at !== index)
-                    setField({ layout: 'grid', [key]: tracks.length ? tracks : [{ size: 'fr', count: 1 }] })
-                  }}><X size={12} /></AlignButton>
+                  <div className="flex items-center gap-1">
+                    <div className="min-w-0 flex-1">
+                      <GeomField
+                        label={typeof track.size === 'number' ? 'Size' : 'Count'}
+                        ariaLabel={typeof track.size === 'number' ? 'Track size' : 'Track count'}
+                        value={typeof track.size === 'number' ? track.size : track.count ?? 1}
+                        onChange={(value) => {
+                          const tracks = (node[key] ?? [{ size: 'fr' as const, count: 2 }]).slice()
+                          tracks[index] = typeof track.size === 'number' ? { ...track, size: Math.max(1, value) } : { ...track, count: Math.max(1, Math.round(value)) }
+                          setField({ layout: 'grid', [key]: tracks })
+                        }}
+                      />
+                    </div>
+                    <AlignButton label="Remove track" onClick={() => {
+                      const tracks = (node[key] ?? []).filter((_, at) => at !== index)
+                      setField({ layout: 'grid', [key]: tracks.length ? tracks : [{ size: 'fr', count: 1 }] })
+                    }}><X size={12} /></AlignButton>
+                  </div>
                 </div>
               ))}
               <AlignButton label={key === 'gridColumns' ? 'Add column track' : 'Add row track'} caption={key === 'gridColumns' ? 'Add column' : 'Add row'} onClick={() => setField({ layout: 'grid', [key]: [...(node[key] ?? []), { size: 'fr', count: 1 }] })}>
@@ -664,14 +664,12 @@ export function NodeSettings({
       ) : null}
       {flows ? (
         <>
-          <div className="grid grid-cols-2 gap-1">
-            <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} tokens={spaceTokens} bound={node.bindings?.gap} onBind={(token) => bindField('gap', token)} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
-            <GeomField label="Padding" value={padField.value} mixed={padField.mixed} tokens={spaceTokens} bound={node.bindings?.pad} onBind={(token) => bindField('pad', token)} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
-          </div>
+          <GeomField label="Gap" value={gapField.value} mixed={gapField.mixed} tokens={spaceTokens} bound={node.bindings?.gap} onBind={(token) => bindField('gap', token)} onChange={(gap) => setField(gap > 0 ? { gap } : {}, gap > 0 ? [] : ['gap'])} />
+          <GeomField label="Padding" value={padField.value} mixed={padField.mixed} tokens={spaceTokens} bound={node.bindings?.pad} onBind={(token) => bindField('pad', token)} onChange={(pad) => setField(pad > 0 ? { pad } : {}, pad > 0 ? ['padTop', 'padRight', 'padBottom', 'padLeft'] : ['pad', 'padTop', 'padRight', 'padBottom', 'padLeft'])} />
           {nodes.every((item) => item.wrap) ? (
             <div className="grid grid-cols-2 gap-1">
-              <GeomField label="Col gap" ariaLabel="Column gap" value={numberOf((item) => item.gapX ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapX ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapX} onBind={(token) => bindField('gapX', token)} onChange={(gapX) => setField(gapX > 0 ? { gapX } : {}, gapX > 0 ? [] : ['gapX'])} />
-              <GeomField label="Row gap" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapY} onBind={(token) => bindField('gapY', token)} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
+              <GeomField label="Col" ariaLabel="Column gap" value={numberOf((item) => item.gapX ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapX ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapX} onBind={(token) => bindField('gapX', token)} onChange={(gapX) => setField(gapX > 0 ? { gapX } : {}, gapX > 0 ? [] : ['gapX'])} />
+              <GeomField label="Row" ariaLabel="Row gap" value={numberOf((item) => item.gapY ?? item.gap ?? 0).value} mixed={numberOf((item) => item.gapY ?? item.gap ?? 0).mixed} tokens={spaceTokens} bound={node.bindings?.gapY} onBind={(token) => bindField('gapY', token)} onChange={(gapY) => setField(gapY > 0 ? { gapY } : {}, gapY > 0 ? [] : ['gapY'])} />
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-1">
@@ -1271,29 +1269,27 @@ export function NodeSettings({
       </Section>
       {allText ? (
         <Section title="Text">
-          <div className="grid grid-cols-2 gap-1">
-            <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} tokens={typeTokens} bound={node.bindings?.fontSize} onBind={(token) => bindField('fontSize', token)} onChange={(fontSize) => {
-              if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) applyType({}, ['fontSize'])
-              else applyType({ fontSize })
-            }} />
-            <LabeledControl label="Weight">
-              <KomaSelect
-                aria-label="Weight"
-                value={weightField.mixed ? '' : weightField.value}
-                onChange={(event) => {
-                  const weight = event.target.value
-                  if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
-                  applyType(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
-                }}
-                className="h-7 w-full px-1.5 text-[12px]"
-              >
-                {weightField.mixed ? <option value="">Mixed</option> : null}
-                <option value="regular">Regular</option>
-                <option value="medium">Medium</option>
-                <option value="bold">Bold</option>
-              </KomaSelect>
-            </LabeledControl>
-          </div>
+          <GeomField label="Size" value={fontSizeField.value} mixed={fontSizeField.mixed} tokens={typeTokens} bound={node.bindings?.fontSize} onBind={(token) => bindField('fontSize', token)} onChange={(fontSize) => {
+            if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize === 13) applyType({}, ['fontSize'])
+            else applyType({ fontSize })
+          }} />
+          <LabeledControl label="Weight">
+            <KomaSelect
+              aria-label="Weight"
+              value={weightField.mixed ? '' : weightField.value}
+              onChange={(event) => {
+                const weight = event.target.value
+                if (weight !== 'regular' && weight !== 'medium' && weight !== 'bold') return
+                applyType(weight === 'regular' ? {} : { weight }, weight === 'regular' ? ['weight'] : [])
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              {weightField.mixed ? <option value="">Mixed</option> : null}
+              <option value="regular">Regular</option>
+              <option value="medium">Medium</option>
+              <option value="bold">Bold</option>
+            </KomaSelect>
+          </LabeledControl>
           <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
             <span className="flex-none text-[11px] text-koma-dim">Font</span>
             <input

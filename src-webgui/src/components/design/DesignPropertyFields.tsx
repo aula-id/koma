@@ -332,7 +332,7 @@ export function SizeMode({ label, value, mixed, onChange }: { label: string; val
       label={label}
       value={mixed ? '' : value}
       mixed={mixed}
-      grow={false}
+      grow
       options={[
         { value: 'fixed', label: 'Fixed', icon: <Square size={13} /> },
         { value: 'hug', label: 'Hug', icon: <MinimizeIcon /> },
