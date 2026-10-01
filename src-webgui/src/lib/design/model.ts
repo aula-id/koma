@@ -1005,14 +1005,28 @@ function instanceAssetSize(doc: DesignDoc, node: DesignNode): { w: number; h: nu
 function bindInstanceToAsset(doc: DesignDoc, node: DesignNode): DesignNode {
   const asset = instanceAssetSize(doc, node)
   if (!asset) return node
-  const maxW = asset.w
-  const maxH = asset.h
-  const w = Math.min(Math.max(1, node.w), maxW)
-  const h = Math.min(Math.max(1, node.h), maxH)
-  const wMode = node.wMode === 'fill' ? 'fill' : 'fixed'
-  const hMode = node.hMode === 'fill' ? 'fill' : 'fixed'
-  if (node.w === w && node.h === h && node.maxW === maxW && node.maxH === maxH && node.wMode === wMode && node.hMode === hMode) return node
-  return { ...node, w, h, maxW, maxH, wMode, hMode }
+  const w = asset.w
+  const h = asset.h
+  if (node.w === w && node.h === h && node.maxW === w && node.maxH === h && node.wMode === 'fixed' && node.hMode === 'fixed') return node
+  return { ...node, w, h, maxW: w, maxH: h, wMode: 'fixed', hMode: 'fixed' }
+}
+
+/** Open-Pencil SCALE: children move/size by instance/component, they do not reflow. */
+function scaleInstanceVisual(node: DesignNode, sx: number, sy: number, root = true): DesignNode {
+  const next: DesignNode = {
+    ...node,
+    x: root ? node.x : node.x * sx,
+    y: root ? node.y : node.y * sy,
+    w: Math.max(1, node.w * sx),
+    h: Math.max(1, node.h * sy),
+  }
+  if (node.fontSize) next.fontSize = Math.max(1, node.fontSize * Math.abs(sy))
+  if (node.radius != null) next.radius = node.radius * Math.min(Math.abs(sx), Math.abs(sy))
+  if (node.pad != null) next.pad = node.pad * Math.min(Math.abs(sx), Math.abs(sy))
+  if (node.gap != null) next.gap = node.gap * Math.min(Math.abs(sx), Math.abs(sy))
+  if (node.vector && (sx !== 1 || sy !== 1)) next.vector = scaleVector(node.vector, sx, sy)
+  if (node.children?.length) next.children = node.children.map((child) => scaleInstanceVisual(child, sx, sy, false))
+  return next
 }
 
 function bindInstanceTree(doc: DesignDoc, node: DesignNode, frozenId?: string): DesignNode {
@@ -1062,10 +1076,10 @@ export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<str
     const assetH = Math.max(1, picked.node?.h ?? node.h)
     const next: DesignNode = {
       ...node,
-      w: Math.min(Math.max(1, node.wMode === 'fill' ? node.w : assetW), assetW),
-      h: Math.min(Math.max(1, node.hMode === 'fill' ? node.h : assetH), assetH),
-      wMode: node.wMode === 'fill' ? 'fill' : 'fixed',
-      hMode: node.hMode === 'fill' ? 'fill' : 'fixed',
+      w: assetW,
+      h: assetH,
+      wMode: 'fixed',
+      hMode: 'fixed',
       maxW: assetW,
       maxH: assetH,
     }
@@ -1096,20 +1110,24 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
   const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill, overrides: node.overrides })
   const assetW = Number.isFinite(overridden.w) && overridden.w > 0 ? overridden.w : 1
   const assetH = Number.isFinite(overridden.h) && overridden.h > 0 ? overridden.h : 1
-  const width = Number.isFinite(node.w) && node.w > 0 ? Math.min(node.w, assetW) : assetW
-  const height = Number.isFinite(node.h) && node.h > 0 ? Math.min(node.h, assetH) : assetH
   const pinned: DesignNode = {
     ...overridden,
     x: 0,
     y: 0,
-    w: Math.max(1, width),
-    h: Math.max(1, height),
+    w: Math.max(1, assetW),
+    h: Math.max(1, assetH),
     wMode: 'fixed',
     hMode: 'fixed',
     maxW: assetW,
     maxH: assetH,
   }
-  return layoutNode(pinned)
+  const laid = layoutNode(pinned)
+  const boxW = Number.isFinite(node.w) && node.w > 0 ? Math.min(node.w, laid.w) : laid.w
+  const boxH = Number.isFinite(node.h) && node.h > 0 ? Math.min(node.h, laid.h) : laid.h
+  const sx = laid.w > 0 ? boxW / laid.w : 1
+  const sy = laid.h > 0 ? boxH / laid.h : 1
+  if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) return laid
+  return scaleInstanceVisual(laid, sx, sy)
 }
 
 /** Variant frames placed side by side so the canvas can edit them like screens. */

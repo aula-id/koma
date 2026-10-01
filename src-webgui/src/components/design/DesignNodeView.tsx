@@ -53,6 +53,8 @@ export function DesignNodeView({
 }) {
   if (node.visible === false) return null
   const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
+  const boxW = visual?.w ?? node.w
+  const boxH = visual?.h ?? node.h
   const chrome = nodeChrome(visual ?? node)
   const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
   const selected = selectedIds.includes(node.id)
@@ -64,7 +66,7 @@ export function DesignNodeView({
   const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
   const fill = bareFill ? 'transparent' : paintCss(doc, chrome.fill, fillFallback)
   const stroke = paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)')
-  const corners = cornerPixels(doc, node)
+  const corners = cornerPixels(doc, visual ?? node)
   const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
   const unit = 1 / Math.max(zoom, 0.25)
   const insetAt = (value: number, span: number) => Math.min(span / 2, Math.max(8 * unit, value > 0 ? value : 14 * unit))
@@ -86,8 +88,8 @@ export function DesignNodeView({
       style={{
         left: node.x,
         top: node.y,
-        width: node.w,
-        height: node.h,
+        width: boxW,
+        height: boxH,
         opacity: chrome.opacity,
         transform,
         outline: selected ? `${unit}px solid ${SELECTION}` : undefined,
@@ -115,7 +117,7 @@ export function DesignNodeView({
       {container ? (
         <span
           className={`absolute left-0 truncate text-[11px] ${selected ? 'text-koma-fg' : 'text-koma-dim'} ${hitHere && !locked && !node.locked ? 'pointer-events-auto cursor-grab' : 'pointer-events-none'}`}
-          style={{ top: -16, maxWidth: Math.max(node.w, 80) }}
+          style={{ top: -16, maxWidth: Math.max(boxW, 80) }}
           onPointerDown={
             hitHere && !locked && !node.locked
               ? (event) => {
@@ -138,12 +140,12 @@ export function DesignNodeView({
         }}
       >
         {node.kind === 'line' ? (
-          <svg className="absolute inset-0 overflow-visible" width={node.w} height={node.h}>
-            <line x1={0} y1={node.h / 2} x2={node.w} y2={node.h / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} />
+          <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
+            <line x1={0} y1={boxH / 2} x2={boxW} y2={boxH / 2} stroke={stroke} strokeWidth={chrome.strokeWidth} />
           </svg>
         ) : null}
         {node.kind === 'vector' && node.vector ? (
-          <svg className="absolute inset-0 overflow-visible" width={node.w} height={node.h}>
+          <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
             <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} />
           </svg>
         ) : null}
@@ -204,10 +206,10 @@ export function DesignNodeView({
       ) : null}
       {selected && !locked && !node.locked && !dragCursor && (node.kind === 'rect' || node.kind === 'frame') ? (
         ([
-          { id: 'tl' as const, x: insetAt(corners.tl, node.w), y: insetAt(corners.tl, node.h), cursor: 'nwse-resize' },
-          { id: 'tr' as const, x: node.w - insetAt(corners.tr, node.w), y: insetAt(corners.tr, node.h), cursor: 'nesw-resize' },
-          { id: 'bl' as const, x: insetAt(corners.bl, node.w), y: node.h - insetAt(corners.bl, node.h), cursor: 'nesw-resize' },
-          { id: 'br' as const, x: node.w - insetAt(corners.br, node.w), y: node.h - insetAt(corners.br, node.h), cursor: 'nwse-resize' },
+          { id: 'tl' as const, x: insetAt(corners.tl, boxW), y: insetAt(corners.tl, boxH), cursor: 'nwse-resize' },
+          { id: 'tr' as const, x: boxW - insetAt(corners.tr, boxW), y: insetAt(corners.tr, boxH), cursor: 'nesw-resize' },
+          { id: 'bl' as const, x: insetAt(corners.bl, boxW), y: boxH - insetAt(corners.bl, boxH), cursor: 'nesw-resize' },
+          { id: 'br' as const, x: boxW - insetAt(corners.br, boxW), y: boxH - insetAt(corners.br, boxH), cursor: 'nwse-resize' },
         ]).map((corner) => (
           <button
             key={corner.id}

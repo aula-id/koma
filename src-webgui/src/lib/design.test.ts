@@ -1109,6 +1109,18 @@ function sample(): DesignDoc {
   const visual = resolveInstanceTree({ ...emptyDesign(), components: [component] }, placed)
   assert.equal(visual?.w, 80)
   assert.equal(visual?.h, 40)
+  const blown = resolveInstanceTree({ ...emptyDesign(), components: [component] }, { ...placed, w: 400, h: 300 })
+  assert.equal(blown?.w, 80)
+  assert.equal(blown?.h, 40)
+  assert.equal(blown?.children?.[0].w, visual?.children?.[0].w)
+  assert.equal(blown?.children?.[0].h, visual?.children?.[0].h)
+  assert.equal(blown?.children?.[0].x, visual?.children?.[0].x)
+  assert.equal(blown?.children?.[0].y, visual?.children?.[0].y)
+  const half = resolveInstanceTree({ ...emptyDesign(), components: [component] }, { ...placed, w: 40, h: 20 })
+  assert.equal(half?.w, 40)
+  assert.equal(half?.h, 20)
+  assert.equal(Math.round(half?.children?.[0].w ?? 0), Math.round((visual?.children?.[0].w ?? 0) * 0.5))
+  assert.equal(Math.round(half?.children?.[0].h ?? 0), Math.round((visual?.children?.[0].h ?? 0) * 0.5))
   const host = createNode('frame', 'host', 0, 0)
   host.layout = 'column'
   host.align = 'stretch'

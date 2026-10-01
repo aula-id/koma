@@ -63,8 +63,6 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
       ...visual,
       x: node.x,
       y: node.y,
-      w: node.w,
-      h: node.h,
       rotation: node.rotation ?? visual.rotation,
       flipX: node.flipX ?? visual.flipX,
       flipY: node.flipY ?? visual.flipY,
