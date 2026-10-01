@@ -55,29 +55,15 @@ function num(value: unknown): number | null {
 
 export async function importFigToDesign(buffer: ArrayBuffer): Promise<DesignImportResult> {
   try {
-    const fig = await import('@open-pencil/fig')
-    const parse = (fig as { parseFigBuffer?: (data: ArrayBuffer) => { graph?: unknown } }).parseFigBuffer
-    if (typeof parse === 'function') return graphToDesign(parse(buffer).graph ?? parse(buffer))
-  } catch {
-    /* parser optional */
-  }
-  try {
     const text = new TextDecoder().decode(buffer)
     if (text.trim().startsWith('{')) return graphToDesign(JSON.parse(text))
   } catch {
-    /* not json */
+    /* binary .fig needs a parser that is not bundled */
   }
   return { doc: emptyDesign(), error: 'Could not parse this .fig file' }
 }
 
 export async function importPenToDesign(text: string): Promise<DesignImportResult> {
-  try {
-    const pen = await import('@open-pencil/pen')
-    const parse = (pen as { parsePenFile?: (raw: string) => unknown }).parsePenFile
-    if (typeof parse === 'function') return graphToDesign(parse(text))
-  } catch {
-    /* parser optional */
-  }
   try {
     return graphToDesign(JSON.parse(text))
   } catch {

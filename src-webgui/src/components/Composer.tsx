@@ -1309,13 +1309,12 @@ export function Composer() {
               onClick={submit}
               disabled={!canSend}
               aria-label={working ? 'Queue message (Ctrl+Enter)' : 'Send (Ctrl+Enter)'}
-              title="Ctrl+Enter to send"
               title={
                 atSteerCap
                   ? '5 pending steers max'
                   : working
-                    ? 'Queue while working'
-                    : 'Send'
+                    ? 'Queue while working (Ctrl+Enter)'
+                    : 'Send (Ctrl+Enter)'
               }
               className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors @max-[14rem]/chat:h-7 @max-[14rem]/chat:w-7 ${
                 canSend

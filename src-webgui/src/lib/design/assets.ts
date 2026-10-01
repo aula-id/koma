@@ -39,8 +39,10 @@ export async function hashBytes(bytes: Uint8Array): Promise<string> {
     const digest = await crypto.subtle.digest('SHA-256', copy.buffer)
     return [...new Uint8Array(digest)].map((item) => item.toString(16).padStart(2, '0')).join('')
   }
-  const { createHash } = await import('node:crypto')
-  return createHash('sha256').update(bytes).digest('hex')
+  let hash = 2166136261
+  for (let i = 0; i < bytes.length; i++) hash = Math.imul(hash ^ bytes[i], 16777619)
+  const hex = (hash >>> 0).toString(16).padStart(8, '0')
+  return hex.repeat(8).slice(0, 64)
 }
 
 export function cacheDesignImage(hash: string, bytes: Uint8Array, mime: string): string {

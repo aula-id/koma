@@ -326,6 +326,15 @@ export function DesignPanel() {
     }
   }, [menu])
 
+  const fileUi = useKoma((s) =>
+    designTab ? s.design?.fileUi?.[fileKey(designTab.root, designTab.path)] : undefined,
+  )
+
+  useEffect(() => {
+    if (!designTab) return
+    setDesignPanelTab(designTab.id)
+  }, [designTab, setDesignPanelTab])
+
   if (sessionId === null) return <Empty>Open a project to use Design</Empty>
   if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
 
@@ -360,17 +369,9 @@ export function DesignPanel() {
   }
 
   const open = designTab ? docs[fileKey(designTab.root, designTab.path)] : undefined
-  const fileUi = useKoma((s) =>
-    designTab ? s.design?.fileUi?.[fileKey(designTab.root, designTab.path)] : undefined,
-  )
   const focusId = fileUi?.focusId ?? null
   const selection = fileUi?.selection ?? []
   const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null
-
-  useEffect(() => {
-    if (!designTab) return
-    setDesignPanelTab(designTab.id)
-  }, [designTab, setDesignPanelTab])
 
   const query = assetQuery.trim().toLowerCase()
   const fileNeedle = fileQuery.trim().toLowerCase()
