@@ -466,14 +466,10 @@ export function resizeDesignNode(
   }
   const minW = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_W
   const minH = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_H
-  if (w < minW) {
-    if (handle.includes('w')) x = right - minW
-    w = minW
-  }
-  if (h < minH) {
-    if (handle.includes('n')) y = bottom - minH
-    h = minH
-  }
+  w = Math.max(minW, limitSize(w, node.minW, node.maxW))
+  h = Math.max(minH, limitSize(h, node.minH, node.maxH))
+  if (handle.includes('w')) x = right - w
+  if (handle.includes('n')) y = bottom - h
   const next: DesignNode = { ...node, x, y, w, h }
   if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.vector = scaleVector(node.vector, w / node.w, h / node.h)
@@ -853,7 +849,8 @@ export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | n
 export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
   let changed = false
   const screens = doc.screens.map((screen) => {
-    const next = layoutNode(screen, frozenId)
+    const laid = layoutNode(screen, frozenId)
+    const next = bindInstanceTree(doc, laid, frozenId)
     if (next !== screen) changed = true
     return next
   })
@@ -937,9 +934,10 @@ export function createComponentFromFrame(doc: DesignDoc, frameId: string, compon
     h: located.node.h,
     wMode: 'fixed',
     hMode: 'fixed',
+    maxW: Math.max(1, located.node.w),
+    maxH: Math.max(1, located.node.h),
     component: componentId,
   }
-  if (located.node.clip === false) instance.clip = false
   return updateDesignNode(next, located.parentId, (parent) => ({
     ...parent,
     children: (parent.children ?? []).map((child) => (child.id === frameId ? instance : child)),
@@ -994,6 +992,41 @@ export function renameComponent(doc: DesignDoc, componentId: string, raw: string
   return { ...doc, components }
 }
 
+function instanceAssetSize(doc: DesignDoc, node: DesignNode): { w: number; h: number } | null {
+  if (node?.kind !== 'instance' || !node.component) return null
+  const component = doc.components.find((item) => item.id === node.component)
+  const variant = component ? pickVariant(component, node.variant) : null
+  const w = variant?.node?.w
+  const h = variant?.node?.h
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return null
+  return { w, h }
+}
+
+function bindInstanceToAsset(doc: DesignDoc, node: DesignNode): DesignNode {
+  const asset = instanceAssetSize(doc, node)
+  if (!asset) return node
+  const maxW = asset.w
+  const maxH = asset.h
+  const w = Math.min(Math.max(1, node.w), maxW)
+  const h = Math.min(Math.max(1, node.h), maxH)
+  const wMode = node.wMode === 'fill' ? 'fill' : 'fixed'
+  const hMode = node.hMode === 'fill' ? 'fill' : 'fixed'
+  if (node.w === w && node.h === h && node.maxW === maxW && node.maxH === maxH && node.wMode === wMode && node.hMode === hMode) return node
+  return { ...node, w, h, maxW, maxH, wMode, hMode }
+}
+
+function bindInstanceTree(doc: DesignDoc, node: DesignNode, frozenId?: string): DesignNode {
+  let next = node.id !== frozenId && node.kind === 'instance' ? bindInstanceToAsset(doc, node) : node
+  if (!next.children?.length) return next
+  let changed = next !== node
+  const children = next.children.map((child) => {
+    const bound = bindInstanceTree(doc, child, frozenId)
+    if (bound !== child) changed = true
+    return bound
+  })
+  return changed ? { ...next, children } : next
+}
+
 export function makeInstance(doc: DesignDoc, componentId: string, id: string, x: number, y: number): DesignNode | null {
   const component = doc.components.find((item) => item.id === componentId)
   if (!component) return null
@@ -1001,7 +1034,7 @@ export function makeInstance(doc: DesignDoc, componentId: string, id: string, x:
   if (!variant) return null
   const w = Number.isFinite(variant.node?.w) ? variant.node.w : 1
   const h = Number.isFinite(variant.node?.h) ? variant.node.h : 1
-  const instance: DesignNode = {
+  return {
     id,
     kind: 'instance',
     x,
@@ -1010,10 +1043,10 @@ export function makeInstance(doc: DesignDoc, componentId: string, id: string, x:
     h: Math.max(1, h),
     wMode: 'fixed',
     hMode: 'fixed',
+    maxW: Math.max(1, w),
+    maxH: Math.max(1, h),
     component: componentId,
   }
-  if (variant.node?.clip === false) instance.clip = false
-  return instance
 }
 
 export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<string, string>): DesignDoc | null {
@@ -1025,12 +1058,16 @@ export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<str
   const picked = pickVariant(component, clean)
   if (!picked) return null
   return updateDesignNode(doc, id, (node) => {
+    const assetW = Math.max(1, picked.node?.w ?? node.w)
+    const assetH = Math.max(1, picked.node?.h ?? node.h)
     const next: DesignNode = {
       ...node,
-      w: Math.max(1, picked.node?.w ?? node.w),
-      h: Math.max(1, picked.node?.h ?? node.h),
+      w: Math.min(Math.max(1, node.wMode === 'fill' ? node.w : assetW), assetW),
+      h: Math.min(Math.max(1, node.hMode === 'fill' ? node.h : assetH), assetH),
       wMode: node.wMode === 'fill' ? 'fill' : 'fixed',
       hMode: node.hMode === 'fill' ? 'fill' : 'fixed',
+      maxW: assetW,
+      maxH: assetH,
     }
     if (Object.keys(clean).length) next.variant = clean
     else delete next.variant
@@ -1057,8 +1094,10 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
   const variant = pickVariant(component, node.variant)
   if (!variant) return null
   const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill, overrides: node.overrides })
-  const width = Number.isFinite(node.w) && node.w > 0 ? node.w : overridden.w
-  const height = Number.isFinite(node.h) && node.h > 0 ? node.h : overridden.h
+  const assetW = Number.isFinite(overridden.w) && overridden.w > 0 ? overridden.w : 1
+  const assetH = Number.isFinite(overridden.h) && overridden.h > 0 ? overridden.h : 1
+  const width = Number.isFinite(node.w) && node.w > 0 ? Math.min(node.w, assetW) : assetW
+  const height = Number.isFinite(node.h) && node.h > 0 ? Math.min(node.h, assetH) : assetH
   const pinned: DesignNode = {
     ...overridden,
     x: 0,
@@ -1067,6 +1106,8 @@ export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNod
     h: Math.max(1, height),
     wMode: 'fixed',
     hMode: 'fixed',
+    maxW: assetW,
+    maxH: assetH,
   }
   return layoutNode(pinned)
 }

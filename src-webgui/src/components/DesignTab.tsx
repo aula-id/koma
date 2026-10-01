@@ -1716,8 +1716,14 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                   const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
                   if (!located || located.node.locked) return
                   const node = { ...located.node }
-                  if (handle.includes('w') || handle.includes('e')) delete node.wMode
-                  if (handle.includes('n') || handle.includes('s')) delete node.hMode
+                  if (handle.includes('w') || handle.includes('e')) {
+                    if (node.kind === 'instance') node.wMode = 'fixed'
+                    else delete node.wMode
+                  }
+                  if (handle.includes('n') || handle.includes('s')) {
+                    if (node.kind === 'instance') node.hMode = 'fixed'
+                    else delete node.hMode
+                  }
                   dragRef.current = {
                     kind: 'resize',
                     id,

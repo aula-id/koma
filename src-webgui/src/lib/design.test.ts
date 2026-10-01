@@ -1104,6 +1104,8 @@ function sample(): DesignDoc {
   assert.equal(placed.h, 40)
   assert.equal(placed.wMode, 'fixed')
   assert.equal(placed.hMode, 'fixed')
+  assert.equal(placed.maxW, 80)
+  assert.equal(placed.maxH, 40)
   const visual = resolveInstanceTree({ ...emptyDesign(), components: [component] }, placed)
   assert.equal(visual?.w, 80)
   assert.equal(visual?.h, 40)
@@ -1119,8 +1121,17 @@ function sample(): DesignDoc {
   const filling = { ...placed, wMode: 'fill' as const, hMode: 'fill' as const }
   host.children = [filling]
   const filled = layoutDesign({ ...emptyDesign(), components: [component], screens: [host] }).screens[0]
-  assert.equal(filled.children?.[0].w, 240)
-  assert.equal(filled.children?.[0].h, 180)
+  assert.equal(filled.children?.[0].w, 80)
+  assert.equal(filled.children?.[0].h, 40)
+  const huge: DesignNode = { id: 'huge', kind: 'instance', x: 0, y: 0, w: 400, h: 300, component: 'btn' }
+  const clamped = layoutDesign({ ...emptyDesign(), components: [component], screens: [huge] }).screens[0]
+  assert.equal(clamped.w, 80)
+  assert.equal(clamped.h, 40)
+  assert.equal(clamped.maxW, 80)
+  assert.equal(clamped.maxH, 40)
+  const stretched = resizeDesignNode(placed, 'se', 200, 200, 1, false)
+  assert.equal(stretched.w, 80)
+  assert.equal(stretched.h, 40)
   const page = createNode('frame', 'page', 0, 0)
   page.w = 200
   page.h = 200
