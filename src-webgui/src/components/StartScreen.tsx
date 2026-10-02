@@ -114,16 +114,14 @@ export function StartScreen() {
     startSwitching(name)
     requestAnimationFrame(() => req({ r: 'SelectSession', id }))
   }
-  // Local: no optimistic loader — host opens a native folder picker first and
-  // only attaches once confirmed (cancel would strand the loader).
-  // Remote hub: optimistic SSH path picker (requestRemotePath guards re-entry
-  // and shows braille listing immediately).
+  // Local: native folder picker. No optimistic loader — cancel would strand it.
+  // Remote: SSH path picker (requestRemotePath guards re-entry).
   const newSession = () => {
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
       requestRemotePath()
       return
     }
-    req({ r: 'NewSession' })
+    req({ r: 'NewSession', folder: true })
   }
   const remotePathBusy =
     remotePathState === 'listing' ||
@@ -192,7 +190,7 @@ export function StartScreen() {
                 ? 'Opening remote folder picker…'
                 : remoteTarget
                   ? `Pick a folder on ${remoteTarget}`
-                  : 'Start working in your default directory'}
+                  : 'Choose a folder'}
             </span>
           </span>
           {remotePathBusy ? (

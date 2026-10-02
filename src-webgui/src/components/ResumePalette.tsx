@@ -115,11 +115,9 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
       onClose()
       return
     }
-    // No optimistic startSwitching here: the host now opens a native folder
-    // picker first (NewSession req), and only pushes switching/attaches once
-    // a folder is actually confirmed. Starting the full-screen loader here
-    // would strand it if the user cancels the dialog.
-    req({ r: 'NewSession' })
+    // No optimistic startSwitching here: the host opens a native folder
+    // picker first, and only attaches once a folder is confirmed.
+    req({ r: 'NewSession', folder: true })
     onClose()
   }
 
