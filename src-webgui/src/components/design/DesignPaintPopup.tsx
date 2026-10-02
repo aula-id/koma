@@ -161,11 +161,12 @@ function numberField(label: string, aria: string, value: number, onChange: (valu
   return <PaintNumberField label={label} ariaLabel={aria} value={value} onChange={onChange} />
 }
 
-function PaintNumberField({ label, ariaLabel, value, onChange, suffix }: { label: string; ariaLabel: string; value: number; onChange: (value: number) => void; suffix?: string }) {
-  const { inputProps } = useDraftNumber({ value, onChange })
+function PaintNumberField({ label, ariaLabel, value, onChange, suffix, min, max }: { label: string; ariaLabel: string; value: number; onChange: (value: number) => void; suffix?: string; min?: number; max?: number }) {
+  const { inputProps, scrubProps } = useDraftNumber({ value, onChange, min, max })
+  const { className: scrubClass, ...scrubRest } = scrubProps
   return (
     <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
-      <span className="w-14 flex-none truncate text-[11px] text-koma-dim">{label}</span>
+      <span className={`w-14 flex-none truncate text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>{label}</span>
       <input {...inputProps} aria-label={ariaLabel} className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none" />
       {suffix ? <span className="flex-none text-[11px] text-koma-dim">{suffix}</span> : null}
     </label>
@@ -475,7 +476,7 @@ export function DesignPaintEditor({
                 className="h-6 min-w-0 flex-1 bg-transparent text-[12px] uppercase text-koma-fg outline-none"
               />
             </label>
-            <PaintNumberField label="%" ariaLabel="Opacity" value={opacity} onChange={setOpacity} />
+            <PaintNumberField label="%" ariaLabel="Opacity" min={0} max={100} value={opacity} onChange={setOpacity} />
           </div>
           {picker.startsWith('#') ? (
             <div className="grid grid-cols-2 gap-1">
@@ -486,12 +487,14 @@ export function DesignPaintEditor({
                     key={key}
                     label={key.toUpperCase()}
                     ariaLabel={key.toUpperCase()}
+                    min={0}
+                    max={255}
                     value={rgba[key]}
                     onChange={(value) => applyHex(rgbaToHex(key === 'r' ? value : rgba.r, key === 'g' ? value : rgba.g, key === 'b' ? value : rgba.b))}
                   />
                 )
               })}
-              <PaintNumberField label="A" ariaLabel="Alpha" value={opacity} onChange={setOpacity} />
+              <PaintNumberField label="A" ariaLabel="Alpha" min={0} max={100} value={opacity} onChange={setOpacity} />
             </div>
           ) : null}
           {tokens?.length ? (
@@ -503,7 +506,7 @@ export function DesignPaintEditor({
         </div>
       ) : null}
       {mode === 'image' ? (
-        <PaintNumberField label="Opacity" ariaLabel="Opacity" value={opacity} onChange={setOpacity} suffix="%" />
+        <PaintNumberField label="Opacity" ariaLabel="Opacity" min={0} max={100} value={opacity} onChange={setOpacity} suffix="%" />
       ) : null}
       {stroke ? <StrokePaintFields paint={paint} onChange={onChange} /> : null}
       <input

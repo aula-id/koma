@@ -522,7 +522,7 @@ export function NodeSettings({
             })
           }}>{nodes.every((item) => item.locked) ? <Lock size={14} /> : <Unlock size={14} />}</AlignButton>
         </div>
-        <GeomField label="Opacity" ariaLabel="Opacity" suffix="%" value={opacityField.value} mixed={opacityField.mixed} tokens={spaceTokens} bound={node.bindings?.opacity} onBind={(token) => bindField('opacity', token)} onChange={(value) => {
+        <GeomField label="Opacity" ariaLabel="Opacity" suffix="%" min={0} max={100} value={opacityField.value} mixed={opacityField.mixed} tokens={spaceTokens} bound={node.bindings?.opacity} onBind={(token) => bindField('opacity', token)} onChange={(value) => {
           const opacity = Math.min(100, Math.max(0, value)) / 100
           setField(opacity < 1 ? { opacity } : {}, opacity < 1 ? [] : ['opacity'])
         }} />
@@ -556,6 +556,7 @@ export function NodeSettings({
               label="Sides"
               ariaLabel={shapeKindOf(node) === 'star' ? 'Star points' : 'Polygon sides'}
               value={node.pointCount ?? (shapeKindOf(node) === 'star' ? 5 : 6)}
+              min={3}
               onChange={(value) => onPatch((current) => retuneDesignShape(current, { pointCount: value }))}
             />
             {shapeKindOf(node) === 'star' ? (
@@ -564,6 +565,8 @@ export function NodeSettings({
                 ariaLabel="Star inset"
                 suffix="%"
                 value={Math.round((node.innerRadius ?? 0.38) * 100)}
+                min={5}
+                max={95}
                 onChange={(value) => onPatch((current) => retuneDesignShape(current, { innerRadius: Math.min(95, Math.max(5, value)) / 100 }))}
               />
             ) : null}
@@ -572,8 +575,8 @@ export function NodeSettings({
         <div className="grid grid-cols-2 gap-1">
           <GeomField label="X" value={xField.value} mixed={xField.mixed} onChange={(x) => setField({ x })} />
           <GeomField label="Y" value={yField.value} mixed={yField.mixed} onChange={(y) => setField({ y })} />
-          <GeomField label="W" value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
-          <GeomField label="H" value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
+          <GeomField label="W" min={1} value={wField.value} mixed={wField.mixed} onChange={(w) => setField({ w: Math.max(1, w) }, ['wMode'])} />
+          <GeomField label="H" min={1} value={hField.value} mixed={hField.mixed} onChange={(h) => setField({ h: Math.max(1, h) }, ['hMode'])} />
         </div>
         {sizeModes ? (
           <div className="grid grid-cols-2 gap-1">

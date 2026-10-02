@@ -169,7 +169,7 @@ export function InstanceOverrides({
                 onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { color: event.target.value.trim() || null }))}
                 className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
-              <GeomField label="Opacity" ariaLabel={`${name} opacity`} suffix="%" value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
+              <GeomField label="Opacity" ariaLabel={`${name} opacity`} suffix="%" min={0} max={100} value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
               <GeomField label="Radius" ariaLabel={`${name} radius`} value={typeof effective.radius === 'number' ? effective.radius : 0} onChange={(radius) => onPatch((current) => mergeDesignOverride(current, child.id, { radius: radius > 0 ? radius : null }))} />
               <GeomField label="Size" ariaLabel={`${name} font size`} value={effective.fontSize} onChange={(fontSize) => onPatch((current) => mergeDesignOverride(current, child.id, { fontSize: fontSize > 0 ? fontSize : null }))} />
               <GeomField label="Width" ariaLabel={`${name} stroke width`} value={effective.strokeWidth} onChange={(strokeWidth) => onPatch((current) => mergeDesignOverride(current, child.id, { strokeWidth: strokeWidth > 0 ? strokeWidth : null }))} />
@@ -209,11 +209,23 @@ export function FieldGroup({ label, children }: { label: string; children: React
   )
 }
 
-export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, bound, onBind, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; tokens?: DesignToken[]; bound?: string; onBind?: (token: string | null) => void; onChange: (value: number) => void }) {
-  const { inputProps } = useDraftNumber({ value, mixed, onChange })
+export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, bound, min, max, step, onBind, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; tokens?: DesignToken[]; bound?: string; min?: number; max?: number; step?: number; onBind?: (token: string | null) => void; onChange: (value: number) => void }) {
+  const openPage = useInspectorPage()
+  const { inputProps, scrubProps } = useDraftNumber({
+    value,
+    mixed,
+    min,
+    max,
+    step,
+    onChange,
+    onTokenShortcut: tokens?.length && onBind
+      ? () => openPage({ kind: 'token', title: 'Token', tokens, selected: bound, onPick: onBind })
+      : undefined,
+  })
+  const { className: scrubClass, ...scrubRest } = scrubProps
   return (
     <label className="flex h-8 min-w-0 items-center gap-1.5 overflow-hidden rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
-      <span className="flex-none text-[11px] text-koma-dim">{label}</span>
+      <span className={`flex-none text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>{label}</span>
       <input
         {...inputProps}
         aria-label={ariaLabel ?? label}
@@ -354,15 +366,35 @@ export function ConstraintWidget({
 }
 
 export function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: DesignToken[]; onChange: (radius: number | string | null) => void }) {
+  const openPage = useInspectorPage()
   const token = !mixed && typeof value === 'string' ? value : ''
   const numeric = typeof value === 'number' ? value : Number(resolved) || 0
-  const { inputProps, draft, setDraft, focused } = useDraftNumber({
+  const { inputProps, draft, setDraft, focused, scrubProps } = useDraftNumber({
     value: numeric,
     mixed,
     emptyAs: 0,
+    nillable: true,
     onChange: (radius) => onChange(radius > 0 ? radius : null),
+    onClear: () => onChange(null),
+    onTokenShortcut: tokens.length
+      ? () => openPage({
+        kind: 'token',
+        title: 'Token',
+        tokens,
+        selected: token || undefined,
+        onPick: (name) => {
+          if (!name) {
+            const radius = Number(resolved)
+            onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
+            return
+          }
+          onChange(name)
+        },
+      })
+      : undefined,
   })
-  const shown = mixed ? '' : draft != null ? draft : token || formatBareNumber(numeric)
+  const shown = mixed ? '' : draft != null ? draft : token || (typeof value === 'number' ? formatBareNumber(value) : '')
+  const { className: scrubClass, ...scrubRest } = scrubProps
   const commitRadius = (raw: string) => {
     const trimmed = raw.trim()
     const named = tokens.find((item) => item.name === trimmed)
@@ -380,7 +412,7 @@ export function RadiusField({ value, mixed, resolved, tokens, onChange }: { valu
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
-        <span className="w-12 flex-none text-[11px] text-koma-dim">Radius</span>
+        <span className={`w-12 flex-none text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>Radius</span>
         <input
           {...inputProps}
           value={shown}
@@ -397,7 +429,7 @@ export function RadiusField({ value, mixed, resolved, tokens, onChange }: { valu
           }}
           onBlur={() => {
             if (mixed) return
-            const raw = draft ?? (token || formatBareNumber(numeric))
+            const raw = draft ?? (token || (typeof value === 'number' ? formatBareNumber(value) : ''))
             if (token || /[a-zA-Z{]/.test(raw)) {
               focused.current = false
               commitRadius(raw)
@@ -481,10 +513,11 @@ export function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x
 }
 
 export function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  const { inputProps } = useDraftNumber({ value, onChange })
+  const { inputProps, scrubProps } = useDraftNumber({ value, onChange })
+  const { className: scrubClass, ...scrubRest } = scrubProps
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-koma-dim">{label}</span>
+      <span className={`text-koma-dim ${scrubClass}`} {...scrubRest}>{label}</span>
       <input
         {...inputProps}
         className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
@@ -627,7 +660,6 @@ export function ColorRow({
           )}
         </div>
         <div className="flex h-7 w-[52px] items-center border-l border-koma-border pl-1.5">
-          <span className="text-[11px] text-koma-dim">%</span>
           <OpacityInput
             mixed={mixed}
             value={mixed ? 100 : Number(opacity) || 100}
@@ -649,14 +681,18 @@ export function ColorRow({
 }
 
 function OpacityInput({ value, mixed, onChange }: { value: number; mixed?: boolean; onChange: (value: number) => void }) {
-  const { inputProps } = useDraftNumber({ value, mixed, onChange })
+  const { inputProps, scrubProps } = useDraftNumber({ value, mixed, min: 0, max: 100, onChange })
+  const { className: scrubClass, ...scrubRest } = scrubProps
   return (
-    <input
-      {...inputProps}
-      aria-label="Opacity"
-      placeholder={mixed ? '—' : undefined}
-      className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[12px] text-koma-fg outline-none"
-    />
+    <>
+      <span className={`text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>%</span>
+      <input
+        {...inputProps}
+        aria-label="Opacity"
+        placeholder={mixed ? '—' : undefined}
+        className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[12px] text-koma-fg outline-none"
+      />
+    </>
   )
 }
 
