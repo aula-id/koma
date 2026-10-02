@@ -36,7 +36,7 @@ import {
   type DesignVectorSegment,
   type DesignWeight,
 } from './types'
-import { clonePaint, firstVisiblePaint, nodePaints, paintAlias, strokePaintWidth } from './paint'
+import { clonePaint, firstVisiblePaint, nodePaints, paintAlias, scaleImageCrops, strokePaintWidth } from './paint'
 
 export function emptyDesign(): DesignDoc {
   return {
@@ -937,10 +937,11 @@ export function resizeDesignNode(
   }
   if (handle.includes('w')) x = right - w
   if (handle.includes('n')) y = bottom - h
-  const next: DesignNode = { ...node, x, y, w, h }
+  let next: DesignNode = { ...node, x, y, w, h }
   if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.vector = scaleVector(node.vector, w / node.w, h / node.h)
   }
+  next = scaleImageCrops(node, next)
   if (node.kind === 'frame' && !node.layout && node.children?.length && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.children = applyConstraints(node, w, h)
   }
@@ -956,7 +957,7 @@ export function resizeDesignNode(
 
 /** Scale a subtree about an anchor, then shift that anchor onto its new content point. */
 function scaleNodeBox(node: DesignNode, sx: number, sy: number, ax: number, ay: number, newAx: number, newAy: number): DesignNode {
-  const next: DesignNode = {
+  let next: DesignNode = {
     ...node,
     x: ax + (node.x - ax) * sx + (newAx - ax),
     y: ay + (node.y - ay) * sy + (newAy - ay),
@@ -964,6 +965,7 @@ function scaleNodeBox(node: DesignNode, sx: number, sy: number, ax: number, ay: 
     h: Math.max(1, node.h * sy),
   }
   if (node.vector && node.w > 0 && node.h > 0) next.vector = scaleVector(node.vector, next.w / node.w, next.h / node.h)
+  next = scaleImageCrops(node, next)
   if (node.fontSize) next.fontSize = Math.max(1, node.fontSize * sy)
   if (node.children?.length) next.children = node.children.map((child) => scaleNodeBox(child, sx, sy, 0, 0, 0, 0))
   return next
@@ -2908,7 +2910,7 @@ function applyConstraints(frame: DesignNode, newW: number, newH: number): Design
     const x = constraintPos(child.constraintH, child.x, child.w, frame.w, newW)
     const y = constraintPos(child.constraintV, child.y, child.h, frame.h, newH)
     if (x.start === child.x && x.size === child.w && y.start === child.y && y.size === child.h) return child
-    return { ...child, x: x.start, y: y.start, w: x.size, h: y.size }
+    return scaleImageCrops(child, { ...child, x: x.start, y: y.start, w: x.size, h: y.size })
   })
 }
 

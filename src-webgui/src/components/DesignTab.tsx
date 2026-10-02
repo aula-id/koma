@@ -105,9 +105,10 @@ import {
   emptyPlayState,
   retargetTextRuns,
   firstVisiblePaint,
-  keepImageCropWorldFixed,
   nodePaints,
   panImageCrop,
+  resizeImageCrop,
+  scaleImageCrops,
   setNodePaints,
   isImageCropPaint,
   openVectorEndpoints,
@@ -765,30 +766,44 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const located = locateDesign(doc, drag.id)
         if (!located) return
         const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
-        let resized = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
-        if (!cropEditRef.current) {
-          const currentBox = designCanvasBox(doc, drag.id)
-          const scene = designSnapScene(doc, [drag.id])
-          if (currentBox && scene) {
-            const proposed = {
-              x: currentBox.x + (resized.x - drag.node.x),
-              y: currentBox.y + (resized.y - drag.node.y),
-              w: resized.w,
-              h: resized.h,
+        if (cropEditRef.current) {
+          const paint = nodePaints(drag.node, 'fill').find(isImageCropPaint)
+          if (paint) {
+            const nextPaint = resizeImageCrop(paint, drag.handle, delta.x, delta.y, event.shiftKey)
+            const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, (node) => (
+              setNodePaints(node, 'fill', nodePaints(node, 'fill').map((item) => (isImageCropPaint(item) && item.hash === paint.hash ? nextPaint : item)))
+            ))))
+            if (serializeDesign(next) === serializeDesign(stored)) return
+            if (!drag.remembered) {
+              noteRef.current(stored)
+              drag.remembered = true
             }
-            const snap = designResizeSnap(proposed, scene.targets, drag.handle, 5 / zoom)
-            resized = {
-              ...resized,
-              x: resized.x + (snap.box.x - proposed.x),
-              y: resized.y + (snap.box.y - proposed.y),
-              w: snap.box.w,
-              h: snap.box.h,
-            }
-            setSnapMarks(snap.guides.length || snap.measures.length ? { guides: snap.guides, measures: snap.measures } : null)
+            updateRef.current(tab.root, tab.path, next)
+            return
           }
         }
-        const nextNode = cropEditRef.current ? keepImageCropWorldFixed(drag.node, resized) : resized
-        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
+        let resized = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
+        const currentBox = designCanvasBox(doc, drag.id)
+        const scene = designSnapScene(doc, [drag.id])
+        if (currentBox && scene) {
+          const proposed = {
+            x: currentBox.x + (resized.x - drag.node.x),
+            y: currentBox.y + (resized.y - drag.node.y),
+            w: resized.w,
+            h: resized.h,
+          }
+          const snap = designResizeSnap(proposed, scene.targets, drag.handle, 5 / zoom)
+          const snapped = {
+            ...resized,
+            x: resized.x + (snap.box.x - proposed.x),
+            y: resized.y + (snap.box.y - proposed.y),
+            w: snap.box.w,
+            h: snap.box.h,
+          }
+          resized = scaleImageCrops(resized, snapped)
+          setSnapMarks(snap.guides.length || snap.measures.length ? { guides: snap.guides, measures: snap.measures } : null)
+        }
+        const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => resized)))
         if (serializeDesign(next) === serializeDesign(stored)) return
         if (!drag.remembered) {
           noteRef.current(stored)

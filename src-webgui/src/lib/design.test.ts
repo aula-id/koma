@@ -90,6 +90,8 @@ import {
   keepImageCropWorldFixed,
   nodeHasImageFill,
   panImageCrop,
+  resizeImageCrop,
+  scaleImageCrops,
   putDesignImage,
   resolvePaintCss,
   solidPaint,
@@ -229,6 +231,22 @@ assert.equal(isDesignPath('.koma/auth.diag'), false)
   assert.equal(round.doc.screens[0].fills?.[0].imageX, -10)
   assert.equal(round.doc.screens[0].fills?.[0].imageW, 140)
   assert.equal(round.doc.images?.[hashed]?.w, 200)
+  const scaled = scaleImageCrops(prev, { ...prev, w: 200, h: 160 })
+  assert.equal(scaled.fills?.[0].imageX, -100)
+  assert.equal(scaled.fills?.[0].imageW, 400)
+  assert.equal(scaled.fills?.[0].imageH, 160)
+  const imageGrown = resizeImageCrop(prev.fills[0], 'se', 20, 10)
+  assert.equal(imageGrown.imageW, 220)
+  assert.equal(imageGrown.imageH, 90)
+  assert.equal(imageGrown.imageX, -50)
+  const imageWest = resizeImageCrop(prev.fills[0], 'nw', -10, -8)
+  assert.equal(imageWest.imageX, -60)
+  assert.equal(imageWest.imageY, -8)
+  const boxGrown = resizeDesignNode(prev, 'se', 100, 80, 1, false)
+  assert.equal(boxGrown.w, 200)
+  assert.equal(boxGrown.h, 160)
+  assert.equal(boxGrown.fills?.[0].imageW, 400)
+  assert.equal(boxGrown.fills?.[0].imageH, 160)
 }
 
 {
@@ -1302,9 +1320,27 @@ function sample(): DesignDoc {
   assert.equal(poly.kind, 'vector')
   assert.equal(poly.pointCount, 3)
   assert.ok(poly.vector?.vertices.length === 3)
+  const xs = poly.vector!.vertices.map((point) => point.x)
+  const ys = poly.vector!.vertices.map((point) => point.y)
+  assert.equal(Math.min(...xs), 0)
+  assert.equal(Math.max(...xs), 100)
+  assert.equal(Math.min(...ys), 0)
+  assert.equal(Math.max(...ys), 100)
+  const hex = createPolygonNode('hex', 10, 20, 80, 6, 80)
+  assert.equal(hex.w, 80)
+  assert.equal(hex.h, 80)
+  const hexXs = hex.vector!.vertices.map((point) => point.x)
+  assert.equal(Math.min(...hexXs), 0)
+  assert.equal(Math.max(...hexXs), 80)
   const star = createStarNode('star', 0, 0, 100, 5)
   assert.equal(star.kind, 'vector')
   assert.equal(star.vector?.vertices.length, 10)
+  const starXs = star.vector!.vertices.map((point) => point.x)
+  const starYs = star.vector!.vertices.map((point) => point.y)
+  assert.equal(Math.min(...starXs), 0)
+  assert.equal(Math.max(...starXs), 100)
+  assert.equal(Math.min(...starYs), 0)
+  assert.equal(Math.max(...starYs), 100)
   const outlined = outlineStrokeNode({ ...poly, stroke: '#112233' })
   assert.equal(outlined.fill, '#112233')
 }
@@ -1684,8 +1720,15 @@ function sample(): DesignDoc {
   assert.equal(star.kind, 'vector')
   assert.equal(shapeKindOf(star), 'star')
   assert.ok(star.vector?.vertices.length)
+  assert.equal(star.w, 80)
+  assert.equal(star.h, 40)
+  const starXs = star.vector!.vertices.map((point) => point.x)
+  assert.equal(Math.min(...starXs), 0)
+  assert.equal(Math.max(...starXs), 80)
   const retuned = retuneDesignShape(star, { pointCount: 7, innerRadius: 0.5 })
   assert.equal(retuned.pointCount, 7)
   assert.equal(retuned.innerRadius, 0.5)
   assert.equal(shapeKindOf(retuned), 'star')
+  assert.equal(retuned.w, 80)
+  assert.equal(retuned.h, 40)
 }

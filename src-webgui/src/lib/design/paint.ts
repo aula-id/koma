@@ -347,6 +347,65 @@ export function keepImageCropWorldFixed(prev: DesignNode, next: DesignNode): Des
   }))
 }
 
+/** Scale crop image placement with the node box (Penpot / outside-resize). */
+export function scaleImageCrops(prev: DesignNode, next: DesignNode): DesignNode {
+  if (next.w === prev.w && next.h === prev.h) return next
+  if (prev.w <= 0 || prev.h <= 0) return next
+  const paints = nodePaints(next, 'fill')
+  if (!paints.some(isImageCropPaint)) return next
+  const sx = next.w / prev.w
+  const sy = next.h / prev.h
+  return setNodePaints(next, 'fill', paints.map((paint) => {
+    if (!isImageCropPaint(paint) || paint.imageW == null || paint.imageH == null) return paint
+    return {
+      ...paint,
+      imageX: (paint.imageX ?? 0) * sx,
+      imageY: (paint.imageY ?? 0) * sy,
+      imageW: paint.imageW * sx,
+      imageH: paint.imageH * sy,
+    }
+  }))
+}
+
+/** Resize the crop image itself; the shape box stays put. */
+export function resizeImageCrop(
+  paint: DesignPaint,
+  handle: string,
+  dx: number,
+  dy: number,
+  constrain = false,
+): DesignPaint {
+  if (!isImageCropPaint(paint) || paint.imageW == null || paint.imageH == null) return paint
+  const right = (paint.imageX ?? 0) + paint.imageW
+  const bottom = (paint.imageY ?? 0) + paint.imageH
+  let x = paint.imageX ?? 0
+  let y = paint.imageY ?? 0
+  let w = paint.imageW
+  let h = paint.imageH
+  if (handle.includes('w')) {
+    x += dx
+    w = right - x
+  } else if (handle.includes('e')) {
+    w += dx
+  }
+  if (handle.includes('n')) {
+    y += dy
+    h = bottom - y
+  } else if (handle.includes('s')) {
+    h += dy
+  }
+  w = Math.max(1, w)
+  h = Math.max(1, h)
+  if (constrain && paint.imageW > 0 && paint.imageH > 0 && handle.length === 2) {
+    const aspect = paint.imageW / paint.imageH
+    if (Math.abs(dx) >= Math.abs(dy)) h = Math.max(1, w / aspect)
+    else w = Math.max(1, h * aspect)
+  }
+  if (handle.includes('w')) x = right - w
+  if (handle.includes('n')) y = bottom - h
+  return { ...paint, imageX: x, imageY: y, imageW: w, imageH: h }
+}
+
 export function imageFillPlacement(
   box: { w: number; h: number },
   paint: DesignPaint,

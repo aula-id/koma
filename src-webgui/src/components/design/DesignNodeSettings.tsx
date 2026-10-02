@@ -45,6 +45,7 @@ import {
   designImageSize,
   ensureImageCrop,
   nodeHasPaint,
+  scaleImageCrops,
   nodePaints,
   setNodePaints,
   reshapeDesignNode,
@@ -176,8 +177,11 @@ export function NodeSettings({
   }
   const setField = (patch: Partial<DesignNode>, clear: (keyof DesignNode)[] = []) => {
     onPatch((current) => {
-      const next: DesignNode = { ...current, ...patch }
+      let next: DesignNode = { ...current, ...patch }
       for (const key of clear) delete next[key]
+      if ((patch.w != null && patch.w !== current.w) || (patch.h != null && patch.h !== current.h)) {
+        next = scaleImageCrops(current, next)
+      }
       return next
     })
   }

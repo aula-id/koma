@@ -2,22 +2,43 @@ import type { DesignBooleanOp, DesignDoc, DesignNode, DesignPenPoint } from './t
 import { createNode, nodeFromPen, updateDesignNode, wrapDesignNodes } from './model'
 import { setNodeSolid } from './paint'
 
-function regularPoints(cx: number, cy: number, radius: number, count: number, turn = -Math.PI / 2): DesignPenPoint[] {
+function regularPoints(count: number, turn = -Math.PI / 2): DesignPenPoint[] {
   const n = Math.max(3, Math.round(count))
   const zero = { x: 0, y: 0 }
   const points: DesignPenPoint[] = []
   for (let i = 0; i < n; i++) {
     const angle = turn + (i * Math.PI * 2) / n
-    points.push({ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius, incoming: zero, outgoing: zero })
+    points.push({ x: Math.cos(angle), y: Math.sin(angle), incoming: zero, outgoing: zero })
   }
   return points
 }
 
-export function createPolygonNode(id: string, x: number, y: number, size = 100, sides = 3): DesignNode {
-  const radius = size / 2
-  const node = nodeFromPen(id, regularPoints(x + radius, y + radius, radius, sides), true)
-  if (!node) return { ...createNode('rect', id, x, y), name: 'Polygon', pointCount: sides }
-  return { ...node, name: 'Polygon', pointCount: sides }
+function fillBox(points: DesignPenPoint[], w: number, h: number): DesignPenPoint[] {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of points) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  const spanX = maxX - minX || 1
+  const spanY = maxY - minY || 1
+  return points.map((point) => ({
+    ...point,
+    x: ((point.x - minX) / spanX) * w,
+    y: ((point.y - minY) / spanY) * h,
+  }))
+}
+
+export function createPolygonNode(id: string, x: number, y: number, w = 100, sides = 6, h = w): DesignNode {
+  const width = Math.max(1, w)
+  const height = Math.max(1, h)
+  const node = nodeFromPen(id, fillBox(regularPoints(sides), width, height), true)
+  if (!node) return { ...createNode('rect', id, x, y), name: 'Polygon', w: width, h: height, pointCount: sides }
+  return { ...node, name: 'Polygon', pointCount: sides, x, y, w: width, h: height }
 }
 
 const SHAPE_KINDS = ['rect', 'ellipse', 'line', 'polygon', 'star'] as const
@@ -33,7 +54,6 @@ export function shapeKindOf(node: DesignNode): DesignReshapeKind | null {
 /** Keep box and paints; switch rect / ellipse / line / polygon / star. */
 export function reshapeDesignNode(node: DesignNode, kind: DesignReshapeKind): DesignNode {
   if (shapeKindOf(node) === kind) return node
-  const size = Math.max(8, Math.min(node.w, node.h) || 100)
   const shared: Partial<DesignNode> = {
     id: node.id,
     x: node.x,
@@ -54,11 +74,11 @@ export function reshapeDesignNode(node: DesignNode, kind: DesignReshapeKind): De
     name: node.name,
   }
   if (kind === 'polygon') {
-    const made = createPolygonNode(node.id, node.x, node.y, size, node.pointCount && node.pointCount >= 3 ? node.pointCount : 6)
+    const made = createPolygonNode(node.id, node.x, node.y, Math.max(8, node.w), node.pointCount && node.pointCount >= 3 ? node.pointCount : 6, Math.max(8, node.h))
     return { ...made, ...shared, kind: 'vector', name: node.name || 'Polygon' }
   }
   if (kind === 'star') {
-    const made = createStarNode(node.id, node.x, node.y, size, node.pointCount && node.pointCount >= 3 ? node.pointCount : 5, node.innerRadius ?? 0.38)
+    const made = createStarNode(node.id, node.x, node.y, Math.max(8, node.w), node.pointCount && node.pointCount >= 3 ? node.pointCount : 5, node.innerRadius ?? 0.38, Math.max(8, node.h))
     return { ...made, ...shared, kind: 'vector', name: node.name || 'Star' }
   }
   const next: DesignNode = {
@@ -84,10 +104,9 @@ export function retuneDesignShape(node: DesignNode, patch: { pointCount?: number
   if (kind !== 'polygon' && kind !== 'star') return node
   const count = Math.max(3, Math.round(patch.pointCount ?? node.pointCount ?? (kind === 'star' ? 5 : 6)))
   const inner = Math.max(0.05, Math.min(0.95, patch.innerRadius ?? node.innerRadius ?? 0.38))
-  const size = Math.max(8, Math.min(node.w, node.h) || 100)
   const made = kind === 'star'
-    ? createStarNode(node.id, node.x, node.y, size, count, inner)
-    : createPolygonNode(node.id, node.x, node.y, size, count)
+    ? createStarNode(node.id, node.x, node.y, Math.max(8, node.w), count, inner, Math.max(8, node.h))
+    : createPolygonNode(node.id, node.x, node.y, Math.max(8, node.w), count, Math.max(8, node.h))
   return {
     ...made,
     id: node.id,
@@ -110,20 +129,21 @@ export function retuneDesignShape(node: DesignNode, patch: { pointCount?: number
   }
 }
 
-export function createStarNode(id: string, x: number, y: number, size = 100, points = 5, inner = 0.38): DesignNode {
+export function createStarNode(id: string, x: number, y: number, w = 100, points = 5, inner = 0.38, h = w): DesignNode {
   const n = Math.max(3, Math.round(points))
-  const outer = size / 2
-  const innerR = outer * Math.max(0.05, Math.min(0.95, inner))
+  const width = Math.max(1, w)
+  const height = Math.max(1, h)
+  const ratio = Math.max(0.05, Math.min(0.95, inner))
   const zero = { x: 0, y: 0 }
   const verts: DesignPenPoint[] = []
   for (let i = 0; i < n * 2; i++) {
-    const radius = i % 2 === 0 ? outer : innerR
+    const radius = i % 2 === 0 ? 1 : ratio
     const angle = -Math.PI / 2 + (i * Math.PI) / n
-    verts.push({ x: x + outer + Math.cos(angle) * radius, y: y + outer + Math.sin(angle) * radius, incoming: zero, outgoing: zero })
+    verts.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, incoming: zero, outgoing: zero })
   }
-  const node = nodeFromPen(id, verts, true)
-  if (!node) return { ...createNode('rect', id, x, y), name: 'Star', pointCount: n, innerRadius: inner }
-  return { ...node, name: 'Star', pointCount: n, innerRadius: inner }
+  const node = nodeFromPen(id, fillBox(verts, width, height), true)
+  if (!node) return { ...createNode('rect', id, x, y), name: 'Star', w: width, h: height, pointCount: n, innerRadius: inner }
+  return { ...node, name: 'Star', pointCount: n, innerRadius: inner, x, y, w: width, h: height }
 }
 
 export function booleanDesignNodes(doc: DesignDoc, ids: string[], op: DesignBooleanOp, mint: () => string): DesignDoc | null {
