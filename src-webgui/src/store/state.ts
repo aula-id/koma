@@ -583,6 +583,8 @@ export type KomaState = {
   // The Sidebar Usage-panel header's all/session segmented control: switch
   // scope. UsagePanel re-requests on the resulting change.
   setUsageScope: (scope: 'all' | 'session') => void
+  // Chat transcript window. Memory only; ChatView reads `ui.chatTurns`.
+  setChatTurns: (turns: number) => void
   // Manual re-fetch trigger for the Sidebar Usage-panel header's refresh
   // button — fires the same UsagePreview req UsagePanel's mount/scope-change
   // effect uses, for the CURRENT usageScope + attached session. Safe to call

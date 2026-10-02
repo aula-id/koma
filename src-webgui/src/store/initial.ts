@@ -1,3 +1,4 @@
+import { CHAT_TURNS_DEFAULT } from '../lib/chatWindow'
 import { broadcastThemeToPanels } from '../lib/panelBridge'
 import { DEFAULT_GROUP } from './editorGroups'
 import type { PaletteColors } from './types/chat'
@@ -124,6 +125,7 @@ export const initialUi: UiSlice = {
   composerRefill: null,
   pendingRewindIndex: null,
   scrollTick: 0,
+  chatTurns: CHAT_TURNS_DEFAULT,
   switchingTo: null,
   toast: null,
   toastSeq: 0,

@@ -29,6 +29,7 @@ import {
   Shield,
   Terminal,
 } from 'lucide-react'
+import { countTurns, isHistoryPrepend, nextRenderFrom, visibleFromTurn } from '../lib/chatWindow'
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
@@ -39,13 +40,6 @@ import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
-
-// On attach, only mount the newest slice of history. Older rows expand when
-// the user scrolls near the top (or clicks the affordance). Caps Streamdown/
-// Shiki mount cost after a fat Snapshot without needing pixel virtualization.
-// Keep in lockstep with host SNAPSHOT_WINDOW / SNAPSHOT_HEAD_CHUNK (project.rs).
-const CHAT_WINDOW = 40
-const CHAT_WINDOW_STEP = 40
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -525,6 +519,7 @@ export function ChatView() {
   const messages = useKoma((s) => s.session.messages)
   const hasMoreOlder = useKoma((s) => s.session.hasMoreOlder)
   const requestHistoryPage = useKoma((s) => s.requestHistoryPage)
+  const chatTurns = useKoma((s) => s.ui.chatTurns)
   const stream = useKoma((s) => s.session.stream)
   const reasoning = useKoma((s) => s.session.reasoning)
   const working = useKoma((s) => s.session.working)
@@ -579,52 +574,109 @@ export function ChatView() {
     rememberMetrics(el)
   }
 
-  // Newest-first window into `messages`. Resets on session switch / big attach
-  // so a fat Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
-  const [renderFrom, setRenderFrom] = useState(() =>
-    Math.max(0, messages.length - CHAT_WINDOW),
-  )
-  const prevLenRef = useRef(messages.length)
+  // Mounted slice of `messages`. Following the tail shows the last `chatTurns`
+  // prompts. Scrolling up raises `extraRef` so the next history page mounts
+  // those older rows. An append while reading keeps the anchor row instead.
+  const extraRef = useRef(0)
+  const [mounted, setMounted] = useState(() => ({
+    from: visibleFromTurn(messages, chatTurns),
+    messages,
+    sessionId,
+    chatTurns,
+  }))
+  if (messages !== mounted.messages || sessionId !== mounted.sessionId || chatTurns !== mounted.chatTurns) {
+    const sessionChanged = sessionId !== mounted.sessionId
+    if (sessionChanged || stickRef.current) {
+      extraRef.current = 0
+      if (sessionChanged) setStick(true)
+    }
+    const from = nextRenderFrom(
+      mounted.messages,
+      messages,
+      mounted.from,
+      stickRef.current,
+      chatTurns,
+      sessionChanged,
+      extraRef.current,
+    )
+    // Measure before the older rows commit, so the layout effect can put the
+    // viewport back. A tail pull leaves this unset and stays pinned down.
+    if (
+      !sessionChanged &&
+      !stickRef.current &&
+      extraRef.current > 0 &&
+      isHistoryPrepend(mounted.messages, messages)
+    ) {
+      const el = scrollRef.current
+      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
+    }
+    setMounted({ from, messages, sessionId, chatTurns })
+  }
+  const renderFrom = mounted.from
+
   useEffect(() => {
-    prevLenRef.current = messages.length
-    setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
     setStick(true)
+    extraRef.current = 0
     historyPullInflight.current = false
   }, [sessionId])
+
+  // Drop the in-flight flag when a page lands or the host says history is done,
+  // so the next shortfall can pull again.
   useEffect(() => {
-    // Growing the transcript at the end must keep the live tail mounted; if
-    // renderFrom was left pointing past the new length, clamp. Shrinking
-    // (rewind) also clamps. A SnapshotHead/HistoryPage prepend shifts
-    // renderFrom so the visible tail stays put instead of mounting every row.
-    const prev = prevLenRef.current
-    const added = messages.length - prev
-    prevLenRef.current = messages.length
-    if (added > 0) historyPullInflight.current = false
-    setRenderFrom((from) => {
-      const tail = Math.max(0, messages.length - CHAT_WINDOW)
-      if (added >= CHAT_WINDOW && from < added) return from + added
-      if (added > 0 && from > 0) return from + added
-      return Math.min(from, tail)
-    })
-  }, [messages.length])
+    historyPullInflight.current = false
+  }, [messages.length, hasMoreOlder, sessionId])
+
+  // The first snapshot is often shorter than the setting. Pull existing
+  // HistoryPage slices until the tail has enough turns. One request at a time.
+  useEffect(() => {
+    if (!stickRef.current || historyPullInflight.current || !hasMoreOlder) return
+    if (countTurns(messages) >= chatTurns) return
+    historyPullInflight.current = true
+    requestHistoryPage()
+  }, [messages, hasMoreOlder, chatTurns, sessionId, requestHistoryPage])
 
   const expandOlder = () => {
     if (expandingRef.current) return
-    if (renderFrom > 0) {
-      expandingRef.current = true
+    const want = chatTurns + extraRef.current + chatTurns
+    const next = visibleFromTurn(messages, want)
+    const canReveal = next < renderFrom
+    const canPull = countTurns(messages) < want && hasMoreOlder && !historyPullInflight.current
+    if (!canReveal && !canPull) return
+    extraRef.current += chatTurns
+    setStick(false)
+    expandingRef.current = true
+    if (canReveal) {
       const el = scrollRef.current
       if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
-      setRenderFrom((from) => Math.max(0, from - CHAT_WINDOW_STEP))
-      return
+      setMounted((w) => (w.from === next ? w : { ...w, from: next }))
     }
-    // Local window exhausted — pull host-held older history if any.
-    if (hasMoreOlder && !historyPullInflight.current) {
+    // One host page. The rows mount when they arrive, via `extraRef` above.
+    if (canPull) {
       historyPullInflight.current = true
-      const el = scrollRef.current
-      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
-      expandingRef.current = true
       requestHistoryPage()
     }
+  }
+
+  const trimToTail = () => {
+    setMounted((w) => {
+      const from = visibleFromTurn(w.messages, w.chatTurns)
+      return from === w.from ? w : { ...w, from }
+    })
+  }
+
+  // Re-follow the bottom. Trim only on the transition so a scroll tick at the
+  // tail does not rebuild the list.
+  const followTail = () => {
+    const was = stickRef.current
+    setStick(true)
+    extraRef.current = 0
+    if (was) return
+    trimToTail()
+    // The cap may have been raised while reading. Catch up once the tail is
+    // back on screen, using the history request the GUI already sends.
+    if (historyPullInflight.current || !hasMoreOlder || countTurns(messages) >= chatTurns) return
+    historyPullInflight.current = true
+    requestHistoryPage()
   }
 
   const setScrollEl = (el: HTMLDivElement | null) => {
@@ -643,14 +695,17 @@ export function ChatView() {
     // Stable scrollHeight: the user moved the viewport (wheel, bar, keys).
     // A height change is the reply committing or the markdown settling.
     if (Math.abs(heightDelta) <= 1) {
-      setStick(distance < 40)
+      if (distance < 40) followTail()
+      else setStick(false)
     } else if (stickRef.current) {
       pinToBottom()
       return
     } else if (distance < 40) {
-      setStick(true)
+      followTail()
     }
-    if (el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
+    // A short transcript sits at scrollTop 0 while still following the tail.
+    // Only a real scroll-up should reveal older turns.
+    if (!stickRef.current && el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
   }
 
   useLayoutEffect(() => {
@@ -664,8 +719,7 @@ export function ChatView() {
       pinningRef.current = false
       pendingTopRestoreRef.current = null
       expandingRef.current = false
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-      setStick(distance < 40)
+      setStick(false)
       rememberMetrics(el)
       requestAnimationFrame(() => {
         suppressPinRef.current = false
@@ -708,6 +762,8 @@ export function ChatView() {
   const scrollTick = useKoma((s) => s.ui.scrollTick)
   useLayoutEffect(() => {
     setStick(true)
+    extraRef.current = 0
+    trimToTail()
     const el = scrollRef.current
     if (!el) return
     pinningRef.current = true
@@ -717,8 +773,8 @@ export function ChatView() {
   }, [scrollTick])
 
   const visible = messages.slice(renderFrom)
-  const hiddenCount = renderFrom
-  const canShowEarlier = hiddenCount > 0 || hasMoreOlder
+  const hiddenTurns = countTurns(messages.slice(0, renderFrom))
+  const canShowEarlier = renderFrom > 0 || hasMoreOlder
 
   return (
     <div className="term-shell flex min-w-0 flex-col">
@@ -735,9 +791,9 @@ export function ChatView() {
                 onClick={expandOlder}
                 className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
               >
-                {hiddenCount > 0
-                  ? `Show ${Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier${
-                      hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''
+                {hiddenTurns > 0
+                  ? `Show ${Math.min(chatTurns, hiddenTurns)} earlier turn${
+                      Math.min(chatTurns, hiddenTurns) === 1 ? '' : 's'
                     }`
                   : 'Load earlier messages'}
               </button>

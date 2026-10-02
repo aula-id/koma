@@ -2,6 +2,7 @@ import { codingRefToken } from '../../lib/codingRef'
 import type { StoreGet, StoreSet } from '../api'
 import { useComputerPreview } from '../computerPreview'
 import { DEFAULT_GROUP, normalizeGroups } from '../editorGroups'
+import { clampChatTurns } from '../../lib/chatWindow'
 import { initialSession, makeBootstrapState, makeChatTab, saveActivityBarLayout, updateBootstrap } from '../initial'
 import type { KomaState } from '../state'
 import type { LoadPhase } from '../types/session'
@@ -14,7 +15,7 @@ function mintAgentTabId(): string {
   return `agent-${agentTabSeq}`
 }
 
-export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
+export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'setChatTurns' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
   return {
   openExternal: (url) => {
     get().req({ r: 'OpenExternal', url })
@@ -247,6 +248,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
+  setChatTurns: (turns) => set((s) => ({ ui: { ...s.ui, chatTurns: clampChatTurns(turns) } })),
   refreshUsagePreview: () => {
     const s = get()
     // Clear any stale preview first so the loading row shows instead of

@@ -213,6 +213,9 @@ export type UiSlice = {
   // when the user submits while scrolled up. Not a boolean so repeat sends at
   // the same scroll position still fire the effect.
   scrollTick: number
+  // How many recent turns ChatView mounts. Scroll up reveals more. In memory
+  // for this GUI process only — not a host pref and not written to disk.
+  chatTurns: number
   // Full-screen session-swap overlay: set optimistically the moment
   // SelectSession/NewSession is emitted from ResumePalette, holding the
   // target session's display name. There is no host-pushed "swap started"
