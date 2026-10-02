@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type PointerEve
 import { ChevronLeft, Minus, Plus } from 'lucide-react'
 import {
   cacheDesignImage,
+  clearImageCrop,
   defaultGradient,
   designImageUrl,
   ensureImageCrop,
@@ -360,8 +361,11 @@ export function DesignPaintEditor({
               onChange={(event) => {
                 const scale = event.target.value
                 if (scale !== 'fill' && scale !== 'fit' && scale !== 'crop' && scale !== 'tile') return
-                const next = { ...paint, type: 'image' as const, scale: scale as DesignImageScale }
-                onChange(scale === 'crop' && box ? ensureImageCrop(next, box, natural) : next)
+                if (scale === 'crop') {
+                  onChange(box ? ensureImageCrop(paint, box, natural, paint.scale ?? 'fill') : { ...paint, type: 'image' as const, scale })
+                  return
+                }
+                onChange(clearImageCrop({ ...paint, type: 'image' as const, scale }))
               }}
               className="h-7 w-full px-1.5 text-[12px]"
             >

@@ -17,6 +17,16 @@ export function designImageSize(doc: DesignDoc | null | undefined, hash: string 
   if (cached) return cached
   const asset = doc?.images?.[hash]
   if (asset?.w && asset.h && asset.w > 0 && asset.h > 0) return { w: asset.w, h: asset.h }
+  const url = urls.get(hash)
+  if (url && typeof Image !== 'undefined') {
+    const image = new Image()
+    image.src = url
+    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+      rememberImageSize(hash, image.naturalWidth, image.naturalHeight)
+      return { w: image.naturalWidth, h: image.naturalHeight }
+    }
+    image.onload = () => rememberImageSize(hash, image.naturalWidth, image.naturalHeight)
+  }
   return null
 }
 
@@ -65,6 +75,11 @@ export function cacheDesignImage(hash: string, bytes: Uint8Array, mime: string):
   if (prev) URL.revokeObjectURL(prev)
   const url = bytesToObjectUrl(bytes, mime)
   urls.set(hash, url)
+  if (typeof Image !== 'undefined') {
+    const image = new Image()
+    image.onload = () => rememberImageSize(hash, image.naturalWidth, image.naturalHeight)
+    image.src = url
+  }
   return url
 }
 

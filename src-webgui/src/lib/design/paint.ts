@@ -300,6 +300,21 @@ export function nodeHasImageFill(node: DesignNode | null | undefined): boolean {
   return firstImageFill(node) != null
 }
 
+export function imageScaleRect(
+  box: { w: number; h: number },
+  scale: NonNullable<DesignPaint['scale']>,
+  natural?: { w: number; h: number } | null,
+): { x: number; y: number; w: number; h: number } | null {
+  const nw = natural?.w ?? 0
+  const nh = natural?.h ?? 0
+  if (!(nw > 0 && nh > 0 && box.w > 0 && box.h > 0)) return null
+  if (scale === 'tile') return { x: 0, y: 0, w: nw, h: nh }
+  const factor = scale === 'fit' ? Math.min(box.w / nw, box.h / nh) : Math.max(box.w / nw, box.h / nh)
+  const w = nw * factor
+  const h = nh * factor
+  return { x: (box.w - w) / 2, y: (box.h - h) / 2, w, h }
+}
+
 export function imageCropRect(
   box: { w: number; h: number },
   paint: DesignPaint,
@@ -308,24 +323,32 @@ export function imageCropRect(
   if (paint.imageW != null && paint.imageH != null && paint.imageW > 0 && paint.imageH > 0) {
     return { x: paint.imageX ?? 0, y: paint.imageY ?? 0, w: paint.imageW, h: paint.imageH }
   }
-  const nw = natural?.w ?? 0
-  const nh = natural?.h ?? 0
-  if (nw > 0 && nh > 0 && box.w > 0 && box.h > 0) {
-    const scale = Math.max(box.w / nw, box.h / nh)
-    const w = nw * scale
-    const h = nh * scale
-    return { x: (box.w - w) / 2, y: (box.h - h) / 2, w, h }
-  }
-  return { x: 0, y: 0, w: Math.max(1, box.w), h: Math.max(1, box.h) }
+  return imageScaleRect(box, 'fill', natural) ?? { x: 0, y: 0, w: Math.max(1, box.w), h: Math.max(1, box.h) }
+}
+
+export function clearImageCrop(paint: DesignPaint): DesignPaint {
+  if (paint.imageX == null && paint.imageY == null && paint.imageW == null && paint.imageH == null) return paint
+  const next = { ...paint }
+  delete next.imageX
+  delete next.imageY
+  delete next.imageW
+  delete next.imageH
+  return next
 }
 
 export function ensureImageCrop(
   paint: DesignPaint,
   box: { w: number; h: number },
   natural?: { w: number; h: number } | null,
+  fromScale?: DesignPaint['scale'],
 ): DesignPaint {
   if (paint.type !== 'image') return paint
-  const rect = imageCropRect(box, paint, natural)
+  const source = fromScale ?? paint.scale ?? 'fill'
+  const keepStored = source === 'crop' && paint.imageW != null && paint.imageH != null && paint.imageW > 0 && paint.imageH > 0
+  const rect = keepStored
+    ? { x: paint.imageX ?? 0, y: paint.imageY ?? 0, w: paint.imageW as number, h: paint.imageH as number }
+    : imageScaleRect(box, source === 'fit' || source === 'tile' ? source : 'fill', natural)
+  if (!rect) return { ...clearImageCrop(paint), scale: 'crop' }
   if (paint.scale === 'crop' && paint.imageX === rect.x && paint.imageY === rect.y && paint.imageW === rect.w && paint.imageH === rect.h) return paint
   return { ...paint, scale: 'crop', imageX: rect.x, imageY: rect.y, imageW: rect.w, imageH: rect.h }
 }
@@ -415,8 +438,12 @@ export function imageFillPlacement(
   if (paint.scale === 'tile') return { size: 'auto', position: '0 0' }
   if (paint.scale === 'fit') return { size: 'contain', position: 'center' }
   if (paint.scale === 'crop') {
-    const rect = imageCropRect(box, paint, natural)
-    return { size: `${rect.w}px ${rect.h}px`, position: `${rect.x}px ${rect.y}px` }
+    if (paint.imageW != null && paint.imageH != null && paint.imageW > 0 && paint.imageH > 0) {
+      return { size: `${paint.imageW}px ${paint.imageH}px`, position: `${paint.imageX ?? 0}px ${paint.imageY ?? 0}px` }
+    }
+    const rect = imageScaleRect(box, 'fill', natural)
+    if (rect) return { size: `${rect.w}px ${rect.h}px`, position: `${rect.x}px ${rect.y}px` }
+    return { size: 'cover', position: 'center' }
   }
   return { size: 'cover', position: 'center' }
 }

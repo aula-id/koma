@@ -87,6 +87,7 @@ import {
   applyDesignToken,
   ensureImageCrop,
   imageCropRect,
+  imageFillPlacement,
   keepImageCropWorldFixed,
   nodeHasImageFill,
   panImageCrop,
@@ -208,6 +209,25 @@ assert.equal(isDesignPath('.koma/auth.diag'), false)
   assert.equal(stored.imageW, 200)
   assert.equal(stored.imageH, 80)
   assert.equal(stored.imageX, -50)
+  const leftover = ensureImageCrop(
+    { type: 'image', hash: 'x', scale: 'fill', imageX: 0, imageY: 0, imageW: 100, imageH: 100 },
+    { w: 100, h: 100 },
+    { w: 200, h: 100 },
+    'fill',
+  )
+  assert.equal(leftover.imageW, 200)
+  assert.equal(leftover.imageH, 100)
+  assert.equal(leftover.imageX, -50)
+  const fitted = ensureImageCrop({ type: 'image', hash: 'x', scale: 'fit' }, { w: 100, h: 100 }, { w: 200, h: 100 }, 'fit')
+  assert.equal(fitted.imageW, 100)
+  assert.equal(fitted.imageH, 50)
+  assert.equal(fitted.imageY, 25)
+  const pending = ensureImageCrop({ type: 'image', hash: 'x', scale: 'fill' }, { w: 100, h: 100 })
+  assert.equal(pending.scale, 'crop')
+  assert.equal(pending.imageW, undefined)
+  const coverPlace = imageFillPlacement({ w: 100, h: 100 }, { type: 'image', hash: 'x', scale: 'crop' })
+  assert.equal(coverPlace.size, 'cover')
+  assert.equal(coverPlace.position, 'center')
   const prev = createNode('rect', 'r', 10, 20)
   prev.w = 100
   prev.h = 80
