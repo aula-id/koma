@@ -2663,14 +2663,15 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         <DesignMenu
           x={menu.x}
           y={menu.y}
-          items={designMenuItems(doc, selection, menu.canvasX, menu.canvasY, !!getCopiedShape()?.nodes.length, getCopiedStyle() != null, !focusId && selection.length === 1 && findDesignNode(doc, selection[0])?.kind === 'frame')}
+          items={designMenuItems(doc, selection, menu.canvasX, menu.canvasY, !!getCopiedShape()?.nodes.length, getCopiedStyle() != null, !focusId && selection.length === 1 && findDesignNode(doc, selection[0])?.kind === 'frame', !multi && chatQuery != null)}
           onClose={() => setMenu(null)}
           onPick={(id) => {
             const here = menu
             setMenu(null)
             const commands = commandsRef.current
             if (!commands) return
-            if (id === 'copy') commands.copy()
+            if (id === 'chat') sendChat()
+            else if (id === 'copy') commands.copy()
             else if (id === 'paste') commands.paste()
             else if (id === 'paste-here') commands.paste({ x: here.canvasX, y: here.canvasY })
             else if (id === 'duplicate') commands.duplicate()

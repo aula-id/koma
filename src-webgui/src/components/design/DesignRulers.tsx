@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { MessageSquarePlus } from 'lucide-react'
 import { locateDesign, designLayerName, stackDesign, type DesignDoc } from '../../lib/design'
 import type { DesignMenuItem } from '../DesignMenu'
 import { SELECTION } from './tabShared'
@@ -113,13 +114,14 @@ function RulerBadge({ axis, label, at }: { axis: 'horizontal' | 'vertical'; labe
   )
 }
 
-export function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: number, canPaste: boolean, canPasteStyle: boolean, canComponent: boolean): DesignMenuItem[] {
+export function designMenuItems(doc: DesignDoc, selection: string[], x: number, y: number, canPaste: boolean, canPasteStyle: boolean, canComponent: boolean, canChat: boolean): DesignMenuItem[] {
   const selected = selection.length > 0
   const rows = selection.map((id) => locateDesign(doc, id))
   const sameParent = rows.length > 0 && rows.every((row) => row && row.parentId === rows[0]?.parentId)
   const canUngroup = rows.some((row) => row?.node.kind === 'group')
   const stack = stackDesign(doc, x, y).slice(0, 12)
   return [
+    { id: 'chat', label: 'Add to chat', disabled: !canChat, icon: <MessageSquarePlus size={12} /> },
     { id: 'copy', label: 'Copy', shortcut: '⌘C', disabled: !sameParent },
     { id: 'paste', label: 'Paste', shortcut: '⌘V', disabled: !canPaste },
     { id: 'paste-here', label: 'Paste here', disabled: !canPaste },

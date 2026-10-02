@@ -7,6 +7,7 @@ export type DesignMenuItem = {
   shortcut?: string
   disabled?: boolean
   danger?: boolean
+  icon?: ReactNode
   children?: DesignMenuItem[]
 }
 
@@ -174,8 +175,9 @@ function MenuRow({ item, onPick, maxHeight }: { item: DesignMenuItem; onPick: (i
         onClick={() => {
           if (!item.children?.length) onPick(item.id)
         }}
-        className={`flex h-7 w-full items-center px-3 text-left ${item.disabled ? 'text-koma-dim/50' : 'hover:bg-koma-hover'} ${item.danger ? 'text-koma-error' : ''}`}
+        className={`flex h-7 w-full items-center gap-2 px-3 text-left ${item.disabled ? 'text-koma-dim/50' : 'hover:bg-koma-hover'} ${item.danger ? 'text-koma-error' : ''}`}
       >
+        {item.icon ? <span className="flex size-3 flex-none items-center justify-center opacity-70">{item.icon}</span> : null}
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
         {item.children?.length ? <span className="text-koma-dim">›</span> : null}
         {item.shortcut ? <span className="ml-3 text-koma-dim">{item.shortcut}</span> : null}
