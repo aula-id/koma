@@ -289,7 +289,7 @@ pub(super) fn command(
 ) -> Result<Value, String> {
     static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let guard = ACTIVE
-        .fetch_update(
+        .try_update(
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
             |n| if n < 8 { Some(n + 1) } else { None },

@@ -394,7 +394,7 @@ fn read_messages(s: &Arc<Session>, reader: Box<dyn Read + Send>) -> Result<()> {
             Some("request") => {
                 if msg["command"] != "runInTerminal"
                     || s.reverse_requests
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                             if n < 4 {
                                 Some(n + 1)
                             } else {
