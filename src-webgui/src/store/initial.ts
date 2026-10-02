@@ -1,3 +1,4 @@
+import { CHAT_TURNS_DEFAULT } from '../lib/chatWindow'
 import { broadcastThemeToPanels } from '../lib/panelBridge'
 import { DEFAULT_GROUP } from './editorGroups'
 import type { PaletteColors } from './types/chat'
@@ -118,10 +119,13 @@ export const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
   diagramChatQueue: [],
+  pendingComposerAttachmentInserts: [],
+  designChatQueue: [],
   pasteBody: null,
   composerRefill: null,
   pendingRewindIndex: null,
   scrollTick: 0,
+  chatTurns: CHAT_TURNS_DEFAULT,
   switchingTo: null,
   toast: null,
   toastSeq: 0,
@@ -133,6 +137,8 @@ export const initialUi: UiSlice = {
   activeGroupId: DEFAULT_GROUP,
   splitDir: 'row',
   groupSizes: { [DEFAULT_GROUP]: 1 },
+  splitTree: { type: 'leaf', id: DEFAULT_GROUP },
+  groupSplitDir: {},
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,

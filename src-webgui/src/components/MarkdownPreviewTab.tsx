@@ -9,6 +9,7 @@ import { luminance } from '../lib/luminance'
 import { BrailleSpinner } from './BrailleSpinner'
 import { EditorChrome } from './EditorChrome'
 import { komaCode } from './komaShiki'
+import { komaLinkSafety } from './LinkSafetyModal'
 
 type CodingTab = Extract<Tab, { kind: 'codingFile' }>
 
@@ -114,6 +115,7 @@ export default function MarkdownPreviewTab({ tab }: { tab: CodingTab }) {
             shikiTheme={[theme, theme]}
             lineNumbers={false}
             controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
+            linkSafety={komaLinkSafety}
           >{file.content}</Streamdown>
         </div>
       )}

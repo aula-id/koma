@@ -16,6 +16,7 @@ import {
   Cog,
   FileText,
   Files,
+  Frame,
   Folder,
   GitBranch,
   Globe,
@@ -28,22 +29,17 @@ import {
   Shield,
   Terminal,
 } from 'lucide-react'
+import { countTurns, isHistoryPrepend, nextRenderFrom, visibleFromTurn } from '../lib/chatWindow'
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { ChatScrollRootContext, MessageBody } from './MessageBody'
 import { ComputerObservationCard, ComputerToolCall } from './ComputerObservationCard'
 import { DiagramObservationCard } from './DiagramVisual'
 import { diagramMessageParts, splitDiagramMessage } from '../lib/diagramMermaid'
+import { splitDesignMessage } from '../lib/design'
 import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
-
-// On attach, only mount the newest slice of history. Older rows expand when
-// the user scrolls near the top (or clicks the affordance). Caps Streamdown/
-// Shiki mount cost after a fat Snapshot without needing pixel virtualization.
-// Keep in lockstep with host SNAPSHOT_WINDOW / SNAPSHOT_HEAD_CHUNK (project.rs).
-const CHAT_WINDOW = 40
-const CHAT_WINDOW_STEP = 40
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -257,21 +253,34 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
 // by default while streaming so live thinking is visible, collapses once done.
 function ReasoningBlock({ text, defaultOpen }: { text: string; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
+  useEffect(() => {
+    if (defaultOpen) setOpen(true)
+  }, [defaultOpen])
+  const panelId = useRef(`reasoning-${Math.random().toString(36).slice(2, 9)}`).current
   return (
-    <div className="mb-1.5">
+    <div className="relative z-20 mb-1.5">
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[11px] text-koma-dim opacity-70 transition-opacity hover:opacity-100"
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((o) => !o)
+        }}
+        className="flex items-center gap-1 rounded px-0.5 text-[11px] text-koma-dim opacity-70 transition-opacity hover:bg-koma-hover/40 hover:opacity-100"
       >
         <Brain size={11} className="flex-none" />
         <span>reasoning</span>
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
       </button>
-      {open && (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-koma-dim pl-2 text-[12px] italic text-koma-dim">
+      {open ? (
+        <div
+          id={panelId}
+          className="mt-1 whitespace-pre-wrap border-l-2 border-koma-dim pl-2 text-[12px] italic text-koma-dim"
+        >
           {text}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -348,21 +357,28 @@ function UserMessage({
 }) {
   const pasted = splitPasteMessage(content)
   const split = splitDiagramMessage(pasted.prose)
-  // A diagram reference stays a drawing here. A long paste stays a text chip.
-  // The fence body is what the model already received.
-  const showBand = split.prose.length > 0 || (split.diagrams.length === 0 && pasted.pastes.length === 0)
+  const designed = splitDesignMessage(split.prose)
+  // A diagram reference stays a drawing here. A design reference stays a chip.
+  // A long paste stays a text chip. The fence body is what the model already received.
+  const showBand = designed.prose.length > 0 || (split.diagrams.length === 0 && designed.designs.length === 0 && pasted.pastes.length === 0)
   return (
     <div className="group relative space-y-2">
       {showBand ? (
         <div className="flex overflow-hidden bg-koma-band">
           <div className="w-[3px] flex-none bg-koma-accent" />
-          <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
-            {split.prose || content}
+          <div className="min-w-0 flex-1 px-3 py-2 text-[13px] [&_.koma-md]:text-koma-accent [&_.koma-md_code]:text-koma-accent/90">
+            <MessageBody text={designed.prose || content} />
           </div>
         </div>
       ) : null}
       {pasted.pastes.map((item) => (
         <PasteTextCard key={`paste-${item.n}-${item.text.length}`} n={item.n} text={item.text} />
+      ))}
+      {designed.designs.map((item, index) => (
+        <div key={`design-${index}:${item.title}`} className="flex items-center gap-2 rounded-lg border border-koma-border bg-koma-panel px-3 py-2 text-[12px] text-koma-fg">
+          <Frame size={14} className="flex-none text-koma-accent" />
+          <span className="min-w-0 flex-1 truncate">{item.title}</span>
+        </div>
       ))}
       {split.diagrams.map((item, index) => (
         <DiagramObservationCard key={`${index}:${item.mermaid.length}`} mermaid={item.mermaid} />
@@ -441,7 +457,7 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className="flex gap-2">
       <Circle size={9} className="mt-[5px] flex-none fill-koma-fg text-koma-fg" />
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
         {hasReasoning && <ReasoningBlock text={reasoning as string} defaultOpen={streaming} />}
         {hasBody &&
           parts.map((part, index) =>
@@ -503,6 +519,7 @@ export function ChatView() {
   const messages = useKoma((s) => s.session.messages)
   const hasMoreOlder = useKoma((s) => s.session.hasMoreOlder)
   const requestHistoryPage = useKoma((s) => s.requestHistoryPage)
+  const chatTurns = useKoma((s) => s.ui.chatTurns)
   const stream = useKoma((s) => s.session.stream)
   const reasoning = useKoma((s) => s.session.reasoning)
   const working = useKoma((s) => s.session.working)
@@ -511,64 +528,155 @@ export function ChatView() {
   // stably as "live" so Snapshot commits don't remount the streaming node.
   const showLive = stream.length > 0 || (working && reasoning.trim() !== '')
 
-  // Scroll-anchored to BOTTOM: auto-stick to the newest content as the
-  // transcript / live stream grows, but RELEASE the moment the user scrolls up
-  // to read back, and RE-STICK once they return to the bottom. `stickRef` is a
-  // ref (not state) so the scroll handler never triggers a re-render, and the
-  // pin runs in a layout effect (before paint) so streaming never flickers.
+  // Follow the tail while the user is there, including after the turn commits
+  // and the bubble keeps growing (plain text, then Streamdown). Release only
+  // when the user scrolls up; scrolling back to the tail follows again.
+  // `stickRef` is a ref so the scroll handler never triggers a re-render, and
+  // the pin runs before paint so streaming never flickers.
   const scrollRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null)
   const stickRef = useRef(true)
+  const pinningRef = useRef(false)
+  // Set while restoring the viewport after older rows mount, so a height
+  // change does not yank the view back to the bottom.
+  const suppressPinRef = useRef(false)
   const pendingTopRestoreRef = useRef<number | null>(null)
   const expandingRef = useRef(false)
   const historyPullInflight = useRef(false)
+  // Previous scrollHeight. A scroll event with a stable height is the user.
+  // A height change is the transcript growing; that must not release the tail.
+  const metricsRef = useRef({ height: 0, top: 0 })
 
-  // Newest-first window into `messages`. Resets on session switch / big attach
-  // so a fat Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
-  const [renderFrom, setRenderFrom] = useState(() =>
-    Math.max(0, messages.length - CHAT_WINDOW),
-  )
-  const prevLenRef = useRef(messages.length)
+  const rememberMetrics = (el: HTMLElement) => {
+    metricsRef.current = { height: el.scrollHeight, top: el.scrollTop }
+  }
+
+  const setStick = (on: boolean) => {
+    stickRef.current = on
+    const el = scrollRef.current
+    // Following the tail opts out of scroll anchoring, which otherwise keeps
+    // the start of a long reply on screen as that reply grows. Reading back
+    // opts in so changes above the viewport stay put.
+    if (el) el.style.overflowAnchor = on ? 'none' : 'auto'
+  }
+
+  const pinToBottom = () => {
+    const el = scrollRef.current
+    if (!el || !stickRef.current || suppressPinRef.current || pendingTopRestoreRef.current != null) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) {
+      rememberMetrics(el)
+      return
+    }
+    pinningRef.current = true
+    el.scrollTop = el.scrollHeight
+    pinningRef.current = false
+    rememberMetrics(el)
+  }
+
+  // Mounted slice of `messages`. Following the tail shows the last `chatTurns`
+  // prompts. Scrolling up raises `extraRef` so the next history page mounts
+  // those older rows. An append while reading keeps the anchor row instead.
+  const extraRef = useRef(0)
+  const [mounted, setMounted] = useState(() => ({
+    from: visibleFromTurn(messages, chatTurns),
+    messages,
+    sessionId,
+    chatTurns,
+  }))
+  if (messages !== mounted.messages || sessionId !== mounted.sessionId || chatTurns !== mounted.chatTurns) {
+    const sessionChanged = sessionId !== mounted.sessionId
+    if (sessionChanged || stickRef.current) {
+      extraRef.current = 0
+      if (sessionChanged) setStick(true)
+    }
+    const from = nextRenderFrom(
+      mounted.messages,
+      messages,
+      mounted.from,
+      stickRef.current,
+      chatTurns,
+      sessionChanged,
+      extraRef.current,
+    )
+    // Measure before the older rows commit, so the layout effect can put the
+    // viewport back. A tail pull leaves this unset and stays pinned down.
+    if (
+      !sessionChanged &&
+      !stickRef.current &&
+      extraRef.current > 0 &&
+      isHistoryPrepend(mounted.messages, messages)
+    ) {
+      const el = scrollRef.current
+      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
+    }
+    setMounted({ from, messages, sessionId, chatTurns })
+  }
+  const renderFrom = mounted.from
+
   useEffect(() => {
-    prevLenRef.current = messages.length
-    setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
-    stickRef.current = true
+    setStick(true)
+    extraRef.current = 0
     historyPullInflight.current = false
   }, [sessionId])
+
+  // Drop the in-flight flag when a page lands or the host says history is done,
+  // so the next shortfall can pull again.
   useEffect(() => {
-    // Growing the transcript at the end must keep the live tail mounted; if
-    // renderFrom was left pointing past the new length, clamp. Shrinking
-    // (rewind) also clamps. A SnapshotHead/HistoryPage prepend shifts
-    // renderFrom so the visible tail stays put instead of mounting every row.
-    const prev = prevLenRef.current
-    const added = messages.length - prev
-    prevLenRef.current = messages.length
-    if (added > 0) historyPullInflight.current = false
-    setRenderFrom((from) => {
-      const tail = Math.max(0, messages.length - CHAT_WINDOW)
-      if (added >= CHAT_WINDOW && from < added) return from + added
-      if (added > 0 && from > 0) return from + added
-      return Math.min(from, tail)
-    })
-  }, [messages.length])
+    historyPullInflight.current = false
+  }, [messages.length, hasMoreOlder, sessionId])
+
+  // The first snapshot is often shorter than the setting. Pull existing
+  // HistoryPage slices until the tail has enough turns. One request at a time.
+  useEffect(() => {
+    if (!stickRef.current || historyPullInflight.current || !hasMoreOlder) return
+    if (countTurns(messages) >= chatTurns) return
+    historyPullInflight.current = true
+    requestHistoryPage()
+  }, [messages, hasMoreOlder, chatTurns, sessionId, requestHistoryPage])
 
   const expandOlder = () => {
     if (expandingRef.current) return
-    if (renderFrom > 0) {
-      expandingRef.current = true
+    const want = chatTurns + extraRef.current + chatTurns
+    const next = visibleFromTurn(messages, want)
+    const canReveal = next < renderFrom
+    const canPull = countTurns(messages) < want && hasMoreOlder && !historyPullInflight.current
+    if (!canReveal && !canPull) return
+    extraRef.current += chatTurns
+    setStick(false)
+    expandingRef.current = true
+    if (canReveal) {
       const el = scrollRef.current
       if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
-      setRenderFrom((from) => Math.max(0, from - CHAT_WINDOW_STEP))
-      return
+      setMounted((w) => (w.from === next ? w : { ...w, from: next }))
     }
-    // Local window exhausted — pull host-held older history if any.
-    if (hasMoreOlder && !historyPullInflight.current) {
+    // One host page. The rows mount when they arrive, via `extraRef` above.
+    if (canPull) {
       historyPullInflight.current = true
-      const el = scrollRef.current
-      if (el) pendingTopRestoreRef.current = el.scrollHeight - el.scrollTop
-      expandingRef.current = true
       requestHistoryPage()
     }
+  }
+
+  const trimToTail = () => {
+    setMounted((w) => {
+      const from = visibleFromTurn(w.messages, w.chatTurns)
+      return from === w.from ? w : { ...w, from }
+    })
+  }
+
+  // Re-follow the bottom. Trim only on the transition so a scroll tick at the
+  // tail does not rebuild the list.
+  const followTail = () => {
+    const was = stickRef.current
+    setStick(true)
+    extraRef.current = 0
+    if (was) return
+    trimToTail()
+    // The cap may have been raised while reading. Catch up once the tail is
+    // back on screen, using the history request the GUI already sends.
+    if (historyPullInflight.current || !hasMoreOlder || countTurns(messages) >= chatTurns) return
+    historyPullInflight.current = true
+    requestHistoryPage()
   }
 
   const setScrollEl = (el: HTMLDivElement | null) => {
@@ -578,10 +686,26 @@ export function ChatView() {
 
   const onScroll = () => {
     const el = scrollRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    stickRef.current = distanceFromBottom < 40
-    if (el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
+    if (!el || pinningRef.current || suppressPinRef.current || pendingTopRestoreRef.current != null) return
+    const height = el.scrollHeight
+    const top = el.scrollTop
+    const heightDelta = height - metricsRef.current.height
+    rememberMetrics(el)
+    const distance = height - top - el.clientHeight
+    // Stable scrollHeight: the user moved the viewport (wheel, bar, keys).
+    // A height change is the reply committing or the markdown settling.
+    if (Math.abs(heightDelta) <= 1) {
+      if (distance < 40) followTail()
+      else setStick(false)
+    } else if (stickRef.current) {
+      pinToBottom()
+      return
+    } else if (distance < 40) {
+      followTail()
+    }
+    // A short transcript sits at scrollTop 0 while still following the tail.
+    // Only a real scroll-up should reveal older turns.
+    if (!stickRef.current && el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
   }
 
   useLayoutEffect(() => {
@@ -589,29 +713,68 @@ export function ChatView() {
     if (!el) return
     const pending = pendingTopRestoreRef.current
     if (pending != null) {
+      suppressPinRef.current = true
+      pinningRef.current = true
       el.scrollTop = el.scrollHeight - pending
+      pinningRef.current = false
       pendingTopRestoreRef.current = null
       expandingRef.current = false
+      setStick(false)
+      rememberMetrics(el)
+      requestAnimationFrame(() => {
+        suppressPinRef.current = false
+      })
       return
     }
     expandingRef.current = false
-    if (!stickRef.current) return
-    el.scrollTop = el.scrollHeight
+    pinToBottom()
   }, [messages, stream, reasoning, showLive, renderFrom])
+
+  // The committed bubble keeps growing after the turn ends (plain text, then
+  // Streamdown/Shiki). That height change used to anchor the viewport on the
+  // start of the reply. Stay at the bottom until the user scrolls up.
+  useEffect(() => {
+    const content = contentRef.current
+    const el = scrollRef.current
+    if (!content || !el) return
+    let raf = 0
+    const observer = new ResizeObserver(() => {
+      const node = scrollRef.current
+      // Record the grown height when the user has scrolled up, so the next
+      // wheel or scrollbar movement is not treated as another growth.
+      if (node && !stickRef.current) rememberMetrics(node)
+      // Some engines apply scroll anchoring after this callback. Pin again
+      // on the next frame in case that adjustment landed late.
+      pinToBottom()
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => pinToBottom())
+    })
+    observer.observe(content)
+    return () => {
+      cancelAnimationFrame(raf)
+      observer.disconnect()
+    }
+  }, [scrollRoot])
 
   // Scroll-on-send: the composer bumps `scrollTick` on every submit. FORCE
   // re-engage the bottom-stick (even if the user had scrolled up to read back)
   // and snap down now, so a send while scrolled up never lands off-screen.
   const scrollTick = useKoma((s) => s.ui.scrollTick)
   useLayoutEffect(() => {
-    stickRef.current = true
+    setStick(true)
+    extraRef.current = 0
+    trimToTail()
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    pinningRef.current = true
+    el.scrollTop = el.scrollHeight
+    pinningRef.current = false
+    rememberMetrics(el)
   }, [scrollTick])
 
   const visible = messages.slice(renderFrom)
-  const hiddenCount = renderFrom
-  const canShowEarlier = hiddenCount > 0 || hasMoreOlder
+  const hiddenTurns = countTurns(messages.slice(0, renderFrom))
+  const canShowEarlier = renderFrom > 0 || hasMoreOlder
 
   return (
     <div className="term-shell flex min-w-0 flex-col">
@@ -619,35 +782,37 @@ export function ChatView() {
         <div
           ref={setScrollEl}
           onScroll={onScroll}
-          className="flex-1 space-y-4 overflow-y-auto px-2 py-4 @max-xs/chat:px-1.5 @max-xs/chat:py-3"
+          className="flex-1 overflow-y-auto overflow-anchor-none px-2 py-4 @max-xs/chat:px-1.5 @max-xs/chat:py-3"
         >
-          {canShowEarlier && (
-            <button
-              type="button"
-              onClick={expandOlder}
-              className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
-            >
-              {hiddenCount > 0
-                ? `Show ${Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier${
-                    hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''
-                  }`
-                : 'Load earlier messages'}
-            </button>
-          )}
-          {visible.map((m, i) => {
-            const index = renderFrom + i
-            const key =
-              typeof m.idx === 'number' ? `m-${m.idx}` : `i-${index}`
-            return <Message key={key} m={m} index={index} />
-          })}
-          {showLive && (
-            <AssistantMessage
-              key="live"
-              content={stream}
-              reasoning={reasoning || null}
-              streaming
-            />
-          )}
+          <div ref={contentRef} className="space-y-4">
+            {canShowEarlier && (
+              <button
+                type="button"
+                onClick={expandOlder}
+                className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+              >
+                {hiddenTurns > 0
+                  ? `Show ${Math.min(chatTurns, hiddenTurns)} earlier turn${
+                      Math.min(chatTurns, hiddenTurns) === 1 ? '' : 's'
+                    }`
+                  : 'Load earlier messages'}
+              </button>
+            )}
+            {visible.map((m, i) => {
+              const index = renderFrom + i
+              const key =
+                typeof m.idx === 'number' ? `m-${m.idx}` : `i-${index}`
+              return <Message key={key} m={m} index={index} />
+            })}
+            {showLive && (
+              <AssistantMessage
+                key="live"
+                content={stream}
+                reasoning={reasoning || null}
+                streaming
+              />
+            )}
+          </div>
         </div>
       </ChatScrollRootContext.Provider>
       <ApprovalOverlay />

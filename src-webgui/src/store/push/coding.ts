@@ -3,11 +3,15 @@ import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '..
 import { codingRequest, codingWindowId, resolveCodingReply } from '../../lib/coding-service'
 import { resolveFilePreviewBytes } from '../../lib/filePreview'
 import { resolveLspCompletion, resolveLspCompletionResolve, resolveLspDefinition, resolveLspDocumentSymbol, resolveLspFileText, resolveLspHover, resolveLspReferences } from '../../lib/lsp-bridge'
-import { diagramTabId } from '../../lib/diagram'
+import { designTabId } from '../../lib/design'
+import { diagramTabId, isDiagramPath } from '../../lib/diagram'
+import { consumeQuietMiss, diagramFolder, expectMissingFileOp } from '../../lib/diagramNotes'
 import { codingTabId } from '../../lib/markdownPreview'
+import { beginDesignSeed } from '../actions/design'
 import { beginDiagramSeed } from '../actions/diagram'
 import type { StoreGet, StoreSet } from '../api'
-import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
+import { baseName as codingBaseName, isPathOrDescendant as codingIsPathOrDescendant, remapPath as codingRemapPath, fileKey, mintRequestId, reduceFileContentReplace, reduceFileContentSearch, reduceFileCreate, reduceFileDelete, reduceFileRead, reduceFileRename, reduceFileSave, reduceFileTree, reduceFileWriteBytes } from '../coding'
+import { claimDesignRead, claimDesignSave, dropDesignDocs, normalizeDesignSlice, remapDesignDocs } from '../design'
 import { claimDiagramRead, claimDiagramSave, dropDiagramDocs, remapDiagramDocs } from '../diagram'
 import { normalizeGroups } from '../editorGroups'
 import type { PushEnvelope } from '../types/envelope'
@@ -208,6 +212,21 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           }
           break
         }
+        const designClaimed = claimDesignRead(get().design, env)
+        if (designClaimed) {
+          set({ design: designClaimed.design })
+          if (designClaimed.save) {
+            get().req({
+              r: 'FileSave',
+              root: designClaimed.save.root,
+              path: designClaimed.save.path,
+              content: designClaimed.save.content,
+              expectedFingerprint: designClaimed.save.fingerprint,
+              requestId: designClaimed.save.requestId,
+            })
+          }
+          break
+        }
         resolveLspFileText(
           env.requestId,
           env.content ?? null,
@@ -229,6 +248,21 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             if (written != null && written !== diagramBefore.savedText) {
               const workspace = { hostId: get().remoteState.hostId ?? 'local', root: env.root }
               if (diagramBefore.savedText != null) recordCodingHistory(workspace, env.path, diagramBefore.savedText, 'Before save')
+              recordCodingHistory(workspace, env.path, written, 'Saved')
+            }
+          }
+          break
+        }
+        const designKey = fileKey(env.root, env.path)
+        const designBefore = get().design?.docs?.[designKey]
+        const designSaved = claimDesignSave(get().design, env)
+        if (designSaved) {
+          set({ design: designSaved })
+          if (!env.error && designBefore?.saveReq === env.requestId) {
+            const written = designBefore.pendingSaveText
+            if (written != null && written !== designBefore.savedText) {
+              const workspace = { hostId: get().remoteState.hostId ?? 'local', root: env.root }
+              if (designBefore.savedText != null) recordCodingHistory(workspace, env.path, designBefore.savedText, 'Before save')
               recordCodingHistory(workspace, env.path, written, 'Saved')
             }
           }
@@ -325,12 +359,36 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               beginDiagramSeed(set, get, pending.root, pending.path)
             }
           }
+          const designPending = get().design?.pendingCreate
+          if (designPending && designPending.createReq === env.requestId) {
+            if (env.error) {
+              set((s) => ({
+                design: normalizeDesignSlice({
+                  ...s.design,
+                  pendingCreate: s.design?.pendingCreate?.createReq === env.requestId ? null : s.design?.pendingCreate ?? null,
+                }),
+              }))
+            } else {
+              beginDesignSeed(set, get, designPending.root, designPending.path)
+            }
+          }
         }
         break
       case 'FileRename':
         set((s) => {
           const coding = reduceFileRename(s.coding, env)
+          const quietMiss = consumeQuietMiss(env.requestId, env.error)
+          if (!env.error && isDiagramPath(env.oldPath) && isDiagramPath(env.newPath)) {
+            const from = diagramFolder(env.oldPath)
+            const to = diagramFolder(env.newPath)
+            if (from && to && from !== to) {
+              const requestId = mintRequestId()
+              expectMissingFileOp(requestId)
+              queueMicrotask(() => get().req({ r: 'FileRename', root: env.root, oldPath: from, newPath: to, requestId }))
+            }
+          }
           if (env.error) {
+            if (quietMiss) return { coding }
             const seq = s.ui.toastSeq + 1
             return {
               coding,
@@ -346,10 +404,10 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           const tabGroup = { ...s.ui.tabGroup }
           const groupActive = { ...s.ui.groupActive }
           const tabs = s.ui.tabs.map((t) => {
-            if ((t.kind !== 'codingFile' && t.kind !== 'diagram') || t.root !== env.root) return t
+            if ((t.kind !== 'codingFile' && t.kind !== 'diagram' && t.kind !== 'design') || t.root !== env.root) return t
             const mapped = codingRemapPath(t.path, env.oldPath, env.newPath)
             if (mapped == null) return t
-            const newId = t.kind === 'diagram' ? diagramTabId(env.root, mapped) : codingTabId(env.root, mapped, t.preview)
+            const newId = t.kind === 'diagram' ? diagramTabId(env.root, mapped) : t.kind === 'design' ? designTabId(env.root, mapped) : codingTabId(env.root, mapped, t.preview)
             if (s.ui.activeTabId === t.id) activeTabId = newId
             if (tabGroup[t.id]) {
               tabGroup[newId] = tabGroup[t.id]
@@ -379,6 +437,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           return {
             coding,
             diagram: { ...s.diagram, docs: remapDiagramDocs(s.diagram.docs, env.root, env.oldPath, env.newPath) },
+            design: normalizeDesignSlice({ ...s.design, docs: remapDesignDocs(s.design?.docs, env.root, env.oldPath, env.newPath) }),
             ui: normalizeGroups({ ...s.ui, tabs, activeTabId, tabGroup, groupActive }),
           }
         })
@@ -386,7 +445,17 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'FileDelete':
         set((s) => {
           const coding = reduceFileDelete(s.coding, env)
+          const quietMiss = consumeQuietMiss(env.requestId, env.error)
+          if (!env.error && isDiagramPath(env.path)) {
+            const folder = diagramFolder(env.path)
+            if (folder) {
+              const requestId = mintRequestId()
+              expectMissingFileOp(requestId)
+              queueMicrotask(() => get().req({ r: 'FileDelete', root: env.root, path: folder, requestId }))
+            }
+          }
           if (env.error) {
+            if (quietMiss) return { coding }
             const seq = s.ui.toastSeq + 1
             return {
               coding,
@@ -400,7 +469,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           // Close codingFile tabs for the deleted path and every descendant.
           const closed = new Set<string>()
           const tabs = s.ui.tabs.filter((t) => {
-            if ((t.kind !== 'codingFile' && t.kind !== 'diagram') || t.root !== env.root) return true
+            if ((t.kind !== 'codingFile' && t.kind !== 'diagram' && t.kind !== 'design') || t.root !== env.root) return true
             if (!codingIsPathOrDescendant(t.path, env.path)) return true
             closed.add(t.id)
             return false
@@ -435,6 +504,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           return {
             coding,
             diagram: { ...s.diagram, docs: dropDiagramDocs(s.diagram.docs, env.root, env.path) },
+            design: normalizeDesignSlice({ ...s.design, docs: dropDesignDocs(s.design?.docs, env.root, env.path) }),
             ui: { ...s.ui, tabs, activeTabId },
           }
         })

@@ -17,6 +17,7 @@ import {
   Monitor,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { CHAT_TURNS_DEFAULT, clampChatTurns } from '../lib/chatWindow'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
@@ -156,6 +157,7 @@ export default function SettingsTab() {
 
           <section ref={sessionRef} className="mt-12">
             <SectionHeader title="Session" desc="Preferences for the current session." />
+            <ChatTurnsSetting />
             <SessionSettings />
           </section>
 
@@ -432,6 +434,45 @@ function PaletteCard({
 }
 
 // ── Session ─────────────────────────────────────────────────────────────────
+
+// Mount cap for the chat list. Lives on the UI slice, not SetPrefs, so it
+// lasts until this window closes and then returns to the default.
+function ChatTurnsSetting() {
+  const chatTurns = useKoma((s) => s.ui.chatTurns)
+  const setChatTurns = useKoma((s) => s.setChatTurns)
+  const [text, setText] = useState(String(chatTurns))
+
+  useEffect(() => {
+    setText(String(chatTurns))
+  }, [chatTurns])
+
+  const commit = () => {
+    const trimmed = text.trim()
+    const next = /^\d+$/.test(trimmed) ? clampChatTurns(parseInt(trimmed, 10)) : CHAT_TURNS_DEFAULT
+    setText(String(next))
+    if (next !== chatTurns) setChatTurns(next)
+  }
+
+  return (
+    <SettingRow
+      label="Turns on screen"
+      desc="How many recent turns the chat shows. Scroll up to load more. This window only."
+    >
+      <input
+        type="number"
+        min={1}
+        max={200}
+        value={text}
+        onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+        className="w-24 rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[12px] text-koma-fg outline-none focus:border-koma-grip"
+      />
+    </SettingRow>
+  )
+}
 
 function SessionSettings() {
   const req = useKoma((s) => s.req)

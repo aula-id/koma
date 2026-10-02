@@ -1,0 +1,1094 @@
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent, type JSX } from 'react'
+import { LexicalComposer } from '@lexical/react/LexicalComposer'
+import { ContentEditable } from '@lexical/react/LexicalContentEditable'
+import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin'
+import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin'
+import { ListPlugin } from '@lexical/react/LexicalListPlugin'
+import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
+import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin'
+import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin'
+import { $createCodeNode, $isCodeNode, CodeNode } from '@lexical/code'
+import { $isLinkNode, LinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link'
+import {
+  INSERT_CHECK_LIST_COMMAND,
+  INSERT_ORDERED_LIST_COMMAND,
+  INSERT_UNORDERED_LIST_COMMAND,
+  $isListItemNode,
+  $isListNode,
+  ListItemNode,
+  ListNode,
+} from '@lexical/list'
+import { CheckListPlugin } from '@lexical/react/LexicalCheckListPlugin'
+import {
+  $convertFromMarkdownString,
+  BOLD_ITALIC_STAR,
+  BOLD_ITALIC_UNDERSCORE,
+  BOLD_STAR,
+  BOLD_UNDERSCORE,
+  CHECK_LIST,
+  CODE,
+  $generateNodesFromMarkdownString,
+  HEADING,
+  INLINE_CODE,
+  ITALIC_STAR,
+  ITALIC_UNDERSCORE,
+  LINK,
+  ORDERED_LIST,
+  QUOTE,
+  STRIKETHROUGH,
+  UNORDERED_LIST,
+  type TextMatchTransformer,
+  type Transformer,
+} from '@lexical/markdown'
+import { $createHeadingNode, $createQuoteNode, HeadingNode, QuoteNode } from '@lexical/rich-text'
+import { $setBlocksType } from '@lexical/selection'
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getNearestNodeFromDOMNode,
+  $getNodeByKey,
+  $getRoot,
+  $getSelection,
+  $isElementNode,
+  $isRangeSelection,
+  $isTextNode,
+  COMMAND_PRIORITY_CRITICAL,
+  COMMAND_PRIORITY_HIGH,
+  DRAGOVER_COMMAND,
+  DROP_COMMAND,
+  FORMAT_TEXT_COMMAND,
+  KEY_BACKSPACE_COMMAND,
+  KEY_DELETE_COMMAND,
+  KEY_ENTER_COMMAND,
+  PASTE_COMMAND,
+  type LexicalEditor,
+  type LexicalNode,
+} from 'lexical'
+import {
+  $createComposerChipNode,
+  $isComposerChipNode,
+  COMPOSER_CHIP_MIME,
+  ComposerChipContext,
+  ComposerChipNode,
+  type ComposerChipActions,
+} from './chipNodes'
+import { $exportLexicalMarkdown } from './lexicalMarkdown'
+import {
+  chipPayloadForAttachMarker,
+  chipPayloadFromWire,
+  COMPOSER_ATTACHMENT_MIME,
+  findFileRefWireInText,
+  hasComposerAttachmentDrag,
+  readComposerAttachmentDrag,
+  type ComposerChipPayload,
+} from '../../lib/composerIpc'
+import {
+  loneHttpUrl,
+  looksLikeComposerMarkdown,
+  markdownFromClipboardHtml,
+  splitTaskListMarker,
+} from '../../lib/composerMarkdownPaste'
+import { normalizeDiagramNoteMarkdown, noteImageFile, safeNoteUrl } from '../../lib/markdownNote'
+import { $createNoteImageNode, $isNoteImageNode, NoteAssetsContext, NoteImageNode, type NoteAssets } from './noteImageNode'
+
+export type LexicalProfile = 'composer' | 'inline' | 'note'
+
+export type LexicalEditorHandle = {
+  focus: () => void
+  insertText: (text: string) => void
+  appendText: (text: string) => void
+  insertChip: (payload: ComposerChipPayload, opts?: { atEnd?: boolean; trailingSpace?: boolean }) => void
+  replacePendingAttachChip: (queueId: string, payload: ComposerChipPayload) => boolean
+  removeAttachMarkerChip: (kind: 'image' | 'paste', markerN: number) => boolean
+  removeComposerChip: (nodeKey: string) => void
+  setMarkdown: (markdown: string, edge?: 'start' | 'end') => void
+  getMarkdown: () => string
+  format: (kind: 'bold' | 'italic' | 'code' | 'strikethrough') => void
+  toggleHeading: () => void
+  toggleBullet: () => void
+  toggleNumber: () => void
+  toggleCheckList: () => void
+  toggleQuote: () => void
+  toggleCodeBlock: () => void
+  insertLink: (url: string) => void
+  insertImage: (alt: string, src: string) => void
+  isAtStart: () => boolean
+  isAtEnd: () => boolean
+}
+
+const MARKER = /\[(?:Image|Pasted Text) #\d+\]/
+const FILE_REF = /(?:@\[\d+\]\S+|@\S+)/
+
+const markerTransformer: TextMatchTransformer = {
+  dependencies: [ComposerChipNode],
+  export: (node) => ($isComposerChipNode(node) && node.getWireText().startsWith('[') ? node.getWireText() : null),
+  importRegExp: MARKER,
+  regExp: /\[(?:Image|Pasted Text) #\d+\]$/,
+  replace: (node, match) => {
+    node.replace($createComposerChipNode(chipPayloadFromWire(match[0])))
+  },
+  trigger: ']',
+  type: 'text-match',
+}
+
+const fileTransformer: TextMatchTransformer = {
+  dependencies: [ComposerChipNode],
+  export: (node) => ($isComposerChipNode(node) && node.getWireText().startsWith('@') ? node.getWireText() : null),
+  importRegExp: FILE_REF,
+  regExp: /(?:@\[\d+\]\S+|@\S+)$/,
+  replace: (node, match) => {
+    node.replace($createComposerChipNode(chipPayloadFromWire(match[0])))
+  },
+  trigger: ' ',
+  type: 'text-match',
+}
+
+const imageTransformer: TextMatchTransformer = {
+  dependencies: [NoteImageNode],
+  export: (node) => ($isNoteImageNode(node) ? node.getTextContent() : null),
+  importRegExp: /!\[([^\]]*)\]\(([^)\s]+)\)/,
+  regExp: /!\[([^\]]*)\]\(([^)\s]+)\)$/,
+  replace: (node, match) => {
+    const src = (match[2] ?? '').replace(/\\/g, '/').split('/').pop() ?? match[2] ?? ''
+    node.replace($createNoteImageNode(match[1] ?? '', src))
+  },
+  trigger: ')',
+  type: 'text-match',
+}
+
+/** LINK must not steal `![alt](file)` — both matches end at the same `)`, so LINK wins otherwise. */
+const noteLinkTransformer: TextMatchTransformer = {
+  ...LINK,
+  replace: (textNode, match) => {
+    const text = textNode.getTextContent()
+    const at = match.index ?? text.indexOf(match[0])
+    if (at > 0 && text[at - 1] === '!') return
+    const src = (match[2] ?? match[3] ?? '').replace(/\\/g, '/').split('/').pop() ?? ''
+    if (noteImageFile(src)) {
+      textNode.replace($createNoteImageNode(match[1] ?? '', src))
+      return
+    }
+    LINK.replace?.(textNode, match)
+  },
+}
+
+const INLINE: Transformer[] = [
+  INLINE_CODE,
+  BOLD_ITALIC_STAR,
+  BOLD_ITALIC_UNDERSCORE,
+  BOLD_STAR,
+  BOLD_UNDERSCORE,
+  ITALIC_STAR,
+  ITALIC_UNDERSCORE,
+  STRIKETHROUGH,
+  LINK,
+]
+const COMPOSER: Transformer[] = [
+  CODE,
+  HEADING,
+  QUOTE,
+  // CHECK_LIST must beat UNORDERED_LIST: both match `- `, and import takes the first hit.
+  CHECK_LIST,
+  UNORDERED_LIST,
+  ORDERED_LIST,
+  ...INLINE,
+  markerTransformer,
+  fileTransformer,
+]
+const NOTE: Transformer[] = [
+  CODE,
+  HEADING,
+  QUOTE,
+  CHECK_LIST,
+  UNORDERED_LIST,
+  ORDERED_LIST,
+  imageTransformer,
+  ...INLINE.filter((t) => t !== LINK),
+  noteLinkTransformer,
+]
+
+function transformersFor(profile: LexicalProfile): Transformer[] {
+  if (profile === 'note') return NOTE
+  if (profile === 'composer') return COMPOSER
+  return INLINE
+}
+
+
+function namedImage(file: File): File {
+  if (file.name) return file
+  const ext = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+  return new File([file], `clipboard.${ext}`, { type: file.type || 'image/png' })
+}
+
+function imageFilesFrom(data: DataTransfer | null): File[] {
+  if (!data) return []
+  const files: File[] = []
+  for (const item of Array.from(data.items ?? [])) {
+    if (!item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (file) files.push(namedImage(file))
+  }
+  if (files.length) return files
+  for (const file of Array.from(data.files ?? [])) {
+    if (file.type.startsWith('image/')) files.push(namedImage(file))
+  }
+  return files
+}
+
+async function readClipboardImages(): Promise<File[]> {
+  if (!navigator.clipboard?.read) return []
+  try {
+    const items = await navigator.clipboard.read()
+    const files: File[] = []
+    for (const item of items) {
+      const type = item.types.find((entry) => entry.startsWith('image/'))
+      if (!type) continue
+      const blob = await item.getType(type)
+      const ext = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+      files.push(new File([blob], `clipboard.${ext}`, { type }))
+    }
+    return files
+  } catch {
+    return []
+  }
+}
+
+function $promoteNoteImages() {
+  for (const textNode of $getRoot().getAllTextNodes()) {
+    const text = textNode.getTextContent()
+    const match = /!?\[([^\]]*)\]\(([^)\s]+)\)/.exec(text)
+    if (!match) continue
+    const src = (match[2] ?? '').replace(/\\/g, '/').split('/').pop() ?? ''
+    if (!noteImageFile(src) && !match[0].startsWith('!')) continue
+    const image = $createNoteImageNode(match[1] ?? '', src)
+    if (text.trim() === match[0]) {
+      textNode.replace(image)
+      continue
+    }
+    const start = match.index ?? 0
+    const before = text.slice(0, start)
+    const after = text.slice(start + match[0].length)
+    const nodes: LexicalNode[] = []
+    if (before) nodes.push($createTextNode(before))
+    nodes.push(image)
+    if (after) nodes.push($createTextNode(after))
+    textNode.replace(nodes[0]!)
+    let prev = nodes[0]!
+    for (const next of nodes.slice(1)) {
+      prev.insertAfter(next)
+      prev = next
+    }
+  }
+  const links: LinkNode[] = []
+  const visit = (node: LexicalNode) => {
+    if ($isLinkNode(node)) links.push(node)
+    if ($isElementNode(node)) node.getChildren().forEach(visit)
+  }
+  $getRoot().getChildren().forEach(visit)
+  for (const link of links) {
+    const src = link.getURL().replace(/\\/g, '/').split('/').pop() ?? ''
+    if (!noteImageFile(src)) continue
+    link.replace($createNoteImageNode(link.getTextContent(), src))
+  }
+}
+
+function $promoteTaskListMarkers() {
+  for (const node of $getRoot().getAllTextNodes()) {
+    const item = node.getParent()
+    if (!$isListItemNode(item) || item.getFirstChild() !== node) continue
+    const split = splitTaskListMarker(node.getTextContent())
+    if (!split) continue
+    node.setTextContent(split.rest)
+    const list = item.getParent()
+    if ($isListNode(list) && list.getListType() !== 'check') list.setListType('check')
+    item.setChecked(split.checked)
+  }
+}
+
+function $promoteFileRefChips() {
+  let guard = 0
+  while (guard < 40) {
+    guard += 1
+    let replaced = false
+    for (const textNode of $getRoot().getAllTextNodes()) {
+      const text = textNode.getTextContent()
+      const tokens = findFileRefWireInText(text)
+      const token = tokens[0]
+      if (!token) continue
+      const index = text.indexOf(token)
+      const parts = textNode.splitText(index, index + token.length)
+      const target = parts.find((part) => part.getTextContent() === token)
+      if (!target) continue
+      target.replace($createComposerChipNode(chipPayloadFromWire(token)))
+      replaced = true
+      break
+    }
+    if (!replaced) break
+  }
+}
+
+function $insertComposerChip(payload: ComposerChipPayload, atEnd: boolean, trailingSpace: boolean) {
+  $prepareInsert(atEnd)
+  const active = $getSelection()
+  if (!$isRangeSelection(active)) return
+  active.insertNodes([$createComposerChipNode(payload)])
+  if (trailingSpace) active.insertNodes([$createTextNode(' ')])
+}
+
+function $replaceChipByQueueId(queueId: string, payload: ComposerChipPayload): boolean {
+  const stack: LexicalNode[] = [$getRoot()]
+  while (stack.length) {
+    const node = stack.pop()!
+    if ($isComposerChipNode(node) && node.getQueueId() === queueId) {
+      node.replace($createComposerChipNode(payload))
+      return true
+    }
+    if ($isElementNode(node)) stack.push(...node.getChildren())
+  }
+  return false
+}
+
+function $findAttachMarkerChip(kind: 'image' | 'paste', markerN: number): ComposerChipNode | null {
+  const stack: LexicalNode[] = [$getRoot()]
+  while (stack.length) {
+    const node = stack.pop()!
+    if ($isComposerChipNode(node) && node.getChipKind() === kind && node.getMarkerN() === markerN) {
+      return node
+    }
+    if ($isElementNode(node)) stack.push(...node.getChildren())
+  }
+  return null
+}
+
+function $removeAttachMarkerChips(kind: 'image' | 'paste', markerN: number): boolean {
+  const chip = $findAttachMarkerChip(kind, markerN)
+  if (!chip) return false
+  chip.remove()
+  return true
+}
+
+function $caretRangeFromPoint(clientX: number, clientY: number): Range | null {
+  return typeof document.caretRangeFromPoint === 'function'
+    ? document.caretRangeFromPoint(clientX, clientY)
+    : null
+}
+
+function $insertChipAtClientPoint(
+  payload: ComposerChipPayload,
+  clientX: number,
+  clientY: number,
+  trailingSpace: boolean,
+): void {
+  const range = $caretRangeFromPoint(clientX, clientY)
+  const created = $createComposerChipNode(payload)
+  const dom = range?.startContainer
+  const el = dom instanceof Element ? dom : dom?.parentElement ?? null
+  const nearest = el ? $getNearestNodeFromDOMNode(el) : null
+  if ($isTextNode(nearest) && range) {
+    const offset = Math.min(range.startOffset, nearest.getTextContentSize())
+    nearest.select(offset, offset)
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([created])
+    else nearest.insertAfter(created)
+  } else if ($isComposerChipNode(nearest)) {
+    nearest.insertAfter(created)
+  } else {
+    $prepareInsert(true)
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([created])
+  }
+  if (trailingSpace) {
+    const selection = $getSelection()
+    if ($isRangeSelection(selection)) selection.insertNodes([$createTextNode(' ')])
+  }
+}
+
+/** Backspace/Delete on a collapsed caret beside an inline pile chip. */
+function $pasteComposerPlainText(editor: LexicalEditor, transformers: Transformer[], raw: string): boolean {
+  const text = raw.replace(/\r\n/g, '\n')
+  const url = loneHttpUrl(text)
+  if (url && safeNoteUrl(url)) {
+    let wrapSelection = false
+    editor.getEditorState().read(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection) || selection.isCollapsed()) return
+      if (selection.getTextContent().trim()) wrapSelection = true
+    })
+    if (wrapSelection) {
+      editor.dispatchCommand(TOGGLE_LINK_COMMAND, url)
+      return true
+    }
+    let inserted = false
+    editor.update(() => {
+      const selection = $getSelection()
+      if (!$isRangeSelection(selection)) return
+      const nodes = $generateNodesFromMarkdownString(`[${url}](${url})`, transformers, true)
+      if (!nodes.length) return
+      selection.insertNodes(nodes)
+      inserted = true
+    })
+    return inserted
+  }
+  if (!looksLikeComposerMarkdown(text)) return false
+  let handled = false
+  editor.update(() => {
+    const selection = $getSelection()
+    if (!$isRangeSelection(selection)) return
+    const nodes = $generateNodesFromMarkdownString(text, transformers, true)
+    if (!nodes.length) return
+    selection.insertNodes(nodes)
+    $promoteTaskListMarkers()
+    $promoteFileRefChips()
+    handled = true
+  })
+  return handled
+}
+
+function $deleteAdjacentComposerChip(forward: boolean): boolean {
+  const selection = $getSelection()
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false
+  const anchor = selection.anchor
+  const node = anchor.getNode()
+  let chip: ComposerChipNode | null = null
+  if ($isComposerChipNode(node)) {
+    chip = node
+  } else if ($isTextNode(node)) {
+    const offset = anchor.offset
+    if (!forward && offset === 0) {
+      const prev = node.getPreviousSibling()
+      if ($isComposerChipNode(prev)) chip = prev
+    }
+    if (forward && offset === node.getTextContentSize()) {
+      const next = node.getNextSibling()
+      if ($isComposerChipNode(next)) chip = next
+    }
+  }
+  if (!chip) return false
+  chip.remove()
+  return true
+}
+
+function $prepareInsert(atEnd: boolean) {
+  const root = $getRoot()
+  if (root.getChildrenSize() === 0) {
+    const paragraph = $createParagraphNode()
+    root.append(paragraph)
+    paragraph.select()
+    return
+  }
+  if (atEnd || !$isRangeSelection($getSelection())) root.selectEnd()
+}
+
+function $insertPiece(text: string, atEnd = false) {
+  $prepareInsert(atEnd)
+  const active = $getSelection()
+  if (!$isRangeSelection(active)) return
+  const trimmed = text.trim()
+  if (/^\[(?:Image|Pasted Text) #\d+\]$/.test(trimmed)) {
+    $insertComposerChip(chipPayloadFromWire(trimmed), false, text.endsWith(' '))
+    return
+  }
+  if (/^@/.test(trimmed) && text.trim() === trimmed) {
+    $insertComposerChip(chipPayloadFromWire(trimmed), false, text.endsWith(' '))
+    return
+  }
+  active.insertText(text)
+}
+
+function readMarkdown(editor: LexicalEditor, _transformers: Transformer[]): string {
+  let markdown = ''
+  editor.getEditorState().read(() => {
+    markdown = $exportLexicalMarkdown()
+  })
+  return markdown
+}
+
+function EditorPlugins({
+  profile,
+  markdown,
+  controlled,
+  onMarkdown,
+  onKeyDown,
+  onPaste,
+  onPasteFiles,
+  onSubmit,
+  apiRef,
+  editorElementRef,
+}: {
+  profile: LexicalProfile
+  markdown: string
+  controlled: boolean
+  onMarkdown: (markdown: string) => void
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
+  onPaste?: (event: ClipboardEvent) => boolean
+  onPasteFiles?: (files: File[]) => void
+  onSubmit?: () => void
+  apiRef?: { current: LexicalEditorHandle | null }
+  editorElementRef?: (el: HTMLElement | null) => void
+}) {
+  const [editor] = useLexicalComposerContext()
+  const transformers = useMemo(() => transformersFor(profile), [profile])
+  const suppress = useRef(false)
+  const last = useRef<string | null>(null)
+  const onKeyDownRef = useRef(onKeyDown)
+  onKeyDownRef.current = onKeyDown
+  const onPasteRef = useRef(onPaste)
+  onPasteRef.current = onPaste
+  const onPasteFilesRef = useRef(onPasteFiles)
+  onPasteFilesRef.current = onPasteFiles
+  const imagePasteAt = useRef(0)
+  const onSubmitRef = useRef(onSubmit)
+  onSubmitRef.current = onSubmit
+
+  const focused = useRef(false)
+
+  const applyMarkdown = (next: string, edge?: 'start' | 'end') => {
+    suppress.current = true
+    const prepared = profile === 'note' ? normalizeDiagramNoteMarkdown(next) : next
+    editor.update(() => {
+      if (prepared === '') {
+        const root = $getRoot()
+        root.clear()
+        root.append($createParagraphNode())
+      } else {
+        $convertFromMarkdownString(prepared, transformers, undefined, false)
+        if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
+        if (profile === 'note') $promoteNoteImages()
+        if (profile === 'composer') $promoteFileRefChips()
+      }
+      if (edge === 'end') $getRoot().selectEnd()
+      else if (edge === 'start') $getRoot().selectStart()
+    })
+    last.current = prepared
+    queueMicrotask(() => {
+      suppress.current = false
+    })
+  }
+
+  useEffect(() => {
+    const handle: LexicalEditorHandle = {
+      focus: () => editor.focus(),
+      insertText: (text) => {
+        editor.update(() => {
+          $insertPiece(text, false)
+        })
+      },
+      appendText: (text) => {
+        editor.update(() => {
+          $insertPiece(text, true)
+        })
+      },
+      insertChip: (payload, opts) => {
+        editor.update(() => {
+          $insertComposerChip(payload, opts?.atEnd ?? false, opts?.trailingSpace ?? false)
+        })
+      },
+      replacePendingAttachChip: (queueId, payload) => {
+        let ok = false
+        editor.update(() => {
+          ok = $replaceChipByQueueId(queueId, payload)
+        })
+        return ok
+      },
+      removeAttachMarkerChip: (kind, markerN) => {
+        let ok = false
+        editor.update(() => {
+          ok = $removeAttachMarkerChips(kind, markerN)
+        })
+        return ok
+      },
+      removeComposerChip: (nodeKey) => {
+        editor.update(() => {
+          const node = $getNodeByKey(nodeKey)
+          if ($isComposerChipNode(node)) node.remove()
+        })
+      },
+      setMarkdown: applyMarkdown,
+      getMarkdown: () => readMarkdown(editor, transformers),
+      format: (kind) => {
+        editor.focus()
+        editor.dispatchCommand(FORMAT_TEXT_COMMAND, kind)
+      },
+      toggleHeading: () => {
+        editor.update(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection)) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          $setBlocksType(selection, () => (top?.getType() === 'heading' ? $createParagraphNode() : $createHeadingNode('h2')))
+        })
+      },
+      toggleBullet: () => {
+        editor.dispatchCommand(INSERT_UNORDERED_LIST_COMMAND, undefined)
+      },
+      toggleNumber: () => {
+        editor.dispatchCommand(INSERT_ORDERED_LIST_COMMAND, undefined)
+      },
+      toggleCheckList: () => {
+        editor.dispatchCommand(INSERT_CHECK_LIST_COMMAND, undefined)
+      },
+      toggleQuote: () => {
+        editor.update(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection)) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          $setBlocksType(selection, () => (top?.getType() === 'quote' ? $createParagraphNode() : $createQuoteNode()))
+        })
+      },
+      toggleCodeBlock: () => {
+        editor.update(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection)) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          $setBlocksType(selection, () => (top?.getType() === 'code' ? $createParagraphNode() : $createCodeNode()))
+        })
+      },
+      insertLink: (url) => {
+        editor.focus()
+        editor.dispatchCommand(TOGGLE_LINK_COMMAND, url)
+      },
+      insertImage: (alt, src) => {
+        editor.update(() => {
+          let selection = $getSelection()
+          if (!$isRangeSelection(selection)) {
+            $getRoot().selectEnd()
+            selection = $getSelection()
+          }
+          if ($isRangeSelection(selection)) {
+            const image = $createNoteImageNode(alt, src)
+            const block = $createParagraphNode()
+            block.append(image)
+            const after = $createParagraphNode()
+            selection.insertNodes([block])
+            block.insertAfter(after)
+            after.selectStart()
+          }
+        })
+      },
+      isAtStart: () => {
+        let at = false
+        editor.getEditorState().read(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection) || !selection.isCollapsed()) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          at = top != null && top === $getRoot().getFirstChild() && selection.anchor.offset === 0
+        })
+        return at
+      },
+      isAtEnd: () => {
+        let at = false
+        editor.getEditorState().read(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection) || !selection.isCollapsed()) return
+          const node = selection.focus.getNode()
+          const top = node.getTopLevelElement()
+          const size = $isTextNode(node) ? node.getTextContentSize() : node.getChildrenSize()
+          at = top != null && top === $getRoot().getLastChild() && selection.focus.offset === size
+        })
+        return at
+      },
+    }
+    if (apiRef) apiRef.current = handle
+    return () => {
+      if (apiRef) apiRef.current = null
+    }
+    // applyMarkdown closes over transformers; editor identity is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiRef, editor, profile, transformers])
+
+  useEffect(() => {
+    const root = editor.getRootElement()
+    const onFocus = () => {
+      focused.current = true
+    }
+    const onBlur = () => {
+      focused.current = false
+    }
+    root?.addEventListener('focusin', onFocus)
+    root?.addEventListener('focusout', onBlur)
+    return () => {
+      root?.removeEventListener('focusin', onFocus)
+      root?.removeEventListener('focusout', onBlur)
+    }
+  }, [editor])
+
+  useEffect(() => {
+    if (!controlled) return
+    if (markdown === last.current) return
+    if (profile === 'note' && focused.current) return
+    applyMarkdown(markdown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlled, markdown])
+
+  useEffect(() => {
+    if (profile !== 'note') return
+    return editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        if (!event) return false
+        const shift = event.shiftKey
+        let handled = false
+        editor.update(() => {
+          const selection = $getSelection()
+          if (!$isRangeSelection(selection)) return
+          const top = selection.anchor.getNode().getTopLevelElement()
+          if ($isCodeNode(top)) {
+            if (shift) {
+              selection.insertLineBreak()
+              handled = true
+            }
+            return
+          }
+          if ($isListNode(top) || $isListItemNode(selection.anchor.getNode().getParent())) {
+            if (shift) {
+              selection.insertLineBreak()
+              handled = true
+            }
+            return
+          }
+          if (shift) {
+            selection.insertLineBreak()
+            handled = true
+            return
+          }
+          const kids = top?.getChildren() ?? []
+          const onImage = $isNoteImageNode(selection.anchor.getNode()) || kids.some((node) => $isNoteImageNode(node))
+          if (onImage && top) {
+            const next = $createParagraphNode()
+            top.insertAfter(next)
+            next.selectStart()
+            handled = true
+            return
+          }
+          selection.insertParagraph()
+          handled = true
+        })
+        if (handled) event.preventDefault()
+        return handled
+      },
+      COMMAND_PRIORITY_HIGH,
+    )
+  }, [editor, profile])
+
+  useEffect(() => {
+    if (profile !== 'composer') return
+    return editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        if (event && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          if (onSubmitRef.current) onSubmitRef.current()
+          else onKeyDownRef.current?.(event as unknown as ReactKeyboardEvent<HTMLElement>)
+          return true
+        }
+        return false
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+  }, [editor, profile])
+
+  useEffect(() => {
+    if (profile !== 'composer') return
+    const onBackspace = () => {
+      let handled = false
+      editor.update(() => {
+        handled = $deleteAdjacentComposerChip(false)
+      })
+      return handled
+    }
+    const onDelete = () => {
+      let handled = false
+      editor.update(() => {
+        handled = $deleteAdjacentComposerChip(true)
+      })
+      return handled
+    }
+    const unregisterBack = editor.registerCommand(KEY_BACKSPACE_COMMAND, onBackspace, COMMAND_PRIORITY_HIGH)
+    const unregisterDel = editor.registerCommand(KEY_DELETE_COMMAND, onDelete, COMMAND_PRIORITY_HIGH)
+    return () => {
+      unregisterBack()
+      unregisterDel()
+    }
+  }, [editor, profile])
+
+  useEffect(() => {
+    const deliverImages = (files: File[]) => {
+      if (!files.length) return
+      const now = performance.now()
+      if (now - imagePasteAt.current < 400) return
+      imagePasteAt.current = now
+      onPasteFilesRef.current?.(files)
+    }
+    const onNativePaste = (event: ClipboardEvent) => {
+      const files = imageFilesFrom(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      event.stopPropagation()
+      deliverImages(files)
+    }
+    const root = editor.getRootElement()
+    root?.addEventListener('paste', onNativePaste, true)
+    const unregisterPaste = editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const data = event && 'clipboardData' in event ? event.clipboardData : null
+        const files = imageFilesFrom(data)
+        if (files.length) {
+          event.preventDefault()
+          deliverImages(files)
+          return true
+        }
+        const types = data ? Array.from(data.types) : []
+        if (types.some((type) => type.startsWith('image/')) && !types.includes('text/plain')) {
+          event.preventDefault()
+          void readClipboardImages().then(deliverImages)
+          return true
+        }
+        if (profile === 'composer' && event instanceof ClipboardEvent) {
+          const data = event.clipboardData
+          const plain = data?.getData('text/plain') ?? ''
+          const html = data?.getData('text/html') ?? ''
+          const fromHtml = html ? markdownFromClipboardHtml(html) : null
+          const candidate =
+            fromHtml && (!plain.trim() || (!looksLikeComposerMarkdown(plain) && fromHtml.trim().length > plain.trim().length))
+              ? fromHtml
+              : plain
+          if (candidate && $pasteComposerPlainText(editor, transformers, candidate)) {
+            event.preventDefault()
+            return true
+          }
+        }
+        if (event instanceof ClipboardEvent) return onPasteRef.current?.(event) ?? false
+        return false
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    )
+    const unregisterOver = editor.registerCommand(
+      DRAGOVER_COMMAND,
+      (event) => {
+        if (profile !== 'composer') return false
+        const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
+        const fromStrip = hasComposerAttachmentDrag(types)
+        if (!types.includes(COMPOSER_CHIP_MIME) && !fromStrip) return false
+        event.preventDefault()
+        if (event.dataTransfer) event.dataTransfer.dropEffect = fromStrip ? 'copy' : 'move'
+        return true
+      },
+      COMMAND_PRIORITY_HIGH,
+    )
+    const unregisterDrop = editor.registerCommand(
+      DROP_COMMAND,
+      (event) => {
+        if (profile !== 'composer') return false
+        const plain = event.dataTransfer?.getData('text/plain') ?? ''
+        const attach = readComposerAttachmentDrag(event.dataTransfer?.getData(COMPOSER_ATTACHMENT_MIME), plain)
+        if (attach) {
+          event.preventDefault()
+          editor.update(() => {
+            const chipKind = attach.kind === 'image' ? 'image' : 'paste'
+            if ($findAttachMarkerChip(chipKind, attach.markerN)) return
+            $insertChipAtClientPoint(chipPayloadForAttachMarker(attach.kind, attach.markerN), event.clientX, event.clientY, true)
+          })
+          return true
+        }
+        const mimeKey = event.dataTransfer?.getData(COMPOSER_CHIP_MIME) ?? ''
+        const key =
+          mimeKey && mimeKey !== 'marker'
+            ? mimeKey
+            : plain.startsWith('koma-chip:')
+              ? plain.slice('koma-chip:'.length)
+              : ''
+        if (!key) return false
+        event.preventDefault()
+        editor.update(() => {
+          const existing = $getNodeByKey(key)
+          const chip = existing && $isComposerChipNode(existing) ? existing : null
+          if (!chip) return
+          const payload: ComposerChipPayload = {
+            kind: chip.getChipKind(),
+            wireText: chip.getWireText(),
+            displayLabel: chip.getDisplayLabel(),
+            markerN: chip.getMarkerN(),
+            queueId: chip.getQueueId(),
+          }
+          $insertChipAtClientPoint(payload, event.clientX, event.clientY, false)
+          chip.remove()
+        })
+        return true
+      },
+      COMMAND_PRIORITY_HIGH,
+    )
+    return () => {
+      root?.removeEventListener('paste', onNativePaste, true)
+      unregisterPaste()
+      unregisterOver()
+      unregisterDrop()
+    }
+  }, [editor, profile, transformers])
+
+  return (
+    <>
+      <RichTextPlugin
+        contentEditable={
+          <ContentEditable
+            ref={editorElementRef}
+            aria-label={undefined}
+            className="outline-none"
+            onKeyDown={(event) => {
+              onKeyDown?.(event)
+            }}
+          />
+        }
+        placeholder={null}
+        ErrorBoundary={LexicalErrorBoundary}
+      />
+      <HistoryPlugin />
+      <LinkPlugin />
+      {profile === 'note' || profile === 'composer' ? <ListPlugin /> : null}
+      {profile === 'note' || profile === 'composer' ? <CheckListPlugin /> : null}
+      <MarkdownShortcutPlugin transformers={transformers} />
+      <OnChangePlugin
+        onChange={() => {
+          if (suppress.current) return
+          const next = readMarkdown(editor, transformers)
+          if (next === last.current) return
+          last.current = next
+          onMarkdown(next)
+        }}
+      />
+    </>
+  )
+}
+
+export function LexicalMarkdownEditor({
+  profile,
+  markdown,
+  onMarkdown,
+  className,
+  style,
+  placeholder,
+  ariaLabel,
+  controlled = false,
+  chipActions,
+  onKeyDown,
+  onPaste,
+  onPasteFiles,
+  onSubmit,
+  onFocus,
+  onBlur,
+  apiRef,
+  editorRef,
+  noteAssets,
+}: {
+  profile: LexicalProfile
+  markdown: string
+  onMarkdown: (markdown: string) => void
+  className?: string
+  style?: CSSProperties
+  placeholder?: string
+  ariaLabel?: string
+  controlled?: boolean
+  chipActions?: ComposerChipActions
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
+  onPaste?: (event: ClipboardEvent) => boolean
+  onPasteFiles?: (files: File[]) => void
+  onSubmit?: () => void
+  onFocus?: () => void
+  onBlur?: () => void
+  apiRef?: { current: LexicalEditorHandle | null }
+  editorRef?: (el: HTMLElement | null) => void
+  noteAssets?: NoteAssets
+}): JSX.Element {
+  const nodes = useMemo(
+    () =>
+      profile === 'note'
+        ? [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, NoteImageNode]
+        : [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, ComposerChipNode, NoteImageNode],
+    [profile],
+  )
+  const initial = useRef(markdown)
+  const body = (
+    <LexicalComposer
+      initialConfig={{
+        namespace: `koma-${profile}`,
+        nodes,
+        theme: {
+          paragraph: 'm-0 min-h-[1.2em]',
+          heading: { h1: 'my-1 text-[15px] font-semibold', h2: 'my-1 text-[13px] font-semibold', h3: 'my-1 text-[12px] font-semibold' },
+          quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
+          list: {
+            ul: 'my-1 list-disc pl-4',
+            ol: 'my-1 list-decimal pl-4',
+            listitem: 'my-0.5',
+            listitemChecked: 'koma-checklist-item koma-checklist-checked',
+            listitemUnchecked: 'koma-checklist-item koma-checklist-unchecked',
+          },
+          text: {
+            bold: 'font-semibold',
+            italic: 'italic',
+            strikethrough: 'line-through',
+            code: 'rounded bg-koma-panel2 px-0.5 font-mono text-[0.92em]',
+          },
+          link: 'text-koma-accent underline',
+          code: 'my-1 block overflow-x-auto rounded bg-koma-bg px-2 py-1 font-mono text-[11px]',
+        },
+        editorState: () => {
+          const seed =
+            profile === 'note' ? normalizeDiagramNoteMarkdown(initial.current) : initial.current
+          $convertFromMarkdownString(seed, transformersFor(profile), undefined, false)
+          if (profile === 'note' || profile === 'composer') $promoteTaskListMarkers()
+          if (profile === 'note') $promoteNoteImages()
+          if (profile === 'composer') $promoteFileRefChips()
+        },
+        onError: (error) => {
+          throw error
+        },
+      }}
+    >
+      <ComposerChipContext.Provider value={chipActions ?? {}}>
+        <div
+          className={`relative ${className ?? ''}`}
+          style={style}
+          aria-label={ariaLabel}
+          data-composer-editor={profile === 'composer' ? '' : undefined}
+          onFocus={onFocus}
+          onBlur={onBlur}
+        >
+          <EditorPlugins
+            profile={profile}
+            markdown={markdown}
+            controlled={controlled}
+            onMarkdown={onMarkdown}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onPasteFiles={onPasteFiles}
+            onSubmit={onSubmit}
+            apiRef={apiRef}
+            editorElementRef={editorRef}
+          />
+          {placeholder ? <Placeholder text={placeholder} /> : null}
+        </div>
+      </ComposerChipContext.Provider>
+    </LexicalComposer>
+  )
+  if (!noteAssets) return body
+  return <NoteAssetsContext.Provider value={noteAssets}>{body}</NoteAssetsContext.Provider>
+}
+
+
+function Placeholder({ text }: { text: string }) {
+  const [editor] = useLexicalComposerContext()
+  const [empty, setEmpty] = useState(true)
+  useEffect(() => {
+    return editor.registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
+        const text = $getRoot().getTextContent()
+        setEmpty(text.length === 0)
+      })
+    })
+  }, [editor])
+  if (!empty) return null
+  return <div className="pointer-events-none absolute left-0 top-0 text-koma-fg/40">{text}</div>
+}

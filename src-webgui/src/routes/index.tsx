@@ -36,12 +36,15 @@ import { hasCodingPathDrag, readCodingPathDragData } from '../lib/codingRef'
 import {
   MAX_GROUPS,
   dropZoneFor,
-  gridLayout,
+  gridLayoutFromTree,
   groupOf,
   isTabVisible,
+  nodeFracRect,
   normalizeGroups,
   type DropZone,
   type EditorGroupId,
+  type SplitDir,
+  type SplitNodeId,
 } from '../store/editorGroups'
 import type { Tab } from '../store/koma'
 
@@ -538,6 +541,7 @@ const InstalledExtensionTab = lazy(() => import('../components/InstalledExtensio
 
 // Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
 const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
+const LocalFileTab = lazy(() => import('../components/LocalFileTab'))
 const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab'))
 
 // Interactive terminal tab — lazy so its chunk (xterm.js) only loads when the
@@ -545,6 +549,7 @@ const MarkdownPreviewTab = lazy(() => import('../components/MarkdownPreviewTab')
 const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ default: m.TerminalTab })))
 
 const DiagramTab = lazy(() => import('../components/DiagramTab').then((m) => ({ default: m.DiagramTab })))
+const DesignTab = lazy(() => import('../components/DesignTab').then((m) => ({ default: m.DesignTab })))
 
 function DiffFallback() {
   return (
@@ -585,10 +590,14 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
         <ExtensionPanelFrame extId={tab.extId} panelId={tab.panelId} title={tab.title} />
       ) : tab.kind === 'codingFile' ? (
         tab.preview ? <MarkdownPreviewTab tab={tab} /> : <CodeEditorTab tab={tab} />
+      ) : tab.kind === 'localFile' ? (
+        <LocalFileTab tab={tab} />
       ) : tab.kind === 'terminal' ? (
         <TerminalTab tab={tab} />
       ) : tab.kind === 'diagram' ? (
         <DiagramTab tab={tab} />
+      ) : tab.kind === 'design' ? (
+        <DesignTab tab={tab} />
       ) : null}
     </Suspense>
   )
@@ -611,7 +620,7 @@ function zoneHighlightClass(zone: DropZone): string {
   }
 }
 
-/** Paint-only drop affordance — never receives pointer events. */
+/** Split-drop paint. The parent shield blocks the editor for the drag only. */
 function EditorDropHighlight({
   groupId,
   hover,
@@ -622,14 +631,14 @@ function EditorDropHighlight({
   if (hover?.groupId !== groupId) return null
   return (
     <div
-      className={`pointer-events-none absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
+      className={`absolute ${zoneHighlightClass(hover.zone)} rounded border border-koma-accent bg-koma-accent/15`}
     />
   )
 }
 
-// A single CSS grid hosts every group strip, every tab body, and every divider.
-// Tab bodies stay siblings even when moved: only their grid coordinates change,
-// so React never remounts chat, Monaco, xterm, streams, or extension iframes.
+// One positioning host for every group strip, tab body, and divider. Tab bodies
+// stay siblings: only their boxes change, so React never remounts chat, Monaco,
+// xterm, streams, or extension iframes. Sibling splits keep isolated sizes.
 function TabbedMain() {
   const rawUi = useKoma((s) => s.ui)
   const ui = useMemo(() => normalizeGroups(rawUi), [rawUi])
@@ -645,28 +654,28 @@ function TabbedMain() {
   const [dropHover, setDropHover] = useState<DropHover | null>(null)
   const dropHoverRef = useRef<DropHover | null>(null)
   const sessionRef = useRef(false)
+  const [dragArmed, setDragArmed] = useState(false)
   const moveTab = useKoma((s) => s.moveTabToGroup)
   const openCodingFile = useKoma((s) => s.openCodingFile)
   // splitTab already selected above for the keyboard shortcut.
   const layout = useMemo(
-    () => gridLayout(ui.groups, ui.groupSizes, ui.splitDir),
-    [ui.groupSizes, ui.groups, ui.splitDir],
+    () => gridLayoutFromTree(ui.splitTree ?? { type: 'leaf', id: ui.groups?.[0] ?? 'g0' }),
+    [ui.splitTree, ui.groups],
   )
 
-  // After 2→1 collapse, some WebViews keep the previous multi-track paint until
+  // After 2→1 collapse, some WebViews keep the previous multi-pane paint until
   // a forced reflow. Nudge when the live group count drops to one.
-  const groupCount = ui.groups.length
+  const groupCount = ui.groups?.length ?? 0
   useLayoutEffect(() => {
     if (groupCount !== 1) return
     const el = gridRef.current
     if (!el) return
-    // Read layout → write a no-op style toggle to flush stale tracks.
     void el.offsetWidth
-    const prev = el.style.gridTemplateColumns
-    el.style.gridTemplateColumns = 'minmax(0, 1fr)'
+    const prev = el.style.transform
+    el.style.transform = 'translateZ(0)'
     void el.offsetWidth
-    el.style.gridTemplateColumns = prev
-  }, [groupCount, layout.gridTemplateColumns, layout.gridTemplateRows])
+    el.style.transform = prev
+  }, [groupCount, layout.cells])
 
   const cells = useMemo(
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
@@ -696,6 +705,7 @@ function TabbedMain() {
     sessionRef.current = false
     dropHoverRef.current = null
     setDropHover(null)
+    setDragArmed(false)
   }
 
   const hitTestPane = (clientX: number, clientY: number): DropHover | null => {
@@ -721,13 +731,11 @@ function TabbedMain() {
 
   useEffect(() => {
     const arm = (e: DragEvent) => {
-      // Tab moves and coding-tree file opens arm document-level drop handling
-      // so Monaco never sees the bare text/plain path fallback — and so we never
-      // need a full-pane hit layer that can stick and steal focus.
       if (!isEditorBodyDrag(e.dataTransfer)) return
       sessionRef.current = true
       dropHoverRef.current = null
       setDropHover(null)
+      setDragArmed(true)
     }
 
     const stop = () => {
@@ -745,8 +753,9 @@ function TabbedMain() {
         }
         return
       }
-      // Accept the drop so the OS cursor shows move/copy over the pane.
+      // Capture before Monaco/xterm/Lexical so text/plain never lands in the buffer.
       e.preventDefault()
+      e.stopPropagation()
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = e.dataTransfer.types.includes(TAB_DRAG_MIME)
           ? 'move'
@@ -817,29 +826,29 @@ function TabbedMain() {
 
     window.addEventListener('dragstart', arm)
     window.addEventListener('dragend', stop)
-    window.addEventListener('dragover', onDragOver)
-    window.addEventListener('drop', onDrop)
+    window.addEventListener('dragover', onDragOver, true)
+    window.addEventListener('drop', onDrop, true)
     window.addEventListener('blur', stop)
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('dragstart', arm)
       window.removeEventListener('dragend', stop)
-      window.removeEventListener('dragover', onDragOver)
-      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragover', onDragOver, true)
+      window.removeEventListener('drop', onDrop, true)
       window.removeEventListener('blur', stop)
       window.removeEventListener('keydown', onKey)
     }
   }, [])
 
-  // Split (Ctrl/Cmd+\): create the second pane, or flip axis when already split.
-  // Group focus is Ctrl/Cmd+1..2 only (max two panes).
+  // Split (Ctrl/Cmd+\): nest a pane, or flip the focused leaf's parent.
+  // Group focus is Ctrl/Cmd+1..8 in tree order.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
       if (e.key === '\\') {
-        if (ui.groups.length >= 2) {
+        if (ui.groupSplitDir?.[ui.activeGroupId]) {
           e.preventDefault()
-          toggleSplitDir()
+          toggleSplitDir(ui.activeGroupId)
           return
         }
         if (ui.activeTabId === 'chat' || ui.groups.length >= MAX_GROUPS) return
@@ -856,16 +865,18 @@ function TabbedMain() {
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groups])
+  }, [focusGroup, splitTab, toggleSplitDir, ui.activeGroupId, ui.activeTabId, ui.groupSplitDir, ui.groups])
 
-  const startResize = (index: number, e: ReactMouseEvent) => {
+  const startResize = (splitId: SplitNodeId, dir: SplitDir, e: ReactMouseEvent) => {
     e.preventDefault()
-    const dir = ui.splitDir
-    let prev = dir === 'row' ? e.clientX : e.clientY
+    const tree = ui.splitTree
+    const box = nodeFracRect(tree, splitId)
+    const host = gridRef.current
     const total =
       dir === 'row'
-        ? (gridRef.current?.clientWidth ?? 1)
-        : (gridRef.current?.clientHeight ?? 1)
+        ? (box?.w ?? 1) * (host?.clientWidth ?? 1)
+        : (box?.h ?? 1) * (host?.clientHeight ?? 1)
+    let prev = dir === 'row' ? e.clientX : e.clientY
     let raf = 0
     let pending: number | null = null
     const flush = () => {
@@ -873,7 +884,7 @@ function TabbedMain() {
       if (pending == null) return
       const d = pending
       pending = null
-      resizeGroups(index, d, total)
+      resizeGroups(splitId, d, total)
     }
     const move = (ev: MouseEvent) => {
       const next = dir === 'row' ? ev.clientX : ev.clientY
@@ -899,14 +910,10 @@ function TabbedMain() {
     <div className="flex h-full w-full min-w-0 flex-col">
       <div
         ref={gridRef}
-        className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
-        style={{
-          gridTemplateColumns: layout.gridTemplateColumns,
-          gridTemplateRows: layout.gridTemplateRows,
-        }}
+        className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
       >
         {layout.cells.map((cell) => (
-          <div key={`bar:${cell.id}`} style={cell.bar} className="min-w-0">
+          <div key={`bar:${cell.id}`} style={cell.bar} className="z-20 min-w-0">
             <TabBar groupId={cell.id} focused={ui.activeGroupId === cell.id} />
           </div>
         ))}
@@ -949,33 +956,29 @@ function TabbedMain() {
           )
         })}
 
-        {/* Measure + paint only. Never pointer-events — document drag listeners
-            hit-test these boxes so a stuck session cannot block Monaco typing. */}
         {layout.cells.map((cell) => (
           <div
             key={`drop:${cell.id}`}
             ref={(el) => setPaneEl(cell.id, el)}
             style={cell.content}
-            className="pointer-events-none relative z-40 min-h-0 min-w-0"
+            className={`relative z-40 min-h-0 min-w-0 ${dragArmed ? 'pointer-events-auto' : 'pointer-events-none'}`}
           >
             <EditorDropHighlight groupId={cell.id} hover={dropHover} />
           </div>
         ))}
 
-        {layout.cells.map((cell, index) =>
-          cell.grip ? (
+        {layout.grips.map((grip) => (
             <div
-              key={`grip:${cell.id}`}
-              style={cell.grip}
-              onMouseDown={(e) => startResize(index, e)}
+              key={`grip:${grip.id}`}
+              style={grip.cell}
+              onMouseDown={(e) => startResize(grip.id, grip.dir, e)}
               className={`z-30 bg-koma-panel2 hover:bg-koma-grip ${
-                ui.splitDir === 'row'
+                grip.dir === 'row'
                   ? 'cursor-ew-resize border-l border-koma-border'
                   : 'cursor-ns-resize border-t border-koma-border'
               }`}
             />
-          ) : null,
-        )}
+        ))}
       </div>
       <BottomPanel />
       <UsageFooter />

@@ -4,6 +4,7 @@ import { sendCodingLanguage } from '../lib/coding-language'
 import { resolveFilePreviewBytes } from '../lib/filePreview'
 import { analyticsActions } from './actions/analytics'
 import { codingActions } from './actions/coding'
+import { designActions } from './actions/design'
 import { diagramActions } from './actions/diagram'
 import { gitActions } from './actions/git'
 import { importGraphActions } from './actions/importGraph'
@@ -12,6 +13,7 @@ import { remoteActions } from './actions/remote'
 import { sessionActions } from './actions/session'
 import { tabActions } from './actions/tabs'
 import { initialCoding } from './coding'
+import { initialDesign } from './design'
 import { initialDiagram } from './diagram'
 import {
   initialActivity,
@@ -160,6 +162,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   importGraph: initialImportGraph,
   coding: initialCoding,
   diagram: initialDiagram,
+  design: initialDesign,
   remoteHosts: [],
   remoteState: { state: 'disconnected', hostId: null, user: null, host: null, sessionId: null, error: null, sessions: [] },
   remotePath: { state: 'idle', path: '', dirs: [], error: null },
@@ -272,4 +275,5 @@ export const useKoma = create<KomaState>((set, get) => ({
   ...importGraphActions(set, get),
   ...codingActions(set, get),
   ...diagramActions(set, get),
+  ...designActions(set, get),
 }))

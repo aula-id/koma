@@ -142,6 +142,10 @@ pub enum ClientRequest {
     ReadPaste {
         marker_n: usize,
     },
+    /// Resolve a staged `[Image #N]` attachment to its on-disk absolute path for GUI preview.
+    ReadAttachment {
+        marker_n: usize,
+    },
     /// Fuzzy-search the foreground session's workspace file index (the `@`-palette engine)
     /// for the GUI omnisearch overlay. Read-only: the daemon runs `DirCache::search` and
     /// replies with a one-shot [`DaemonEvent::FileSearchResults`] WITHOUT attaching or
@@ -816,6 +820,13 @@ pub enum DaemonEvent {
     PasteBody {
         marker_n: usize,
         text: String,
+    },
+    /// Absolute path of a staged image attachment (composer chip open-in-viewer).
+    AttachmentLocated {
+        marker_n: usize,
+        abs_path: String,
+        rel_path: String,
+        name: String,
     },
     /// One-shot reply to a [`ClientRequest::UsagePreview`]: LAST-7-DAYS ledger
     /// totals + sparkline + top models, computed on the daemon host so a remote

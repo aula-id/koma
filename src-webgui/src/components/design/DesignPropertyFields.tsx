@@ -1,0 +1,812 @@
+import { useState, type ReactNode } from 'react'
+import {
+  Circle,
+  Component,
+  Eye,
+  EyeOff,
+  Frame,
+  Group,
+  Maximize2,
+  Minus,
+  Square,
+  Spline,
+  Type,
+} from 'lucide-react'
+import { AccordionSection } from '../AccordionSection'
+import { KomaSelect } from '../KomaSelect'
+import type { DesignToken } from '../../lib/design'
+import {
+  bindNodeField,
+  designImageSize,
+  designLayerName,
+  ensureImageCrop,
+  effectiveInstanceChild,
+  mergeDesignOverride,
+  nodeHasPaint,
+  nodePaints,
+  pickVariant,
+  setNodePaints,
+  setNodeSolid,
+  solidPaint,
+  type DesignDoc,
+  type DesignConstraint,
+  type DesignNode,
+  type DesignPaint,
+  type DesignPenPoint,
+} from '../../lib/design'
+import { SELECTION, SHAPE_FILL, type PenDraft } from './tabShared'
+import { formatBareNumber, parseBareNumber, useDraftNumber } from './draftInput'
+import { paintRowLabel, paintSwatch, useInspectorPage } from './DesignPaintPopup'
+
+function TokenBindControl({
+  tokens,
+  bound,
+  onBind,
+  compact,
+}: {
+  tokens: DesignToken[]
+  bound?: string
+  onBind: (token: string | null) => void
+  compact?: boolean
+}) {
+  const openPage = useInspectorPage()
+  return (
+    <button
+      type="button"
+      title={bound ? `Bound to ${bound}` : 'Bind token'}
+      aria-label={bound ? `Bound to ${bound}` : 'Bind token'}
+      aria-pressed={!!bound}
+      onClick={() => openPage({ kind: 'token', title: 'Token', tokens, selected: bound, onPick: onBind })}
+      className={compact
+        ? `h-4 w-4 flex-none rounded-full border border-koma-border ${bound ? 'bg-koma-accent' : 'bg-transparent'}`
+        : `flex h-7 w-7 flex-none items-center justify-center rounded ${bound ? 'text-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+    >
+      {compact ? null : <span className={`h-3 w-3 rounded-full border ${bound ? 'border-koma-accent bg-koma-accent' : 'border-koma-border'}`} />}
+    </button>
+  )
+}
+
+function instanceDescendants(node: DesignNode, into: DesignNode[]) {
+  for (const child of node.children ?? []) {
+    into.push(child)
+    instanceDescendants(child, into)
+  }
+}
+
+export function InstanceOverrides({
+  doc,
+  node,
+  onPatch,
+  onTypeFocus,
+  onTypeBlur,
+  onPickTarget,
+}: {
+  doc: DesignDoc
+  node: DesignNode
+  onPatch: (fn: (node: DesignNode) => DesignNode) => void
+  onTypeFocus: () => void
+  onTypeBlur: () => void
+  onPickTarget?: (childId: string | null) => void
+}) {
+  if (node.kind !== 'instance' || !node.component) return null
+  const component = doc.components.find((item) => item.id === node.component)
+  const variant = component ? pickVariant(component, node.variant) : null
+  const rows: DesignNode[] = []
+  if (variant) instanceDescendants(variant.node, rows)
+  if (!rows.length) return null
+  const commitFill = (id: string, raw: string) => {
+    const value = raw.trim()
+    if (!value) onPatch((current) => mergeDesignOverride(current, id, { fill: null }))
+    else if (value === 'none' || /^#[0-9a-fA-F]{6}$/.test(value) || /^[a-zA-Z][\w.-]*$/.test(value)) onPatch((current) => mergeDesignOverride(current, id, { fill: value }))
+  }
+  return (
+    <Section title="Overrides">
+      {rows.map((child) => {
+        const effective = effectiveInstanceChild(doc, node, child.id)
+        if (!effective) return null
+        const name = designLayerName(child)
+        const hidden = !effective.visible
+        return (
+          <div key={child.id} className="flex flex-col gap-1">
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded text-left hover:bg-koma-hover"
+              onClick={() => onPickTarget?.(child.id)}
+            >
+              <span
+                role="button"
+                tabIndex={-1}
+                aria-label={hidden ? `Show ${name}` : `Hide ${name}`}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const nextVisible = hidden
+                  onPatch((current) => mergeDesignOverride(current, child.id, { visible: nextVisible ? true : false }))
+                }}
+                className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim"
+              >
+                {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-koma-fg">{name}</span>
+            </button>
+            {child.kind === 'text' ? (
+              <input
+                aria-label={`${name} text`}
+                value={effective.text}
+                onFocus={() => {
+                  onPickTarget?.(child.id)
+                  onTypeFocus()
+                }}
+                onBlur={onTypeBlur}
+                onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { text: event.target.value }))}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+            ) : null}
+            <input
+              aria-label={`${name} fill`}
+              value={effective.fill && effective.fill !== 'none' ? effective.fill : ''}
+              placeholder="Fill"
+              onFocus={() => onPickTarget?.(child.id)}
+              onChange={(event) => commitFill(child.id, event.target.value)}
+              className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+            />
+            <div className="grid grid-cols-2 gap-1">
+              <input
+                aria-label={`${name} stroke`}
+                value={effective.stroke && effective.stroke !== 'none' ? effective.stroke : ''}
+                placeholder="Stroke"
+                onFocus={() => onPickTarget?.(child.id)}
+                onChange={(event) => {
+                  const value = event.target.value.trim()
+                  onPatch((current) => mergeDesignOverride(current, child.id, { stroke: value || null }))
+                }}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+              <input
+                aria-label={`${name} color`}
+                value={effective.color && effective.color !== 'none' ? effective.color : ''}
+                placeholder="Color"
+                onFocus={() => onPickTarget?.(child.id)}
+                onChange={(event) => onPatch((current) => mergeDesignOverride(current, child.id, { color: event.target.value.trim() || null }))}
+                className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+              />
+              <GeomField label="Opacity" ariaLabel={`${name} opacity`} suffix="%" min={0} max={100} value={Math.round(effective.opacity * 100)} onChange={(value) => onPatch((current) => mergeDesignOverride(current, child.id, { opacity: Math.min(100, Math.max(0, value)) / 100 }))} />
+              <GeomField label="Radius" ariaLabel={`${name} radius`} value={typeof effective.radius === 'number' ? effective.radius : 0} onChange={(radius) => onPatch((current) => mergeDesignOverride(current, child.id, { radius: radius > 0 ? radius : null }))} />
+              <GeomField label="Size" ariaLabel={`${name} font size`} value={effective.fontSize} onChange={(fontSize) => onPatch((current) => mergeDesignOverride(current, child.id, { fontSize: fontSize > 0 ? fontSize : null }))} />
+              <GeomField label="Width" ariaLabel={`${name} stroke width`} value={effective.strokeWidth} onChange={(strokeWidth) => onPatch((current) => mergeDesignOverride(current, child.id, { strokeWidth: strokeWidth > 0 ? strokeWidth : null }))} />
+              <GeomField label="Angle" ariaLabel={`${name} rotation`} value={effective.rotation} onChange={(rotation) => onPatch((current) => mergeDesignOverride(current, child.id, { rotation: rotation ? rotation : null }))} />
+            </div>
+          </div>
+        )
+      })}
+    </Section>
+  )
+}
+
+export function Section({ title, action, children }: { title: string; action?: ReactNode; children?: ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <AccordionSection title={title} open={open} onToggle={() => setOpen((value) => !value)} action={action} fill={false}>
+      <div className="flex flex-col gap-1.5 px-2 pt-1.5">{children}</div>
+    </AccordionSection>
+  )
+}
+
+export function LabeledControl({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2">
+      <span className={`${wide ? 'w-[4.75rem]' : 'w-14'} flex-none truncate text-[11px] text-koma-dim`}>{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </label>
+  )
+}
+
+export function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="px-0.5 text-[11px] text-koma-dim">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, bound, min, max, step, onBind, onChange }: { label: string; ariaLabel?: string; value: number; mixed?: boolean; suffix?: string; tokens?: DesignToken[]; bound?: string; min?: number; max?: number; step?: number; onBind?: (token: string | null) => void; onChange: (value: number) => void }) {
+  const openPage = useInspectorPage()
+  const { inputProps, scrubProps } = useDraftNumber({
+    value,
+    mixed,
+    min,
+    max,
+    step,
+    onChange,
+    onTokenShortcut: tokens?.length && onBind
+      ? () => openPage({ kind: 'token', title: 'Token', tokens, selected: bound, onPick: onBind })
+      : undefined,
+  })
+  const { className: scrubClass, ...scrubRest } = scrubProps
+  return (
+    <label className="flex h-8 min-w-0 items-center gap-1.5 overflow-hidden rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+      <span className={`flex-none text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>{label}</span>
+      <input
+        {...inputProps}
+        aria-label={ariaLabel ?? label}
+        className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+      />
+      {suffix ? <span className="flex-none text-[11px] text-koma-dim">{suffix}</span> : null}
+      {tokens?.length && onBind ? <TokenBindControl tokens={tokens} bound={bound} onBind={onBind} compact /> : null}
+    </label>
+  )
+}
+
+export function AlignButton({ label, caption, pressed, onClick, children }: { label: string; caption?: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick} className={`flex h-7 flex-none items-center justify-center gap-1 rounded px-1.5 text-[11px] ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
+      {children}
+      {caption ? <span>{caption}</span> : null}
+    </button>
+  )
+}
+
+export function KindMark({ kind }: { kind: DesignNode['kind'] }) {
+  const props = { size: 14, strokeWidth: 2 }
+  if (kind === 'frame') return <Frame {...props} />
+  if (kind === 'group') return <Group {...props} />
+  if (kind === 'ellipse') return <Circle {...props} />
+  if (kind === 'line') return <Minus {...props} />
+  if (kind === 'vector') return <Spline {...props} />
+  if (kind === 'text') return <Type {...props} />
+  if (kind === 'instance') return <Component {...props} />
+  return <Square {...props} />
+}
+
+export function SizeMode({ label, value, mixed, onChange }: { label: string; value: string; mixed?: boolean; onChange: (mode: 'fixed' | 'hug' | 'fill') => void }) {
+  return (
+    <Choices
+      label={label}
+      value={mixed ? '' : value}
+      mixed={mixed}
+      grow
+      options={[
+        { value: 'fixed', label: 'Fixed', icon: <Square size={13} /> },
+        { value: 'hug', label: 'Hug', icon: <MinimizeIcon /> },
+        { value: 'fill', label: 'Fill', icon: <Maximize2 size={13} /> },
+      ]}
+      onChange={(mode) => {
+        if (mode === 'fixed' || mode === 'hug' || mode === 'fill') onChange(mode)
+      }}
+    />
+  )
+}
+
+function MinimizeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+      <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+      <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+      <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  )
+}
+
+export function StrokeAlignIcon({ mode }: { mode: 'inside' | 'center' | 'outside' }) {
+  const inset = mode === 'inside' ? 5 : mode === 'outside' ? 1.5 : 3.5
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      <rect x={inset} y={inset} width={14 - inset * 2} height={14 - inset * 2} fill="currentColor" opacity="0.22" />
+      <rect x="3.5" y="3.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth={mode === 'center' ? 2 : 1.5} />
+    </svg>
+  )
+}
+
+function toggleConstraint(current: DesignConstraint, edge: 'start' | 'end' | 'center'): DesignConstraint {
+  if (edge === 'center') return current === 'center' ? 'scale' : 'center'
+  if (edge === 'start') {
+    if (current === 'start') return 'scale'
+    if (current === 'stretch') return 'end'
+    if (current === 'end') return 'stretch'
+    return 'start'
+  }
+  if (current === 'end') return 'scale'
+  if (current === 'stretch') return 'start'
+  if (current === 'start') return 'stretch'
+  return 'end'
+}
+
+function ConstraintBar({ active, vertical, label, onClick }: { active: boolean; vertical?: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      className="flex h-full w-full items-center justify-center"
+    >
+      <span className={`rounded-full ${vertical ? 'h-8 w-[3px]' : 'h-[3px] w-8'} ${active ? 'bg-koma-accent' : 'bg-koma-grip'}`} />
+    </button>
+  )
+}
+
+export function ConstraintWidget({
+  horizontal,
+  vertical,
+  onHorizontal,
+  onVertical,
+}: {
+  horizontal: DesignConstraint
+  vertical: DesignConstraint
+  onHorizontal: (value: DesignConstraint) => void
+  onVertical: (value: DesignConstraint) => void
+}) {
+  return (
+    <div
+      className="grid h-[108px] w-[108px] flex-none rounded-lg bg-koma-bg"
+      style={{ gridTemplate: '"top top top" 24px "left center right" 60px "bottom bottom bottom" 24px / 24px 60px 24px' }}
+    >
+      <div style={{ gridArea: 'top' }}>
+        <ConstraintBar active={vertical === 'start' || vertical === 'stretch'} label="Top" onClick={() => onVertical(toggleConstraint(vertical, 'start'))} />
+      </div>
+      <div style={{ gridArea: 'left' }}>
+        <ConstraintBar vertical active={horizontal === 'start' || horizontal === 'stretch'} label="Left" onClick={() => onHorizontal(toggleConstraint(horizontal, 'start'))} />
+      </div>
+      <div className="relative rounded-lg bg-koma-panel" style={{ gridArea: 'center' }}>
+        <ConstraintBar active={vertical === 'center'} label="Vertical center" onClick={() => onVertical(toggleConstraint(vertical, 'center'))} />
+        <div className="absolute inset-0">
+          <ConstraintBar vertical active={horizontal === 'center'} label="Horizontal center" onClick={() => onHorizontal(toggleConstraint(horizontal, 'center'))} />
+        </div>
+      </div>
+      <div style={{ gridArea: 'right' }}>
+        <ConstraintBar vertical active={horizontal === 'end' || horizontal === 'stretch'} label="Right" onClick={() => onHorizontal(toggleConstraint(horizontal, 'end'))} />
+      </div>
+      <div style={{ gridArea: 'bottom' }}>
+        <ConstraintBar active={vertical === 'end' || vertical === 'stretch'} label="Bottom" onClick={() => onVertical(toggleConstraint(vertical, 'end'))} />
+      </div>
+    </div>
+  )
+}
+
+export function RadiusField({ value, mixed, resolved, tokens, onChange }: { value: number | string | undefined; mixed?: boolean; resolved?: string; tokens: DesignToken[]; onChange: (radius: number | string | null) => void }) {
+  const openPage = useInspectorPage()
+  const token = !mixed && typeof value === 'string' ? value : ''
+  const numeric = typeof value === 'number' ? value : Number(resolved) || 0
+  const { inputProps, draft, setDraft, focused, scrubProps } = useDraftNumber({
+    value: numeric,
+    mixed,
+    emptyAs: 0,
+    nillable: true,
+    onChange: (radius) => onChange(radius > 0 ? radius : null),
+    onClear: () => onChange(null),
+    onTokenShortcut: tokens.length
+      ? () => openPage({
+        kind: 'token',
+        title: 'Token',
+        tokens,
+        selected: token || undefined,
+        onPick: (name) => {
+          if (!name) {
+            const radius = Number(resolved)
+            onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
+            return
+          }
+          onChange(name)
+        },
+      })
+      : undefined,
+  })
+  const shown = mixed ? '' : draft != null ? draft : token || (typeof value === 'number' ? formatBareNumber(value) : '')
+  const { className: scrubClass, ...scrubRest } = scrubProps
+  const commitRadius = (raw: string) => {
+    const trimmed = raw.trim()
+    const named = tokens.find((item) => item.name === trimmed)
+    if (named) {
+      onChange(named.name)
+      return
+    }
+    if (trimmed === '') {
+      onChange(null)
+      return
+    }
+    const radius = parseBareNumber(raw)
+    onChange(radius > 0 ? radius : null)
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <label className="flex h-8 items-center gap-1 rounded-lg bg-koma-bg px-2 focus-within:outline focus-within:outline-1 focus-within:outline-koma-accent">
+        <span className={`w-12 flex-none text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>Radius</span>
+        <input
+          {...inputProps}
+          value={shown}
+          inputMode={token || (draft != null && /[a-zA-Z]/.test(draft)) ? 'text' : 'decimal'}
+          aria-label="Corner radius"
+          onChange={(event) => {
+            if (mixed) return
+            const raw = event.target.value
+            if (token || /[a-zA-Z{]/.test(raw)) {
+              setDraft(raw)
+              return
+            }
+            inputProps.onChange(event)
+          }}
+          onBlur={() => {
+            if (mixed) return
+            const raw = draft ?? (token || (typeof value === 'number' ? formatBareNumber(value) : ''))
+            if (token || /[a-zA-Z{]/.test(raw)) {
+              focused.current = false
+              commitRadius(raw)
+              setDraft(null)
+              return
+            }
+            inputProps.onBlur()
+          }}
+          className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+        />
+        {tokens.length ? (
+          <TokenBindControl
+            tokens={tokens}
+            bound={token || undefined}
+            onBind={(name) => {
+              if (!name) {
+                const radius = Number(resolved)
+                onChange(Number.isFinite(radius) && radius > 0 ? radius : null)
+                return
+              }
+              onChange(name)
+            }}
+            compact
+          />
+        ) : null}
+      </label>
+    </div>
+  )
+}
+
+export function containerPaint(node: DesignNode, field: 'fill' | 'stroke', chrome: string): string {
+  if (node.kind === 'group' && node[field] == null) return 'none'
+  if (node.kind === 'frame' && field === 'fill' && node.fill == null) return '#ffffff'
+  if (node.kind === 'frame' && field === 'stroke' && node.stroke == null) return 'none'
+  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'fill' && node.fill == null) return SHAPE_FILL
+  if ((node.kind === 'rect' || node.kind === 'ellipse') && field === 'stroke' && node.stroke == null) return 'none'
+  if ((node.kind === 'line' || node.kind === 'vector') && field === 'stroke' && node.stroke == null) return '#1c1c1c'
+  return chrome
+}
+
+function penCurve(points: DesignPenPoint[], closed: boolean): string {
+  if (!points.length) return ''
+  let path = `M ${points[0].x} ${points[0].y}`
+  const count = closed ? points.length : points.length - 1
+  for (let index = 0; index < count; index++) {
+    const start = points[index]
+    const end = points[(index + 1) % points.length]
+    path += ` C ${start.x + start.outgoing.x} ${start.y + start.outgoing.y} ${end.x + end.incoming.x} ${end.y + end.incoming.y} ${end.x} ${end.y}`
+  }
+  if (closed) path += ' Z'
+  return path
+}
+
+export function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x: number; y: number } | null; zoom: number }) {
+  const unit = 1 / Math.max(zoom, 0.25)
+  const points = draft.points
+  const last = points[points.length - 1]
+  const first = points[0]
+  const close = hover && first && points.length >= 3 && Math.hypot(first.x - hover.x, first.y - hover.y) <= 8 * unit
+  const rubber = hover && last && !close ? `M ${last.x} ${last.y} C ${last.x + last.outgoing.x} ${last.y + last.outgoing.y} ${hover.x} ${hover.y} ${hover.x} ${hover.y}` : ''
+  return (
+    <svg className="pointer-events-none absolute overflow-visible" width={1} height={1}>
+      <path d={penCurve(points, false)} fill="none" stroke="#1c1c1c" strokeWidth={2} />
+      {rubber ? <path d={rubber} fill="none" stroke={SELECTION} strokeWidth={1.25 * unit} /> : null}
+      {first && points.length >= 3 ? <circle cx={first.x} cy={first.y} r={close ? 7 * unit : 5 * unit} fill={close ? SELECTION : 'transparent'} stroke={SELECTION} strokeWidth={unit} /> : null}
+      {points.map((point, index) => {
+        const showOut = point.outgoing.x !== 0 || point.outgoing.y !== 0
+        const showIn = point.incoming.x !== 0 || point.incoming.y !== 0
+        return (
+          <g key={`${draft.id}-${index}`}>
+            {showOut ? <line x1={point.x} y1={point.y} x2={point.x + point.outgoing.x} y2={point.y + point.outgoing.y} stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showIn ? <line x1={point.x} y1={point.y} x2={point.x + point.incoming.x} y2={point.y + point.incoming.y} stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showOut ? <circle cx={point.x + point.outgoing.x} cy={point.y + point.outgoing.y} r={3 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} /> : null}
+            {showIn ? <circle cx={point.x + point.incoming.x} cy={point.y + point.incoming.y} r={3 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} /> : null}
+            <rect x={point.x - 3.5 * unit} y={point.y - 3.5 * unit} width={7 * unit} height={7 * unit} fill="#ffffff" stroke={SELECTION} strokeWidth={unit} />
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+export function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const { inputProps, scrubProps } = useDraftNumber({ value, onChange })
+  const { className: scrubClass, ...scrubRest } = scrubProps
+  return (
+    <label className="flex flex-col gap-1">
+      <span className={`text-koma-dim ${scrubClass}`} {...scrubRest}>{label}</span>
+      <input
+        {...inputProps}
+        className="h-7 rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
+      />
+    </label>
+  )
+}
+
+export function ColorRow({
+  doc,
+  paint,
+  fallback,
+  tokens,
+  mixed,
+  allowImage = true,
+  allowGradient = true,
+  bound,
+  onBind,
+  onChange,
+  onRemove,
+  onStoreImage,
+  pageTitle = 'Color',
+  box,
+  stroke,
+}: {
+  doc: DesignDoc
+  paint: DesignPaint
+  fallback: string
+  tokens?: DesignToken[]
+  mixed?: boolean
+  allowImage?: boolean
+  allowGradient?: boolean
+  bound?: string
+  onBind?: (token: string | null) => void
+  onChange: (paint: DesignPaint) => void
+  onRemove?: () => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+  pageTitle?: string
+  box?: { w: number; h: number }
+  stroke?: boolean
+}) {
+  const openPage = useInspectorPage()
+  const [hexDraft, setHexDraft] = useState<string | null>(null)
+  const named = paint.type === 'image' || paint.type === 'gradient'
+  const token = paint.type === 'solid' && paint.color && !paint.color.startsWith('#') && paint.color !== 'none' ? paint.color : ''
+  const hex = paint.type === 'solid' && paint.color?.startsWith('#') ? paint.color.slice(1).toUpperCase() : ''
+  const opacity = mixed ? '' : String(Math.round((paint.opacity ?? 1) * 100))
+  const swatch = mixed ? 'transparent' : paintSwatch(doc, paint, fallback)
+  const label = mixed ? '' : paintRowLabel(paint) || token
+  const openEditor = () => {
+    if (mixed) return
+    const ready = paint.type === 'image' && paint.scale === 'crop' && box
+      ? ensureImageCrop(paint, box, designImageSize(doc, paint.hash))
+      : paint
+    if (ready !== paint) onChange(ready)
+    openPage({
+      kind: 'paint',
+      title: pageTitle,
+      paint: ready,
+      fallback,
+      tokens,
+      allowImage,
+      allowGradient,
+      box,
+      natural: designImageSize(doc, paint.hash),
+      stroke,
+      onChange,
+      onStoreImage,
+    })
+  }
+  const commitHex = (raw: string) => {
+    setHexDraft(null)
+    const trimmed = raw.trim()
+    const namedToken = tokens?.find((item) => item.name === trimmed)
+    if (namedToken) {
+      onChange({ ...solidPaint(namedToken.name), opacity: paint.opacity })
+      return
+    }
+    const body = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
+    if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(body)) {
+      const color = body.length === 3 ? `#${body.split('').map((item) => item + item).join('')}`.toLowerCase() : `#${body.toLowerCase()}`
+      onChange({ ...solidPaint(color), opacity: paint.opacity })
+    }
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        title={paint.visible === false ? 'Show' : 'Hide'}
+        aria-label={paint.visible === false ? 'Show paint' : 'Hide paint'}
+        onClick={() => onChange({ ...paint, visible: paint.visible === false ? undefined : false })}
+        className="flex h-7 w-7 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+      >
+        {paint.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
+      </button>
+      <div className="grid h-7 min-w-0 flex-1 grid-cols-[1fr_auto] items-center overflow-hidden rounded border border-koma-border bg-koma-bg focus-within:border-koma-fg/40">
+        <div className="flex h-7 min-w-0 items-center">
+          <button
+            type="button"
+            title={pageTitle}
+            aria-label={pageTitle}
+            onClick={openEditor}
+            className="ml-2 h-4 w-4 flex-none rounded-full border border-koma-border"
+            style={{ background: swatch }}
+          />
+          {named || token ? (
+            <button type="button" onClick={openEditor} className="min-w-0 flex-1 truncate px-1.5 text-left text-[12px] text-koma-fg">
+              {mixed ? '—' : label}
+            </button>
+          ) : (
+            <input
+              aria-label="Hex"
+              value={mixed ? '' : hexDraft ?? hex}
+              placeholder={mixed ? '—' : '000000'}
+              onDoubleClick={openEditor}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => {
+                const raw = event.target.value
+                setHexDraft(raw)
+                const body = raw.startsWith('#') ? raw.slice(1) : raw
+                if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(body)) commitHex(raw)
+              }}
+              onBlur={() => {
+                if (hexDraft != null) commitHex(hexDraft)
+                setHexDraft(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  if (hexDraft != null) commitHex(hexDraft)
+                  event.currentTarget.blur()
+                }
+                if (event.key === 'Escape') {
+                  setHexDraft(null)
+                  event.currentTarget.blur()
+                }
+              }}
+              className="h-7 min-w-0 flex-1 bg-transparent px-1.5 text-[12px] uppercase text-koma-fg outline-none"
+            />
+          )}
+        </div>
+        <div className="flex h-7 w-[52px] items-center border-l border-koma-border pl-1.5">
+          <OpacityInput
+            mixed={mixed}
+            value={mixed ? 100 : Number(opacity) || 100}
+            onChange={(value) => {
+              const next = Math.max(0, Math.min(100, value)) / 100
+              onChange({ ...paint, opacity: next >= 1 ? undefined : next })
+            }}
+          />
+        </div>
+      </div>
+      {tokens?.length && onBind ? <TokenBindControl tokens={tokens} bound={bound} onBind={onBind} /> : null}
+      {onRemove ? (
+        <button type="button" title="Remove" aria-label="Remove color" className="flex h-7 w-7 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={onRemove}>
+          <Minus size={14} />
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function OpacityInput({ value, mixed, onChange }: { value: number; mixed?: boolean; onChange: (value: number) => void }) {
+  const { inputProps, scrubProps } = useDraftNumber({ value, mixed, min: 0, max: 100, onChange })
+  const { className: scrubClass, ...scrubRest } = scrubProps
+  return (
+    <>
+      <span className={`text-[11px] text-koma-dim ${scrubClass}`} {...scrubRest}>%</span>
+      <input
+        {...inputProps}
+        aria-label="Opacity"
+        placeholder={mixed ? '—' : undefined}
+        className="h-7 min-w-0 flex-1 bg-transparent px-1 text-[12px] text-koma-fg outline-none"
+      />
+    </>
+  )
+}
+
+export function PaintRow({ label, value, mixed, fallback, resolved, tokens, weight, onWeight, onChange, doc }: { label: string; value: string; mixed?: boolean; fallback: string; resolved?: string; tokens?: DesignToken[]; weight?: { value: number; mixed?: boolean }; onWeight?: (value: number) => void; onChange: (next: string | null) => void; doc?: DesignDoc }) {
+  const paint = solidPaint(value && value !== 'none' ? value : fallback)
+  return (
+    <div className="flex flex-col gap-1">
+      <ColorRow
+        doc={doc ?? { version: 2, modes: ['light'], mode: 'light', grid: 8, tokens: [], screens: [], components: [] }}
+        paint={value === 'none' ? solidPaint('none') : paint}
+        fallback={resolved?.startsWith('#') ? resolved : fallback}
+        tokens={tokens}
+        mixed={mixed}
+        pageTitle={label}
+        allowImage={false}
+        allowGradient={false}
+        onChange={(next) => onChange(next.color && next.color !== 'none' ? next.color : 'none')}
+      />
+      {weight && onWeight ? (
+        <GeomField label="Width" ariaLabel="Weight" value={weight.value} mixed={weight.mixed} onChange={onWeight} />
+      ) : null}
+    </div>
+  )
+}
+
+export function Choices<T extends string>({
+  label,
+  value,
+  mixed,
+  options,
+  onChange,
+  grow = true,
+}: {
+  label: string
+  value: T | ''
+  mixed?: boolean
+  options: { value: T; label: string; icon?: ReactNode }[]
+  onChange: (value: T) => void
+  grow?: boolean
+}) {
+  const iconic = options.every((option) => option.icon)
+  return (
+    <div className={`flex flex-col gap-1 ${grow ? 'min-w-0 flex-1' : 'flex-none'}`} role="group" aria-label={mixed ? `${label} · Mixed` : label}>
+      {iconic ? null : <span className="px-0.5 text-[11px] text-koma-dim">{label}</span>}
+      <div className={`flex ${iconic ? 'h-8 rounded-lg bg-koma-bg p-0.5' : 'flex-wrap gap-0.5'} ${grow ? 'min-w-0' : ''}`}>
+        {options.map((option) => {
+          const pressed = !mixed && option.value === value
+          return (
+            <button
+              key={option.value}
+              type="button"
+              title={option.label}
+              aria-label={option.label}
+              aria-pressed={pressed}
+              onClick={() => onChange(option.value)}
+              className={
+                iconic
+                  ? `flex h-7 items-center justify-center rounded-md ${grow ? 'min-w-0 flex-1' : 'w-7 flex-none'} ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+                  : `h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] ${pressed ? 'border-koma-fg/40 text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`
+              }
+            >
+              {option.icon ?? option.label}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+export function FillEditor({
+  label,
+  doc,
+  node,
+  field,
+  mixed,
+  tokens,
+  onChange,
+  onStoreImage,
+}: {
+  label: string
+  doc: DesignDoc
+  node: DesignNode
+  field: 'fill' | 'stroke'
+  mixed?: boolean
+  tokens?: DesignToken[]
+  onChange: (node: DesignNode) => void
+  onPickImage?: () => void
+  onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
+}) {
+  const fallback = field === 'fill' ? SHAPE_FILL : '#1c1c1c'
+  if (mixed) {
+    return <PaintRow label={label} doc={doc} value="" mixed fallback={fallback} tokens={tokens} onChange={(next) => onChange(setNodeSolid(node, field, next))} />
+  }
+  if (!nodeHasPaint(node, field)) return null
+  const paints = nodePaints(node, field).filter((paint) => paint.type === 'image' || paint.type === 'gradient' || (paint.color && paint.color !== 'none'))
+  const paint = paints[0]
+  if (!paint) return null
+  return (
+    <ColorRow
+      doc={doc}
+      paint={paint}
+      fallback={fallback}
+      tokens={tokens}
+      pageTitle={label}
+      box={{ w: node.w, h: node.h }}
+      stroke={field === 'stroke'}
+      allowImage={field === 'fill'}
+      bound={node.bindings?.[field]}
+      onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, [paint]), field, token)) : undefined}
+      onChange={(next) => onChange(setNodePaints(node, field, [next]))}
+      onRemove={() => onChange(setNodeSolid(node, field, 'none'))}
+      onStoreImage={onStoreImage}
+    />
+  )
+}
+

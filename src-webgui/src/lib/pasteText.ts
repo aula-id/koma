@@ -22,7 +22,7 @@ export function pasteMarker(n: number): string {
   return `[Pasted Text #${n}]`
 }
 
-export type PasteMarkerRow = { id: string; markerN: number | null; cancelled: boolean }
+export type PasteMarkerRow = { id: string; markerN: number | null; cancelled: boolean; kind?: 'image' | 'pasted_text' }
 
 /**
  * Bind paste chips that just appeared in the snapshot to composer rows, in

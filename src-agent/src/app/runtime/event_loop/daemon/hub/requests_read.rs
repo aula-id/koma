@@ -592,6 +592,39 @@ impl DaemonHub {
         }
     }
 
+    pub(super) fn read_attachment(&mut self, idx: usize, state: &AppState, marker_n: usize) {
+        let fg = state.rest.fg();
+        let Some(session) = fg.session.as_ref() else {
+            self.send_to(idx, DaemonEvent::Error("no active session".into()));
+            return;
+        };
+        let att = fg
+            .pending_attachments
+            .iter()
+            .find(|a| a.is_image() && a.marker_n == marker_n);
+        let Some(att) = att else {
+            self.send_to(
+                idx,
+                DaemonEvent::Error("image attachment is no longer staged".into()),
+            );
+            return;
+        };
+        let abs = session.path.join(&att.rel_path);
+        if !abs.is_file() {
+            self.send_to(idx, DaemonEvent::Error("attachment file missing on disk".into()));
+            return;
+        }
+        self.send_to(
+            idx,
+            DaemonEvent::AttachmentLocated {
+                marker_n,
+                abs_path: abs.display().to_string(),
+                rel_path: att.rel_path.clone(),
+                name: att.file_name().to_string(),
+            },
+        );
+    }
+
     // The single-writer gate is RELAXED: any client may now submit / send keys /
     // paste / approve / `/new` / switch / attach-select against its own foreground
     // session (the C2 LOAD/STORE bracket scoped that mutation to this client's view,

@@ -559,7 +559,13 @@ mod tests {
         let exec = desktop_exec(&exe);
         assert!(exec.ends_with(" gui"));
         assert!(desktop.contains(&format!("Exec={exec}\n")));
-        assert!(desktop.contains(&format!("Icon={}\n", icon.display())));
+        // Path::join keeps each segment's slash characters. On Windows the
+        // Icon line and one long join name the same file but do not match as text.
+        let written_icon = desktop
+            .lines()
+            .find_map(|line| line.strip_prefix("Icon="))
+            .expect("desktop entry has an Icon line");
+        assert_eq!(Path::new(written_icon), icon.as_path());
         assert!(desktop.contains("StartupWMClass=koma\n"));
         assert_eq!(fs::read(&icon).unwrap(), ICON_256);
         assert_eq!(

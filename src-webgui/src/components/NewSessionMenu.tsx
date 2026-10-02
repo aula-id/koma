@@ -84,7 +84,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
       afterPick?.()
       return
     }
-    req(kill ? { r: 'NewSession', kill: true } : { r: 'NewSession' })
+    req(kill ? { r: 'NewSession', kill: true, folder: true } : { r: 'NewSession', folder: true })
     setOpen(false)
     afterPick?.()
   }

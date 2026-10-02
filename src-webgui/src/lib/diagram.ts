@@ -32,6 +32,10 @@ export type DiagramNode = {
   /** Omitted border follows the kind: shapes are stroked, text is not. */
   stroke?: boolean
   strokeColor?: string
+  /** Label color. Omitted uses the theme foreground. */
+  textColor?: string
+  /** Markdown description. Omitted when blank. The readable copy is the notes file. */
+  detail?: string
 }
 
 export type DiagramEdge = {
@@ -57,6 +61,10 @@ export type DiagramEdge = {
   toPort?: number
   /** Interior waypoints in document coordinates. Endpoints stay on the shapes. */
   bends?: DiagramPoint[]
+  /** Short label drawn on the line. Omitted when blank. */
+  text?: string
+  /** Markdown description. Omitted when blank. The readable copy is the notes file. */
+  detail?: string
 }
 
 const SIDES: readonly DiagramSide[] = ['n', 'e', 's', 'w']
@@ -125,6 +133,8 @@ export function copyNode(node: DiagramNode, id: string, dx: number, dy: number):
   if (node.fillColor) next.fillColor = node.fillColor
   if (node.stroke != null) next.stroke = node.stroke
   if (node.strokeColor) next.strokeColor = node.strokeColor
+  if (node.textColor) next.textColor = node.textColor
+  if (node.detail?.trim()) next.detail = node.detail
   return next
 }
 
@@ -158,6 +168,10 @@ function parseNodes(value: unknown): DiagramNode[] | null {
     if (typeof row.stroke === 'boolean' && row.stroke !== painted) node.stroke = row.stroke
     const strokeColor = parseColor(row.strokeColor)
     if (strokeColor) node.strokeColor = strokeColor
+    const textColor = parseColor(row.textColor)
+    if (textColor) node.textColor = textColor
+    const detail = parseDetail(row.detail)
+    if (detail) node.detail = detail
     nodes.push(node)
   }
   return nodes
@@ -169,6 +183,22 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | und
 
 function parseColor(value: unknown): string | undefined {
   return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : undefined
+}
+
+const DETAIL_LIMIT = 65536
+const LABEL_LIMIT = 200
+
+function parseDetail(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.length > DETAIL_LIMIT ? value.slice(0, DETAIL_LIMIT) : value
+  return text.trim() ? text : undefined
+}
+
+function parseLineLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.replace(/\r?\n/g, ' ').trim()
+  if (!text) return undefined
+  return text.length > LABEL_LIMIT ? text.slice(0, LABEL_LIMIT) : text
 }
 
 function parsePort(value: unknown): number | undefined {
@@ -224,6 +254,10 @@ function parseEdges(value: unknown): DiagramEdge[] | null {
     if (fromPort != null) edge.fromPort = fromPort
     if (toPort != null) edge.toPort = toPort
     if (bends) edge.bends = bends
+    const label = parseLineLabel(row.text)
+    if (label) edge.text = label
+    const detail = parseDetail(row.detail)
+    if (detail) edge.detail = detail
     edges.push(edge)
   }
   return edges
@@ -267,6 +301,8 @@ export function serializeDiagram(doc: DiagramDoc): string {
       if (n.fillColor) row.fillColor = n.fillColor
       if (typeof n.stroke === 'boolean' && n.stroke !== painted) row.stroke = n.stroke
       if (n.strokeColor) row.strokeColor = n.strokeColor
+      if (n.textColor) row.textColor = n.textColor
+      if (n.detail?.trim()) row.detail = n.detail
       return row
     }),
     edges: doc.edges.map((e) => {
@@ -284,6 +320,8 @@ export function serializeDiagram(doc: DiagramDoc): string {
       if (e.toPort != null) row.toPort = e.toPort
       else if (e.toSide) row.toSide = e.toSide
       if (e.bends?.length) row.bends = e.bends.map((p) => ({ x: p.x, y: p.y }))
+      if (e.text?.trim()) row.text = e.text
+      if (e.detail?.trim()) row.detail = e.detail
       return row
     }),
   })
@@ -301,13 +339,20 @@ export type DiagramEdgeStyle = {
 }
 
 /** Resolved fill and border. Text is bare unless a file says otherwise. */
-export function nodeStyle(node: DiagramNode): { fill: boolean; fillColor: string; stroke: boolean; strokeColor: string } {
+export function nodeStyle(node: DiagramNode): {
+  fill: boolean
+  fillColor: string
+  stroke: boolean
+  strokeColor: string
+  textColor: string
+} {
   const painted = node.kind !== 'text'
   return {
     fill: node.fill ?? painted,
     fillColor: node.fillColor ?? '',
     stroke: node.stroke ?? painted,
     strokeColor: node.strokeColor ?? '',
+    textColor: node.textColor ?? '',
   }
 }
 
@@ -654,4 +699,32 @@ export function routePath(points: DiagramPoint[], rounded: boolean): string {
   }
   const last = points[points.length - 1]
   return `${path} L${last.x} ${last.y}`
+}
+
+/** Point halfway along a route, measured by segment length. */
+export function routeMidpoint(points: DiagramPoint[]): DiagramPoint {
+  if (!points.length) return { x: 0, y: 0 }
+  if (points.length === 1) return points[0]
+  let total = 0
+  const lengths: number[] = []
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]
+    const point = points[i]
+    const length = Math.hypot(point.x - prev.x, point.y - prev.y)
+    lengths.push(length)
+    total += length
+  }
+  if (total === 0) return points[0]
+  let walk = total / 2
+  for (let i = 0; i < lengths.length; i++) {
+    const length = lengths[i]
+    const start = points[i]
+    const end = points[i + 1]
+    if (walk <= length || i === lengths.length - 1) {
+      const t = length === 0 ? 0 : Math.min(1, walk / length)
+      return { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t }
+    }
+    walk -= length
+  }
+  return points[points.length - 1]
 }

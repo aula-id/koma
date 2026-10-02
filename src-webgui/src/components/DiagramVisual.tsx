@@ -6,6 +6,7 @@ import {
   edgeStyle,
   nodeCenter,
   nodeStyle,
+  routeMidpoint,
   type DiagramArrow,
   type DiagramDoc,
   type DiagramNode,
@@ -69,6 +70,12 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
     if (!from || !to || edge.stroke === false) return []
     const points = edgeRoute(from, to, edge)
     for (const point of points) grow(point.x, point.y)
+    const label = edge.text?.trim()
+    if (label) {
+      const at = routeMidpoint(points)
+      grow(at.x - label.length * 3, at.y - 18)
+      grow(at.x + label.length * 3, at.y - 4)
+    }
     return [{ edge, points }]
   })
   if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
@@ -94,17 +101,29 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
         const color = style.color || 'var(--color-koma-fg)'
         const id = `${markerBase}-${index}`
         const d = points.map((point, i) => `${i ? 'L' : 'M'}${point.x} ${point.y}`).join(' ')
+        const label = edge.text?.trim()
+        const at = label ? routeMidpoint(points) : null
+        const width = label ? Math.min(160, label.length * 6 + 10) : 0
         return (
-          <path
-            key={edge.id}
-            d={d}
-            fill="none"
-            stroke={color}
-            strokeWidth={style.width}
-            strokeDasharray={dashArray(style.dash, style.width)}
-            markerEnd={style.end === 'none' ? undefined : `url(#${id}-end)`}
-            markerStart={style.start === 'none' ? undefined : `url(#${id}-start)`}
-          />
+          <g key={edge.id}>
+            <path
+              d={d}
+              fill="none"
+              stroke={color}
+              strokeWidth={style.width}
+              strokeDasharray={dashArray(style.dash, style.width)}
+              markerEnd={style.end === 'none' ? undefined : `url(#${id}-end)`}
+              markerStart={style.start === 'none' ? undefined : `url(#${id}-start)`}
+            />
+            {label && at ? (
+              <g>
+                <rect x={at.x - width / 2} y={at.y - 18} width={width} height={14} rx="3" fill="var(--color-koma-panel)" stroke="var(--color-koma-border)" />
+                <text x={at.x} y={at.y - 11} textAnchor="middle" dominantBaseline="middle" fontSize="10" fill="var(--color-koma-fg)">
+                  {label}
+                </text>
+              </g>
+            ) : null}
+          </g>
         )
       })}
       {doc.nodes.map((node) => (

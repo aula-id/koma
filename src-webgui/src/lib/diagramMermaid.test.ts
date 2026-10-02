@@ -96,3 +96,21 @@ import {
 }
 
 assert.equal(diagramToMermaid(emptyDiagram(), 'empty'), '')
+
+{
+  const doc = emptyDiagram()
+  doc.nodes.push(
+    { id: 'a', kind: 'rect', x: 0, y: 0, w: 100, h: 40, text: 'Login', detail: 'The form' },
+    { id: 'b', kind: 'rect', x: 0, y: 80, w: 100, h: 40, text: 'Home' },
+  )
+  doc.edges.push({ id: 'e', from: 'a', to: 'b', text: 'submits' })
+  const mermaid = diagramToMermaid(doc, 'auth', { path: '.koma/auth/notes.md' })
+  assert.equal(mermaid.includes('%% auth'), true)
+  assert.equal(mermaid.includes('%% notes: .koma/auth/notes.md'), true)
+  assert.equal(mermaid.includes('a -->|submits| b'), true)
+  const parsed = parseMermaidDiagram(mermaid)
+  assert.equal(parsed.title, 'auth')
+  assert.equal(parsed.doc.edges[0]?.text, 'submits')
+  assert.equal(parsed.doc.edges[0]?.from, 'a')
+  assert.equal(parsed.doc.edges[0]?.to, 'b')
+}

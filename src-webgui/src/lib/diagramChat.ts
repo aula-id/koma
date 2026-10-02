@@ -8,6 +8,7 @@ import {
   rememberDiagramView,
   type DiagramRect,
 } from './diagramMermaid'
+import { attachDiagramShapesToComposer } from './diagramNoteAttach'
 
 function toast(text: string, kind: 'info' | 'error' = 'info') {
   useKoma.setState((s) => {
@@ -36,7 +37,9 @@ async function resolveDiagramDoc(root: string, path: string): Promise<DiagramDoc
   return parsed.doc
 }
 
-function publish(doc: DiagramDoc, title: string, empty: string): string | null {
+type DiagramSource = { root: string; path: string; notes?: DiagramDoc }
+
+function publish(doc: DiagramDoc, title: string, empty: string, source?: DiagramSource): string | null {
   const mermaid = diagramToMermaid(doc, title)
   if (!mermaid) {
     toast(empty)
@@ -44,14 +47,17 @@ function publish(doc: DiagramDoc, title: string, empty: string): string | null {
   }
   rememberDiagramView(mermaid, doc)
   useKoma.getState().addDiagramToChat({ title, mermaid, doc })
+  if (source) {
+    void attachDiagramShapesToComposer(source.root, source.path, source.notes ?? doc)
+  }
   return mermaid
 }
 
-export function addDiagramDocToChat(doc: DiagramDoc, title: string, empty = 'This diagram is empty.') {
-  publish(doc, title, empty)
+export function addDiagramDocToChat(doc: DiagramDoc, title: string, empty = 'This diagram is empty.', source?: DiagramSource) {
+  publish(doc, title, empty, source)
 }
 
-export async function copyDiagramMermaid(doc: DiagramDoc, title: string, empty = 'This diagram is empty.') {
+export async function copyDiagramMermaid(doc: DiagramDoc, title: string, empty = 'This diagram is empty.', source?: DiagramSource) {
   const mermaid = diagramToMermaid(doc, title)
   if (!mermaid) {
     toast(empty)
@@ -68,7 +74,7 @@ export async function copyDiagramMermaid(doc: DiagramDoc, title: string, empty =
 export async function addDiagramFileToChat(root: string, path: string) {
   try {
     const doc = await resolveDiagramDoc(root, path)
-    addDiagramDocToChat(doc, diagramChatTitle(path))
+    addDiagramDocToChat(doc, diagramChatTitle(path), 'This diagram is empty.', { root, path })
   } catch (error) {
     toast(error instanceof Error ? error.message : 'Could not read this diagram', 'error')
   }
@@ -77,16 +83,22 @@ export async function addDiagramFileToChat(root: string, path: string) {
 export async function copyDiagramFileMermaid(root: string, path: string) {
   try {
     const doc = await resolveDiagramDoc(root, path)
-    await copyDiagramMermaid(doc, diagramChatTitle(path))
+    await copyDiagramMermaid(doc, diagramChatTitle(path), 'This diagram is empty.', { root, path })
   } catch (error) {
     toast(error instanceof Error ? error.message : 'Could not read this diagram', 'error')
   }
 }
 
-export function addDiagramAreaToChat(doc: DiagramDoc, area: DiagramRect, title: string) {
-  addDiagramDocToChat(captureDiagram(doc, area), `${title} selection`, 'Nothing in that area.')
+export function addDiagramAreaToChat(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {
+  const captured = captureDiagram(doc, area)
+  addDiagramDocToChat(
+    captured,
+    `${title} selection`,
+    'Nothing in that area.',
+    source ? { ...source, notes: captured } : undefined,
+  )
 }
 
-export function copyDiagramArea(doc: DiagramDoc, area: DiagramRect, title: string) {
-  return copyDiagramMermaid(captureDiagram(doc, area), `${title} selection`, 'Nothing in that area.')
+export function copyDiagramArea(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {
+  return copyDiagramMermaid(captureDiagram(doc, area), `${title} selection`, 'Nothing in that area.', source ? { ...source, notes: doc } : undefined)
 }

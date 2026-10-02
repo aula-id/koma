@@ -68,6 +68,46 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
   font-size: 13px;
   line-height: 1.55;
 }
+
+/* Lexical checklist items (composer + notes): role=checkbox on <li>, no native bullet. */
+[data-composer-editor] li.koma-checklist-item,
+.koma-md li.koma-checklist-item {
+  list-style: none;
+  position: relative;
+  margin-left: 0;
+  padding-left: 1.35rem;
+}
+[data-composer-editor] li.koma-checklist-item::before,
+.koma-md li.koma-checklist-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.35em;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 1px solid var(--color-koma-dim);
+  border-radius: 2px;
+  background: var(--color-koma-bg);
+  box-sizing: border-box;
+}
+[data-composer-editor] li.koma-checklist-checked::before,
+.koma-md li.koma-checklist-checked::before {
+  border-color: var(--color-koma-accent);
+  background: var(--color-koma-accent);
+  box-shadow: inset 0 0 0 1px var(--color-koma-bg);
+}
+[data-composer-editor] li.koma-checklist-checked::after,
+.koma-md li.koma-checklist-checked::after {
+  content: '';
+  position: absolute;
+  left: 0.2rem;
+  top: 0.48em;
+  width: 0.35rem;
+  height: 0.6rem;
+  border: solid var(--color-koma-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
 .koma-md > :first-child { margin-top: 0; }
 .koma-md > :last-child { margin-bottom: 0; }
 /* inline code only — never recolor highlighted code-block tokens (pre code) */
@@ -118,6 +158,8 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
   border: none;
   border-radius: 0;
   background: transparent;
+  position: relative;
+  z-index: 0;
 }
 .koma-md [data-streamdown="code-block-header"] {
   font-size: 10px;
@@ -206,6 +248,12 @@ html, body, #root {
      browser from faking any missing weight/style — no synthetic (smeary
      double-strike) bold or oblique. Inherits to every descendant. */
   font-synthesis: none;
+}
+/* KomaMono ships roman faces only. Italic emphasis still needs a slant;
+   allow style synthesis on those nodes without faking bold weights. */
+em, i, .italic {
+  font-style: italic;
+  font-synthesis: style;
 }
 
 /* Custom window chrome (frameless titlebar + resize handles). The Rust host

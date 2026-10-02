@@ -123,6 +123,7 @@ export type AttachmentEntry = {
   markerN: number
   name: string
   kind: 'image' | 'file' | 'pasted_text'
+  relPath?: string
 }
 
 export type SearchResultEntry = {

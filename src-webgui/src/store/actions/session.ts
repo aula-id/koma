@@ -2,6 +2,7 @@ import { codingRefToken } from '../../lib/codingRef'
 import type { StoreGet, StoreSet } from '../api'
 import { useComputerPreview } from '../computerPreview'
 import { DEFAULT_GROUP, normalizeGroups } from '../editorGroups'
+import { clampChatTurns } from '../../lib/chatWindow'
 import { initialSession, makeBootstrapState, makeChatTab, saveActivityBarLayout, updateBootstrap } from '../initial'
 import type { KomaState } from '../state'
 import type { LoadPhase } from '../types/session'
@@ -14,7 +15,7 @@ function mintAgentTabId(): string {
   return `agent-${agentTabSeq}`
 }
 
-export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
+export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'setChatTurns' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
   return {
   openExternal: (url) => {
     get().req({ r: 'OpenExternal', url })
@@ -36,12 +37,19 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     })
   },
   askCodingSelectionInChat: (payload) => {
-    get().insertToComposer(payload)
+    const text = payload?.text?.replace(/\s+$/, '') ?? ''
+    if (!text) return
+    get().stageComposerAttachmentInsert('pasted_text', {
+      name: payload.label,
+      text,
+      path: payload.path,
+    })
+    get().req({ r: 'AttachPaste', text })
     get().activateTab('chat')
     queueMicrotask(() => {
       const el = document.querySelector(
-        '[data-tour="composer"] textarea',
-      ) as HTMLTextAreaElement | null
+        '[data-tour="composer"] textarea, [data-tour="composer"] [contenteditable="true"]',
+      ) as HTMLElement | null
       el?.focus()
     })
   },
@@ -50,6 +58,26 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     get().activateTab('chat')
   },
   consumeDiagramChatQueue: () => set((s) => ({ ui: { ...s.ui, diagramChatQueue: [] } })),
+  stageComposerAttachmentInsert: (kind, extra) => {
+    const id = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        pendingComposerAttachmentInserts: [
+          ...s.ui.pendingComposerAttachmentInserts,
+          { id, kind, name: extra?.name, text: extra?.text, path: extra?.path },
+        ],
+      },
+    }))
+    return id
+  },
+  consumePendingComposerAttachmentInserts: () =>
+    set((s) => ({ ui: { ...s.ui, pendingComposerAttachmentInserts: [] } })),
+  addDesignToChat: (item) => {
+    set((s) => ({ ui: { ...s.ui, designChatQueue: [...s.ui.designChatQueue, item] } }))
+    get().activateTab('chat')
+  },
+  consumeDesignChatQueue: () => set((s) => ({ ui: { ...s.ui, designChatQueue: [] } })),
   consumePasteBody: () => set((s) => ({ ui: { ...s.ui, pasteBody: null } })),
 
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
@@ -220,6 +248,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
+  setChatTurns: (turns) => set((s) => ({ ui: { ...s.ui, chatTurns: clampChatTurns(turns) } })),
   refreshUsagePreview: () => {
     const s = get()
     // Clear any stale preview first so the loading row shows instead of
@@ -264,7 +293,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       // tracks on macOS/Windows WebViews after the session died.
       ui: normalizeGroups({
         ...s.ui,
-        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram')],
+        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')],
         activeTabId: 'chat',
         groups: [DEFAULT_GROUP],
         tabGroup: {},
@@ -272,6 +301,8 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
         activeGroupId: DEFAULT_GROUP,
         splitDir: 'row' as const,
         groupSizes: { [DEFAULT_GROUP]: 1 },
+        splitTree: { type: 'leaf' as const, id: DEFAULT_GROUP },
+        groupSplitDir: {},
         switchingTo: null,
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.

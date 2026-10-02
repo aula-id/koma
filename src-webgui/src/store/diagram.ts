@@ -106,6 +106,7 @@ export function claimDiagramRead(diagram: DiagramSlice, env: ReadEnv): DiagramRe
     const requestId = `diag-save-${env.requestId}`
     return {
       diagram: {
+        ...diagram,
         pendingCreate: null,
         docs: {
           ...diagram.docs,

@@ -16,7 +16,7 @@ import {
   registerLspDidChangeFlusher,
   flushPendingLspDidChange,
 } from '../lib/monaco-lsp'
-import { codingAskInChatPayload } from '../lib/codingRef'
+import { codingAskInChatPaste } from '../lib/codingRef'
 import { viewerKindForPath, type ViewerKind } from '../lib/viewerKind'
 import { useKoma, type Tab } from '../store/koma'
 import { fileKey } from '../store/coding'
@@ -262,7 +262,7 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
     editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: async () => {
       try { await undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
     } })
-    // Selection → composer: `@path:start-end` + fenced buffer text, then focus chat.
+    // Selection → composer paste pile (`file.rs:22` / `file.rs:1:2`). Body goes out on send.
     editor.addAction({
       id: 'koma.askInChat',
       label: 'Ask in chat',
@@ -284,16 +284,8 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
           endLine = endLine - 1
         }
         const selectedText = model.getValueInRange(sel)
-        const workdirs = (useKoma.getState().settingsValues?.workdir ?? []).filter(Boolean)
-        const payload = codingAskInChatPayload(
-          tab.root,
-          tab.path,
-          workdirs,
-          startLine,
-          endLine,
-          selectedText,
-        )
-        useKoma.getState().askCodingSelectionInChat(payload)
+        const payload = codingAskInChatPaste(tab.path, startLine, endLine, selectedText)
+        if (payload) useKoma.getState().askCodingSelectionInChat(payload)
       },
     })
 

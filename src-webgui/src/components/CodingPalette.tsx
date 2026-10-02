@@ -9,6 +9,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
 import { showCodingPacks } from './CodingPacks'
 import { showCodingTasks } from './CodingTasks'
+import { KomaSelect } from './KomaSelect'
 
 type Command = { id: string; title: string; shortcut?: string; editor?: boolean }
 const commands: Command[] = [
@@ -189,10 +190,10 @@ export function CodingPalette() {
         </div>
         {mode === 'files' && <div className="flex items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[11px] text-koma-dim">
           <span>Workspace</span>
-          <select aria-label="Workspace" value={scope || activeRoot || ''} onChange={e => setScope(e.target.value)} className="min-w-0 flex-1 bg-koma-panel text-koma-fg outline-none">
+          <KomaSelect aria-label="Workspace" value={scope || activeRoot || ''} onChange={e => setScope(e.target.value)} className="h-7 w-full min-w-0 flex-1 text-[12px]">
             {(roots ?? []).map(root => <option key={root} value={root}>{root}</option>)}
             {(roots?.length ?? 0) > 1 && <option value="*">All workspaces</option>}
-          </select>
+          </KomaSelect>
         </div>}
         <div className="max-h-[55vh] overflow-y-auto py-1" role="listbox" aria-label="Results">
           {error && <div className="px-3 py-3 text-[12px] text-koma-error">{error}</div>}

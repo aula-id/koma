@@ -1,6 +1,8 @@
+import type { DesignDoc } from '../lib/design'
 import type { DiagramDoc } from '../lib/diagram'
 import type { LspDiagnostic } from '../lib/lsp-bridge'
 import type { CodingSlice } from './coding'
+import type { DesignSlice } from './design'
 import type { DiagramSlice } from './diagram'
 import type { EditorGroupId, SplitDir } from './editorGroups'
 import type { AnalyticsMetric, AnalyticsRange, AnalyticsScope } from './types/analytics'
@@ -307,11 +309,20 @@ export type KomaState = {
   insertToComposer: (path: string) => void
   /** Insert a coding path/dir `@` token and focus the chat tab + composer. */
   putCodingPathInChat: (root: string, path: string, opts?: { isDir?: boolean }) => void
-  /** Insert selection ask payload and focus chat. */
-  askCodingSelectionInChat: (payload: string) => void
+  /** Stage a code-range paste pile (compact chip; body goes out on send). */
+  askCodingSelectionInChat: (payload: { text: string; label: string; path: string }) => void
   /** Queue a diagram drawing for the composer. The model receives its Mermaid. */
   addDiagramToChat: (item: { title: string; mermaid: string; doc: DiagramDoc }) => void
   consumeDiagramChatQueue: () => void
+  /** Register a marker-insert row before AttachFile / AttachPaste from diagram → chat. */
+  stageComposerAttachmentInsert: (
+    kind: 'image' | 'pasted_text',
+    extra?: { name?: string; text?: string; path?: string },
+  ) => string
+  consumePendingComposerAttachmentInserts: () => void
+  /** Queue a design slice as a chat chip. The model receives its html fence. */
+  addDesignToChat: (item: { title: string; text: string }) => void
+  consumeDesignChatQueue: () => void
   consumePasteBody: () => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
@@ -552,20 +563,19 @@ export type KomaState = {
   // Move/reorder one tab into an existing pane. `beforeId: null` appends it to
   // that pane's strip. The permanent chat tab cannot be moved.
   moveTabToGroup: (tabId: string, groupId: EditorGroupId, beforeId?: string | null) => void
-  // Create the second pane and move one tab into it (max two groups). Prefer
-  // toggleSplitDir once already split — a second split is refused.
+  // Split `targetGroupId` into a nested pair and move `tabId` into the new leaf.
   splitTab: (
     tabId: string,
     targetGroupId: EditorGroupId,
     side: 'before' | 'after',
     dir: SplitDir,
   ) => void
-  // Flip the two-pane axis in place (row ↔ col). No-op when unsplit.
-  toggleSplitDir: () => void
-  // Set the two-pane axis explicitly. No-op when unsplit or already that dir.
-  setSplitDir: (dir: SplitDir) => void
-  // Resize the divider between group[index] and group[index + 1].
-  resizeEditorGroups: (index: number, deltaPx: number, totalPx: number) => void
+  // Flip the parent split of `groupId` (focused leaf when omitted).
+  toggleSplitDir: (groupId?: EditorGroupId) => void
+  // Set the parent split axis of `groupId`. No-op when unsplit or already that dir.
+  setSplitDir: (dir: SplitDir, groupId?: EditorGroupId) => void
+  // Resize the divider of a split node.
+  resizeEditorGroups: (splitId: string, deltaPx: number, totalPx: number) => void
   // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
   // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
   // PLAN section in response.
@@ -573,6 +583,8 @@ export type KomaState = {
   // The Sidebar Usage-panel header's all/session segmented control: switch
   // scope. UsagePanel re-requests on the resulting change.
   setUsageScope: (scope: 'all' | 'session') => void
+  // Chat transcript window. Memory only; ChatView reads `ui.chatTurns`.
+  setChatTurns: (turns: number) => void
   // Manual re-fetch trigger for the Sidebar Usage-panel header's refresh
   // button — fires the same UsagePreview req UsagePanel's mount/scope-change
   // effect uses, for the CURRENT usageScope + attached session. Safe to call
@@ -625,6 +637,7 @@ export type KomaState = {
       split?: { side: 'before' | 'after'; dir: SplitDir }
     },
   ) => void
+  openLocalFileTab: (absPath: string, title: string) => void
   saveCodingFile: (root: string, path: string) => void
   revertCodingFile: (root: string, path: string) => void
   updateCodingContent: (root: string, path: string, content: string) => void
@@ -656,4 +669,17 @@ export type KomaState = {
   updateDiagram: (root: string, path: string, doc: DiagramDoc) => void
   // `path` is `.koma/<name>.diag`. Creates the file, then seeds an empty document.
   createDiagramFile: (root: string, path: string) => void
+  // ─── UI designer ───────────────────────────────────────────────────────
+  design: DesignSlice
+  openDesignTab: (root: string, path: string) => void
+  saveDesign: (root: string, path: string) => void
+  updateDesign: (root: string, path: string, doc: DesignDoc) => void
+  // `path` is `.koma/<name>.kdsgn`. Creates the file, then seeds an empty document.
+  createDesignFile: (root: string, path: string) => void
+  setDesignPanelTab: (id: string | null) => void
+  setDesignFileUi: (
+    root: string,
+    path: string,
+    patch: Partial<import('./design').DesignFileUiState>,
+  ) => void
 }
