@@ -78,12 +78,15 @@ fn build_computer_bridge() {
                 "The GUI computer bridge requires the Windows MSVC SDK; use --no-default-features for GNU headless builds");
             build
                 .file(source)
-                .flag("/std:c++17")
+                // VS 18 rejects <experimental/coroutine>, which C++/WinRT includes
+                // when this file is built as C++17. C++20 selects <coroutine>.
+                .flag("/std:c++20")
                 .flag("/EHsc")
                 .flag("/utf-8");
             build
                 .define("WIN32_LEAN_AND_MEAN", None)
-                .define("NOMINMAX", None);
+                .define("NOMINMAX", None)
+                .define("_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS", None);
             build.compile("koma_computer");
             for library in [
                 "windowsapp",
