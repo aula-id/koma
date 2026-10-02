@@ -33,6 +33,10 @@
 #include <wincodec.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
+// JsonArray::Size/Append and range-for are IVector/IIterable methods. C++/WinRT
+// only forward-declares them (return type auto) until this header is included.
+// VS 18 reports C3779 at the call if it is missing.
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Foundation.h>
