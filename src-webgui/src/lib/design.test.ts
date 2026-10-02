@@ -645,17 +645,167 @@ function sample(): DesignDoc {
 {
   const doc = sample()
   const component = designChatText(doc, { component: 'button', variant: { tone: 'primary' } })
-  assert.ok(component?.startsWith('```kdsgn\n'))
+  assert.ok(component?.startsWith('```html\n'))
   assert.ok(component?.endsWith('\n```'))
   assert.equal(component?.includes('@'), false)
-  assert.ok(component?.includes('color.accent'))
+  assert.ok(component?.includes('#3355ff'))
+  assert.equal(component?.includes('color.accent'), false)
   assert.equal(component?.includes('color.unused'), false)
   assert.equal(component?.includes('Field'), false)
+  assert.ok(component?.includes('Save'))
+  assert.ok(component?.includes('border-radius:6px'))
   const screen = designChatText(doc, { screen: 'login' })
   assert.ok(screen?.includes('Continue'))
-  assert.ok(screen?.includes('"kind":"instance"'))
+  assert.equal(screen?.includes('"kind":"instance"'), false)
+  assert.ok(screen?.includes('data-koma-name="Login"'))
   assert.equal(designChatText(doc, { component: 'missing' }), null)
   assert.equal(designChatText(doc, { screen: 'missing' }), null)
+}
+
+{
+  const frame = createNode('frame', 'frame', 0, 0)
+  frame.name = 'frameX'
+  frame.w = 400
+  frame.h = 300
+  const rect = createNode('rect', 'rect', 40, 50)
+  rect.name = 'Rectangle'
+  rect.w = 200
+  rect.h = 80
+  const textB = createNode('text', 'text-b', 20, 20)
+  textB.name = 'TextB'
+  textB.text = 'Other'
+  textB.w = 60
+  textB.h = 20
+  const text = createNode('text', 'text', 52, 58)
+  text.name = 'Text'
+  text.text = 'Hi'
+  text.w = 40
+  text.h = 20
+  frame.children = [rect, textB, text]
+  const doc = { ...emptyDesign(), screens: [frame] }
+  const html = designChatText(doc, { screen: 'frame' }) ?? ''
+  assert.match(html, /data-koma-name="Rectangle"[^>]*>\s*<div data-koma-name="Text"[^>]*>Hi<\/div>\s*<\/div>\s*<div data-koma-name="TextB"/)
+  const partial = createNode('text', 'partial', 210, 100)
+  partial.name = 'Partial'
+  partial.text = 'Edge'
+  partial.w = 40
+  partial.h = 20
+  frame.children = [rect, partial]
+  const overlapped = designChatText({ ...doc, screens: [frame] }, { screen: 'frame' }) ?? ''
+  assert.match(overlapped, /data-koma-name="Rectangle"[\s\S]*data-koma-name="Partial"/)
+  const touching = createNode('text', 'touch', 240, 50)
+  touching.name = 'Touch'
+  touching.text = 'Side'
+  touching.w = 40
+  touching.h = 20
+  frame.children = [rect, touching]
+  const beside = designChatText({ ...doc, screens: [frame] }, { screen: 'frame' }) ?? ''
+  assert.match(beside, /data-koma-name="Rectangle"[^>]*><\/div>\s*<div data-koma-name="Touch"/)
+  const back = createNode('rect', 'back', 10, 10)
+  back.name = 'Back'
+  back.w = 180
+  back.h = 80
+  const front = createNode('rect', 'front', 20, 20)
+  front.name = 'Front'
+  front.w = 160
+  front.h = 60
+  const top = createNode('text', 'top', 30, 30)
+  top.name = 'Top'
+  top.text = 'On'
+  top.w = 40
+  top.h = 16
+  frame.children = [back, front, top]
+  const stacked = designChatText({ ...doc, screens: [frame] }, { screen: 'frame' }) ?? ''
+  assert.match(stacked, /data-koma-name="Front"[^>]*>\s*<div data-koma-name="Top"/)
+  assert.doesNotMatch(stacked, /data-koma-name="Back"[^>]*>\s*<div data-koma-name="Top"/)
+  const hidden = createNode('text', 'hidden', 10, 10)
+  hidden.name = 'Secret'
+  hidden.text = 'Nope'
+  hidden.visible = false
+  const nested = createNode('rect', 'nested', 0, 0)
+  nested.name = 'Nested'
+  hidden.children = [nested]
+  frame.children = [hidden]
+  const hiddenHtml = designChatText({ ...doc, screens: [frame] }, { screen: 'frame' }) ?? ''
+  assert.equal(hiddenHtml.includes('Secret'), false)
+  assert.equal(hiddenHtml.includes('Nested'), false)
+  const group = createNode('group', 'group', 40, 50)
+  group.name = 'Group'
+  group.w = 200
+  group.h = 80
+  frame.children = [rect, group, text]
+  const grouped = designChatText({ ...doc, screens: [frame] }, { screen: 'frame' }) ?? ''
+  assert.match(grouped, /data-koma-name="Group"[^>]*>\s*<div data-koma-name="Text"/)
+  const label = createNode('text', 'label', 8, 8)
+  label.text = 'Go'
+  label.w = 40
+  label.h = 16
+  const button = createNode('frame', 'button', 0, 0)
+  button.name = 'Button'
+  button.w = 80
+  button.h = 32
+  button.children = [label]
+  const componentDoc = {
+    ...emptyDesign(),
+    components: [{ id: 'button', name: 'Button', variants: [{ props: {}, node: button }] }],
+  }
+  const board = createNode('frame', 'board', 0, 0)
+  board.w = 400
+  board.h = 300
+  const card = createNode('rect', 'card', 0, 0)
+  card.name = 'Card'
+  card.w = 300
+  card.h = 200
+  const instance: DesignNode = { id: 'submit', kind: 'instance', x: 16, y: 20, w: 80, h: 32, component: 'button' }
+  board.children = [card, instance]
+  const instanced = designChatText({ ...componentDoc, screens: [board] }, { screen: 'board' }) ?? ''
+  assert.match(instanced, /data-koma-name="Card"[\s\S]*data-koma-name="Button"[\s\S]*Go/)
+  const painted = createNode('rect', 'swatch', 0, 0)
+  painted.name = 'Swatch'
+  painted.w = 40
+  painted.h = 40
+  painted.fill = 'color.accent'
+  const tokenDoc = {
+    ...emptyDesign(),
+    mode: 'dark',
+    tokens: [{ name: 'color.accent', kind: 'color' as const, values: { light: '#3355ff', dark: '#8899ff' } }],
+    screens: [painted],
+  }
+  const tokenHtml = designChatText(tokenDoc, { screen: 'swatch' }) ?? ''
+  assert.ok(tokenHtml.includes('background:#8899ff'))
+  assert.equal(tokenHtml.includes('color.accent'), false)
+  const photo = createNode('rect', 'photo', 0, 0)
+  photo.name = 'Photo'
+  photo.w = 80
+  photo.h = 60
+  photo.fills = [{ type: 'image', hash: 'abc', scale: 'fill' }]
+  const imageDoc = {
+    ...emptyDesign(),
+    screens: [photo],
+    images: { abc: { mime: 'image/png', path: '.koma/assets/abc.png' } },
+  }
+  const imageHtml = designChatText(imageDoc, { screen: 'photo' }, '/data1/my app') ?? ''
+  assert.ok(imageHtml.includes('src="file:///data1/my%20app/.koma/assets/abc.png"'))
+  assert.equal(imageHtml.includes('base64'), false)
+  photo.fills = [{ type: 'image', hash: 'missing', scale: 'fill' }]
+  const bare = designChatText({ ...imageDoc, screens: [photo] }, { screen: 'photo' }, '/data1/app') ?? ''
+  assert.equal(bare.includes('<img'), false)
+  const raw = createNode('text', 'raw', 0, 0)
+  raw.text = 'a<b>&"c'
+  raw.w = 80
+  raw.h = 20
+  const escaped = designChatText({ ...emptyDesign(), screens: [raw] }, { screen: 'raw' }) ?? ''
+  assert.ok(escaped.includes('a&lt;b&gt;&amp;&quot;c'))
+  const plain = 'look\n\n```html\n<div>notes</div>\n```'
+  const kept = splitDesignMessage(plain)
+  assert.equal(kept.prose, 'look\n\n```html\n<div>notes</div>\n```')
+  assert.equal(kept.designs.length, 0)
+  const oldFence = '```kdsgn\n{"screen":{"name":"Login"}}\n```'
+  const old = splitDesignMessage(`see\n\n${oldFence}`)
+  assert.equal(old.prose, 'see')
+  assert.equal(old.designs.length, 1)
+  assert.equal(old.designs[0].title, 'Login')
+  assert.equal(designFenceTitle(imageHtml), 'Photo')
 }
 
 {
@@ -837,7 +987,7 @@ function sample(): DesignDoc {
   const note = designChatNote(saved.doc, { screen: 'loose' })
   assert.ok(note?.includes('Attached image is the render'))
   assert.ok(note?.includes('Rectangle 100×100 at (12, 18)'))
-  assert.ok(note?.includes('```kdsgn'))
+  assert.ok(note?.includes('```html'))
   assert.equal(designQueryNode(saved.doc, { screen: 'loose' })?.id, 'loose')
 }
 

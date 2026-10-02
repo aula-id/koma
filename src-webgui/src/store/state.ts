@@ -320,7 +320,7 @@ export type KomaState = {
     extra?: { name?: string; text?: string; path?: string },
   ) => string
   consumePendingComposerAttachmentInserts: () => void
-  /** Queue a design slice as a chat chip. The model receives its kdsgn fence. */
+  /** Queue a design slice as a chat chip. The model receives its html fence. */
   addDesignToChat: (item: { title: string; text: string }) => void
   consumeDesignChatQueue: () => void
   consumePasteBody: () => void

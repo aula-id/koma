@@ -304,7 +304,7 @@ export function Composer() {
     flushAttachmentInserts()
   }, [pendingComposerAttachmentInserts, consumePendingComposerAttachmentInserts, attachments, req])
 
-  // A design reference is a chip. The kdsgn fence stays on the chip until send.
+  // A design reference is a chip. The html fence stays on the chip until send.
   useEffect(() => {
     if (!designChatQueue.length) return
     setDesignChips((prev) => [

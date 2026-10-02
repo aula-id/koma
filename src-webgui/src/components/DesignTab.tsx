@@ -1850,7 +1850,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   stepOutRef.current = stepOut
   const sendChat = () => {
     if (!chatQuery) return
-    const text = designChatText(storedDoc, chatQuery)
+    const text = designChatText(storedDoc, chatQuery, tab.root)
     const node = designQueryNode(storedDoc, chatQuery)
     if (!text || !node) return
     const png = designPngBase64(storedDoc, node)

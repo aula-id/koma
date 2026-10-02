@@ -606,7 +606,7 @@ export function DesignPanel() {
                       }}
                       onChat={() => {
                         const query = { component: component.id }
-                        const text = designChatText(open.doc, query)
+                        const text = designChatText(open.doc, query, designTab.root)
                         const node = designQueryNode(open.doc, query)
                         if (!text || !node) return
                         const png = designPngBase64(open.doc, node)

@@ -190,7 +190,7 @@ export type UiSlice = {
     text?: string
     path?: string
   }[]
-  // Design slices queued as chips. Submit sends the kdsgn fence, which is
+  // Design slices queued as chips. Submit sends the html fence, which is
   // what the model reads. The fence is not written into the draft text.
   designChatQueue: { title: string; text: string }[]
   // One-shot body for a staged `[Pasted Text #N]` chip. The composer copies it

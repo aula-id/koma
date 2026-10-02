@@ -4,6 +4,7 @@ import {
   pickVariant,
   variantKey,
 } from './model'
+import { designChatHtml } from './chatHtml'
 import { writeNode } from './serialize'
 
 export type DesignQuery =
@@ -116,11 +117,11 @@ export function queryDesign(doc: DesignDoc, query: DesignQuery): DesignQuerySlic
   }
 }
 
-/** One fenced slice for chat. The fence is the model payload. */
-export function designChatText(doc: DesignDoc, query: DesignQuery): string | null {
-  const slice = queryDesign(doc, query)
-  if (!slice) return null
-  return '```kdsgn\n' + JSON.stringify(slice) + '\n```'
+/** One fenced HTML fragment for chat. The fence is the model payload. */
+export function designChatText(doc: DesignDoc, query: DesignQuery, root = ''): string | null {
+  const node = designQueryNode(doc, query)
+  if (!node) return null
+  return '```html\n' + designChatHtml(doc, node, root) + '\n```'
 }
 
 /** The screen or component tree a chat query names. */
@@ -153,7 +154,7 @@ export function designCoordinateText(doc: DesignDoc, node: DesignNode): string {
   return lines.join('\n')
 }
 
-/** Coordinate list plus the fenced slice. Prefer `designChatText` for chat chips. */
+/** Coordinate list plus the fenced HTML. Prefer `designChatText` for chat chips. */
 export function designChatNote(doc: DesignDoc, query: DesignQuery): string | null {
   const fence = designChatText(doc, query)
   const node = designQueryNode(doc, query)
@@ -167,10 +168,24 @@ export function designChatTitle(doc: DesignDoc, query: DesignQuery): string {
   return node ? designLayerName(node) : 'Design'
 }
 
-const KDSGN_FENCE = /```[ \t]*kdsgn[ \t]*\r?\n[\s\S]*?```/gi
+const DESIGN_FENCE = /```[ \t]*(?:kdsgn|html)[ \t]*\r?\n[\s\S]*?```/gi
 
-/** Title shown on a design chip. The fence body is one query slice. */
+function decodeAttr(value: string): string {
+  return value.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
+
+/** A kdsgn fence, or an html fence whose root carries data-koma-name. */
+function isDesignFence(fence: string): boolean {
+  if (/^```[ \t]*kdsgn/i.test(fence)) return true
+  return /^```[ \t]*html/i.test(fence) && /data-koma-name="/.test(fence)
+}
+
+/** Title shown on a design chip. HTML uses the root data-koma-name. */
 export function designFenceTitle(fence: string): string {
+  if (/^```[ \t]*html/i.test(fence)) {
+    const name = fence.match(/data-koma-name="([^"]*)"/)
+    return name?.[1] ? decodeAttr(name[1]) : 'Design'
+  }
   const body = fence.replace(/^```[ \t]*kdsgn[ \t]*\r?\n/, '').replace(/```\s*$/, '')
   try {
     const value = JSON.parse(body) as { screen?: { name?: string }; component?: { name?: string } }
@@ -194,7 +209,8 @@ function stripLegacyDesignCoordinateProse(prose: string): string {
 /** Pull fenced design slices out of a user message. The fence is what the model read. */
 export function splitDesignMessage(content: string): { prose: string; designs: { text: string; title: string }[] } {
   const designs: { text: string; title: string }[] = []
-  const prose = content.replace(new RegExp(KDSGN_FENCE.source, 'gi'), (fence) => {
+  const prose = content.replace(new RegExp(DESIGN_FENCE.source, 'gi'), (fence) => {
+    if (!isDesignFence(fence)) return fence
     designs.push({ text: fence, title: designFenceTitle(fence) })
     return ''
   })
