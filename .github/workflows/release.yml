@@ -9,11 +9,10 @@ name: release
 # link against system webkit2gtk (not bundled); Darwin uses the system WebKit;
 # Windows uses WebView2.
 #
-# The linux-packages / windows-package jobs additionally publish desktop
-# installers under STABLE, VERSIONLESS names (hard-linked from the homepage via
-# /releases/latest/download/): koma-x64.deb, koma-arm64.deb, koma-x64.AppImage,
-# koma-arm64.AppImage, koma-x64.msi. Windows publishes only the WiX MSI installer,
-# which install.ps1 downloads.
+# The windows-package job additionally publishes the desktop installer under the
+# stable, versionless name hard-linked from the homepage
+# (/releases/latest/download/koma-x64.msi). install.ps1 downloads that WiX MSI.
+# Linux deb and AppImage packages are not built.
 #
 # IMPORTANT: Linux runners are pinned to ubuntu-22.04 (glibc 2.35) so that
 # prebuilt binaries run on Ubuntu 22.04 LTS and all newer releases. Glibc is
@@ -116,142 +115,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset }}
-
-  # ---------------------------------------------------------------------------
-  # Proves the Nix flake still builds on every tagged release. Matrix mirrors
-  # the build job's two Linux targets (x86_64-unknown-linux-gnu /
-  # aarch64-unknown-linux-gnu) above so this reads as the same two targets, not
-  # a third axis. Produces no release asset - install.sh fetches the binaries
-  # staged above, not Nix outputs - so it only needs read access, not the
-  # workflow's write token.
-  # ---------------------------------------------------------------------------
-  nix-build:
-    name: nix build (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux-x64
-            os: ubuntu-latest
-          - name: linux-arm64
-            os: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: nix build .#default
-        run: nix build .#default --print-build-logs
-
-      - name: nix build .#gui
-        run: nix build .#gui --print-build-logs
-
-  # ---------------------------------------------------------------------------
-  # Linux desktop installers (.deb + .AppImage). Built NATIVELY per arch because
-  # the AppImage tooling (linuxdeploy/appimagetool) cannot cross-compile. Output
-  # names embed the version (e.g. koma_0.2.27_amd64.deb), so a rename step maps
-  # them to the stable versionless homepage names.
-  #
-  # Pinned to ubuntu-22.04 / ubuntu-22.04-arm for the same glibc 2.35 floor as
-  # the raw binary jobs above.
-  # ---------------------------------------------------------------------------
-  linux-packages:
-    name: package linux ${{ matrix.arch }} (deb + appimage)
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            arch: x64
-          - runner: ubuntu-22.04-arm
-            arch: arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # webkit2gtk + gtk dev headers for the wry (gui) build and for
-      # cargo-packager's AppImage bundling. libwebkit2gtk-4.1-dev already
-      # depends on libgtk-3-dev AND libsoup-3.0-dev (verified on
-      # packages.ubuntu.com/noble), so libsoup is not listed explicitly.
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libxtst6 tesseract-ocr tesseract-ocr-eng gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good pipewire-bin libpipewire-0.3-modules libspa-0.2-modules
-
-      - name: Stage portal capture runtime
-        run: python3 scripts/stage_linux_portal.py
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.runner }}-packages-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      # Pinned to the latest published cargo-packager (0.11.8) with --locked so
-      # the tool builds from its own committed lockfile (reproducible).
-      - name: Install cargo-packager
-        run: cargo install cargo-packager --version 0.11.8 --locked
-
-      - name: Build release binary (gui)
-        run: cargo build --release -p agent --features gui
-
-      # cargo-packager reads [package.metadata.packager] from src-agent/Cargo.toml
-      # via `cargo metadata`, auto-detects the single `koma` bin, locates it at
-      # target/release/koma, and writes packages to target/release/. No
-      # --out-dir/--binaries flags are needed (verified against cargo-packager
-      # crates/packager/src/cli/config.rs::load_configs_from_cargo_workspace).
-      # APPIMAGE_EXTRACT_AND_RUN=1: linuxdeploy/appimagetool are themselves
-      # AppImages and GitHub runners may lack FUSE.
-      - name: Package deb + appimage
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        run: cargo packager --release --formats deb,appimage --verbose
-
-      - name: Verify packaged OCR and portal runtime
-        run: python3 scripts/check_computer_package.py target/release
-
-      # Map the version-embedded outputs (koma_<ver>_<arch>.deb /
-      # koma_<ver>_<arch>.AppImage, written directly into target/release/) to the
-      # stable versionless names the homepage hard-links from
-      # /releases/latest/download/. -maxdepth 1 + the koma* prefix excludes the
-      # intermediate files under target/release/.cargo-packager/.
-      - name: Rename package assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          deb=$(find target/release -maxdepth 1 -name 'koma*.deb' -print -quit)
-          appimage=$(find target/release -maxdepth 1 -name 'koma*.AppImage' -print -quit)
-          [ -n "$deb" ] || { echo "::error::no koma*.deb produced under target/release"; exit 1; }
-          [ -n "$appimage" ] || { echo "::error::no koma*.AppImage produced under target/release"; exit 1; }
-          echo "deb      $deb  ->  koma-${{ matrix.arch }}.deb"
-          echo "appimage $appimage  ->  koma-${{ matrix.arch }}.AppImage"
-          cp "$deb" "koma-${{ matrix.arch }}.deb"
-          cp "$appimage" "koma-${{ matrix.arch }}.AppImage"
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            koma-${{ matrix.arch }}.deb
-            koma-${{ matrix.arch }}.AppImage
 
   # ---------------------------------------------------------------------------
   # Windows: the .msi installer (WiX), including the GUI (default = ["gui"]).
