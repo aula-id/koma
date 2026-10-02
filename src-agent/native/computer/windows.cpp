@@ -76,7 +76,9 @@ static JsonValue str(std::wstring_view value) {
     return JsonValue::CreateStringValue(hstring(value));
 }
 static JsonValue num(double value) { return JsonValue::CreateNumberValue(value); }
-static JsonValue boolean(bool value) { return JsonValue::CreateBooleanValue(value); }
+// rpcndr.h, pulled in by ole2.h, typedefs `boolean` as unsigned char. A helper
+// with that name is a redefinition, and each call becomes a cast to that typedef.
+static JsonValue jsonBool(bool value) { return JsonValue::CreateBooleanValue(value); }
 static JsonObject rectangle(double x, double y, double w, double h) {
     JsonObject r;
     r.SetNamedValue(L"x", num(x));
@@ -140,7 +142,7 @@ static JsonObject describe(HWND window) {
     r.SetNamedValue(L"application", str(L"pid " + std::to_wstring(pid)));
     r.SetNamedValue(L"title", str(title(window)));
     r.SetNamedValue(L"geometry", rectangle(geometry(window)));
-    r.SetNamedValue(L"focused", boolean(GetForegroundWindow() == window));
+    r.SetNamedValue(L"focused", jsonBool(GetForegroundWindow() == window));
     return r;
 }
 // Monitor sources capture the composed desktop, including dialogs and panels.
@@ -183,7 +185,7 @@ static JsonObject describeMonitor(HMONITOR monitor) {
     r.SetNamedValue(L"application", str(L"Desktop"));
     r.SetNamedValue(L"title", str(std::wstring(info.szDevice) + ((info.dwFlags & MONITORINFOF_PRIMARY) ? L" · Main display" : L" · Display")));
     r.SetNamedValue(L"geometry", rectangle(info.rcMonitor));
-    r.SetNamedValue(L"focused", boolean(true));
+    r.SetNamedValue(L"focused", jsonBool(true));
     r.SetNamedValue(L"focus", str(desktopFocus()));
     return r;
 }
@@ -793,9 +795,9 @@ static JsonArray accessibility(HWND window, RECT desktop, int width, int height)
             item.SetNamedValue(L"bounds",
                                rectangle((b.left - desktop.left) * sx, (b.top - desktop.top) * sy,
                                          (b.right - b.left) * sx, (b.bottom - b.top) * sy));
-            item.SetNamedValue(L"enabled", boolean(enabled));
-            item.SetNamedValue(L"selected", boolean(selected));
-            item.SetNamedValue(L"focused", boolean(focus));
+            item.SetNamedValue(L"enabled", jsonBool(enabled));
+            item.SetNamedValue(L"selected", jsonBool(selected));
+            item.SetNamedValue(L"focused", jsonBool(focus));
             item.SetNamedValue(L"confidence", JsonValue::CreateNullValue());
             elements.Append(item);
         }
@@ -959,10 +961,10 @@ static IJsonValue dispatch(JsonObject r) {
         JsonObject result;
         for (auto key :
              {L"capture", L"windows", L"focus", L"pointer", L"keyboard"})
-            result.SetNamedValue(key, boolean(supported));
-        result.SetNamedValue(L"accessibility", boolean(supported));
-        result.SetNamedValue(L"ocr", boolean(false));
-        result.SetNamedValue(L"floating", boolean(true));
+            result.SetNamedValue(key, jsonBool(supported));
+        result.SetNamedValue(L"accessibility", jsonBool(supported));
+        result.SetNamedValue(L"ocr", jsonBool(false));
+        result.SetNamedValue(L"floating", jsonBool(true));
         JsonArray limits;
         if (!supported)
             limits.Append(str(L"Computer use requires a local Windows 10 1903+ console with "
@@ -1080,8 +1082,8 @@ extern "C" char *koma_computer_call(const char *json) {
             response.SetNamedValue(L"result", dispatch(JsonObject::Parse(to_hstring(json))));
         } catch (const InputBusy &) {
             response.SetNamedValue(L"error", str(L"Keyboard or mouse is busy"));
-            response.SetNamedValue(L"input_busy", boolean(true));
-            response.SetNamedValue(L"input_started", boolean(inputStarted));
+            response.SetNamedValue(L"input_busy", jsonBool(true));
+            response.SetNamedValue(L"input_started", jsonBool(inputStarted));
         } catch (const hresult_error &e) {
             response.SetNamedValue(L"error", str(e.message()));
         } catch (const std::exception &e) {
