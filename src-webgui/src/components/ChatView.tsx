@@ -533,17 +533,51 @@ export function ChatView() {
   // stably as "live" so Snapshot commits don't remount the streaming node.
   const showLive = stream.length > 0 || (working && reasoning.trim() !== '')
 
-  // Scroll-anchored to BOTTOM: auto-stick to the newest content as the
-  // transcript / live stream grows, but RELEASE the moment the user scrolls up
-  // to read back, and RE-STICK once they return to the bottom. `stickRef` is a
-  // ref (not state) so the scroll handler never triggers a re-render, and the
-  // pin runs in a layout effect (before paint) so streaming never flickers.
+  // Follow the tail while the user is there, including after the turn commits
+  // and the bubble keeps growing (plain text, then Streamdown). Release only
+  // when the user scrolls up; scrolling back to the tail follows again.
+  // `stickRef` is a ref so the scroll handler never triggers a re-render, and
+  // the pin runs before paint so streaming never flickers.
   const scrollRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null)
   const stickRef = useRef(true)
+  const pinningRef = useRef(false)
+  // Set while restoring the viewport after older rows mount, so a height
+  // change does not yank the view back to the bottom.
+  const suppressPinRef = useRef(false)
   const pendingTopRestoreRef = useRef<number | null>(null)
   const expandingRef = useRef(false)
   const historyPullInflight = useRef(false)
+  // Previous scrollHeight. A scroll event with a stable height is the user.
+  // A height change is the transcript growing; that must not release the tail.
+  const metricsRef = useRef({ height: 0, top: 0 })
+
+  const rememberMetrics = (el: HTMLElement) => {
+    metricsRef.current = { height: el.scrollHeight, top: el.scrollTop }
+  }
+
+  const setStick = (on: boolean) => {
+    stickRef.current = on
+    const el = scrollRef.current
+    // Following the tail opts out of scroll anchoring, which otherwise keeps
+    // the start of a long reply on screen as that reply grows. Reading back
+    // opts in so changes above the viewport stay put.
+    if (el) el.style.overflowAnchor = on ? 'none' : 'auto'
+  }
+
+  const pinToBottom = () => {
+    const el = scrollRef.current
+    if (!el || !stickRef.current || suppressPinRef.current || pendingTopRestoreRef.current != null) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) {
+      rememberMetrics(el)
+      return
+    }
+    pinningRef.current = true
+    el.scrollTop = el.scrollHeight
+    pinningRef.current = false
+    rememberMetrics(el)
+  }
 
   // Newest-first window into `messages`. Resets on session switch / big attach
   // so a fat Snapshot only mounts ~CHAT_WINDOW bubbles on first paint.
@@ -554,7 +588,7 @@ export function ChatView() {
   useEffect(() => {
     prevLenRef.current = messages.length
     setRenderFrom(Math.max(0, messages.length - CHAT_WINDOW))
-    stickRef.current = true
+    setStick(true)
     historyPullInflight.current = false
   }, [sessionId])
   useEffect(() => {
@@ -600,9 +634,22 @@ export function ChatView() {
 
   const onScroll = () => {
     const el = scrollRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    stickRef.current = distanceFromBottom < 40
+    if (!el || pinningRef.current || suppressPinRef.current || pendingTopRestoreRef.current != null) return
+    const height = el.scrollHeight
+    const top = el.scrollTop
+    const heightDelta = height - metricsRef.current.height
+    rememberMetrics(el)
+    const distance = height - top - el.clientHeight
+    // Stable scrollHeight: the user moved the viewport (wheel, bar, keys).
+    // A height change is the reply committing or the markdown settling.
+    if (Math.abs(heightDelta) <= 1) {
+      setStick(distance < 40)
+    } else if (stickRef.current) {
+      pinToBottom()
+      return
+    } else if (distance < 40) {
+      setStick(true)
+    }
     if (el.scrollTop < 80 && (renderFrom > 0 || hasMoreOlder)) expandOlder()
   }
 
@@ -611,24 +658,62 @@ export function ChatView() {
     if (!el) return
     const pending = pendingTopRestoreRef.current
     if (pending != null) {
+      suppressPinRef.current = true
+      pinningRef.current = true
       el.scrollTop = el.scrollHeight - pending
+      pinningRef.current = false
       pendingTopRestoreRef.current = null
       expandingRef.current = false
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      setStick(distance < 40)
+      rememberMetrics(el)
+      requestAnimationFrame(() => {
+        suppressPinRef.current = false
+      })
       return
     }
     expandingRef.current = false
-    if (!stickRef.current) return
-    el.scrollTop = el.scrollHeight
+    pinToBottom()
   }, [messages, stream, reasoning, showLive, renderFrom])
+
+  // The committed bubble keeps growing after the turn ends (plain text, then
+  // Streamdown/Shiki). That height change used to anchor the viewport on the
+  // start of the reply. Stay at the bottom until the user scrolls up.
+  useEffect(() => {
+    const content = contentRef.current
+    const el = scrollRef.current
+    if (!content || !el) return
+    let raf = 0
+    const observer = new ResizeObserver(() => {
+      const node = scrollRef.current
+      // Record the grown height when the user has scrolled up, so the next
+      // wheel or scrollbar movement is not treated as another growth.
+      if (node && !stickRef.current) rememberMetrics(node)
+      // Some engines apply scroll anchoring after this callback. Pin again
+      // on the next frame in case that adjustment landed late.
+      pinToBottom()
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => pinToBottom())
+    })
+    observer.observe(content)
+    return () => {
+      cancelAnimationFrame(raf)
+      observer.disconnect()
+    }
+  }, [scrollRoot])
 
   // Scroll-on-send: the composer bumps `scrollTick` on every submit. FORCE
   // re-engage the bottom-stick (even if the user had scrolled up to read back)
   // and snap down now, so a send while scrolled up never lands off-screen.
   const scrollTick = useKoma((s) => s.ui.scrollTick)
   useLayoutEffect(() => {
-    stickRef.current = true
+    setStick(true)
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    pinningRef.current = true
+    el.scrollTop = el.scrollHeight
+    pinningRef.current = false
+    rememberMetrics(el)
   }, [scrollTick])
 
   const visible = messages.slice(renderFrom)
@@ -641,35 +726,37 @@ export function ChatView() {
         <div
           ref={setScrollEl}
           onScroll={onScroll}
-          className="flex-1 space-y-4 overflow-y-auto px-2 py-4 @max-xs/chat:px-1.5 @max-xs/chat:py-3"
+          className="flex-1 overflow-y-auto overflow-anchor-none px-2 py-4 @max-xs/chat:px-1.5 @max-xs/chat:py-3"
         >
-          {canShowEarlier && (
-            <button
-              type="button"
-              onClick={expandOlder}
-              className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
-            >
-              {hiddenCount > 0
-                ? `Show ${Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier${
-                    hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''
-                  }`
-                : 'Load earlier messages'}
-            </button>
-          )}
-          {visible.map((m, i) => {
-            const index = renderFrom + i
-            const key =
-              typeof m.idx === 'number' ? `m-${m.idx}` : `i-${index}`
-            return <Message key={key} m={m} index={index} />
-          })}
-          {showLive && (
-            <AssistantMessage
-              key="live"
-              content={stream}
-              reasoning={reasoning || null}
-              streaming
-            />
-          )}
+          <div ref={contentRef} className="space-y-4">
+            {canShowEarlier && (
+              <button
+                type="button"
+                onClick={expandOlder}
+                className="mx-auto block rounded-md border border-koma-border bg-koma-panel px-3 py-1 text-[12px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+              >
+                {hiddenCount > 0
+                  ? `Show ${Math.min(CHAT_WINDOW_STEP, hiddenCount)} earlier${
+                      hiddenCount > CHAT_WINDOW_STEP ? ` (${hiddenCount} hidden)` : ''
+                    }`
+                  : 'Load earlier messages'}
+              </button>
+            )}
+            {visible.map((m, i) => {
+              const index = renderFrom + i
+              const key =
+                typeof m.idx === 'number' ? `m-${m.idx}` : `i-${index}`
+              return <Message key={key} m={m} index={index} />
+            })}
+            {showLive && (
+              <AssistantMessage
+                key="live"
+                content={stream}
+                reasoning={reasoning || null}
+                streaming
+              />
+            )}
+          </div>
         </div>
       </ChatScrollRootContext.Provider>
       <ApprovalOverlay />
