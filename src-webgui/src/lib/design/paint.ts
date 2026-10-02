@@ -56,6 +56,13 @@ export function nodePaints(node: DesignNode | null | undefined, field: 'fill' | 
   return [solidPaint(alias)]
 }
 
+export function nodeHasPaint(node: DesignNode | null | undefined, field: 'fill' | 'stroke'): boolean {
+  return nodePaints(node, field).some((paint) => {
+    if (paint.type === 'image' || paint.type === 'gradient') return true
+    return !!(paint.color && paint.color !== 'none')
+  })
+}
+
 export function firstVisiblePaint(paints: DesignPaint[] | null | undefined): DesignPaint | null {
   if (!paints?.length) return null
   return paints.find((paint) => paint.visible !== false) ?? null

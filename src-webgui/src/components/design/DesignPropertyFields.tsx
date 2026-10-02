@@ -22,9 +22,9 @@ import {
   ensureImageCrop,
   effectiveInstanceChild,
   mergeDesignOverride,
+  nodeHasPaint,
   nodePaints,
   pickVariant,
-  reorderNodePaint,
   setNodePaints,
   setNodeSolid,
   solidPaint,
@@ -579,6 +579,7 @@ export function ColorRow({
   onStoreImage,
   pageTitle = 'Color',
   box,
+  stroke,
 }: {
   doc: DesignDoc
   paint: DesignPaint
@@ -594,6 +595,7 @@ export function ColorRow({
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
   pageTitle?: string
   box?: { w: number; h: number }
+  stroke?: boolean
 }) {
   const openPage = useInspectorPage()
   const [hexDraft, setHexDraft] = useState<string | null>(null)
@@ -619,6 +621,7 @@ export function ColorRow({
       allowGradient,
       box,
       natural: designImageSize(doc, paint.hash),
+      stroke,
       onChange,
       onStoreImage,
     })
@@ -800,116 +803,29 @@ export function FillEditor({
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
   const fallback = field === 'fill' ? SHAPE_FILL : '#1c1c1c'
-  const stored = nodePaints(node, field)
-  const paints = stored.length ? stored : [solidPaint(fallback)]
-  const implicit = !stored.length
-  const [strokeSides, setStrokeSides] = useState(paints.some((paint) => paint.top != null || paint.right != null || paint.bottom != null || paint.left != null || node.strokeTop != null || node.strokeRight != null || node.strokeBottom != null || node.strokeLeft != null))
   if (mixed) {
     return <PaintRow label={label} doc={doc} value="" mixed fallback={fallback} tokens={tokens} onChange={(next) => onChange(setNodeSolid(node, field, next))} />
   }
+  if (!nodeHasPaint(node, field)) return null
+  const paints = nodePaints(node, field).filter((paint) => paint.type === 'image' || paint.type === 'gradient' || (paint.color && paint.color !== 'none'))
+  const paint = paints[0]
+  if (!paint) return null
   return (
-    <div className="flex flex-col gap-2">
-      {paints.map((paint, index) => (
-        <div key={`${paint.type}-${index}`} className="flex items-start gap-1">
-          {paints.length > 1 ? (
-            <div className="flex flex-col">
-              <button type="button" title="Move up" aria-label="Move up" disabled={index === 0} className="h-4 w-5 text-[10px] text-koma-dim disabled:opacity-30" onClick={() => onChange(reorderNodePaint(node, field, index, index - 1))}>↑</button>
-              <button type="button" title="Move down" aria-label="Move down" disabled={index === paints.length - 1} className="h-4 w-5 text-[10px] text-koma-dim disabled:opacity-30" onClick={() => onChange(reorderNodePaint(node, field, index, index + 1))}>↓</button>
-            </div>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <ColorRow
-              doc={doc}
-              paint={paint}
-              fallback={fallback}
-              tokens={tokens}
-              pageTitle={label}
-              box={{ w: node.w, h: node.h }}
-              allowImage={field === 'fill'}
-              bound={node.bindings?.[field]}
-              onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, implicit ? [paint] : paints), field, token)) : undefined}
-              onChange={(next) => onChange(setNodePaints(node, field, implicit ? [next] : paints.map((item, at) => (at === index ? next : item))))}
-              onRemove={() => onChange(implicit || paints.length <= 1 ? setNodeSolid(node, field, 'none') : setNodePaints(node, field, paints.filter((_, at) => at !== index)))}
-              onStoreImage={onStoreImage}
-            />
-            {field === 'stroke' ? (
-              <div className="mt-1 flex flex-col gap-1.5">
-                <GeomField label="Width" ariaLabel="Stroke width" value={paint.width ?? node.strokeWidth ?? 1} onChange={(width) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, width } : item))))} />
-                <LabeledControl label="Align">
-                  <KomaSelect
-                    aria-label="Align"
-                    value={paint.align ?? node.strokeAlign ?? 'center'}
-                    onChange={(event) => {
-                      const align = event.target.value
-                      if (align !== 'inside' && align !== 'center' && align !== 'outside') return
-                      onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, align: align === 'center' ? undefined : align } : item))))
-                    }}
-                    className="h-7 w-full px-1.5 text-[12px]"
-                  >
-                    <option value="inside">Inside</option>
-                    <option value="center">Center</option>
-                    <option value="outside">Outside</option>
-                  </KomaSelect>
-                </LabeledControl>
-                <div className="grid grid-cols-2 gap-1">
-                  <GeomField label="Dash" ariaLabel="Dash" value={paint.dash ?? 0} onChange={(dash) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, dash: dash > 0 ? dash : undefined } : item))))} />
-                  <GeomField label="Gap" ariaLabel="Gap" value={paint.gap ?? 0} onChange={(gap) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, gap: gap > 0 ? gap : undefined } : item))))} />
-                </div>
-                <AlignButton label={strokeSides ? 'One width' : 'Per-side widths'} caption={strokeSides ? 'One width' : 'Per side'} pressed={strokeSides} onClick={() => {
-                  setStrokeSides((current) => !current)
-                  if (strokeSides) onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top: undefined, right: undefined, bottom: undefined, left: undefined } : item))))
-                }}>
-                  <Square size={14} />
-                </AlignButton>
-                {strokeSides ? (
-                  <div className="grid grid-cols-2 gap-1">
-                    <GeomField label="Top" ariaLabel="Stroke top" value={paint.top ?? node.strokeTop ?? paint.width ?? node.strokeWidth ?? 1} onChange={(top) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, top } : item))))} />
-                    <GeomField label="Right" ariaLabel="Stroke right" value={paint.right ?? node.strokeRight ?? paint.width ?? node.strokeWidth ?? 1} onChange={(right) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, right } : item))))} />
-                    <GeomField label="Bottom" ariaLabel="Stroke bottom" value={paint.bottom ?? node.strokeBottom ?? paint.width ?? node.strokeWidth ?? 1} onChange={(bottom) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, bottom } : item))))} />
-                    <GeomField label="Left" ariaLabel="Stroke left" value={paint.left ?? node.strokeLeft ?? paint.width ?? node.strokeWidth ?? 1} onChange={(left) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, left } : item))))} />
-                  </div>
-                ) : null}
-                <LabeledControl label="Cap">
-                  <KomaSelect aria-label="Cap" value={paint.capStart ?? node.strokeStart ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="none">None</option>
-                    <option value="round">Round</option>
-                    <option value="square">Square</option>
-                  </KomaSelect>
-                </LabeledControl>
-                <LabeledControl label="End cap">
-                  <KomaSelect aria-label="End cap" value={paint.capEnd ?? node.strokeEnd ?? node.strokeCap ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, capEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="none">None</option>
-                    <option value="round">Round</option>
-                    <option value="square">Square</option>
-                  </KomaSelect>
-                </LabeledControl>
-                <LabeledControl label="Start" wide>
-                  <KomaSelect aria-label="Start marker" value={paint.markerStart ?? node.strokeMarkerStart ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerStart'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="none">None</option>
-                    <option value="arrow">Arrow</option>
-                    <option value="dot">Dot</option>
-                  </KomaSelect>
-                </LabeledControl>
-                <LabeledControl label="End" wide>
-                  <KomaSelect aria-label="End marker" value={paint.markerEnd ?? node.strokeMarkerEnd ?? 'none'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, markerEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerEnd'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="none">None</option>
-                    <option value="arrow">Arrow</option>
-                    <option value="dot">Dot</option>
-                  </KomaSelect>
-                </LabeledControl>
-                <LabeledControl label="Join">
-                  <KomaSelect aria-label="Join" value={paint.join ?? node.strokeJoin ?? 'miter'} onChange={(event) => onChange(setNodePaints(node, 'stroke', paints.map((item, at) => (at === index ? { ...item, join: event.target.value === 'miter' ? undefined : event.target.value as DesignPaint['join'] } : item))))} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="miter">Miter</option>
-                    <option value="round">Round</option>
-                    <option value="bevel">Bevel</option>
-                  </KomaSelect>
-                </LabeledControl>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ))}
-    </div>
+    <ColorRow
+      doc={doc}
+      paint={paint}
+      fallback={fallback}
+      tokens={tokens}
+      pageTitle={label}
+      box={{ w: node.w, h: node.h }}
+      stroke={field === 'stroke'}
+      allowImage={field === 'fill'}
+      bound={node.bindings?.[field]}
+      onBind={tokens?.length ? (token) => onChange(bindNodeField(setNodePaints(node, field, [paint]), field, token)) : undefined}
+      onChange={(next) => onChange(setNodePaints(node, field, [next]))}
+      onRemove={() => onChange(setNodeSolid(node, field, 'none'))}
+      onStoreImage={onStoreImage}
+    />
   )
 }
 

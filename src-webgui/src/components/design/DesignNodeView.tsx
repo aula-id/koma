@@ -13,6 +13,7 @@ import {
   nodeFillLayers,
   nodeHasImageFill,
   nodePaints,
+  roundedRectPath,
   paintAlias,
   siblingMaskStyle,
   layoutGridBands,
@@ -277,7 +278,7 @@ export function DesignNodeView({
         ) : node.kind === 'text' ? (
           <div
             className="flex h-full w-full px-1"
-            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start', textAlign: style.align, alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color || chrome.fill, 'var(--color-koma-fg)') }}
+            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start', textAlign: style.align, alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color || (chrome.fill && chrome.fill !== 'none' ? chrome.fill : ''), 'var(--color-koma-fg)') }}
           >
             <span className="whitespace-pre-wrap">
               {splitTextByRuns(node.text || 'Text', node.runs).map((part, index) => (
@@ -446,7 +447,7 @@ function StrokeShape({
     )
   }
   if (node.kind === 'ellipse') {
-    return <ellipse cx={boxW / 2} cy={boxH / 2} rx={Math.max(0.5, boxW / 2 - inset)} ry={Math.max(0.5, boxH / 2 - inset)} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} />
+    return <ellipse cx={boxW / 2} cy={boxH / 2} rx={Math.max(0.5, boxW / 2 - inset)} ry={Math.max(0.5, boxH / 2 - inset)} fill="none" stroke={color} strokeWidth={width} strokeLinecap={linecap} strokeDasharray={dash} />
   }
   if (sided) {
     return (
@@ -460,16 +461,12 @@ function StrokeShape({
   }
   return (
     <g>
-      <rect x={inset} y={inset} width={Math.max(1, boxW - inset * 2)} height={Math.max(1, boxH - inset * 2)} rx={cornersSafe(node)} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} strokeLinecap={linecap} strokeLinejoin={join} />
+      <path d={roundedRectPath(boxW, boxH, cornerPixels(doc, node), inset)} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash} strokeLinecap={linecap} strokeLinejoin={join} />
       {markerEnd === 'arrow' ? <polygon points={`${boxW},${boxH / 2} ${boxW - 8},${boxH / 2 - 4} ${boxW - 8},${boxH / 2 + 4}`} fill={color} /> : null}
       {markerStart === 'dot' ? <circle cx={0} cy={boxH / 2} r={3} fill={color} /> : null}
       {markerEnd === 'dot' ? <circle cx={boxW} cy={boxH / 2} r={3} fill={color} /> : null}
     </g>
   )
-}
-
-function cornersSafe(node: DesignNode): number {
-  return typeof node.radius === 'number' ? node.radius : 0
 }
 
 function nodeContainsId(nodes: DesignNode[], id: string): boolean {

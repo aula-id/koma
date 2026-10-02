@@ -52,6 +52,7 @@ export type PaintInspectorPage = {
   allowGradient?: boolean
   box?: { w: number; h: number }
   natural?: { w: number; h: number } | null
+  stroke?: boolean
   onChange: (paint: DesignPaint) => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }
@@ -64,7 +65,13 @@ export type TokenInspectorPage = {
   onPick: (name: string | null) => void
 }
 
-export type InspectorPage = PaintInspectorPage | TokenInspectorPage
+export type DetailInspectorPage = {
+  kind: 'shadow' | 'blur' | 'interaction' | 'text'
+  title: string
+  index?: number
+}
+
+export type InspectorPage = PaintInspectorPage | TokenInspectorPage | DetailInspectorPage
 
 export const InspectorPageContext = createContext<(page: InspectorPage) => void>(() => {})
 
@@ -95,7 +102,7 @@ function parseHex(raw: string, tokens?: DesignToken[]): string | null {
   return null
 }
 
-function InspectorBack({ title, onBack }: { title: string; onBack: () => void }) {
+export function InspectorBack({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <div className="flex h-8 items-center gap-1">
       <button
@@ -120,6 +127,7 @@ export function InspectorPageView({ page, onBack }: { page: InspectorPage; onBac
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onBack])
+  if (page.kind !== 'paint' && page.kind !== 'token') return null
   if (page.kind === 'token') {
     return (
       <div className="flex flex-col gap-2 px-2 pb-2 pt-1 text-[12px]">
@@ -139,9 +147,112 @@ export function InspectorPageView({ page, onBack }: { page: InspectorPage; onBac
         allowGradient={page.allowGradient}
         box={page.box}
         natural={page.natural}
+        stroke={page.stroke}
         onChange={page.onChange}
         onStoreImage={page.onStoreImage}
       />
+    </div>
+  )
+}
+
+function numberField(label: string, aria: string, value: number, onChange: (value: number) => void) {
+  return (
+    <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-koma-bg px-2">
+      <span className="w-14 flex-none truncate text-[11px] text-koma-dim">{label}</span>
+      <input
+        aria-label={aria}
+        defaultValue={String(value)}
+        key={value}
+        onBlur={(event) => {
+          const next = Number(event.target.value)
+          if (Number.isFinite(next)) onChange(next)
+        }}
+        className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
+      />
+    </label>
+  )
+}
+
+function StrokePaintFields({ paint, onChange }: { paint: DesignPaint; onChange: (paint: DesignPaint) => void }) {
+  const [sides, setSides] = useState(paint.top != null || paint.right != null || paint.bottom != null || paint.left != null)
+  const patch = (next: Partial<DesignPaint>) => onChange({ ...paint, ...next })
+  return (
+    <div className="flex flex-col gap-2">
+      {numberField('Width', 'Stroke width', paint.width ?? 1, (width) => patch({ width: width > 0 ? width : undefined }))}
+      <LabeledControl label="Align">
+        <KomaSelect
+          aria-label="Align"
+          value={paint.align ?? 'center'}
+          onChange={(event) => {
+            const align = event.target.value
+            if (align !== 'inside' && align !== 'center' && align !== 'outside') return
+            patch({ align: align === 'center' ? undefined : align })
+          }}
+          className="h-7 w-full px-1.5 text-[12px]"
+        >
+          <option value="inside">Inside</option>
+          <option value="center">Center</option>
+          <option value="outside">Outside</option>
+        </KomaSelect>
+      </LabeledControl>
+      <div className="grid grid-cols-2 gap-1">
+        {numberField('Dash', 'Dash', paint.dash ?? 0, (dash) => patch({ dash: dash > 0 ? dash : undefined }))}
+        {numberField('Gap', 'Gap', paint.gap ?? 0, (gap) => patch({ gap: gap > 0 ? gap : undefined }))}
+      </div>
+      <button
+        type="button"
+        aria-pressed={sides}
+        className={`h-8 rounded-lg text-[12px] ${sides ? 'bg-koma-hover text-koma-fg' : 'bg-koma-bg text-koma-dim hover:text-koma-fg'}`}
+        onClick={() => {
+          setSides((current) => !current)
+          if (sides) patch({ top: undefined, right: undefined, bottom: undefined, left: undefined })
+        }}
+      >
+        {sides ? 'One width' : 'Per-side widths'}
+      </button>
+      {sides ? (
+        <div className="grid grid-cols-2 gap-1">
+          {numberField('Top', 'Stroke top', paint.top ?? paint.width ?? 1, (top) => patch({ top }))}
+          {numberField('Right', 'Stroke right', paint.right ?? paint.width ?? 1, (right) => patch({ right }))}
+          {numberField('Bottom', 'Stroke bottom', paint.bottom ?? paint.width ?? 1, (bottom) => patch({ bottom }))}
+          {numberField('Left', 'Stroke left', paint.left ?? paint.width ?? 1, (left) => patch({ left }))}
+        </div>
+      ) : null}
+      <LabeledControl label="Cap">
+        <KomaSelect aria-label="Cap" value={paint.capStart ?? 'none'} onChange={(event) => patch({ capStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capStart'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="none">None</option>
+          <option value="round">Round</option>
+          <option value="square">Square</option>
+        </KomaSelect>
+      </LabeledControl>
+      <LabeledControl label="End cap">
+        <KomaSelect aria-label="End cap" value={paint.capEnd ?? 'none'} onChange={(event) => patch({ capEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['capEnd'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="none">None</option>
+          <option value="round">Round</option>
+          <option value="square">Square</option>
+        </KomaSelect>
+      </LabeledControl>
+      <LabeledControl label="Start">
+        <KomaSelect aria-label="Start marker" value={paint.markerStart ?? 'none'} onChange={(event) => patch({ markerStart: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerStart'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="none">None</option>
+          <option value="arrow">Arrow</option>
+          <option value="dot">Dot</option>
+        </KomaSelect>
+      </LabeledControl>
+      <LabeledControl label="End">
+        <KomaSelect aria-label="End marker" value={paint.markerEnd ?? 'none'} onChange={(event) => patch({ markerEnd: event.target.value === 'none' ? undefined : event.target.value as DesignPaint['markerEnd'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="none">None</option>
+          <option value="arrow">Arrow</option>
+          <option value="dot">Dot</option>
+        </KomaSelect>
+      </LabeledControl>
+      <LabeledControl label="Join">
+        <KomaSelect aria-label="Join" value={paint.join ?? 'miter'} onChange={(event) => patch({ join: event.target.value === 'miter' ? undefined : event.target.value as DesignPaint['join'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="miter">Miter</option>
+          <option value="round">Round</option>
+          <option value="bevel">Bevel</option>
+        </KomaSelect>
+      </LabeledControl>
     </div>
   )
 }
@@ -154,6 +265,7 @@ export function DesignPaintEditor({
   allowImage = true,
   box,
   natural,
+  stroke = false,
   onChange,
   onStoreImage,
 }: {
@@ -164,6 +276,7 @@ export function DesignPaintEditor({
   allowImage?: boolean
   box?: { w: number; h: number }
   natural?: { w: number; h: number } | null
+  stroke?: boolean
   onChange: (paint: DesignPaint) => void
   onStoreImage?: (hash: string, bytes: Uint8Array, mime: string) => void
 }) {
@@ -418,6 +531,7 @@ export function DesignPaintEditor({
           <span className="flex-none text-[11px] text-koma-dim">%</span>
         </label>
       ) : null}
+      {stroke ? <StrokePaintFields paint={paint} onChange={onChange} /> : null}
       <input
         ref={fileRef}
         type="file"

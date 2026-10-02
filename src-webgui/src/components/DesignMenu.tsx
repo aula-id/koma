@@ -118,31 +118,48 @@ export function DesignMenu({
       if (event.key === 'Escape') onClose()
     }
     const onPointer = (event: PointerEvent) => {
-      if (ref.current?.contains(event.target as Node)) return
+      if (event.button === 2) return
+      const target = event.target as Element | null
+      if (target?.closest('[role="menuitem"]')) return
       onClose()
     }
     window.addEventListener('keydown', onKey)
-    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('pointerdown', onPointer, true)
     return () => {
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('pointerdown', onPointer, true)
     }
   }, [onClose])
   return (
-    <div
-      ref={ref}
-      role="menu"
-      className="fixed z-50 w-[220px] overflow-hidden rounded-md border border-koma-border bg-koma-panel text-[12px] text-koma-fg shadow-lg"
-      style={{ left, top }}
-    >
-      <HoverScroll maxHeight={maxHeight}>
-        <div className="py-1">
-          {items.map((item) => (
-            <MenuRow key={item.id} item={item} onPick={onPick} maxHeight={maxHeight} />
-          ))}
-        </div>
-      </HoverScroll>
-    </div>
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onPointerDown={(event) => {
+          if (event.button === 2) return
+          event.preventDefault()
+          onClose()
+        }}
+      />
+      <div
+        ref={ref}
+        role="menu"
+        className="fixed z-50 w-[220px] overflow-hidden rounded-md border border-koma-border bg-koma-panel text-[12px] text-koma-fg shadow-lg"
+        style={{ left, top }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return
+          if ((event.target as Element).closest('[role="menuitem"]')) return
+          onClose()
+        }}
+      >
+        <HoverScroll maxHeight={maxHeight}>
+          <div className="py-1">
+            {items.map((item) => (
+              <MenuRow key={item.id} item={item} onPick={onPick} maxHeight={maxHeight} />
+            ))}
+          </div>
+        </HoverScroll>
+      </div>
+    </>
   )
 }
 

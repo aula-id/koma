@@ -709,6 +709,38 @@ export function measureTextBox(node: DesignNode): { w: number; h: number } {
 }
 
 /** Resolved corner radii in pixels. An omitted corner uses `radius`. */
+export function roundedRectPath(
+  w: number,
+  h: number,
+  corners: { tl: number; tr: number; br: number; bl: number },
+  inset = 0,
+): string {
+  const x = inset
+  const y = inset
+  const rw = Math.max(0.5, w - inset * 2)
+  const rh = Math.max(0.5, h - inset * 2)
+  const limit = Math.min(rw, rh) / 2
+  const tl = Math.min(Math.max(0, corners.tl), limit)
+  const tr = Math.min(Math.max(0, corners.tr), limit)
+  const br = Math.min(Math.max(0, corners.br), limit)
+  const bl = Math.min(Math.max(0, corners.bl), limit)
+  const right = x + rw
+  const bottom = y + rh
+  const arc = (radius: number, x1: number, y1: number) => (radius > 0 ? `A ${radius} ${radius} 0 0 1 ${x1} ${y1}` : `L ${x1} ${y1}`)
+  return [
+    `M ${x + tl} ${y}`,
+    `L ${right - tr} ${y}`,
+    arc(tr, right, y + tr),
+    `L ${right} ${bottom - br}`,
+    arc(br, right - br, bottom),
+    `L ${x + bl} ${bottom}`,
+    arc(bl, x, bottom - bl),
+    `L ${x} ${y + tl}`,
+    arc(tl, x + tl, y),
+    'Z',
+  ].join(' ')
+}
+
 export function cornerPixels(doc: DesignDoc, node: DesignNode): { tl: number; tr: number; br: number; bl: number } {
   const base = node.radius
   const px = (value: number | string | undefined): number => {
@@ -2443,6 +2475,52 @@ export function designObjectSnap(moving: DesignRect, targets: DesignRect[], dx: 
     snappedY: ySnap != null,
     guides,
     measures: designMeasures(landed, targets),
+  }
+}
+
+/** Snap the edges a resize handle is moving, using the same guides and spacing as a drag. */
+export function designResizeSnap(
+  box: DesignRect,
+  targets: DesignRect[],
+  handle: DesignHandle,
+  threshold: number,
+): DesignSnap & { box: DesignRect } {
+  const right = box.x + box.w
+  const bottom = box.y + box.h
+  let next = { ...box }
+  let xSnap: { delta: number; at: number } | null = null
+  let ySnap: { delta: number; at: number } | null = null
+  if (handle.includes('e')) {
+    xSnap = snapAxis(right, right, targets, 'x', threshold)
+    if (xSnap) next.w = Math.max(1, right + xSnap.delta - next.x)
+  } else if (handle.includes('w')) {
+    xSnap = snapAxis(box.x, box.x, targets, 'x', threshold)
+    if (xSnap) {
+      next.x = box.x + xSnap.delta
+      next.w = Math.max(1, right - next.x)
+    }
+  }
+  if (handle.includes('s')) {
+    ySnap = snapAxis(bottom, bottom, targets, 'y', threshold)
+    if (ySnap) next.h = Math.max(1, bottom + ySnap.delta - next.y)
+  } else if (handle.includes('n')) {
+    ySnap = snapAxis(box.y, box.y, targets, 'y', threshold)
+    if (ySnap) {
+      next.y = box.y + ySnap.delta
+      next.h = Math.max(1, bottom - next.y)
+    }
+  }
+  const guides: DesignGuide[] = []
+  if (xSnap) guides.push({ axis: 'x', at: xSnap.at, ...guideSpan(xSnap.at, 'x', next, targets) })
+  if (ySnap) guides.push({ axis: 'y', at: ySnap.at, ...guideSpan(ySnap.at, 'y', next, targets) })
+  return {
+    box: next,
+    dx: next.x - box.x,
+    dy: next.y - box.y,
+    snappedX: xSnap != null,
+    snappedY: ySnap != null,
+    guides,
+    measures: designMeasures(next, targets),
   }
 }
 

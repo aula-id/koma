@@ -19,6 +19,9 @@ import {
   designDrop,
   effectiveInstanceChild,
   designObjectSnap,
+  designResizeSnap,
+  nodeHasPaint,
+  roundedRectPath,
   designPath,
   designSnapScene,
   designStyle,
@@ -1083,6 +1086,15 @@ function sample(): DesignDoc {
   const inside = designSnapScene({ ...emptyDesign(), screens: [frame] }, ['child'])
   const toEdge = designObjectSnap(inside!.moving, inside!.targets, -6, 0, 5)
   assert.equal(toEdge.dx, -10)
+  const pulled = { x: 104, y: 0, w: 196, h: 100 }
+  const resizeSnap = designResizeSnap(pulled, scene!.targets, 'w', 5)
+  assert.equal(resizeSnap.snappedX, true)
+  assert.equal(resizeSnap.box.x, 100)
+  assert.equal(nodeHasPaint(createNode('rect', 'r', 0, 0), 'fill'), true)
+  assert.equal(nodeHasPaint(createNode('rect', 'r', 0, 0), 'stroke'), false)
+  const path = roundedRectPath(100, 80, { tl: 20, tr: 20, br: 20, bl: 20 })
+  assert.ok(path.startsWith('M 20 0'))
+  assert.ok(path.includes('A 20 20'))
   assert.equal(designCanvasBox(snapDoc, 'right')?.x, 200)
   const framed = frameDesignView([{ x: 0, y: 0, w: 100, h: 100 }], 216, 216, 0.25, 64)
   assert.equal(framed?.zoom, 1.52)

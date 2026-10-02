@@ -28,6 +28,7 @@ import {
   designDrop,
   designLayerName,
   designObjectSnap,
+  designResizeSnap,
   designSnapScene,
   designStyle,
   duplicateDesignNodes,
@@ -764,7 +765,28 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const located = locateDesign(doc, drag.id)
         if (!located) return
         const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
-        const resized = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
+        let resized = resizeDesignNode(drag.node, drag.handle, delta.x, delta.y, doc.grid, doc.snap, event.shiftKey)
+        if (!cropEditRef.current) {
+          const currentBox = designCanvasBox(doc, drag.id)
+          const scene = designSnapScene(doc, [drag.id])
+          if (currentBox && scene) {
+            const proposed = {
+              x: currentBox.x + (resized.x - drag.node.x),
+              y: currentBox.y + (resized.y - drag.node.y),
+              w: resized.w,
+              h: resized.h,
+            }
+            const snap = designResizeSnap(proposed, scene.targets, drag.handle, 5 / zoom)
+            resized = {
+              ...resized,
+              x: resized.x + (snap.box.x - proposed.x),
+              y: resized.y + (snap.box.y - proposed.y),
+              w: snap.box.w,
+              h: snap.box.h,
+            }
+            setSnapMarks(snap.guides.length || snap.measures.length ? { guides: snap.guides, measures: snap.measures } : null)
+          }
+        }
         const nextNode = cropEditRef.current ? keepImageCropWorldFixed(drag.node, resized) : resized
         const next = projectDoc(stored, focus, layoutDesign(updateDesignNode(doc, drag.id, () => nextNode)))
         if (serializeDesign(next) === serializeDesign(stored)) return
@@ -1666,6 +1688,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       return
     }
     if (event.button !== 0) return
+    setMenu(null)
     const point = toDoc(event.clientX, event.clientY)
     if (!point || !file) return
     if (tool === 'pen') {
@@ -2120,6 +2143,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 }}
                 onSelect={(id, event) => {
                   setOverrideTargetId(null)
+                  if (event.button === 0) setMenu(null)
                   if (event.button === 1 || spaceRef.current || toolRef.current === 'pan') {
                     event.preventDefault()
                     event.stopPropagation()

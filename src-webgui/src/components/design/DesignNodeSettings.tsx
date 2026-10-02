@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  ChevronRight,
   AlignCenterHorizontal,
   AlignCenterVertical,
   AlignEndHorizontal,
@@ -31,19 +32,19 @@ import {
 } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
 import { DesignModeContext } from './DesignTokenMenu'
-import { InspectorPageContext, InspectorPageView, type InspectorPage } from './DesignPaintPopup'
+import { InspectorBack, InspectorPageContext, InspectorPageView, type InspectorPage } from './DesignPaintPopup'
 import {
   designChatText,
   designChatTitle,
   designLayerName,
   designQueryNode,
   mergeDesignOverride,
-  appendNodePaint,
   applyFramePreset,
   applyTextRun,
   bindNodeField,
   designImageSize,
   ensureImageCrop,
+  nodeHasPaint,
   nodePaints,
   setNodePaints,
   reshapeDesignNode,
@@ -69,6 +70,7 @@ import {
   type DesignReshapeKind,
   type DesignOverlayPlace,
   type DesignTextRun,
+  type DesignToken,
 } from '../../lib/design'
 import { SHAPE_FILL } from './tabShared'
 import { InstanceOverrides } from './DesignPropertyFields'
@@ -215,7 +217,6 @@ export function NodeSettings({
   const hField = numberOf((item) => item.h)
   const rotationField = numberOf((item) => item.rotation ?? 0)
   const opacityField = numberOf((item) => Math.round((item.opacity ?? 1) * 100))
-  const strokeWidthField = numberOf((item) => nodeChrome(item).strokeWidth)
   const radiusField = textOf((item) => (typeof item.radius === 'number' ? (item.radius > 0 ? String(item.radius) : '0') : item.radius || '0'))
   const fillField = textOf((item) => containerPaint(item, 'fill', nodeChrome(item).fill))
   const strokeField = textOf((item) => containerPaint(item, 'stroke', nodeChrome(item).stroke))
@@ -295,6 +296,7 @@ export function NodeSettings({
     }
     setInspectorPage(page)
   }
+  const closeInspector = () => setInspectorPage(null)
   useEffect(() => {
     if (!openFillToken || multi) return
     const paints = nodePaints(node, 'fill')
@@ -325,8 +327,16 @@ export function NodeSettings({
   return (
     <DesignModeContext.Provider value={doc.mode}>
     <InspectorPageContext.Provider value={openInspectorPage}>
-    {inspectorPage ? (
-      <InspectorPageView page={inspectorPage} onBack={() => setInspectorPage(null)} />
+    {inspectorPage && (inspectorPage.kind === 'paint' || inspectorPage.kind === 'token') ? (
+      <InspectorPageView page={inspectorPage} onBack={closeInspector} />
+    ) : inspectorPage ? (
+      <div className="flex flex-col gap-2 px-2 pb-2 pt-1 text-[12px]">
+        <InspectorBack title={inspectorPage.title} onBack={closeInspector} />
+        {inspectorPage.kind === 'shadow' ? <ShadowPage doc={doc} node={node} index={inspectorPage.index ?? 0} colorTokens={colorTokens} onPatch={onPatch} /> : null}
+        {inspectorPage.kind === 'blur' ? <BlurPage node={node} index={inspectorPage.index ?? 0} onPatch={onPatch} /> : null}
+        {inspectorPage.kind === 'interaction' ? <InteractionPage node={node} index={inspectorPage.index ?? 0} frames={frames} onPatch={setField} /> : null}
+        {inspectorPage.kind === 'text' ? <TextMorePage node={node} setField={setField} selectedText={selectedText} applyType={applyType} /> : null}
+      </div>
     ) : (
     <div className="flex flex-col gap-1 px-2 pb-2 text-[12px]">
       {onMakeComponent || onAddToChat ? (
@@ -1074,14 +1084,16 @@ export function NodeSettings({
         title="Fill"
         action={(
           <AlignButton label="Add fill" onClick={() => onPatch((current) => {
+            if (nodeHasPaint(current, 'fill')) return current
             const color = current.kind === 'frame' ? '#ffffff' : SHAPE_FILL
-            return appendNodePaint(current, 'fill', solidPaint(color), solidPaint(color))
+            return setNodeSolid(current, 'fill', color)
           })}>
             <Plus size={14} />
           </AlignButton>
         )}
       >
         {multi ? (
+          fillField.mixed || fillField.value !== 'none' ? (
           <PaintRow
             label="Fill"
             doc={doc}
@@ -1092,6 +1104,7 @@ export function NodeSettings({
             tokens={colorTokens}
             onChange={(next) => paintChange('fill', next)}
           />
+          ) : null
         ) : (
           <FillEditor label="Fill" doc={doc} node={node} field="fill" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onPickImage={onPickImage} onStoreImage={onStoreImage} />
         )}
@@ -1099,12 +1112,13 @@ export function NodeSettings({
       <Section
         title="Stroke"
         action={(
-          <AlignButton label="Add stroke" onClick={() => onPatch((current) => appendNodePaint(current, 'stroke', solidPaint('#1c1c1c'), solidPaint('#1c1c1c')))}>
+          <AlignButton label="Add stroke" onClick={() => onPatch((current) => nodeHasPaint(current, 'stroke') ? current : setNodeSolid(current, 'stroke', '#1c1c1c'))}>
             <Plus size={14} />
           </AlignButton>
         )}
       >
         {multi ? (
+          strokeField.mixed || strokeField.value !== 'none' ? (
           <PaintRow
             label="Stroke"
             doc={doc}
@@ -1113,67 +1127,12 @@ export function NodeSettings({
             fallback="#8b93b8"
             resolved={resolveRef(doc, chrome.stroke)}
             tokens={colorTokens}
-            weight={strokeWidthField}
-            onWeight={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])}
             onChange={(next) => paintChange('stroke', next)}
           />
+          ) : null
         ) : (
           <FillEditor label="Stroke" doc={doc} node={node} field="stroke" tokens={colorTokens} onChange={(next) => onPatch(() => next)} onStoreImage={onStoreImage} />
         )}
-        {multi ? (
-        <div className="flex flex-col gap-1.5">
-          <GeomField label="Width" ariaLabel="Width" value={strokeWidthField.value} mixed={strokeWidthField.mixed} tokens={spaceTokens} bound={node.bindings?.strokeWidth} onBind={(token) => bindField('strokeWidth', token)} onChange={(strokeWidth) => setField(strokeWidth > 0 && strokeWidth !== 1 ? { strokeWidth } : {}, strokeWidth > 0 && strokeWidth !== 1 ? [] : ['strokeWidth'])} />
-          <LabeledControl label="Align">
-            <KomaSelect
-              aria-label="Alignment"
-              value={node.strokeAlign ?? 'center'}
-              onChange={(event) => {
-                const strokeAlign = event.target.value
-                if (strokeAlign !== 'inside' && strokeAlign !== 'center' && strokeAlign !== 'outside') return
-                setField(strokeAlign === 'center' ? {} : { strokeAlign }, strokeAlign === 'center' ? ['strokeAlign'] : [])
-              }}
-              className="h-7 w-full px-1.5 text-[12px]"
-            >
-              <option value="inside">Inside</option>
-              <option value="center">Center</option>
-              <option value="outside">Outside</option>
-            </KomaSelect>
-          </LabeledControl>
-          <LabeledControl label="Style">
-            <KomaSelect
-              aria-label="Style"
-              value={!node.strokeDash?.length ? 'solid' : (node.strokeDash[0] ?? 4) <= 1 ? 'dotted' : 'dashed'}
-              onChange={(event) => {
-                const style = event.target.value
-                if (style === 'solid') setField({}, ['strokeDash'])
-                else if (style === 'dotted') setField({ strokeDash: [1, 3] })
-                else setField({ strokeDash: [4, 4] })
-              }}
-              className="h-7 w-full px-1.5 text-[12px]"
-            >
-              <option value="solid">Solid</option>
-              <option value="dashed">Dashed</option>
-              <option value="dotted">Dotted</option>
-            </KomaSelect>
-          </LabeledControl>
-          <LabeledControl label="Cap">
-            <KomaSelect
-              aria-label="Cap"
-              value={node.strokeCap ?? 'none'}
-              onChange={(event) => {
-                const strokeCap = event.target.value
-                if (strokeCap !== 'none' && strokeCap !== 'round' && strokeCap !== 'square') return
-                setField(strokeCap === 'none' ? {} : { strokeCap }, strokeCap === 'none' ? ['strokeCap'] : [])
-              }}
-              className="h-7 w-full px-1.5 text-[12px]"
-            >
-              <option value="none">None</option>
-              <option value="round">Round</option>
-              <option value="square">Square</option>
-            </KomaSelect>
-          </LabeledControl>
-        </div>
-        ) : null}
       </Section>
       {hasParent && (!sizeModes || node.absolute) ? (
         <Section title="Constraints">
@@ -1236,58 +1195,23 @@ export function NodeSettings({
         )}
       >
         {(node.effects ?? []).map((effect, index) => {
-          const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
-          const removeEffect = () => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))
-          if (effect.kind === 'drop-shadow' || effect.kind === 'inner-shadow') {
-            return (
-              <div key={`${effect.kind}-${index}`} className="flex flex-col gap-1">
-                <div className="flex items-center gap-1">
-                  <AlignButton label={effect.visible === false ? 'Show shadow' : 'Hide shadow'} pressed={effect.visible === false} onClick={() => patchEffect({ visible: effect.visible === false ? undefined : false })}>
-                    {effect.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
-                  </AlignButton>
-                  <AlignButton label="Move up" onClick={() => onPatch((current) => {
-                    if (index === 0) return current
-                    const effects = (current.effects ?? []).slice()
-                    const [moved] = effects.splice(index, 1)
-                    effects.splice(index - 1, 0, moved)
-                    return { ...current, effects }
-                  })}><span className="text-[10px]">↑</span></AlignButton>
-                  <KomaSelect
-                    aria-label="Shadow type"
-                    value={effect.kind}
-                    onChange={(event) => {
-                      const kind = event.target.value
-                      if (kind === 'drop-shadow' || kind === 'inner-shadow') patchEffect({ kind })
-                    }}
-                    className="h-8 min-w-0 flex-1 px-1.5 text-[12px]"
-                  >
-                    <option value="drop-shadow">Drop shadow</option>
-                    <option value="inner-shadow">Inner shadow</option>
-                  </KomaSelect>
-                  <button type="button" title="Remove" aria-label="Remove shadow" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
-                    <X size={13} />
-                  </button>
-                </div>
-                <ColorRow
-                  doc={doc}
-                  paint={solidPaint(effect.color && effect.color !== 'none' ? effect.color : '#000000')}
-                  fallback="#000000"
-                  tokens={colorTokens}
-                  pageTitle="Shadow"
-                  allowImage={false}
-                  allowGradient={false}
-                  onChange={(paint) => patchEffect({ color: paint.color && paint.color !== 'none' ? paint.color : '#000000' })}
-                />
-                <div className="grid grid-cols-2 gap-1">
-                  <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => patchEffect({ x })} />
-                  <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => patchEffect({ y })} />
-                  <GeomField label="Blur" ariaLabel="Shadow blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
-                  <GeomField label="Spread" ariaLabel="Shadow spread" value={effect.spread ?? 0} onChange={(spread) => patchEffect({ spread })} />
-                </div>
-              </div>
-            )
-          }
-          return null
+          if (effect.kind !== 'drop-shadow' && effect.kind !== 'inner-shadow') return null
+          return (
+            <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-koma-bg px-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                onClick={() => setInspectorPage({ kind: 'shadow', title: 'Shadow', index })}
+              >
+                <span className="h-4 w-4 flex-none rounded-full border border-koma-border" style={{ background: effect.color && effect.color !== 'none' ? effect.color : '#000000' }} />
+                <span className="min-w-0 flex-1 truncate">{effect.kind === 'inner-shadow' ? 'Inner' : 'Drop'}</span>
+                <ChevronRight size={14} className="flex-none text-koma-dim" />
+              </button>
+              <button type="button" title="Remove" aria-label="Remove shadow" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>
+                <X size={13} />
+              </button>
+            </div>
+          )
         })}
       </Section>
       <Section
@@ -1300,35 +1224,19 @@ export function NodeSettings({
       >
         {(node.effects ?? []).map((effect, index) => {
           if (effect.kind !== 'layer-blur' && effect.kind !== 'background-blur') return null
-          const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
-          const removeEffect = () => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))
           return (
-            <div key={`${effect.kind}-${index}`} className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-1">
-                <AlignButton label={effect.visible === false ? 'Show blur' : 'Hide blur'} pressed={effect.visible === false} onClick={() => patchEffect({ visible: effect.visible === false ? undefined : false })}>
-                  {effect.visible === false ? <EyeOff size={14} /> : <Eye size={14} />}
-                </AlignButton>
-                <div className="min-w-0 flex-1">
-                  <LabeledControl label="Type">
-                    <KomaSelect
-                      aria-label="Blur type"
-                      value={effect.kind}
-                      onChange={(event) => {
-                        const kind = event.target.value
-                        if (kind === 'layer-blur' || kind === 'background-blur') patchEffect({ kind })
-                      }}
-                      className="h-7 w-full px-1.5 text-[12px]"
-                    >
-                      <option value="layer-blur">Layer</option>
-                      <option value="background-blur">Background</option>
-                    </KomaSelect>
-                  </LabeledControl>
-                </div>
-                <button type="button" title="Remove" aria-label="Remove blur" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={removeEffect}>
-                  <X size={13} />
-                </button>
-              </div>
-              <GeomField label="Blur" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+            <div key={`${effect.kind}-${index}`} className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-koma-bg px-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                onClick={() => setInspectorPage({ kind: 'blur', title: 'Blur', index })}
+              >
+                <span className="min-w-0 flex-1 truncate">{effect.kind === 'background-blur' ? 'Background' : 'Layer'} · {effect.blur ?? 4}</span>
+                <ChevronRight size={14} className="flex-none text-koma-dim" />
+              </button>
+              <button type="button" title="Remove" aria-label="Remove blur" className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover hover:text-koma-fg" onClick={() => onPatch((current) => ({ ...current, effects: (current.effects ?? []).filter((_, at) => at !== index) }))}>
+                <X size={13} />
+              </button>
             </div>
           )
         })}
@@ -1425,7 +1333,6 @@ export function NodeSettings({
             <AlignButton label="Underline" pressed={!!node.underline} onClick={() => applyType(node.underline ? {} : { underline: true }, node.underline ? ['underline'] : [])}><span className="text-[10px] underline">U</span></AlignButton>
             <AlignButton label="Strike" pressed={!!node.strike} onClick={() => applyType(node.strike ? {} : { strike: true }, node.strike ? ['strike'] : [])}><span className="text-[10px] line-through">S</span></AlignButton>
           </div>
-          <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'As typed' }, { value: 'upper', label: 'UPPER' }, { value: 'lower', label: 'lower' }, { value: 'title', label: 'Title' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
           <PaintRow
             label="Color"
             doc={doc}
@@ -1437,39 +1344,6 @@ export function NodeSettings({
             onChange={(next) => applyType(next && next !== 'none' ? { color: next, fill: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
           <div className="grid grid-cols-2 gap-1">
-            <Choices
-              label="Truncate"
-              value={node.truncate ?? 'off'}
-              options={[{ value: 'off', label: 'Off' }, { value: 'end', label: 'End' }]}
-              onChange={(truncate) => setField(truncate === 'off' ? {} : { truncate }, truncate === 'off' ? ['truncate'] : [])}
-            />
-            <GeomField label="Lines" ariaLabel="Max lines" value={node.maxLines ?? 0} onChange={(maxLines) => setField(maxLines > 0 ? { maxLines: Math.round(maxLines) } : {}, maxLines > 0 ? [] : ['maxLines'])} />
-          </div>
-          {selectedText ? (
-            <p className="truncate text-[11px] text-koma-dim" title={(node.text ?? '').slice(selectedText.start, selectedText.end)}>
-              Selection: {(node.text ?? '').slice(selectedText.start, selectedText.end) || '…'}
-            </p>
-          ) : (
-            <p className="text-[11px] text-koma-dim">Select text on the canvas to style a run</p>
-          )}
-          {(node.runs ?? []).map((run, index) => (
-            <div key={`${run.start}-${index}`} className="flex items-center gap-1">
-              <span className="min-w-0 flex-1 truncate rounded-lg bg-koma-bg px-2 py-1 text-[11px] text-koma-fg" title={(node.text ?? '').slice(run.start, run.end)}>
-                {(node.text ?? '').slice(run.start, run.end) || '…'}
-                {run.fontSize ? ` · ${run.fontSize}` : ''}
-              </span>
-              <button type="button" title="Remove run" aria-label="Remove run" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
-                const runs = (node.runs ?? []).filter((_, at) => at !== index)
-                setField(runs.length ? { runs } : {}, runs.length ? [] : ['runs'])
-              }}><X size={12} /></button>
-            </div>
-          ))}
-          {selectedText ? (
-            <AlignButton label="Style selection" onClick={() => applyType({ fontSize: node.fontSize ?? 13 })}>
-              <Plus size={14} />
-            </AlignButton>
-          ) : null}
-          <div className="grid grid-cols-2 gap-1">
             <GeomField label="Line" ariaLabel="Line height" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {
               if (!Number.isFinite(lineHeight) || lineHeight <= 0) setField({}, ['lineHeight'])
               else setField({ lineHeight })
@@ -1479,6 +1353,14 @@ export function NodeSettings({
               else setField({ letterSpacing })
             }} />
           </div>
+          <button
+            type="button"
+            className="flex h-8 w-full items-center justify-between rounded-lg bg-koma-bg px-2 text-[12px] text-koma-fg hover:bg-koma-hover"
+            onClick={() => setInspectorPage({ kind: 'text', title: 'Text' })}
+          >
+            <span>More</span>
+            <ChevronRight size={14} className="text-koma-dim" />
+          </button>
         </Section>
       ) : null}
       {!multi && (node.kind === 'vector' || node.kind === 'line') ? (
@@ -1533,87 +1415,24 @@ export function NodeSettings({
             </AlignButton>
           )}
         >
-          {(node.interactions ?? []).map((item, index) => {
-            const patch = (next: Partial<DesignInteraction>) => setField({ interactions: (node.interactions ?? []).map((row, at) => (at === index ? { ...row, ...next } : row)) })
-            return (
-            <div key={`${item.trigger}-${item.action}-${index}`} className="flex flex-col gap-1.5">
-              <div className="flex items-start gap-1">
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                  <LabeledControl label="When">
-                    <KomaSelect aria-label="Trigger" value={item.trigger} onChange={(event) => patch({ trigger: event.target.value as DesignInteraction['trigger'] })} className="h-7 w-full px-1.5 text-[12px]">
-                      <option value="click">Click</option>
-                      <option value="mouse-enter">Mouse enter</option>
-                      <option value="mouse-leave">Mouse leave</option>
-                      <option value="after-delay">After delay</option>
-                    </KomaSelect>
-                  </LabeledControl>
-                  <LabeledControl label="Do">
-                    <KomaSelect aria-label="Action" value={item.action} onChange={(event) => patch({ action: event.target.value as DesignInteraction['action'] })} className="h-7 w-full px-1.5 text-[12px]">
-                      <option value="navigate">Navigate</option>
-                      <option value="open-overlay">Open overlay</option>
-                      <option value="toggle-overlay">Toggle overlay</option>
-                      <option value="close-overlay">Close overlay</option>
-                      <option value="prev-screen">Previous</option>
-                      <option value="open-url">Open URL</option>
-                    </KomaSelect>
-                  </LabeledControl>
-                </div>
-                <button type="button" title="Remove" aria-label="Remove interaction" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
-                  const next = (node.interactions ?? []).filter((_, at) => at !== index)
-                  setField(next.length ? { interactions: next } : {}, next.length ? [] : ['interactions'])
-                }}>
-                  <X size={13} />
-                </button>
-              </div>
-              <GeomField label="Delay" ariaLabel="Delay" suffix="ms" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
-              {item.action === 'open-url' ? (
-                <LabeledControl label="URL">
-                  <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 w-full bg-transparent text-[12px] text-koma-fg outline-none" />
-                </LabeledControl>
-              ) : null}
-              {item.action === 'navigate' || item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-                <LabeledControl label="Frame" wide>
-                  <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-7 w-full px-1.5 text-[12px]">
-                    <option value="">Choose frame</option>
-                    {frames.map((frame) => (
-                      <option key={frame.id} value={frame.id}>{designLayerName(frame)}</option>
-                    ))}
-                  </KomaSelect>
-                </LabeledControl>
-              ) : null}
-              {item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-                <>
-                  <LabeledControl label="Place">
-                    <KomaSelect
-                      aria-label="Overlay place"
-                      value={item.overlayPlace ?? 'manual'}
-                      onChange={(event) => {
-                        const overlayPlace = event.target.value as DesignOverlayPlace
-                        patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
-                      }}
-                      className="h-7 w-full px-1.5 text-[12px]"
-                    >
-                      <option value="manual">Manual</option>
-                      <option value="center">Center</option>
-                      <option value="top-left">Top left</option>
-                      <option value="top">Top</option>
-                      <option value="top-right">Top right</option>
-                      <option value="left">Left</option>
-                      <option value="right">Right</option>
-                      <option value="bottom-left">Bottom left</option>
-                      <option value="bottom">Bottom</option>
-                      <option value="bottom-right">Bottom right</option>
-                    </KomaSelect>
-                  </LabeledControl>
-                  <div className="grid grid-cols-2 gap-1">
-                    <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
-                    <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />
-                  </div>
-                </>
-              ) : null}
+          {(node.interactions ?? []).map((item, index) => (
+            <div key={`${item.trigger}-${item.action}-${index}`} className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-koma-bg px-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                onClick={() => setInspectorPage({ kind: 'interaction', title: 'Interaction', index })}
+              >
+                <span className="min-w-0 flex-1 truncate">{item.trigger.replace('-', ' ')} → {item.action.replace('-', ' ')}</span>
+                <ChevronRight size={14} className="flex-none text-koma-dim" />
+              </button>
+              <button type="button" title="Remove" aria-label="Remove interaction" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
+                const next = (node.interactions ?? []).filter((_, at) => at !== index)
+                setField(next.length ? { interactions: next } : {}, next.length ? [] : ['interactions'])
+              }}>
+                <X size={13} />
+              </button>
             </div>
-            )
-          })}
+          ))}
         </Section>
       ) : null}
       {colorTokens.length || doc.tokens.some((token) => token.kind === 'space' || token.kind === 'radius') ? (
@@ -1650,5 +1469,225 @@ export function NodeSettings({
     )}
     </InspectorPageContext.Provider>
     </DesignModeContext.Provider>
+  )
+}
+
+function ShadowPage({
+  doc,
+  node,
+  index,
+  colorTokens,
+  onPatch,
+}: {
+  doc: DesignDoc
+  node: DesignNode
+  index: number
+  colorTokens: DesignToken[]
+  onPatch: (fn: (node: DesignNode) => DesignNode) => void
+}) {
+  const effect = node.effects?.[index]
+  if (!effect || (effect.kind !== 'drop-shadow' && effect.kind !== 'inner-shadow')) return null
+  const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
+  return (
+    <div className="flex flex-col gap-2">
+      <LabeledControl label="Type">
+        <KomaSelect
+          aria-label="Shadow type"
+          value={effect.kind}
+          onChange={(event) => {
+            const kind = event.target.value
+            if (kind === 'drop-shadow' || kind === 'inner-shadow') patchEffect({ kind })
+          }}
+          className="h-7 w-full px-1.5 text-[12px]"
+        >
+          <option value="drop-shadow">Drop shadow</option>
+          <option value="inner-shadow">Inner shadow</option>
+        </KomaSelect>
+      </LabeledControl>
+      <ColorRow
+        doc={doc}
+        paint={solidPaint(effect.color && effect.color !== 'none' ? effect.color : '#000000')}
+        fallback="#000000"
+        tokens={colorTokens}
+        pageTitle="Shadow"
+        allowImage={false}
+        allowGradient={false}
+        onChange={(paint) => patchEffect({ color: paint.color && paint.color !== 'none' ? paint.color : '#000000' })}
+      />
+      <div className="grid grid-cols-2 gap-1">
+        <GeomField label="X" ariaLabel="Shadow X" value={effect.x ?? 0} onChange={(x) => patchEffect({ x })} />
+        <GeomField label="Y" ariaLabel="Shadow Y" value={effect.y ?? 4} onChange={(y) => patchEffect({ y })} />
+        <GeomField label="Blur" ariaLabel="Shadow blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+        <GeomField label="Spread" ariaLabel="Shadow spread" value={effect.spread ?? 0} onChange={(spread) => patchEffect({ spread })} />
+      </div>
+    </div>
+  )
+}
+
+function BlurPage({
+  node,
+  index,
+  onPatch,
+}: {
+  node: DesignNode
+  index: number
+  onPatch: (fn: (node: DesignNode) => DesignNode) => void
+}) {
+  const effect = node.effects?.[index]
+  if (!effect || (effect.kind !== 'layer-blur' && effect.kind !== 'background-blur')) return null
+  const patchEffect = (next: Partial<typeof effect>) => onPatch((current) => ({ ...current, effects: (current.effects ?? []).map((item, at) => (at === index ? { ...item, ...next } : item)) }))
+  return (
+    <div className="flex flex-col gap-2">
+      <LabeledControl label="Type">
+        <KomaSelect
+          aria-label="Blur type"
+          value={effect.kind}
+          onChange={(event) => {
+            const kind = event.target.value
+            if (kind === 'layer-blur' || kind === 'background-blur') patchEffect({ kind })
+          }}
+          className="h-7 w-full px-1.5 text-[12px]"
+        >
+          <option value="layer-blur">Layer</option>
+          <option value="background-blur">Background</option>
+        </KomaSelect>
+      </LabeledControl>
+      <GeomField label="Blur" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
+    </div>
+  )
+}
+
+function InteractionPage({
+  node,
+  index,
+  frames,
+  onPatch,
+}: {
+  node: DesignNode
+  index: number
+  frames: DesignNode[]
+  onPatch: (patch: Partial<DesignNode>, clear?: (keyof DesignNode)[]) => void
+}) {
+  const item = node.interactions?.[index]
+  if (!item) return null
+  const patch = (next: Partial<DesignInteraction>) => onPatch({ interactions: (node.interactions ?? []).map((row, at) => (at === index ? { ...row, ...next } : row)) })
+  return (
+    <div className="flex flex-col gap-2">
+      <LabeledControl label="When">
+        <KomaSelect aria-label="Trigger" value={item.trigger} onChange={(event) => patch({ trigger: event.target.value as DesignInteraction['trigger'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="click">Click</option>
+          <option value="mouse-enter">Mouse enter</option>
+          <option value="mouse-leave">Mouse leave</option>
+          <option value="after-delay">After delay</option>
+        </KomaSelect>
+      </LabeledControl>
+      <LabeledControl label="Do">
+        <KomaSelect aria-label="Action" value={item.action} onChange={(event) => patch({ action: event.target.value as DesignInteraction['action'] })} className="h-7 w-full px-1.5 text-[12px]">
+          <option value="navigate">Navigate</option>
+          <option value="open-overlay">Open overlay</option>
+          <option value="toggle-overlay">Toggle overlay</option>
+          <option value="close-overlay">Close overlay</option>
+          <option value="prev-screen">Previous</option>
+          <option value="open-url">Open URL</option>
+        </KomaSelect>
+      </LabeledControl>
+      <GeomField label="Delay" ariaLabel="Delay" suffix="ms" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
+      {item.action === 'open-url' ? (
+        <LabeledControl label="URL">
+          <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 w-full bg-transparent text-[12px] text-koma-fg outline-none" />
+        </LabeledControl>
+      ) : null}
+      {item.action === 'navigate' || item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
+        <LabeledControl label="Frame">
+          <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-7 w-full px-1.5 text-[12px]">
+            <option value="">Choose frame</option>
+            {frames.map((frame) => (
+              <option key={frame.id} value={frame.id}>{designLayerName(frame)}</option>
+            ))}
+          </KomaSelect>
+        </LabeledControl>
+      ) : null}
+      {item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
+        <>
+          <LabeledControl label="Place">
+            <KomaSelect
+              aria-label="Overlay place"
+              value={item.overlayPlace ?? 'manual'}
+              onChange={(event) => {
+                const overlayPlace = event.target.value as DesignOverlayPlace
+                patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
+              }}
+              className="h-7 w-full px-1.5 text-[12px]"
+            >
+              <option value="manual">Manual</option>
+              <option value="center">Center</option>
+              <option value="top-left">Top left</option>
+              <option value="top">Top</option>
+              <option value="top-right">Top right</option>
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+              <option value="bottom-left">Bottom left</option>
+              <option value="bottom">Bottom</option>
+              <option value="bottom-right">Bottom right</option>
+            </KomaSelect>
+          </LabeledControl>
+          <div className="grid grid-cols-2 gap-1">
+            <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
+            <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function TextMorePage({
+  node,
+  setField,
+  selectedText,
+  applyType,
+}: {
+  node: DesignNode
+  setField: (patch: Partial<DesignNode>, clear?: (keyof DesignNode)[]) => void
+  selectedText: { start: number; end: number } | null
+  applyType: (patch: Partial<DesignNode>, clear?: (keyof DesignNode)[]) => void
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Choices label="Case" value={node.textCase ?? 'original'} options={[{ value: 'original', label: 'As typed' }, { value: 'upper', label: 'UPPER' }, { value: 'lower', label: 'lower' }, { value: 'title', label: 'Title' }]} onChange={(textCase) => setField(textCase === 'original' ? {} : { textCase }, textCase === 'original' ? ['textCase'] : [])} />
+      <div className="grid grid-cols-2 gap-1">
+        <Choices
+          label="Truncate"
+          value={node.truncate ?? 'off'}
+          options={[{ value: 'off', label: 'Off' }, { value: 'end', label: 'End' }]}
+          onChange={(truncate) => setField(truncate === 'off' ? {} : { truncate }, truncate === 'off' ? ['truncate'] : [])}
+        />
+        <GeomField label="Lines" ariaLabel="Max lines" value={node.maxLines ?? 0} onChange={(maxLines) => setField(maxLines > 0 ? { maxLines: Math.round(maxLines) } : {}, maxLines > 0 ? [] : ['maxLines'])} />
+      </div>
+      {selectedText ? (
+        <p className="truncate text-[11px] text-koma-dim" title={(node.text ?? '').slice(selectedText.start, selectedText.end)}>
+          Selection: {(node.text ?? '').slice(selectedText.start, selectedText.end) || '…'}
+        </p>
+      ) : (
+        <p className="text-[11px] text-koma-dim">Select text on the canvas to style a run</p>
+      )}
+      {(node.runs ?? []).map((run, index) => (
+        <div key={`${run.start}-${index}`} className="flex items-center gap-1">
+          <span className="min-w-0 flex-1 truncate rounded-lg bg-koma-bg px-2 py-1 text-[11px] text-koma-fg" title={(node.text ?? '').slice(run.start, run.end)}>
+            {(node.text ?? '').slice(run.start, run.end) || '…'}
+            {run.fontSize ? ` · ${run.fontSize}` : ''}
+          </span>
+          <button type="button" title="Remove run" aria-label="Remove run" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
+            const runs = (node.runs ?? []).filter((_, at) => at !== index)
+            setField(runs.length ? { runs } : {}, runs.length ? [] : ['runs'])
+          }}><X size={12} /></button>
+        </div>
+      ))}
+      {selectedText ? (
+        <AlignButton label="Style selection" onClick={() => applyType({ fontSize: node.fontSize ?? 13 })}>
+          <Plus size={14} />
+        </AlignButton>
+      ) : null}
+    </div>
   )
 }
