@@ -29,19 +29,6 @@ export type DesignTextTruncate = 'off' | 'end'
 export type DesignBooleanOp = 'union' | 'subtract' | 'intersect' | 'exclude'
 export type DesignEffectKind = 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur'
 export type DesignStrokeMarker = 'none' | 'arrow' | 'dot'
-export type DesignInteractionTrigger = 'click' | 'mouse-enter' | 'mouse-leave' | 'after-delay'
-export type DesignInteractionAction = 'navigate' | 'open-overlay' | 'toggle-overlay' | 'close-overlay' | 'prev-screen' | 'open-url'
-export type DesignOverlayPlace = 'manual' | 'center' | 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right'
-export type DesignInteraction = {
-  trigger: DesignInteractionTrigger
-  action: DesignInteractionAction
-  target?: string
-  delay?: number
-  url?: string
-  overlayPlace?: DesignOverlayPlace
-  overlayX?: number
-  overlayY?: number
-}
 export type DesignLayoutGrid = { kind: 'square' | 'column' | 'row'; align?: 'stretch' | 'start' | 'center' | 'end'; size?: number; color?: string; gutter?: number; count?: number; offset?: number }
 export type DesignPageView = { panX: number; panY: number; zoom: number }
 export type DesignBindingMap = Record<string, string>
@@ -188,7 +175,6 @@ export type DesignNode = {
   marginBottom?: number
   marginLeft?: number
   layoutGrids?: DesignLayoutGrid[]
-  interactions?: DesignInteraction[]
   svgAttrs?: Record<string, string>
   bindings?: DesignBindingMap
   proportion?: boolean

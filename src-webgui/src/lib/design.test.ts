@@ -107,15 +107,12 @@ import {
   detachInstance,
   applyNodeBindings,
   boundNumber,
-  emptyPlayState,
   graphToDesign,
   hexToHsb,
   applyTextRun,
   maskClipCss,
   nodeChangesToDesign,
-  playOverlayPosition,
   retargetTextRuns,
-  runPlayAction,
   siblingMaskStyle,
   splitTextByRuns,
   visibleDesignScreens,
@@ -1486,13 +1483,6 @@ function sample(): DesignDoc {
 }
 
 {
-  const frame = createNode('frame', 'f', 0, 0)
-  frame.interactions = [{ trigger: 'click', action: 'navigate', target: 'home' }]
-  const parsed = parseDesign(serializeDesign({ ...emptyDesign(), screens: [frame] }))
-  assert.equal(parsed.doc.screens[0].interactions?.[0].target, 'home')
-}
-
-{
   const root = createNode('frame', 'root', 0, 0)
   const kid = createNode('text', 'kid', 0, 0)
   kid.text = 'Hi'
@@ -1557,20 +1547,6 @@ function sample(): DesignDoc {
   assert.equal(bound.gap, 16)
   const laid = layoutDesign({ ...next, screens: [frame] }).screens[0]
   assert.equal(laid.children?.[1].x, 36)
-}
-
-{
-  const doc = emptyDesign()
-  const home = createNode('frame', 'home', 0, 0)
-  const overlay = createNode('frame', 'overlay', 400, 0)
-  overlay.interactions = [{ trigger: 'click', action: 'prev-screen' }]
-  home.interactions = [{ trigger: 'click', action: 'open-overlay', target: 'overlay', overlayX: 8, overlayY: 12 }]
-  doc.screens = [home, overlay]
-  const started = emptyPlayState(doc)
-  const opened = runPlayAction(doc, started, home.interactions[0])
-  assert.equal(opened.overlays[0]?.id, 'overlay')
-  const closed = runPlayAction(doc, opened, { trigger: 'click', action: 'close-overlay' })
-  assert.equal(closed.overlays.length, 0)
 }
 
 {
@@ -1657,18 +1633,6 @@ function sample(): DesignDoc {
   const shifted = retargetTextRuns(runs, 'Hello!!', 'HeXlo!!')
   assert.equal(shifted[0].start, 1)
   assert.equal(splitTextByRuns('Hello', runs).some((part) => part.run?.fontSize === 20), true)
-}
-
-{
-  const screen = createNode('frame', 'home', 0, 0)
-  screen.w = 200
-  screen.h = 100
-  const overlay = createNode('frame', 'overlay', 0, 0)
-  overlay.w = 40
-  overlay.h = 20
-  const at = playOverlayPosition(screen, overlay, { trigger: 'click', action: 'open-overlay', overlayPlace: 'center', overlayX: 4, overlayY: 2 })
-  assert.equal(at.x, 84)
-  assert.equal(at.y, 42)
 }
 
 {

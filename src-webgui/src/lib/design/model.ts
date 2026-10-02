@@ -9,8 +9,6 @@ import {
   type DesignDoc,
   type DesignDrawKind,
   type DesignHandle,
-  type DesignInteraction,
-  type DesignOverlayPlace,
   type DesignKind,
   type DesignLayout,
   type DesignMeasure,
@@ -321,18 +319,6 @@ export function visibleDesignScreens(doc: DesignDoc): DesignNode[] {
   return doc.screens
 }
 
-export function collectDesignFrames(node: DesignNode, into: DesignNode[] = []): DesignNode[] {
-  if (node.kind === 'frame') into.push(node)
-  for (const child of node.children ?? []) collectDesignFrames(child, into)
-  return into
-}
-
-export function collectDocFrames(doc: DesignDoc): DesignNode[] {
-  const frames: DesignNode[] = []
-  for (const screen of doc.screens) collectDesignFrames(screen, frames)
-  return frames
-}
-
 export function maskClipCss(mask: DesignNode, parentW: number, parentH: number): string {
   if (mask.kind === 'ellipse') {
     return `ellipse(${mask.w / 2}px ${mask.h / 2}px at ${mask.x + mask.w / 2}px ${mask.y + mask.h / 2}px)`
@@ -400,33 +386,6 @@ export function siblingMaskStyle(mask: DesignNode, child: DesignNode, doc?: Desi
   return {
     clipPath: `inset(${dy}px ${child.w - dx - mask.w}px ${child.h - dy - mask.h}px ${dx}px)`,
   }
-}
-
-export function playOverlayPosition(screen: DesignNode | undefined, frame: DesignNode, interaction: DesignInteraction): { x: number; y: number } {
-  const ox = interaction.overlayX ?? 0
-  const oy = interaction.overlayY ?? 0
-  const place: DesignOverlayPlace = interaction.overlayPlace ?? 'manual'
-  const originX = screen?.x ?? 0
-  const originY = screen?.y ?? 0
-  if (!screen || place === 'manual') return { x: originX + ox, y: originY + oy }
-  const left = screen.x
-  const top = screen.y
-  const cx = screen.x + (screen.w - frame.w) / 2
-  const cy = screen.y + (screen.h - frame.h) / 2
-  const right = screen.x + screen.w - frame.w
-  const bottom = screen.y + screen.h - frame.h
-  const at = {
-    center: { x: cx, y: cy },
-    'top-left': { x: left, y: top },
-    top: { x: cx, y: top },
-    'top-right': { x: right, y: top },
-    left: { x: left, y: cy },
-    right: { x: right, y: cy },
-    'bottom-left': { x: left, y: bottom },
-    bottom: { x: cx, y: bottom },
-    'bottom-right': { x: right, y: bottom },
-  }[place] ?? { x: left, y: top }
-  return { x: at.x + ox, y: at.y + oy }
 }
 
 function sameTextRunStyle(a: DesignTextRun, b: DesignTextRun): boolean {
@@ -516,57 +475,6 @@ export function splitTextByRuns(text: string, runs: DesignTextRun[] | undefined)
     parts.push({ text: text.slice(start, end), run })
   }
   return parts.length ? parts : [{ text }]
-}
-
-export type DesignPlayState = {
-  screenId: string
-  overlays: { id: string; x: number; y: number }[]
-  history: string[]
-}
-
-export function emptyPlayState(doc: DesignDoc): DesignPlayState {
-  const screenId = doc.activePage ?? doc.screens[0]?.id ?? ''
-  return { screenId, overlays: [], history: screenId ? [screenId] : [] }
-}
-
-export function runPlayAction(
-  doc: DesignDoc,
-  state: DesignPlayState,
-  interaction: DesignInteraction,
-): DesignPlayState {
-  if (interaction.action === 'open-url') {
-    if (interaction.url && typeof window !== 'undefined') window.open(interaction.url, '_blank', 'noopener')
-    return state
-  }
-  if (interaction.action === 'prev-screen') {
-    const history = state.history.slice(0, -1)
-    const screenId = history[history.length - 1] ?? state.screenId
-    return { ...state, screenId, overlays: [], history: history.length ? history : [screenId] }
-  }
-  if (interaction.action === 'close-overlay') {
-    return { ...state, overlays: state.overlays.slice(0, -1) }
-  }
-  const target = interaction.target && findDesignNode(doc, interaction.target) ? interaction.target : ''
-  const screen = findDesignNode(doc, state.screenId)
-  const frame = target ? findDesignNode(doc, target) : null
-  if (interaction.action === 'open-overlay' && target && frame) {
-    const at = playOverlayPosition(screen, frame, interaction)
-    return { ...state, overlays: [...state.overlays, { id: target, x: at.x, y: at.y }] }
-  }
-  if (interaction.action === 'toggle-overlay' && target && frame) {
-    const open = state.overlays.some((item) => item.id === target)
-    const at = playOverlayPosition(screen, frame, interaction)
-    return {
-      ...state,
-      overlays: open
-        ? state.overlays.filter((item) => item.id !== target)
-        : [...state.overlays, { id: target, x: at.x, y: at.y }],
-    }
-  }
-  if (interaction.action === 'navigate' && target) {
-    return { screenId: target, overlays: [], history: [...state.history, target] }
-  }
-  return state
 }
 
 export function openVectorEndpoints(node: DesignNode): { index: number; x: number; y: number }[] {
@@ -798,7 +706,6 @@ function cloneNode(node: DesignNode, mint: () => string): DesignNode {
   if (node.marginBottom != null) next.marginBottom = node.marginBottom
   if (node.marginLeft != null) next.marginLeft = node.marginLeft
   if (node.layoutGrids?.length) next.layoutGrids = node.layoutGrids.map((item) => ({ ...item }))
-  if (node.interactions?.length) next.interactions = node.interactions.map((item) => ({ ...item }))
   if (node.svgAttrs) next.svgAttrs = { ...node.svgAttrs }
   if (node.bindings) next.bindings = { ...node.bindings }
   if (node.proportion) next.proportion = true

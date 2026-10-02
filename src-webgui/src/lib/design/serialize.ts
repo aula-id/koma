@@ -19,7 +19,6 @@ import {
   type DesignEffect,
   type DesignTextRun,
   type DesignGuide,
-  type DesignInteraction,
   type DesignLayoutGrid,
   type DesignPageView,
 } from './types'
@@ -42,9 +41,6 @@ const TRUNCATES = ['off', 'end'] as const
 const PAINT_TYPES = ['solid', 'gradient', 'image'] as const
 const ALIGNS = ['start', 'center', 'end', 'stretch'] as const
 const JUSTIFIES = ['start', 'center', 'end', 'space', 'around', 'evenly'] as const
-const INTERACTION_TRIGGERS = ['click', 'mouse-enter', 'mouse-leave', 'after-delay'] as const
-const INTERACTION_ACTIONS = ['navigate', 'open-overlay', 'toggle-overlay', 'close-overlay', 'prev-screen', 'open-url'] as const
-const OVERLAY_PLACES = ['manual', 'center', 'top-left', 'top', 'top-right', 'left', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const
 const SIZES = ['hug', 'fill', 'fixed'] as const
 const WEIGHTS = ['regular', 'medium', 'bold'] as const
 const TEXT_ALIGNS = ['left', 'center', 'right', 'justify'] as const
@@ -368,29 +364,6 @@ function parseNode(value: unknown): DesignNode | null {
       if (typeof value === 'string' && TOKEN_NAME.test(value)) bindings[key] = value
     }
     if (Object.keys(bindings).length) node.bindings = bindings
-  }
-  if (Array.isArray(row.interactions)) {
-    const interactions: DesignInteraction[] = []
-    for (const item of row.interactions) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-      const rowItem = item as Record<string, unknown>
-      const trigger = oneOf(rowItem.trigger, INTERACTION_TRIGGERS)
-      const action = oneOf(rowItem.action, INTERACTION_ACTIONS)
-      if (!trigger || !action) continue
-      const next: DesignInteraction = { trigger, action }
-      if (typeof rowItem.target === 'string' && rowItem.target) next.target = rowItem.target
-      const delay = num(rowItem.delay)
-      if (delay != null && delay >= 0) next.delay = delay
-      if (typeof rowItem.url === 'string' && rowItem.url) next.url = rowItem.url
-      const overlayX = num(rowItem.overlayX)
-      const overlayY = num(rowItem.overlayY)
-      if (overlayX != null) next.overlayX = overlayX
-      if (overlayY != null) next.overlayY = overlayY
-      const overlayPlace = oneOf(rowItem.overlayPlace, OVERLAY_PLACES)
-      if (overlayPlace && overlayPlace !== 'manual') next.overlayPlace = overlayPlace
-      interactions.push(next)
-    }
-    if (interactions.length) node.interactions = interactions
   }
   if (kind === 'frame') {
     const layout = oneOf(row.layout, LAYOUTS)
@@ -760,7 +733,6 @@ export function writeNode(node: DesignNode): DesignNode {
   if (node.proportion) row.proportion = true
   if (node.svgAttrs && Object.keys(node.svgAttrs).length) row.svgAttrs = { ...node.svgAttrs }
   if (node.bindings && Object.keys(node.bindings).length) row.bindings = { ...node.bindings }
-  if (node.interactions?.length) row.interactions = node.interactions.map((item) => ({ ...item }))
   if (node.minW != null) row.minW = node.minW
   if (node.maxW != null) row.maxW = node.maxW
   if (node.minH != null) row.minH = node.minH
@@ -913,7 +885,7 @@ function designNeedsV2(doc: DesignDoc): boolean {
   const walk = (node: DesignNode): boolean => {
     if (node.fills?.length || node.strokes?.length || node.effects?.length || node.runs?.length) return true
     if (node.blend || node.mask || node.constraintH || node.constraintV || node.booleanOp || node.section) return true
-    if (node.reverse || node.gapX || node.gapY || node.alignSelf || node.interactions?.length || node.layoutGrids?.length) return true
+    if (node.reverse || node.gapX || node.gapY || node.alignSelf || node.layoutGrids?.length) return true
     if (node.layout === 'grid' || node.pointCount != null) return true
     return (node.children ?? []).some(walk)
   }

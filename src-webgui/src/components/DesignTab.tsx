@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ChevronRight, Frame, Hand, Minus, MousePointer2, PenTool, Play, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { ChevronRight, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { KomaSelect } from './KomaSelect'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
@@ -102,7 +102,6 @@ import {
   snapRotation,
   outlineStrokeNode,
   detachInstance,
-  emptyPlayState,
   retargetTextRuns,
   firstVisiblePaint,
   nodePaints,
@@ -115,7 +114,6 @@ import {
   paintGradientAngle,
   paintGradientCenter,
   parseDesignSlice,
-  runPlayAction,
   serializeDesignSlice,
   visibleDesignScreens,
   cacheDesignImage,
@@ -140,10 +138,8 @@ import {
   type DesignStyle,
   type DesignPenPoint,
   type DesignQuery,
-  type DesignInteraction,
   type DesignNode,
   type DesignPaint,
-  type DesignPlayState,
   type DesignWeight,
 } from '../lib/design'
 import { designPngBase64 } from '../lib/designRender'
@@ -247,15 +243,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   const [enteredContainerId, setEnteredContainerId] = useState<string | null>(null)
   const [vectorEditId, setVectorEditId] = useState<string | null>(null)
   const [textRange, setTextRange] = useState<{ id: string; start: number; end: number } | null>(null)
-  const [playMode, setPlayMode] = useState(false)
-  const playModeRef = useRef(false)
-  playModeRef.current = playMode
-  const [playState, setPlayState] = useState<DesignPlayState | null>(null)
-  const playStateRef = useRef<DesignPlayState | null>(null)
-  playStateRef.current = playState
-  const delayTimers = useRef<number[]>([])
-  const playHoverRef = useRef<string | null>(null)
-  const applyPlayRef = useRef<(doc: DesignDoc, interaction: DesignInteraction) => void>(() => undefined)
   const [palette, setPalette] = useState(false)
   const vectorEditRef = useRef<string | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
@@ -586,24 +573,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     }
     const move = (event: PointerEvent) => {
       const drag = dragRef.current
-      if (playModeRef.current && !drag) {
-        const storedNow = useKoma.getState().design?.docs?.[key]?.doc
-        const current = storedNow ? editingDoc(storedNow, focusRef.current) : null
-        const point = toDoc(event.clientX, event.clientY)
-        if (current && point) {
-          const hit = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
-          const id = hit.kind === 'hit' || hit.kind === 'exit-and-hit' ? hit.id : null
-          if (id && id !== playHoverRef.current) {
-            const prev = playHoverRef.current ? findDesignNode(current, playHoverRef.current) : null
-            const next = findDesignNode(current, id)
-            playHoverRef.current = id
-            const leave = prev?.interactions?.find((item) => item.trigger === 'mouse-leave')
-            const enter = next?.interactions?.find((item) => item.trigger === 'mouse-enter')
-            if (leave) applyPlayRef.current(current, leave)
-            if (enter) applyPlayRef.current(current, enter)
-          }
-        }
-      }
       if (toolRef.current === 'pen' && drag?.kind !== 'pen') {
         const hover = toDoc(event.clientX, event.clientY)
         if (hover) setPenHover(hover)
@@ -1299,37 +1268,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     commit(next)
   }
 
-  const applyPlay = (doc: DesignDoc, interaction: DesignInteraction) => {
-    if ((interaction.delay ?? 0) > 0 && interaction.trigger !== 'after-delay') {
-      delayTimers.current.push(window.setTimeout(() => applyPlay({ ...doc }, { ...interaction, delay: undefined }), interaction.delay))
-      return
-    }
-    const current = playStateRef.current ?? emptyPlayState(doc)
-    const next = runPlayAction(doc, current, interaction)
-    playStateRef.current = next
-    setPlayState(next)
-    applyPlayRef.current = applyPlay
-    const dest = next.screenId ? findDesignNode(doc, next.screenId) : null
-    if (dest && dest.id !== current.screenId) {
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (rect) {
-        const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min((rect.width - 80) / Math.max(dest.w, 1), (rect.height - 80) / Math.max(dest.h, 1))))
-        applyView({ zoom, panX: rect.width / 2 - (dest.x + dest.w / 2) * zoom, panY: rect.height / 2 - (dest.y + dest.h / 2) * zoom })
-      }
-    }
-    delayTimers.current.forEach((id) => window.clearTimeout(id))
-    delayTimers.current = []
-    const screen = dest ?? findDesignNode(doc, next.screenId)
-    const hosts = [screen, ...next.overlays.map((overlay) => findDesignNode(doc, overlay.id))]
-    for (const host of hosts) {
-      for (const item of host?.interactions ?? []) {
-        if (item.trigger !== 'after-delay') continue
-        delayTimers.current.push(window.setTimeout(() => applyPlay(doc, item), item.delay ?? 300))
-      }
-    }
-  }
-  applyPlayRef.current = applyPlay
-
   commandsRef.current = {
     copy: () => {
       const open = viewDoc()
@@ -1741,17 +1679,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     const storedNow = useKoma.getState().design?.docs?.[key]?.doc
     const current = storedNow ? editingDoc(storedNow, focusRef.current) : null
     if (!current) return
-    if (playModeRef.current) {
-      const hit = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
-      const id = hit.kind === 'hit' || hit.kind === 'exit-and-hit' ? hit.id : null
-      const node = id ? findDesignNode(current, id) : null
-      const interaction = node?.interactions?.find((item) => item.trigger === 'click')
-      if (interaction) {
-        event.preventDefault()
-        applyPlay(current, interaction)
-      }
-      return
-    }
     const resolved = resolveDesignSelectHit(current, point.x, point.y, enteredContainerRef.current)
     if (resolved.kind === 'exit-and-hit') setEnteredContainerId(resolved.enteredContainerId)
     const target = resolved.kind === 'hit' ? resolved.id : resolved.kind === 'exit-and-hit' ? resolved.id : null
@@ -2101,7 +2028,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 </span>
               </div>
             ))}
-            {(playMode && playState ? [findDesignNode(doc, playState.screenId) ?? visibleDesignScreens(doc)[0]].filter(Boolean) as DesignNode[] : visibleDesignScreens(doc)).map((screen) => (
+            {visibleDesignScreens(doc).map((screen) => (
               <DesignNodeView
                 key={screen.id}
                 doc={doc}
@@ -2305,36 +2232,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 }}
               />
             ))}
-            {playMode && playState?.overlays.map((overlay) => {
-              const frame = findDesignNode(doc, overlay.id)
-              if (!frame) return null
-              return (
-                <div key={`overlay-${overlay.id}`} className="pointer-events-auto absolute z-30" style={{ left: overlay.x, top: overlay.y, width: frame.w, height: frame.h }}>
-                  <DesignNodeView
-                    doc={doc}
-                    node={{ ...frame, x: 0, y: 0 }}
-                    zoom={view.zoom}
-                    selectedIds={[]}
-                    editing={null}
-                    dragCursor={null}
-                    onSelect={(id, event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      const hit = findDesignNode(doc, id)
-                      const interaction = hit?.interactions?.find((item) => item.trigger === 'click')
-                      if (interaction) applyPlay(doc, interaction)
-                    }}
-                    onResize={() => undefined}
-                    onCorner={() => undefined}
-                    onEdit={() => undefined}
-                    onText={() => undefined}
-                    onTextBlur={() => undefined}
-                    onMenu={() => undefined}
-                  />
-                </div>
-              )
-            })}
-            {!playMode && selection.length === 1 ? (() => {
+            {selection.length === 1 ? (() => {
               const selectedNode = findDesignNode(doc, selection[0])
               const origin = selectedNode ? nodeOrigin(doc, selectedNode.id) : null
               const gradient = selectedNode ? firstVisiblePaint(nodePaints(selectedNode, 'fill')) : null
@@ -2529,28 +2427,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           </ToolButton>
           <ToolButton label="Hand (H)" selected={tool === 'pan'} onClick={() => setTool('pan')}>
             <Hand size={15} strokeWidth={2.25} />
-          </ToolButton>
-          <ToolButton label={playMode ? 'Stop preview' : 'Play preview'} selected={playMode} onClick={() => {
-            setPlayMode((current) => {
-              const next = !current
-              if (next) {
-                const stored = useKoma.getState().design?.docs?.[key]?.doc
-                const currentDoc = stored ? editingDoc(stored, focusRef.current) : null
-                if (currentDoc) {
-                  const state = emptyPlayState(currentDoc)
-                  setPlayState(state)
-                  playStateRef.current = state
-                }
-              } else {
-                setPlayState(null)
-                playStateRef.current = null
-                delayTimers.current.forEach((id) => window.clearTimeout(id))
-                delayTimers.current = []
-              }
-              return next
-            })
-          }}>
-            <Play size={15} strokeWidth={2.25} />
           </ToolButton>
           {focusedComponent || chain.length || enteredContainerId ? (
             <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">

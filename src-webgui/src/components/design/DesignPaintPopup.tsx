@@ -68,7 +68,7 @@ export type TokenInspectorPage = {
 }
 
 export type DetailInspectorPage = {
-  kind: 'shadow' | 'blur' | 'interaction' | 'text'
+  kind: 'shadow' | 'blur' | 'text'
   title: string
   index?: number
 }

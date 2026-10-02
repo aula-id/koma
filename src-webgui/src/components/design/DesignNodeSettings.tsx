@@ -51,7 +51,6 @@ import {
   reshapeDesignNode,
   retuneDesignShape,
   shapeKindOf,
-  collectDocFrames,
   FRAME_PRESETS,
   nodeChrome,
   resolveRef,
@@ -63,13 +62,11 @@ import {
   type DesignAlignAxis,
   type DesignAlignEdge,
   type DesignDoc,
-  type DesignInteraction,
   type DesignLayout,
   type DesignLayoutGrid,
   type DesignNode,
   type DesignPaint,
   type DesignReshapeKind,
-  type DesignOverlayPlace,
   type DesignTextRun,
   type DesignToken,
 } from '../../lib/design'
@@ -252,7 +249,6 @@ export function NodeSettings({
   }).filter(Boolean))]
   const systemFonts = ['Inter', 'system-ui', 'serif', 'monospace', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Courier New']
   const fontChoices = [...new Set([...documentFonts, ...systemFonts])].filter((name) => !fontQuery || name.toLowerCase().includes(fontQuery.toLowerCase()))
-  const frames = collectDocFrames(doc)
   const setCross = (align: 'start' | 'center' | 'end' | 'stretch') => {
     setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])
   }
@@ -338,7 +334,6 @@ export function NodeSettings({
         <InspectorBack title={inspectorPage.title} onBack={closeInspector} />
         {inspectorPage.kind === 'shadow' ? <ShadowPage doc={doc} node={node} index={inspectorPage.index ?? 0} colorTokens={colorTokens} onPatch={onPatch} /> : null}
         {inspectorPage.kind === 'blur' ? <BlurPage node={node} index={inspectorPage.index ?? 0} onPatch={onPatch} /> : null}
-        {inspectorPage.kind === 'interaction' ? <InteractionPage node={node} index={inspectorPage.index ?? 0} frames={frames} onPatch={setField} /> : null}
         {inspectorPage.kind === 'text' ? <TextMorePage node={node} setField={setField} selectedText={selectedText} applyType={applyType} /> : null}
       </div>
     ) : (
@@ -1413,35 +1408,6 @@ export function NodeSettings({
           ))}
         </Section>
       ) : null}
-      {!multi ? (
-        <Section
-          title="Interactions"
-          action={(
-            <AlignButton label="Add interaction" onClick={() => setField({ interactions: [...(node.interactions ?? []), { trigger: 'click', action: 'navigate', target: frames[0]?.id ?? '' }] })}>
-              <Plus size={14} />
-            </AlignButton>
-          )}
-        >
-          {(node.interactions ?? []).map((item, index) => (
-            <div key={`${item.trigger}-${item.action}-${index}`} className="flex items-center gap-1">
-              <button
-                type="button"
-                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-koma-bg px-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
-                onClick={() => setInspectorPage({ kind: 'interaction', title: 'Interaction', index })}
-              >
-                <span className="min-w-0 flex-1 truncate">{item.trigger.replace('-', ' ')} → {item.action.replace('-', ' ')}</span>
-                <ChevronRight size={14} className="flex-none text-koma-dim" />
-              </button>
-              <button type="button" title="Remove" aria-label="Remove interaction" className="flex h-8 w-8 items-center justify-center rounded-lg text-koma-dim hover:bg-koma-hover" onClick={() => {
-                const next = (node.interactions ?? []).filter((_, at) => at !== index)
-                setField(next.length ? { interactions: next } : {}, next.length ? [] : ['interactions'])
-              }}>
-                <X size={13} />
-              </button>
-            </div>
-          ))}
-        </Section>
-      ) : null}
       {colorTokens.length || doc.tokens.some((token) => token.kind === 'space' || token.kind === 'radius') ? (
         <Section title="Tokens">
           <Choices
@@ -1560,90 +1526,6 @@ function BlurPage({
         </KomaSelect>
       </LabeledControl>
       <GeomField label="Blur" ariaLabel="Blur" value={effect.blur ?? 4} onChange={(blur) => patchEffect({ blur })} />
-    </div>
-  )
-}
-
-function InteractionPage({
-  node,
-  index,
-  frames,
-  onPatch,
-}: {
-  node: DesignNode
-  index: number
-  frames: DesignNode[]
-  onPatch: (patch: Partial<DesignNode>, clear?: (keyof DesignNode)[]) => void
-}) {
-  const item = node.interactions?.[index]
-  if (!item) return null
-  const patch = (next: Partial<DesignInteraction>) => onPatch({ interactions: (node.interactions ?? []).map((row, at) => (at === index ? { ...row, ...next } : row)) })
-  return (
-    <div className="flex flex-col gap-2">
-      <LabeledControl label="When">
-        <KomaSelect aria-label="Trigger" value={item.trigger} onChange={(event) => patch({ trigger: event.target.value as DesignInteraction['trigger'] })} className="h-7 w-full px-1.5 text-[12px]">
-          <option value="click">Click</option>
-          <option value="mouse-enter">Mouse enter</option>
-          <option value="mouse-leave">Mouse leave</option>
-          <option value="after-delay">After delay</option>
-        </KomaSelect>
-      </LabeledControl>
-      <LabeledControl label="Do">
-        <KomaSelect aria-label="Action" value={item.action} onChange={(event) => patch({ action: event.target.value as DesignInteraction['action'] })} className="h-7 w-full px-1.5 text-[12px]">
-          <option value="navigate">Navigate</option>
-          <option value="open-overlay">Open overlay</option>
-          <option value="toggle-overlay">Toggle overlay</option>
-          <option value="close-overlay">Close overlay</option>
-          <option value="prev-screen">Previous</option>
-          <option value="open-url">Open URL</option>
-        </KomaSelect>
-      </LabeledControl>
-      <GeomField label="Delay" ariaLabel="Delay" suffix="ms" value={item.delay ?? (item.trigger === 'after-delay' ? 300 : 0)} onChange={(delay) => patch({ delay: delay > 0 ? delay : undefined })} />
-      {item.action === 'open-url' ? (
-        <LabeledControl label="URL">
-          <input aria-label="URL" value={item.url ?? ''} onChange={(event) => patch({ url: event.target.value })} className="h-7 w-full bg-transparent text-[12px] text-koma-fg outline-none" />
-        </LabeledControl>
-      ) : null}
-      {item.action === 'navigate' || item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-        <LabeledControl label="Frame">
-          <KomaSelect aria-label="Destination" value={item.target ?? ''} onChange={(event) => patch({ target: event.target.value })} className="h-7 w-full px-1.5 text-[12px]">
-            <option value="">Choose frame</option>
-            {frames.map((frame) => (
-              <option key={frame.id} value={frame.id}>{designLayerName(frame)}</option>
-            ))}
-          </KomaSelect>
-        </LabeledControl>
-      ) : null}
-      {item.action === 'open-overlay' || item.action === 'toggle-overlay' ? (
-        <>
-          <LabeledControl label="Place">
-            <KomaSelect
-              aria-label="Overlay place"
-              value={item.overlayPlace ?? 'manual'}
-              onChange={(event) => {
-                const overlayPlace = event.target.value as DesignOverlayPlace
-                patch({ overlayPlace: overlayPlace === 'manual' ? undefined : overlayPlace })
-              }}
-              className="h-7 w-full px-1.5 text-[12px]"
-            >
-              <option value="manual">Manual</option>
-              <option value="center">Center</option>
-              <option value="top-left">Top left</option>
-              <option value="top">Top</option>
-              <option value="top-right">Top right</option>
-              <option value="left">Left</option>
-              <option value="right">Right</option>
-              <option value="bottom-left">Bottom left</option>
-              <option value="bottom">Bottom</option>
-              <option value="bottom-right">Bottom right</option>
-            </KomaSelect>
-          </LabeledControl>
-          <div className="grid grid-cols-2 gap-1">
-            <GeomField label="X" ariaLabel="Overlay X" value={item.overlayX ?? 0} onChange={(overlayX) => patch({ overlayX })} />
-            <GeomField label="Y" ariaLabel="Overlay Y" value={item.overlayY ?? 0} onChange={(overlayY) => patch({ overlayY })} />
-          </div>
-        </>
-      ) : null}
     </div>
   )
 }
