@@ -77,6 +77,10 @@ pub(crate) fn build_startup(
     Option<Arc<OpenRouterClient>>,
 )> {
     store::ensure_dirs()?;
+    // Anonymous usage drain (token in/out + model + ts). File-locked so one
+    // process trickles a months-old ledger instead of every session daemon
+    // dumping at once. Best-effort; never blocks startup.
+    crate::service::telemetry::spawn();
 
     let rt = tokio::runtime::Runtime::new()?;
     let handle = rt.handle().clone();

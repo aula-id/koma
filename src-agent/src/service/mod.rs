@@ -15,6 +15,7 @@ pub mod context_limits;
 pub mod koma_free;
 pub mod oauth;
 pub mod openrouter;
+pub mod telemetry;
 
 use crate::dto::chat::ChatMessage;
 
