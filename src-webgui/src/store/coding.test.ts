@@ -3,6 +3,7 @@ import {
   emptyFileState,
   fileKey,
   initialCoding,
+  isMissingCodingDirError,
   reduceFileCreate,
   reduceFileDelete,
   reduceFileRename,
@@ -22,6 +23,15 @@ const withCaches = (partial: Partial<CodingSlice> = {}): CodingSlice => ({
   _treeReq: partial._treeReq ?? {},
   search: partial.search ?? initialCoding.search,
 })
+
+assert.equal(isMissingCodingDirError('failed to list directory: os error 2'), true)
+assert.equal(
+  isMissingCodingDirError(
+    'failed to list directory: The system cannot find the path specified. (os error 3)',
+  ),
+  true,
+)
+assert.equal(isMissingCodingDirError('permission denied'), false)
 
 // These are the production reducers imported from ./coding (not test copies).
 {

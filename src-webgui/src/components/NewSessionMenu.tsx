@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, FolderOpen, Link2 } from 'lucide-react'
+import { ChevronDown, Link2 } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
 
@@ -35,8 +35,7 @@ type NewSessionMenuProps = {
 
 const menuWidth = 240
 
-// The chevron segment of the split "+ New session" button. Always shows:
-//   - "New session" (opens folder picker)
+// Chevron segment beside the primary [Folder] New session button. Shows:
 //   - "New session + close current" (only when a session is attached)
 //   - Remote host list (when any hosts are saved)
 export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProps) {
@@ -76,7 +75,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
 
   // Always render the chevron button so the dropdown is always available.
 
-  const pick = (kill: boolean) => {
+  const pickCloseCurrent = () => {
     if (remoteState.state === 'ready' || remoteState.state === 'connected') {
       // Remote hub: optimistic SSH path picker (guards re-entry + braille).
       requestRemotePath()
@@ -84,19 +83,7 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
       afterPick?.()
       return
     }
-    req(kill ? { r: 'NewSession', kill: true, folder: true } : { r: 'NewSession', folder: true })
-    setOpen(false)
-    afterPick?.()
-  }
-
-  const openFolder = () => {
-    if (remoteState.state === 'ready' || remoteState.state === 'connected') {
-      requestRemotePath()
-      setOpen(false)
-      afterPick?.()
-      return
-    }
-    req({ r: 'NewSession', folder: true })
+    req({ r: 'NewSession', kill: true, folder: true })
     setOpen(false)
     afterPick?.()
   }
@@ -172,18 +159,8 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
             style={menuStyle}
             className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
           >
-            {/* Local session options — always visible */}
-            <MenuItem
-              onClick={openFolder}
-              disabled={remotePathBusy}
-              icon={
-                remotePathBusy ? <BrailleSpinner size={13} /> : <FolderOpen size={13} />
-              }
-            >
-              New session
-            </MenuItem>
             {attachedId && (
-              <MenuItem onClick={() => pick(true)} disabled={remotePathBusy}>
+              <MenuItem onClick={pickCloseCurrent} disabled={remotePathBusy}>
                 New session + close current
               </MenuItem>
             )}

@@ -7,7 +7,7 @@ import { DesignLayers } from '../DesignLayers'
 import { Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
-import { fileKey, mintRequestId, type FileTreeEntry } from '../../store/coding'
+import { fileKey, isMissingCodingDirError, mintRequestId, type FileTreeEntry } from '../../store/coding'
 import {
   COMPONENT_MIME,
   addDesignToken,
@@ -194,11 +194,6 @@ function rootLabel(root: string): string {
   return parts[parts.length - 1] || root
 }
 
-function missingDir(error: string | null | undefined): boolean {
-  if (!error) return false
-  return /no such file|not found|os error 2/i.test(error)
-}
-
 function InlineNameInput({
   initial,
   placeholder,
@@ -339,7 +334,7 @@ export function DesignPanel() {
   if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((entry) => !entry.isDir && isDesignPath(entry.path))
-  const gone = missingDir(dir?.error)
+  const gone = isMissingCodingDirError(dir?.error)
   const busy = (path: string) => {
     if (!activeRoot) return false
     return !!docs[fileKey(activeRoot, path)]?.saving

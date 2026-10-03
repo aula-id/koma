@@ -109,11 +109,11 @@ export default function HelpTab() {
               opens/resumes. With one or more rows selected, the bulk bar offers Kill (live) and Delete forever
               (history), each with a yes/no confirm. Esc clears the selection first.
             </InfoRow>
-            <InfoRow label="+ New session">
-              The primary button opens a folder picker for a new session and leaves whatever's currently cooking
-              running in the background. The chevron next to it offers "New session + close current," which stops
-              the current session's daemon first (same as a kill — it moves to History, it isn't deleted) before
-              opening the picker.
+            <InfoRow label="New session">
+              The folder New session button opens a folder picker and leaves whatever's currently cooking running
+              in the background. The chevron offers "New session + close current," which stops the current session's
+              daemon first (same as a kill — it moves to History, it isn't deleted) before opening the picker, plus
+              saved Remote hosts when configured.
             </InfoRow>
             <InfoRow label="Rename">
               The "rename" pill in the titlebar renames the current session; only shown while a session is attached.

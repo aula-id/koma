@@ -112,6 +112,12 @@ export function fileKey(root: string, path: string): string {
   return `${root}:${path}`
 }
 
+/** FileTree failed because the directory does not exist yet (e.g. `.koma/`). */
+export function isMissingCodingDirError(error: string | null | undefined): boolean {
+  if (!error) return false
+  return /no such file|not found|cannot find the path|os error 2|os error 3/i.test(error)
+}
+
 export function mintRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
