@@ -18,6 +18,9 @@ pub mod conversation;
 pub mod ext_workspace;
 pub mod memory;
 pub mod msglog;
+/// Usage-card memory and token folding. Production callers are the GUI
+/// (`feature = "gui"`). Headless `koma` does not link this module.
+#[cfg(any(feature = "gui", test))]
 pub mod procmem;
 /// Windows-only process liveness/termination helpers (phase B2), shared by
 /// `session_lock` and `app::runtime::manage`. Absent on unix (which uses `kill(2)`).

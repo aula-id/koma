@@ -124,7 +124,7 @@ fn run_loop() {
         let body = WireBody {
             events: events
                 .into_iter()
-                .filter_map(|e| WireEvent::from_ledger(e))
+                .filter_map(WireEvent::from_ledger)
                 .collect(),
         };
         if body.events.is_empty() {
