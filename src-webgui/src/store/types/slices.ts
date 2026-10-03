@@ -66,6 +66,14 @@ export type SessionSlice = {
   tokensCached: number
   tokensOut: number
   cost: number
+  // Effective context window from Status. 0 until the host has a sample.
+  contextWindow: number
+  // Resident bytes sampled in the GUI process (UsageLive). Window includes
+  // this process and its WebKit helpers. 0 until the first sample.
+  memWindow: number
+  memAgent: number
+  memServices: number
+  memSystem: number
 }
 
 export type HubSlice = {

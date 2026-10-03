@@ -49,6 +49,7 @@ mod dispatch;
 mod dispatch_forward;
 mod dispatch_git;
 mod proto;
+mod usage_bar;
 use proto::{ClientMsg, UserEvent, WinCmd};
 
 /// The `src-webgui/dist/` directory (Vite-built React app), embedded at
@@ -612,6 +613,16 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let mut pending_pushes: VecDeque<String> = VecDeque::new();
     let mut next_push_at: Option<Instant> = None;
     let mut last_push_at: Option<Instant> = None;
+    // Memory is local to this process. Wake at least every 2s so the menu bar
+    // and the footer card move without a host Status tick.
+    let mut usage_ticker = usage_bar::UsageTicker::new();
+    let wait_for = |next_push_at: Option<Instant>, usage_at: Instant| -> ControlFlow {
+        let at = match next_push_at {
+            Some(push) => push.min(usage_at),
+            None => usage_at,
+        };
+        ControlFlow::WaitUntil(at)
+    };
 
     let mut computer_viewer: Option<computer_viewer::Viewer> = None;
     let mut computer_status: Option<crate::app::runtime::computer::Status> = None;
@@ -643,15 +654,22 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 );
             }
         }
-        *control_flow = next_push_at
-            .map(ControlFlow::WaitUntil)
-            .unwrap_or(ControlFlow::Wait);
+        *control_flow = wait_for(next_push_at, usage_ticker.deadline());
         match event {
             // Host-relay state push: queue the already-serialised object literal.
             // `MainEventsCleared` below drains a whole burst through one JS call,
             // never one synchronous `evaluate_script` per envelope.
             Event::UserEvent(UserEvent::Push(json)) => {
+                // Any host push means the page has installed `__komaClient`
+                // (it sends Ready only after that assignment).
+                if let Some(live) = usage_ticker.note_host_push() {
+                    pending_pushes.push_back(live);
+                    if next_push_at.is_none() {
+                        next_push_at = Some(Instant::now());
+                    }
+                }
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                    usage_ticker.observe_push(&value);
                     if let Some(palette) = value.get("palette").filter(|v| v.is_object()) {
                         computer_palette = palette.clone();
                         if let Some(viewer) = &computer_viewer {
@@ -719,6 +737,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             }
             Event::MainEventsCleared => {
                 let now = Instant::now();
+                if let Some(live) = usage_ticker.poll(now) {
+                    pending_pushes.push_back(live);
+                    if next_push_at.is_none() {
+                        next_push_at = Some(now);
+                    }
+                }
                 if next_push_at.is_some_and(|at| now >= at) && !pending_pushes.is_empty() {
                     // Switching/Loading must reach WebKit before Snapshot so the
                     // overlay can paint. A fat Snapshot in the same evaluate_script
@@ -873,9 +897,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // A push queued during this callback must wake no later than its frame
         // deadline. Preserve Exit selected by a close event.
         if *control_flow != ControlFlow::Exit {
-            *control_flow = next_push_at
-                .map(ControlFlow::WaitUntil)
-                .unwrap_or(ControlFlow::Wait);
+            *control_flow = wait_for(next_push_at, usage_ticker.deadline());
         }
     });
 }

@@ -325,6 +325,7 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               tokensCached: env.tokensCached ?? s.session.tokensCached,
               tokensOut: env.tokensOut ?? s.session.tokensOut,
               cost: env.cost ?? s.session.cost,
+              contextWindow: env.contextWindow ?? s.session.contextWindow,
               mode: newMode,
               // Explicitly clear stale SDLC rows on mode change: SDLC fields
               // are only valid when mode=sdlc; a mode switch must not leave
@@ -362,6 +363,17 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               : s.ui,
           }
         })
+        break
+      case 'UsageLive':
+        set((s) => ({
+          session: {
+            ...s.session,
+            memWindow: env.memWindow ?? s.session.memWindow,
+            memAgent: env.memAgent ?? s.session.memAgent,
+            memServices: env.memServices ?? s.session.memServices,
+            memSystem: env.memSystem ?? s.session.memSystem,
+          },
+        }))
         break
       case 'Hub':
         set((s) => {

@@ -281,6 +281,10 @@ pub(super) fn serialize_and_push(
     let tokens_cached = fg.tokens_cached;
     let tokens_out = fg.tokens_out;
     let cost = fg.cost;
+    let context_window = fg
+        .context_usage
+        .map(|usage| usage.effective_window)
+        .unwrap_or(0);
     let status = (
         working,
         toast,
@@ -289,6 +293,7 @@ pub(super) fn serialize_and_push(
         tokens_cached,
         tokens_out,
         cost,
+        context_window,
         mode.clone(),
     );
     if last.status.as_ref() != Some(&status) {
@@ -304,7 +309,8 @@ pub(super) fn serialize_and_push(
                 tokens_cached: status.4,
                 tokens_out: status.5,
                 cost: status.6,
-                mode: status.7,
+                context_window: status.7,
+                mode: status.8,
             },
         );
     }

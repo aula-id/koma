@@ -28,19 +28,16 @@ import {
   textStyle,
   vectorSvgPath,
   type DesignDoc,
-  type DesignHandle,
   type DesignNode,
   type DesignPaint,
   type DesignWeight,
 } from '../../lib/design'
-import { HANDLES, SELECTION, SHAPE_FILL, paintCss, weightCss, type RadiusCorner } from './tabShared'
+import { SHAPE_FILL, paintCss, weightCss } from './tabShared'
 
 export function DesignNodeView({
   doc,
   node,
-  zoom,
   selectedIds,
-  geometryId = null,
   editing,
   dragCursor,
   locked = false,
@@ -48,9 +45,6 @@ export function DesignNodeView({
   overrideTargetId = null,
   cropEditId = null,
   onSelect,
-  onResize,
-  onRotate,
-  onCorner,
   onEdit,
   onOpenFill,
   onText,
@@ -63,9 +57,7 @@ export function DesignNodeView({
 }: {
   doc: DesignDoc
   node: DesignNode
-  zoom: number
   selectedIds: string[]
-  geometryId?: string | null
   editing: string | null
   dragCursor: string | null
   locked?: boolean
@@ -74,9 +66,6 @@ export function DesignNodeView({
   cropEditId?: string | null
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
   onEnterContainer?: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
-  onResize: (id: string, handle: DesignHandle, event: ReactPointerEvent<HTMLButtonElement>) => void
-  onRotate?: (id: string, event: ReactPointerEvent<HTMLButtonElement>) => void
-  onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<HTMLButtonElement>) => void
   onEdit: (id: string) => void
   onOpenFill?: (id: string) => void
   onText: (id: string, text: string) => void
@@ -114,14 +103,8 @@ export function DesignNodeView({
   const cropPaint = cropEdit ? fillPaints.find(isImageCropPaint) : null
   const cropRect = cropPaint ? imageCropRect({ w: boxW, h: boxH }, cropPaint, cropPaint.hash ? designImageSize(doc, cropPaint.hash) : null) : null
   const cropUrl = cropPaint ? imageAssetUrl(doc, cropPaint.hash) : ''
-  const chromeBox = cropEdit && cropRect ? cropRect : { x: 0, y: 0, w: boxW, h: boxH }
   const corners = cornerPixels(doc, visual ?? node)
   const radius = node.kind === 'ellipse' ? '50%' : `${corners.tl}px ${corners.tr}px ${corners.br}px ${corners.bl}px`
-  const unit = 1 / Math.max(zoom, 0.25)
-  const handleSize = 7 * unit
-  const handleOutside = chromeBox.w <= 25 * unit || chromeBox.h <= 25 * unit
-  const handleInset = handleOutside ? -handleSize / 2 : handleSize / 2
-  const insetAt = (value: number, span: number) => Math.min(span / 2, Math.max(8 * unit, value > 0 ? value : 14 * unit))
   const clipValue = node.kind === 'instance' ? node.clip ?? visual?.clip : node.clip
   const children = visual?.children ?? (node.kind === 'instance' ? undefined : node.children)
   const cropDescendant = !!cropEditId && (node.id === cropEditId || !!(children && nodeContainsId(children, cropEditId)))
@@ -155,7 +138,6 @@ export function DesignNodeView({
         maskRepeat: maskStyle?.maskRepeat,
         WebkitMaskRepeat: maskStyle?.WebkitMaskRepeat,
         maskMode: maskStyle?.maskMode,
-        outline: selected && !cropEdit ? `${unit}px solid ${SELECTION}` : undefined,
         cursor: !hitHere || node.locked || dragCursor ? undefined : cropEdit ? 'move' : 'grab',
       }}
       onPointerDown={hitHere ? (event) => onSelect(node.id, event) : undefined}
@@ -211,7 +193,6 @@ export function DesignNodeView({
             backgroundSize: '100% 100%',
             backgroundRepeat: 'no-repeat',
             opacity: 0.35,
-            outline: `${unit}px solid ${SELECTION}`,
             cursor: 'move',
           }}
         />
@@ -332,9 +313,7 @@ export function DesignNodeView({
             key={child.id}
             doc={doc}
             node={child}
-            zoom={zoom}
             selectedIds={childIds}
-            geometryId={geometryId}
             editing={editing}
             dragCursor={dragCursor}
             locked={lockChildren}
@@ -344,9 +323,6 @@ export function DesignNodeView({
             maskStyle={mask && !child.mask ? siblingMaskStyle(mask, child, doc) : undefined}
             onEnterContainer={onEnterContainer}
             onSelect={onSelect}
-            onResize={onResize}
-            onRotate={onRotate}
-            onCorner={onCorner}
             onEdit={onEdit}
             onOpenFill={onOpenFill}
             onText={onText}
@@ -357,61 +333,6 @@ export function DesignNodeView({
           )
         })}
       </div>
-      {selected && !locked && !node.locked && !dragCursor && geometryId !== node.id ? (
-        HANDLES.map((handle) => {
-          const x = chromeBox.x + (handle.id.includes('w') ? handleInset : handle.id.includes('e') ? chromeBox.w - handleInset : chromeBox.w / 2)
-          const y = chromeBox.y + (handle.id.includes('n') ? handleInset : handle.id.includes('s') ? chromeBox.h - handleInset : chromeBox.h / 2)
-          return (
-          <button
-            key={handle.id}
-            type="button"
-            aria-label={`${cropEdit ? 'Crop' : 'Resize'} ${handle.id}`}
-            className="absolute z-10 border-0 p-0"
-            style={{ left: x, top: y, width: handleSize, height: handleSize, background: '#ffffff', border: `${unit}px solid ${SELECTION}`, borderRadius: handle.id.length === 2 ? '50%' : 0, transform: 'translate(-50%, -50%)', cursor: handle.cursor }}
-            onPointerDown={(event) => onResize(node.id, handle.id, event)}
-          />
-          )
-        })
-      ) : null}
-      {selected && !cropEdit && !locked && !node.locked && !dragCursor && geometryId !== node.id && onRotate ? (
-        (['nw', 'ne', 'sw', 'se'] as const).map((corner) => {
-          const size = 20 * unit
-          return (
-          <button
-            key={`rot-${corner}`}
-            type="button"
-            aria-label={`Rotate ${corner}`}
-            className="absolute z-20 border-0 p-0"
-            style={{
-              left: corner.includes('w') ? -size : boxW,
-              top: corner.includes('n') ? -size : boxH,
-              width: size,
-              height: size,
-              background: 'transparent',
-              cursor: 'grab',
-            }}
-            onPointerDown={(event) => onRotate(node.id, event)}
-          />
-          )
-        })
-      ) : null}
-      {selected && !cropEdit && !locked && !node.locked && !dragCursor && geometryId !== node.id && (node.kind === 'rect' || node.kind === 'frame') ? (
-        ([
-          { id: 'tl' as const, x: insetAt(corners.tl, boxW), y: insetAt(corners.tl, boxH), cursor: 'nwse-resize' },
-          { id: 'tr' as const, x: boxW - insetAt(corners.tr, boxW), y: insetAt(corners.tr, boxH), cursor: 'nesw-resize' },
-          { id: 'bl' as const, x: insetAt(corners.bl, boxW), y: boxH - insetAt(corners.bl, boxH), cursor: 'nesw-resize' },
-          { id: 'br' as const, x: boxW - insetAt(corners.br, boxW), y: boxH - insetAt(corners.br, boxH), cursor: 'nwse-resize' },
-        ]).map((corner) => (
-          <button
-            key={corner.id}
-            type="button"
-            aria-label={`Corner radius ${corner.id}`}
-            className="absolute z-10 rounded-full border-0 p-0"
-            style={{ left: corner.x, top: corner.y, width: 8 * unit, height: 8 * unit, background: '#ffffff', border: `${unit}px solid ${SELECTION}`, transform: 'translate(-50%, -50%)', cursor: corner.cursor }}
-            onPointerDown={(event) => onCorner(node.id, corner.id, event)}
-          />
-        ))
-      ) : null}
     </div>
   )
 }
