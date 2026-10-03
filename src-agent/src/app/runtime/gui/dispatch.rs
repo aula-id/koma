@@ -31,6 +31,8 @@ pub(super) struct GuiReqCtx {
     pub(super) req: Arc<Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     pub(super) marks: Arc<Mutex<Vec<String>>>,
     pub(super) view: Arc<Mutex<StreamView>>,
+    /// Wakes the tao loop so a folder dialog can run on the window thread.
+    pub(super) loop_proxy: tao::event_loop::EventLoopProxy<super::proto::UserEvent>,
 }
 
 /// Apply one decoded [`GuiReq`]: forward it to the attached daemon (through
@@ -74,26 +76,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::SelectSession { id } => {
             let _ = ctx.ctl.send(HostCtl::Select(id));
         }
-        // `[+ new session]`: open a NATIVE folder picker off the tao event
-        // loop (rfd's dialog is modal/blocking — running it on this thread
-        // would stall the 16ms push loop), and only mint the session once a
-        // folder is confirmed. React raises its switch loader optimistically on
-        // click, so on CANCEL create nothing but kick a hub RE-PUSH so the
-        // loader (`switchingTo`) clears instead of stranding.
+        // `[+ new session]`: open a native folder picker and only mint the
+        // session once a folder is confirmed. Cancel creates nothing and
+        // re-pushes the hub so an optimistic loader cannot stick.
+        //
+        // Linux portal/zenity is a child process, so it stays off this thread
+        // and the window keeps painting. macOS and Windows dialogs do not
+        // present from a background thread (NSOpenPanel must be on the main
+        // thread; IFileDialog without the owner HWND opens behind the window
+        // or not at all), so those hop to the tao loop and use this window
+        // as parent.
         GuiReq::NewSession { kill, folder } => {
             if folder {
-                let ctl = ctx.ctl.clone();
-                std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
-                    Some(folder) => {
-                        let _ = ctl.send(HostCtl::New {
-                            workdir: Some(folder),
-                            kill,
-                        });
-                    }
-                    None => {
-                        let _ = ctl.send(HostCtl::RefreshHub);
-                    }
-                });
+                open_local_folder_picker(ctx, kill);
             } else {
                 let _ = ctx.ctl.send(HostCtl::New {
                     workdir: None,
@@ -1332,6 +1327,48 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
 // `write_attach_scratch`, `forward_paste`, `forward_config_req`, and `forward_or_host`
 // moved to the sibling `dispatch_forward` module (file size) — see the `use
 // super::dispatch_forward::{...}` import above.
+
+fn open_local_folder_picker(ctx: &GuiReqCtx, kill: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        if ctx
+            .loop_proxy
+            .send_event(super::proto::UserEvent::PickFolder { kill })
+            .is_err()
+        {
+            let _ = ctx.ctl.send(HostCtl::RefreshHub);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = &ctx.loop_proxy;
+        let ctl = ctx.ctl.clone();
+        std::thread::spawn(move || {
+            let chosen = rfd::FileDialog::new()
+                .set_title("Choose a folder")
+                .pick_folder();
+            match chosen {
+                Some(folder) => {
+                    let _ = ctl.send(HostCtl::New {
+                        workdir: Some(folder),
+                        kill,
+                    });
+                }
+                None => {
+                    let _ = ctl.send(HostCtl::RefreshHub);
+                }
+            }
+        });
+    }
+}
+
+/// Native folder dialog owned by `parent`. Call on the tao thread.
+pub(super) fn pick_session_folder(parent: &tao::window::Window) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Choose a folder")
+        .set_parent(parent)
+        .pick_folder()
+}
 
 /// Spawn a detached second GUI process for multi-window multi-attach.
 ///

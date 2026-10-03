@@ -20,6 +20,14 @@ pub(super) enum UserEvent {
     /// Background app-list install finished. The Dock icon is applied on this
     /// thread; `NSApplication` calls are main-thread only.
     LauncherReady,
+    /// Open the native folder picker on this thread, then mint a session if
+    /// the user confirms a folder. macOS `NSOpenPanel` and the Windows file
+    /// dialog only present when they run on the window thread, with this
+    /// window as owner. `kill` is the "close current" menu item.
+    /// Linux posts nothing here (the portal dialog runs on a worker), so the
+    /// variant is unused in a Linux build.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    PickFolder { kill: bool },
 }
 
 /// Window-management commands the HTML titlebar (drag region, minimize /
