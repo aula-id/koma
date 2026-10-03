@@ -34,11 +34,13 @@ pub struct LiveTokens {
 }
 
 /// `VmRSS:` kilobytes from `/proc/<pid>/status`, as bytes.
+#[cfg(any(target_os = "linux", test))]
 pub fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
     parse_kb_field(status, "VmRSS:")
 }
 
 /// `MemTotal:` kilobytes from `/proc/meminfo`, as bytes.
+#[cfg(any(target_os = "linux", test))]
 pub fn parse_mem_total_bytes(meminfo: &str) -> Option<u64> {
     parse_kb_field(meminfo, "MemTotal:")
 }
@@ -54,6 +56,7 @@ pub fn parse_pid_file(text: &str) -> Option<u32> {
 }
 
 /// `Name:` from `/proc/<pid>/status`. Empty when the field is absent.
+#[cfg(any(target_os = "linux", test))]
 pub fn proc_status_name(status: &str) -> &str {
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("Name:") {
@@ -65,6 +68,7 @@ pub fn proc_status_name(status: &str) -> &str {
 
 /// Process comms whose resident size belongs on the Koma card.
 /// `/proc` truncates `comm` to 15 bytes, so WebKit names are prefixes.
+#[cfg(any(target_os = "linux", test))]
 pub fn is_koma_or_webkit(name: &str) -> bool {
     let name = name.trim();
     name == "koma" || name == "koma.bin" || name.starts_with("WebKit") || name.starts_with("webkit")
@@ -314,6 +318,7 @@ pub fn assemble_sample(
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_kb_field(text: &str, key: &str) -> Option<u64> {
     for line in text.lines() {
         let Some(rest) = line.trim_start().strip_prefix(key) else {
@@ -419,6 +424,8 @@ MemAvailable:  8000000 kB\n";
         });
         assert!(apply_status(&mut tokens, &full));
         assert_eq!(tokens.tokens_in, 42_000);
+        assert_eq!(tokens.tokens_cached, 1_000);
+        assert_eq!(tokens.tokens_out, 300);
         assert_eq!(tokens.cost_micros, 1_250_000);
         assert_eq!(tokens.context_window, 200_000);
         assert!(tokens.working);

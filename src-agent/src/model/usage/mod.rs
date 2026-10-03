@@ -7,11 +7,13 @@
 #![allow(unused_imports)]
 
 mod cache;
+mod export;
 mod ledger;
 mod queries;
 mod types;
 
 // Re-export the entire public surface so every external path is unchanged.
+pub use export::{events_after, max_usage_id, TelemetryEvent};
 pub use ledger::{record_usage, usage_db_path};
 pub use queries::{
     daily_costs, range_totals, range_totals_scoped, role_split, role_split_scoped, session_hourly,
