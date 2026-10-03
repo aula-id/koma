@@ -137,6 +137,12 @@ impl TerminalManager {
 
         let pair = portable_pty::native_pty_system().openpty(pty_size)?;
 
+        // Match the coding-task PTY and xterm.js: a real TERM so readline/terminfo
+        // bind Delete/Backspace correctly (otherwise ESC [ 3 ~ can echo "~", etc.).
+        let mut cmd = cmd;
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+
         let child = pair
             .slave
             .spawn_command(cmd)

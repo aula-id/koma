@@ -382,7 +382,7 @@ export function DesignPanel() {
           <Select
             value={activeRoot ?? workdir[0] ?? ''}
             options={workdir.map((root) => ({ value: root, label: rootLabel(root) }))}
-            onChange={(root) => setActiveCodingRoot(root)}
+            onChange={(root) => setActiveCodingRoot(root, { closeTabs: true })}
             disabled={creating || renaming != null || deleting != null}
           />
         </div>

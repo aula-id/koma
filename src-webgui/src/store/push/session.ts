@@ -17,7 +17,12 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
         const switched = env.session !== get().session.id
-        if (switched) { cancelGitRequests(); useComputerPreview.getState().hide(); set({ computer: null, computerError: null }) }
+        if (switched) {
+          cancelGitRequests()
+          useComputerPreview.getState().hide()
+          set({ computer: null, computerError: null })
+          get().closeAllTabsExceptChat({ force: true })
+        }
         // Re-attaching the same session id is still a GUI bootstrap even though
         // it must not discard that session's existing tabs/slices.
         const bootstrapping = !!get().ui.bootstrap
@@ -91,8 +96,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                 ? {
                     ...(switched
                       ? {
-                          tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')],
-                          activeTabId: s.ui.tabs.some(t => t.id === s.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')) ? s.ui.activeTabId : 'chat',
+                          tabs: [makeChatTab()],
+                          activeTabId: 'chat',
                         }
                       : {}),
                     // Keep a real host Loading envelope; never synthesize pending.

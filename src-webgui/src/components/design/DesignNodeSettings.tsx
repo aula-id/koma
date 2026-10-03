@@ -31,6 +31,8 @@ import {
   X,
 } from 'lucide-react'
 import { KomaSelect } from '../KomaSelect'
+import { FontFamilyPicker } from './FontFamilyPicker'
+import { TEXT_COLOR_DEFAULT } from './tabShared'
 import { DesignModeContext } from './DesignTokenMenu'
 import { InspectorBack, InspectorPageContext, InspectorPageView, type InspectorPage } from './DesignPaintPopup'
 import {
@@ -243,12 +245,12 @@ export function NodeSettings({
     setField(justify === 'start' ? {} : { justify }, justify === 'start' ? ['justify'] : [])
   }
   const [radiusSplit, setRadiusSplit] = useState(!!(node.radiusTL != null || node.radiusTR != null || node.radiusBR != null || node.radiusBL != null))
-  const [fontQuery, setFontQuery] = useState('')
   const documentFonts = [...new Set(doc.screens.flatMap(function walk(item: DesignNode): string[] {
     return [item.fontFamily ?? '', ...(item.children ?? []).flatMap(walk)]
   }).filter(Boolean))]
   const systemFonts = ['Inter', 'system-ui', 'serif', 'monospace', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Courier New']
-  const fontChoices = [...new Set([...documentFonts, ...systemFonts])].filter((name) => !fontQuery || name.toLowerCase().includes(fontQuery.toLowerCase()))
+  const fontOptions = [...new Set([...documentFonts, ...systemFonts])].sort((a, b) => a.localeCompare(b))
+  const fontFamilyField = textOf((item) => item.fontFamily ?? '')
   const setCross = (align: 'start' | 'center' | 'end' | 'stretch') => {
     setField(align === 'start' ? {} : { align }, align === 'start' ? ['align'] : [])
   }
@@ -1266,30 +1268,18 @@ export function NodeSettings({
               <option value="bold">Bold</option>
             </KomaSelect>
           </LabeledControl>
-          <label className="flex h-7 items-center gap-1 rounded border border-koma-border bg-koma-bg px-1.5">
-            <span className="flex-none text-[11px] text-koma-dim">Font</span>
-            <input
-              aria-label="Font family"
-                value={multi ? '' : fontQuery || node.fontFamily || ''}
-              placeholder={textOf((item) => item.fontFamily ?? '').mixed ? 'Mixed' : 'UI font'}
-              onChange={(event) => {
-                const family = event.target.value
-                setFontQuery(family)
-                if (!family.trim()) applyType({}, ['fontFamily'])
-                else if (/^[\w][\w\s,-]{0,80}$/.test(family)) applyType({ fontFamily: family })
+          <LabeledControl label="Font" wide>
+            <FontFamilyPicker
+              value={multi ? '' : node.fontFamily ?? ''}
+              mixed={fontFamilyField.mixed}
+              disabled={multi}
+              options={fontOptions}
+              onChange={(family) => {
+                if (!family?.trim()) applyType({}, ['fontFamily'])
+                else applyType({ fontFamily: family })
               }}
-              className="h-6 min-w-0 flex-1 bg-transparent text-[12px] text-koma-fg outline-none"
             />
-          </label>
-          {fontChoices.length ? (
-            <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto">
-              {fontChoices.map((name) => (
-                <button key={name} type="button" title={name} onClick={() => { setFontQuery(''); applyType({ fontFamily: name }) }} className={`h-7 truncate rounded px-1.5 text-left text-[12px] ${node.fontFamily === name ? 'bg-koma-accent/20 text-koma-accent' : 'text-koma-dim hover:bg-koma-hover'}`}>
-                  {name}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          </LabeledControl>
           <FieldGroup label="Align">
             <div className="flex flex-wrap gap-0.5">
               <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>
@@ -1340,10 +1330,10 @@ export function NodeSettings({
             doc={doc}
             mixed={colorField.mixed}
             value={colorField.value}
-            fallback="#c8d3f5"
+            fallback={TEXT_COLOR_DEFAULT}
             resolved={resolveRef(doc, style.color)}
             tokens={colorTokens}
-            onChange={(next) => applyType(next && next !== 'none' ? { color: next, fill: next } : {}, next && next !== 'none' ? [] : ['color'])}
+            onChange={(next) => applyType(next && next !== 'none' ? { color: next } : {}, next && next !== 'none' ? [] : ['color'])}
           />
           <div className="grid grid-cols-2 gap-1">
             <GeomField label="Line" ariaLabel="Line height" value={lineField.value} mixed={lineField.mixed} onChange={(lineHeight) => {

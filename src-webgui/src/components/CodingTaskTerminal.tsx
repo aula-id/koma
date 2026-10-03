@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { attachTerminalKeyGuards, normalizeTerminalInput } from '../lib/terminalInput'
 import { useKoma } from '../store/koma'
 import { codingRequest, type WorkspaceRef } from '../lib/coding-service'
 type Chunk = { seq: number; text: string }
@@ -13,7 +14,11 @@ export default function CodingTaskTerminal({ workspace, runId, chunks, running, 
   useEffect(() => {
     if (!container.current) return
     const term = new Terminal({ fontFamily: "'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace", fontSize: 13, lineHeight: 1.2, cursorBlink: true, cursorStyle: 'bar', theme, scrollback: 10000, convertEol: true })
-    const fit = new FitAddon(); term.loadAddon(fit); term.open(container.current); terminal.current = term
+    const fit = new FitAddon()
+    term.loadAddon(fit)
+    attachTerminalKeyGuards(term)
+    term.open(container.current)
+    terminal.current = term
     let stopped = false, sequence = 0, pending = '', sending = false
     let inputTimer: ReturnType<typeof setTimeout>, resizeTimer: ReturnType<typeof setTimeout>
     const send = async () => {
@@ -23,7 +28,14 @@ export default function CodingTaskTerminal({ workspace, runId, chunks, running, 
       catch (e) { pending = ''; if (!stopped) current.current.onError(String(e)) }
       finally { sending = false; if (!stopped && pending) inputTimer = setTimeout(send, 0) }
     }
-    const input = term.onData(data => { if (!current.current.running) return; if (pending.length + data.length > 65536) { current.current.onError('Terminal input is busy; paste a smaller block.'); return } pending += data; clearTimeout(inputTimer); inputTimer = setTimeout(send, 20) })
+    const input = term.onData(data => {
+      if (!current.current.running) return
+      const normalized = normalizeTerminalInput(data)
+      if (pending.length + normalized.length > 65536) { current.current.onError('Terminal input is busy; paste a smaller block.'); return }
+      pending += normalized
+      clearTimeout(inputTimer)
+      inputTimer = setTimeout(send, 20)
+    })
     pump.current = () => {
       const next = current.current.chunks.filter(c => c.seq > sequence)
       if (next.length && next[0].seq > sequence + 1) term.write('\r\n[Earlier terminal output omitted]\r\n')
@@ -36,5 +48,12 @@ export default function CodingTaskTerminal({ workspace, runId, chunks, running, 
   useEffect(() => { pump.current() }, [chunks])
   useEffect(() => { layout.current(); if (terminal.current) terminal.current.options.disableStdin = !running }, [running])
   useEffect(() => { if (terminal.current) terminal.current.options.theme = theme }, [palette])
-  return <div ref={container} className="min-h-0 flex-1 overflow-hidden px-2 py-1" aria-label="Interactive task terminal" />
+  return (
+    <div
+      ref={container}
+      className="min-h-0 flex-1 overflow-hidden px-2 py-1"
+      aria-label="Interactive task terminal"
+      onMouseDown={() => terminal.current?.focus()}
+    />
+  )
 }

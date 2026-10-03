@@ -96,7 +96,10 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
       get().req({ r: 'TerminalCreate', id: terminalId, cwd })
     }
   },
-  setActiveCodingRoot: (root) => set((s) => ({ coding: { ...s.coding, activeRoot: root } })),
+  setActiveCodingRoot: (root, opts) => {
+    if (opts?.closeTabs) get().closeAllTabsExceptChat({ force: true })
+    set((s) => ({ coding: { ...s.coding, activeRoot: root } }))
+  },
   openLocalFileTab: (absPath, title) => {
     const id = localFileTabId(absPath)
     set((s) => {

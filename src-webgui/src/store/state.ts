@@ -554,6 +554,10 @@ export type KomaState = {
   // Dirty codingFile tabs are a no-op unless `force: true` (the floating dirty-
   // close popover collects the confirmation first).
   closeTab: (id: string, opts?: { force?: boolean }) => void
+  // Force-close every tab except the permanent chat tab (workspace folder
+  // change, session switch, detach). Re-picking the same folder still runs
+  // this when the caller opts in.
+  closeAllTabsExceptChat: (opts?: { force?: boolean }) => void
   // Activate a tab. Re-focusing a diff tab RE-REQUESTS its FileDiff for
   // freshness (contents may have changed since it was opened) while keeping the
   // stale diff on screen so the editor doesn't flash.
@@ -623,7 +627,7 @@ export type KomaState = {
   // a no-op.
   clearAgentSaving: (seq?: number) => void
   // ─── Coding panel ──────────────────────────────────────────────────────
-  setActiveCodingRoot: (root: string | null) => void
+  setActiveCodingRoot: (root: string | null, opts?: { closeTabs?: boolean }) => void
   // Open (or focus) a coding file tab. Optional placement drives explorer DnD:
   // drop on a pane center / tab strip → that group; drop on a pane edge → split.
   openCodingFile: (

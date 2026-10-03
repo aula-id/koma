@@ -8,7 +8,7 @@ import { tabBaseName } from '../initial'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
 
-export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openDiffTab' | 'closeTab' | 'activateTab' | 'focusEditorGroup' | 'moveTabToGroup' | 'splitTab' | 'toggleSplitDir' | 'setSplitDir' | 'resizeEditorGroups'> {
+export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openDiffTab' | 'closeTab' | 'closeAllTabsExceptChat' | 'activateTab' | 'focusEditorGroup' | 'moveTabToGroup' | 'splitTab' | 'toggleSplitDir' | 'setSplitDir' | 'resizeEditorGroups'> {
   return {
   openDiffTab: (path) => {
     const id = `diff:${path}`
@@ -154,6 +154,12 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
     // The active tab may have changed (closed the active one) — re-sync the stream
     // view so the host stops streaming a just-closed stream tab's target (or starts
     // streaming the neighbour if focus fell onto another stream tab).
+    get().syncStreamView()
+  },
+  closeAllTabsExceptChat: (opts) => {
+    const force = opts?.force ?? true
+    const ids = get().ui.tabs.filter((t) => t.id !== 'chat').map((t) => t.id)
+    for (const id of ids) get().closeTab(id, { force })
     get().syncStreamView()
   },
   activateTab: (id) => {
