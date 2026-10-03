@@ -38,4 +38,63 @@ unsafe extern "C" {
     /// Must run on the main thread after `NSApplication` exists.
     #[cfg(target_os = "macos")]
     pub fn koma_activate_app();
+
+    /// Resident bytes for `pid`, or 0 when it is dead or not Koma/WebKit.
+    /// The current process is always measured.
+    ///
+    /// # Safety
+    /// `pid` is a plain integer. Safe to call from any thread.
+    #[cfg(target_os = "macos")]
+    pub fn koma_resident_size(pid: u32) -> u64;
+
+    /// Physical memory from `hw.memsize`, or 0 on failure.
+    ///
+    /// # Safety
+    /// No pointers. Safe to call from any thread.
+    #[cfg(target_os = "macos")]
+    pub fn koma_physical_memory() -> u64;
+
+    /// Write up to `cap` direct child pids of `pid` into `out`.
+    ///
+    /// # Safety
+    /// `out` must be writable for `cap` elements. `cap` may be 0 when `out` is null.
+    #[cfg(target_os = "macos")]
+    pub fn koma_child_pids(pid: u32, out: *mut u32, cap: u32) -> u32;
+
+    /// Create the menu-bar item on first call and repaint it.
+    ///
+    /// # Safety
+    /// `stats` must be a live [`KomaUsageStats`]. Call on the main thread after
+    /// `NSApplication` exists.
+    #[cfg(target_os = "macos")]
+    pub fn koma_usage_bar_update(stats: *const KomaUsageStats);
+
+    /// Replace the menu-bar role rows. `count` is 0..=5. Each pointer is a
+    /// UTF-8 C string. The call copies them before returning.
+    ///
+    /// # Safety
+    /// `labels` and `values` must each be readable for `count` pointers, or
+    /// null when `count` is 0. Every string must be valid for the call.
+    #[cfg(target_os = "macos")]
+    pub fn koma_usage_bar_set_roles(
+        labels: *const *const std::ffi::c_char,
+        values: *const *const std::ffi::c_char,
+        count: u32,
+    );
+}
+
+/// Menu-bar usage snapshot. Field order matches `KomaUsageStats` in `macos.mm`.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+pub struct KomaUsageStats {
+    pub mem_window: u64,
+    pub mem_agent: u64,
+    pub mem_services: u64,
+    pub mem_system: u64,
+    pub tokens_in: u64,
+    pub tokens_cached: u64,
+    pub tokens_out: u64,
+    pub cost_micros: u64,
+    pub context_window: u64,
+    pub working: u8,
 }

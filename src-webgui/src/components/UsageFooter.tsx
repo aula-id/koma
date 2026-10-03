@@ -1,19 +1,10 @@
+import { useEffect, useRef, useState } from 'react'
 import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server, Terminal } from 'lucide-react'
 import { showCodingTasks } from './CodingTasks'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 import { BrailleSpinner } from './BrailleSpinner'
-
-// Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
-// trailing ".0" trimmed); below that the raw integer is shown. Local helper —
-// no dep pulled in for a one-line format.
-function fmtTokens(n: number): string {
-  if (n >= 10_000) {
-    const k = n / 1000
-    return `${k.toFixed(1).replace(/\.0$/, '')}k`
-  }
-  return `${Math.round(n)}`
-}
+import { fmtBytes, fmtTokens, UsageDash } from './UsageDash'
 
 // ~20px statusline pinned along the bottom of the whole main area (TUI
 // statusline grammar, ported 1:1): mode badge + a live-run pulse on the left,
@@ -31,6 +22,14 @@ export function UsageFooter() {
   const tokensCached = useKoma((s) => s.session.tokensCached)
   const tokensOut = useKoma((s) => s.session.tokensOut)
   const cost = useKoma((s) => s.session.cost)
+  const memWindow = useKoma((s) => s.session.memWindow)
+  const memAgent = useKoma((s) => s.session.memAgent)
+  const memServices = useKoma((s) => s.session.memServices)
+  const memSystem = useKoma((s) => s.session.memSystem)
+  const [usageOpen, setUsageOpen] = useState(false)
+  const usageRef = useRef<HTMLDivElement>(null)
+  const usageMenuRef = useRef<HTMLDivElement>(null)
+  const [usageRect, setUsageRect] = useState<DOMRect | null>(null)
   const planTodos = useKoma((s) => s.session.planTodos)
   const focusPlanSection = useKoma((s) => s.focusPlanSection)
   const req = useKoma((s) => s.req)
@@ -87,6 +86,38 @@ export function UsageFooter() {
   // plain "PLAN" before the model has written one yet (mode flips to plan
   // before the first checklist call lands).
   const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
+  const memTotal = memWindow + memAgent + memServices
+  const memKnown = memSystem > 0 || memTotal > 0
+  const usageTitle = `↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}${memKnown ? ` · ${fmtBytes(memTotal)}` : ''}`
+
+  useEffect(() => {
+    if (!usageOpen) {
+      setUsageRect(null)
+      return
+    }
+    const update = () => {
+      if (usageRef.current) setUsageRect(usageRef.current.getBoundingClientRect())
+    }
+    update()
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (usageRef.current?.contains(t) || usageMenuRef.current?.contains(t)) return
+      setUsageOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setUsageOpen(false)
+    }
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    window.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+      window.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [usageOpen])
 
   // Viewport max-* only — footer spans the whole main column, not a split pane.
   // Collapse long chips before they shove usage off-screen on narrow windows.
@@ -133,19 +164,32 @@ export function UsageFooter() {
 
       <div className="min-w-0 flex-1" />
 
-      {/* Usage readout — short form under 720px, cost-only under 520px. */}
-      <span className="min-w-0 truncate max-[520px]:hidden" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
-        <span className="max-[720px]:hidden">
-          ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
-        </span>
-        <span className="hidden max-[720px]:inline">
-          ↑{fmtTokens(tokensIn)} ↓{fmtTokens(tokensOut)}{' '}
-        </span>
-        <span className="text-koma-accent">${cost.toFixed(4)}</span>
-      </span>
-      <span className="hidden flex-none text-koma-accent max-[520px]:inline" title={`↑ ${fmtTokens(tokensIn)} · cached ${fmtTokens(tokensCached)} · ↓ ${fmtTokens(tokensOut)} · $${cost.toFixed(4)}`}>
-        ${cost.toFixed(4)}
-      </span>
+      {/* Usage readout — opens the memory / token card. Short form under
+          720px, cost-only under 520px. The card is portaled; this row clips. */}
+      <div ref={usageRef} className="relative min-w-0 max-[520px]:flex-none">
+        <button
+          type="button"
+          onClick={() => setUsageOpen((open) => !open)}
+          aria-expanded={usageOpen}
+          aria-haspopup="dialog"
+          aria-label="Koma usage"
+          title={usageTitle}
+          className="block min-w-0 max-w-full truncate border-0 bg-transparent p-0 text-left font-mono text-[11px] text-koma-dim hover:text-koma-fg"
+        >
+          <span className="max-[520px]:hidden">
+            <span className="max-[720px]:hidden">
+              ↑ {fmtTokens(tokensIn)} · cached {fmtTokens(tokensCached)} · ↓ {fmtTokens(tokensOut)} ·{' '}
+            </span>
+            <span className="hidden max-[720px]:inline">
+              ↑{fmtTokens(tokensIn)} ↓{fmtTokens(tokensOut)}{' '}
+            </span>
+            <span className="text-koma-accent">${cost.toFixed(4)}</span>
+            {memKnown && <span className="max-[720px]:hidden"> · {fmtBytes(memTotal)}</span>}
+          </span>
+          <span className="hidden text-koma-accent max-[520px]:inline">${cost.toFixed(4)}</span>
+        </button>
+        {usageOpen && usageRect && <UsageDash rect={usageRect} menuRef={usageMenuRef} />}
+      </div>
 
       {/* Compact button */}
       <button

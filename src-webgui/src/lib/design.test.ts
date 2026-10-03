@@ -116,6 +116,10 @@ import {
   siblingMaskStyle,
   splitTextByRuns,
   visibleDesignScreens,
+  applyDesignAffine,
+  composeDesignAffine,
+  designNodeMatrix,
+  screenChromePlacement,
   hsbToHex,
   insertVertexOnSegment,
   moveVectorTangent,
@@ -1865,4 +1869,53 @@ function sample(): DesignDoc {
   assert.equal(shapeKindOf(retuned), 'star')
   assert.equal(retuned.w, 80)
   assert.equal(retuned.h, 40)
+}
+
+{
+  const frame = createNode('frame', 'tablet', 100, 50)
+  frame.w = 400
+  frame.h = 300
+  const rect = createNode('rect', 'r', 10, 20)
+  rect.w = 55
+  rect.h = 80
+  rect.rotation = 90
+  const toCanvas = composeDesignAffine(designNodeMatrix(frame, frame.w, frame.h), designNodeMatrix(rect, rect.w, rect.h))
+  const placed = screenChromePlacement(toCanvas, rect.w, rect.h, 5, 6, 4)
+  const origin = applyDesignAffine(placed.matrix, 0, 0)
+  const step = applyDesignAffine(placed.matrix, 1, 0)
+  assert.ok(Math.abs(origin.x - 715) < 1e-6)
+  assert.ok(Math.abs(origin.y - 336) < 1e-6)
+  assert.ok(Math.abs(Math.hypot(step.x - origin.x, step.y - origin.y) - 1) < 1e-6)
+  assert.ok(Math.abs(placed.width - 55 * 4) < 1e-6)
+  assert.ok(Math.abs(placed.height - 80 * 4) < 1e-6)
+}
+
+{
+  const rect = createNode('rect', 'r', 0, 0)
+  rect.w = 55
+  rect.h = 554
+  rect.rotation = 37
+  const placed = screenChromePlacement(designNodeMatrix(rect, rect.w, rect.h), rect.w, rect.h, 40, 18, 47.99)
+  const origin = applyDesignAffine(placed.matrix, 0, 0)
+  const step = applyDesignAffine(placed.matrix, 1, 0)
+  assert.ok(Math.abs(Math.hypot(step.x - origin.x, step.y - origin.y) - 1) < 1e-6)
+  assert.ok(Math.abs(placed.width - 55 * 47.99) < 1e-6)
+  assert.ok(Math.abs(placed.height - 554 * 47.99) < 1e-6)
+}
+
+{
+  const frame = createNode('frame', 'f', 0, 0)
+  frame.w = 100
+  frame.h = 80
+  frame.flipX = true
+  const rect = createNode('rect', 'r', 10, 0)
+  rect.w = 20
+  rect.h = 10
+  const toCanvas = composeDesignAffine(designNodeMatrix(frame, frame.w, frame.h), designNodeMatrix(rect, rect.w, rect.h))
+  const placed = screenChromePlacement(toCanvas, rect.w, rect.h, 0, 0, 10)
+  const origin = applyDesignAffine(placed.matrix, 0, 0)
+  const step = applyDesignAffine(placed.matrix, 1, 0)
+  assert.ok(Math.abs(origin.x - 900) < 1e-6)
+  assert.ok(Math.abs(origin.y - 0) < 1e-6)
+  assert.ok(Math.abs(Math.hypot(step.x - origin.x, step.y - origin.y) - 1) < 1e-6)
 }

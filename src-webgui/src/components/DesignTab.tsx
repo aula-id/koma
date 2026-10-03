@@ -181,6 +181,7 @@ import {
 } from './design/tabShared'
 import { canvasBackdrop, DesignRulers, designMenuItems, ToolButton } from './design/DesignRulers'
 import { DesignNodeView } from './design/DesignNodeView'
+import { DesignSelectionChrome } from './design/DesignSelectionChrome'
 import { FrameToolFlyout, ShapeToolFlyout } from './design/DesignTools'
 import { NodeSettings } from './design/DesignNodeSettings'
 import { PenOverlay } from './design/DesignPropertyFields'
@@ -2033,9 +2034,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 key={screen.id}
                 doc={doc}
                 node={screen}
-                zoom={view.zoom}
                 selectedIds={vectorEditId ? [] : selection}
-                geometryId={vectorEditId}
                 editing={editing}
                 dragCursor={dragCursor}
                 enteredContainerId={enteredContainerId}
@@ -2057,26 +2056,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     return
                   }
                   enterContainerAt(id, event.clientX, event.clientY)
-                }}
-                onCorner={(id, corner, event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setSelection([id])
-                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
-                  const locatedNow = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
-                  if (!locatedNow) return
-                  const raw = locatedNow.node.radius
-                  const radius = typeof raw === 'number' ? raw : Number(resolveRef(doc, typeof raw === 'string' ? raw : '')) || 0
-                  dragRef.current = {
-                    kind: 'radius',
-                    id,
-                    corner,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    radius,
-                    node: { ...locatedNow.node },
-                    remembered: false,
-                  }
                 }}
                 onMenu={(id, clientX, clientY) => {
                   const point = toDoc(clientX, clientY)
@@ -2154,51 +2133,6 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     scene: null,
                   }
                   setDragCursor('grabbing')
-                }}
-                onRotate={(id, event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setSelection([id])
-                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
-                  const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
-                  if (!located || located.node.locked) return
-                  dragRef.current = {
-                    kind: 'rotate',
-                    id,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    rotation: located.node.rotation ?? 0,
-                    node: { ...located.node },
-                    remembered: false,
-                  }
-                  setDragCursor('grabbing')
-                }}
-                onResize={(id, handle, event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setSelection([id])
-                  const storedNow = useKoma.getState().design?.docs?.[key]?.doc
-                  const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
-                  if (!located || located.node.locked) return
-                  const node = { ...located.node }
-                  if (handle.includes('w') || handle.includes('e')) {
-                    if (node.kind === 'instance') node.wMode = 'fixed'
-                    else delete node.wMode
-                  }
-                  if (handle.includes('n') || handle.includes('s')) {
-                    if (node.kind === 'instance') node.hMode = 'fixed'
-                    else delete node.hMode
-                  }
-                  dragRef.current = {
-                    kind: 'resize',
-                    id,
-                    handle,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    node,
-                    remembered: false,
-                  }
-                  setDragCursor(HANDLES.find((item) => item.id === handle)?.cursor ?? 'grabbing')
                 }}
                 onEdit={(id) => {
                   setSelection([id])
@@ -2388,6 +2322,81 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
             )
           })() : null}
           </div>
+          <DesignSelectionChrome
+            doc={doc}
+            panX={view.panX}
+            panY={view.panY}
+            zoom={view.zoom}
+            selectedIds={vectorEditId ? [] : selection}
+            dragCursor={dragCursor}
+            enteredContainerId={enteredContainerId}
+            cropEditId={cropEdit ? selectedId : null}
+            onCorner={(id, corner, event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setSelection([id])
+              const storedNow = useKoma.getState().design?.docs?.[key]?.doc
+              const locatedNow = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
+              if (!locatedNow) return
+              const raw = locatedNow.node.radius
+              const radius = typeof raw === 'number' ? raw : Number(resolveRef(doc, typeof raw === 'string' ? raw : '')) || 0
+              dragRef.current = {
+                kind: 'radius',
+                id,
+                corner,
+                startX: event.clientX,
+                startY: event.clientY,
+                radius,
+                node: { ...locatedNow.node },
+                remembered: false,
+              }
+            }}
+            onRotate={(id, event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setSelection([id])
+              const storedNow = useKoma.getState().design?.docs?.[key]?.doc
+              const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
+              if (!located || located.node.locked) return
+              dragRef.current = {
+                kind: 'rotate',
+                id,
+                startX: event.clientX,
+                startY: event.clientY,
+                rotation: located.node.rotation ?? 0,
+                node: { ...located.node },
+                remembered: false,
+              }
+              setDragCursor('grabbing')
+            }}
+            onResize={(id, handle, event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setSelection([id])
+              const storedNow = useKoma.getState().design?.docs?.[key]?.doc
+              const located = locateDesign(storedNow ? editingDoc(storedNow, focusRef.current) : doc, id)
+              if (!located || located.node.locked) return
+              const node = { ...located.node }
+              if (handle.includes('w') || handle.includes('e')) {
+                if (node.kind === 'instance') node.wMode = 'fixed'
+                else delete node.wMode
+              }
+              if (handle.includes('n') || handle.includes('s')) {
+                if (node.kind === 'instance') node.hMode = 'fixed'
+                else delete node.hMode
+              }
+              dragRef.current = {
+                kind: 'resize',
+                id,
+                handle,
+                startX: event.clientX,
+                startY: event.clientY,
+                node,
+                remembered: false,
+              }
+              setDragCursor(HANDLES.find((item) => item.id === handle)?.cursor ?? 'grabbing')
+            }}
+          />
           {doc.screens.length === 0 && !file.loading ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[12px] text-koma-fg opacity-35">
               Drag a frame onto the canvas

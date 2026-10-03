@@ -212,6 +212,11 @@ pub(super) enum PushEnvelope {
         #[serde(rename = "tokensOut")]
         tokens_out: u64,
         cost: f64,
+        /// Effective context window (`ContextUsage::effective_window`) for the
+        /// usage card's token ring. `0` until the session has a sample.
+        /// `default` so an older payload still deserializes.
+        #[serde(rename = "contextWindow", default)]
+        context_window: u64,
         /// The EFFECTIVE agent mode label (`"auto"`/`"normal"`/`"plan"`/`"yolo"`) —
         /// identical source to the Snapshot's `mode` (`shadow.rest.agent_mode()`), so
         /// e.g. a model-driven `plan_enter` while the selector reads "auto" still

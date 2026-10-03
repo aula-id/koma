@@ -83,6 +83,11 @@ export const initialSession: SessionSlice = {
   tokensCached: 0,
   tokensOut: 0,
   cost: 0,
+  contextWindow: 0,
+  memWindow: 0,
+  memAgent: 0,
+  memServices: 0,
+  memSystem: 0,
 }
 
 export const initialHub: HubSlice = {

@@ -7,6 +7,7 @@
 #import <Vision/Vision.h>
 #include "capture_limits.h"
 #include "input_idle.h"
+#include <libproc.h>
 #include <sys/sysctl.h>
 #include <algorithm>
 #include <atomic>
@@ -1124,5 +1125,450 @@ extern "C" void koma_activate_app(void) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         [app activateIgnoringOtherApps:YES];
 #pragma clang diagnostic pop
+    }
+}
+
+// Menu-bar usage card. Field order is the Rust `KomaUsageStats` ABI (`repr(C)`).
+// Do not use `@available` or NSProcessInfo in this file: `@available` lowers to
+// ___isPlatformVersionAtLeast, which this object cannot link.
+struct KomaUsageStats {
+    uint64_t mem_window;
+    uint64_t mem_agent;
+    uint64_t mem_services;
+    uint64_t mem_system;
+    uint64_t tokens_in;
+    uint64_t tokens_cached;
+    uint64_t tokens_out;
+    uint64_t cost_micros;
+    uint64_t context_window;
+    uint8_t working;
+};
+
+static bool path_is_koma_or_webkit(const char *path) {
+    return path != nullptr && (std::strstr(path, "koma") != nullptr || std::strstr(path, "Koma") != nullptr ||
+                                std::strstr(path, "WebKit") != nullptr || std::strstr(path, "webkit") != nullptr);
+}
+
+// Resident bytes for a live pid. Zero when the pid is dead or its executable
+// is neither this process, Koma, nor a WebKit helper (pid reuse guard).
+extern "C" uint64_t koma_resident_size(uint32_t pid) {
+    if (pid == 0)
+        return 0;
+    char path[PROC_PIDPATHINFO_MAXSIZE];
+    std::memset(path, 0, sizeof(path));
+    int n = proc_pidpath((pid_t)pid, path, sizeof(path));
+    if (n <= 0)
+        return 0;
+    path[sizeof(path) - 1] = '\0';
+    if (pid != (uint32_t)getpid() && !path_is_koma_or_webkit(path))
+        return 0;
+    struct proc_taskinfo info;
+    std::memset(&info, 0, sizeof(info));
+    int wrote = proc_pidinfo((pid_t)pid, PROC_PIDTASKINFO, 0, &info, (int)sizeof(info));
+    if (wrote != (int)sizeof(info))
+        return 0;
+    return info.pti_resident_size;
+}
+
+extern "C" uint64_t koma_physical_memory(void) {
+    uint64_t mem = 0;
+    size_t len = sizeof(mem);
+    if (sysctlbyname("hw.memsize", &mem, &len, nullptr, 0) != 0)
+        return 0;
+    return mem;
+}
+
+// Child pids of `pid`, capped by `cap`. The return is how many were written.
+extern "C" uint32_t koma_child_pids(uint32_t pid, uint32_t *out, uint32_t cap) {
+    if (out == nullptr || cap == 0 || pid == 0)
+        return 0;
+    pid_t storage[256];
+    uint32_t slots = 64;
+    int n = proc_listchildpids((pid_t)pid, storage, slots * sizeof(pid_t));
+    if (n == (int)slots) {
+        slots = 256;
+        n = proc_listchildpids((pid_t)pid, storage, slots * sizeof(pid_t));
+    }
+    if (n <= 0)
+        return 0;
+    if (n > (int)slots)
+        n = (int)slots;
+    uint32_t count = 0;
+    for (int i = 0; i < n && count < cap; ++i) {
+        if (storage[i] > 0)
+            out[count++] = (uint32_t)storage[i];
+    }
+    return count;
+}
+
+static NSString *fmt_bytes(uint64_t bytes) {
+    double mb = (double)bytes / (1024.0 * 1024.0);
+    if (mb >= 1024.0) {
+        double gb = mb / 1024.0;
+        if (gb >= 10.0)
+            return [NSString stringWithFormat:@"%.0f GB", gb];
+        return [NSString stringWithFormat:@"%.1f GB", gb];
+    }
+    if (mb >= 100.0)
+        return [NSString stringWithFormat:@"%.0f MB", mb];
+    return [NSString stringWithFormat:@"%.1f MB", mb];
+}
+
+static NSString *fmt_center_bytes(uint64_t bytes) {
+    double mb = (double)bytes / (1024.0 * 1024.0);
+    if (mb >= 1024.0)
+        return [NSString stringWithFormat:@"%.1fG", mb / 1024.0];
+    if (mb >= 10.0)
+        return [NSString stringWithFormat:@"%.0fM", mb];
+    return [NSString stringWithFormat:@"%.1fM", mb];
+}
+
+static NSString *fmt_tokens(uint64_t n) {
+    if (n >= 10000ull) {
+        NSString *raw = [NSString stringWithFormat:@"%.1f", (double)n / 1000.0];
+        if ([raw hasSuffix:@".0"])
+            raw = [raw substringToIndex:raw.length - 2];
+        return [raw stringByAppendingString:@"k"];
+    }
+    return [NSString stringWithFormat:@"%llu", (unsigned long long)n];
+}
+
+static NSString *fmt_cost(uint64_t micros) {
+    return [NSString stringWithFormat:@"$%.4f", (double)micros / 1000000.0];
+}
+
+static unsigned token_percent(const KomaUsageStats *stats) {
+    if (stats->context_window == 0)
+        return 0;
+    double pct = (double)stats->tokens_in * 100.0 / (double)stats->context_window;
+    if (pct < 0)
+        return 0;
+    if (pct > 999)
+        return 999;
+    return (unsigned)(pct + 0.5);
+}
+
+static NSString *menu_title(const KomaUsageStats *stats) {
+    uint64_t total = stats->mem_window + stats->mem_agent + stats->mem_services;
+    NSString *title = @"Koma";
+    if (total > 0 && stats->context_window > 0) {
+        title = [NSString stringWithFormat:@"%@ · %u%%", fmt_bytes(total), token_percent(stats)];
+    } else if (total > 0) {
+        title = fmt_bytes(total);
+    } else if (stats->context_window > 0) {
+        title = [NSString stringWithFormat:@"%u%%", token_percent(stats)];
+    }
+    if (stats->working)
+        title = [@"● " stringByAppendingString:title];
+    return title;
+}
+
+static void draw_text(NSString *text, NSRect rect, NSFont *font, NSColor *color, NSTextAlignment align) {
+    if (text == nil)
+        return;
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.alignment = align;
+    style.lineBreakMode = NSLineBreakByTruncatingTail;
+    [text drawInRect:rect withAttributes:@{
+        NSFontAttributeName : font,
+        NSForegroundColorAttributeName : color,
+        NSParagraphStyleAttributeName : style,
+    }];
+}
+
+static void draw_swatch(NSRect rect, NSColor *color) {
+    if (color == nil)
+        return;
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:rect xRadius:1.5 yRadius:1.5];
+    [color setFill];
+    [path fill];
+}
+
+// `fractions` are 0..1 shares of the circle, drawn clockwise from 12 o'clock.
+static void draw_ring(NSPoint center, CGFloat radius, CGFloat width, const CGFloat *fractions, NSColor *const *colors,
+                      int count) {
+    NSBezierPath *track = [NSBezierPath bezierPath];
+    [track appendBezierPathWithArcWithCenter:center radius:radius startAngle:90 endAngle:90 - 360 clockwise:YES];
+    track.lineWidth = width;
+    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.14] setStroke];
+    [track stroke];
+    CGFloat angle = 90;
+    for (int i = 0; i < count; ++i) {
+        if (fractions[i] <= 0 || colors[i] == nil)
+            continue;
+        CGFloat sweep = fractions[i] * 360.0;
+        if (sweep > 360)
+            sweep = 360;
+        NSBezierPath *arc = [NSBezierPath bezierPath];
+        [arc appendBezierPathWithArcWithCenter:center
+                                        radius:radius
+                                    startAngle:angle
+                                      endAngle:angle - sweep
+                                     clockwise:YES];
+        arc.lineWidth = width;
+        [colors[i] setStroke];
+        [arc stroke];
+        angle -= sweep;
+    }
+}
+
+static void draw_legend(CGFloat y, NSColor *swatch, NSString *label, NSString *value, NSFont *font, NSColor *dim,
+                        NSColor *fg) {
+    draw_swatch(NSMakeRect(108, y + 3, 8, 8), swatch);
+    draw_text(label, NSMakeRect(122, y, 80, 14), font, dim, NSTextAlignmentLeft);
+    draw_text(value, NSMakeRect(188, y, 98, 14), font, fg, NSTextAlignmentRight);
+}
+
+static void draw_center(NSString *text, NSPoint center, NSFont *font, NSColor *color) {
+    NSDictionary *attrs = @{NSFontAttributeName : font, NSForegroundColorAttributeName : color};
+    NSSize size = [text sizeWithAttributes:attrs];
+    [text drawAtPoint:NSMakePoint(center.x - size.width / 2.0, center.y - size.height / 2.0) withAttributes:attrs];
+}
+
+static const CGFloat kCardW = 300;
+static const CGFloat kCardH = 288;
+
+// Five role rows sit under the token block. `roles` is 0..5.
+static CGFloat card_height(uint32_t roles) {
+    if (roles == 0)
+        return kCardH;
+    if (roles > 5)
+        roles = 5;
+    return 310 + (CGFloat)(roles - 1) * 16 + 14 + 12;
+}
+
+static NSString *ns_utf8(const char *text) {
+    if (text == nullptr || text[0] == '\0')
+        return @"—";
+    NSString *value = [NSString stringWithUTF8String:text];
+    return value != nil ? value : @"—";
+}
+
+static void draw_role(CGFloat y, NSString *label, NSString *value, NSFont *font, NSColor *dim, NSColor *fg) {
+    draw_text(label, NSMakeRect(14, y, 78, 14), font, dim, NSTextAlignmentLeft);
+    draw_text(value, NSMakeRect(96, y, 190, 14), font, fg, NSTextAlignmentRight);
+}
+
+@interface KomaUsageView : NSView
+- (void)setStats:(KomaUsageStats)stats;
+- (void)setRoles:(const char *const *)labels values:(const char *const *)values count:(uint32_t)count;
+- (CGFloat)cardHeight;
+@end
+
+@implementation KomaUsageView {
+    KomaUsageStats _stats;
+    NSMutableArray<NSString *> *_roleLabels;
+    NSMutableArray<NSString *> *_roleValues;
+}
+
+- (void)setStats:(KomaUsageStats)stats {
+    _stats = stats;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setRoles:(const char *const *)labels values:(const char *const *)values count:(uint32_t)count {
+    if (labels == nullptr || values == nullptr)
+        count = 0;
+    if (count > 5)
+        count = 5;
+    _roleLabels = [NSMutableArray arrayWithCapacity:count];
+    _roleValues = [NSMutableArray arrayWithCapacity:count];
+    for (uint32_t i = 0; i < count; ++i) {
+        [_roleLabels addObject:ns_utf8(labels[i])];
+        [_roleValues addObject:ns_utf8(values[i])];
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (CGFloat)cardHeight {
+    return card_height((uint32_t)_roleLabels.count);
+}
+
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    NSRect bounds = self.bounds;
+    [[NSColor colorWithSRGBRed:0.11 green:0.11 blue:0.125 alpha:1] setFill];
+    NSRectFill(bounds);
+    CGFloat H = bounds.size.height;
+    NSColor *fg = [NSColor colorWithSRGBRed:0.96 green:0.96 blue:0.97 alpha:1];
+    NSColor *dim = [NSColor colorWithSRGBRed:0.70 green:0.71 blue:0.76 alpha:1];
+    NSColor *windowColor = [NSColor colorWithSRGBRed:0.30 green:0.55 blue:1 alpha:1];
+    NSColor *agentColor = [NSColor colorWithSRGBRed:1 green:0.36 blue:0.36 alpha:1];
+    NSColor *serviceColor = [NSColor colorWithSRGBRed:0.75 green:0.52 blue:0.99 alpha:1];
+    NSColor *tokenColor = [NSColor colorWithSRGBRed:0.24 green:0.86 blue:0.55 alpha:1];
+    NSFont *titleFont = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    NSFont *sectionFont = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    NSFont *rowFont = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSFont *centerFont = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+
+    auto rowY = [&](CGFloat top) { return H - top - 14; };
+    draw_text(@"Koma", NSMakeRect(14, rowY(12), 180, 16), titleFont, fg, NSTextAlignmentLeft);
+    if (_stats.working) {
+        NSRect dot = NSMakeRect(bounds.size.width - 22, rowY(12) + 4, 7, 7);
+        [tokenColor setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:dot] fill];
+    }
+
+    draw_text(@"Memory", NSMakeRect(14, rowY(36), 80, 16), sectionFont, fg, NSTextAlignmentLeft);
+    uint64_t total = _stats.mem_window + _stats.mem_agent + _stats.mem_services;
+    CGFloat memFrac[3] = {0, 0, 0};
+    NSColor *memColor[3] = {windowColor, agentColor, serviceColor};
+    if (total > 0) {
+        memFrac[0] = (CGFloat)_stats.mem_window / (CGFloat)total;
+        memFrac[1] = (CGFloat)_stats.mem_agent / (CGFloat)total;
+        memFrac[2] = (CGFloat)_stats.mem_services / (CGFloat)total;
+    }
+    NSPoint memCenter = NSMakePoint(48, rowY(104));
+    draw_ring(memCenter, 26, 7, memFrac, memColor, 3);
+    draw_center(total > 0 ? fmt_center_bytes(total) : @"0", memCenter, centerFont, fg);
+    draw_legend(rowY(58), windowColor, @"Window", fmt_bytes(_stats.mem_window), rowFont, dim, fg);
+    draw_legend(rowY(76), agentColor, @"Agent", fmt_bytes(_stats.mem_agent), rowFont, dim, fg);
+    draw_legend(rowY(94), serviceColor, @"Services", fmt_bytes(_stats.mem_services), rowFont, dim, fg);
+    draw_legend(rowY(112), nil, @"Total", fmt_bytes(total), rowFont, dim, fg);
+    if (_stats.mem_system > 0) {
+        NSString *of = [NSString stringWithFormat:@"of %@ on this machine", fmt_bytes(_stats.mem_system)];
+        draw_text(of, NSMakeRect(122, rowY(130), 164, 14), rowFont, dim, NSTextAlignmentLeft);
+    }
+
+    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.08] setFill];
+    NSRectFill(NSMakeRect(14, rowY(148), bounds.size.width - 28, 1));
+
+    draw_text(@"Tokens", NSMakeRect(14, rowY(162), 80, 16), sectionFont, fg, NSTextAlignmentLeft);
+    CGFloat tokenFrac = 0;
+    NSString *pct = @"—";
+    if (_stats.context_window > 0) {
+        unsigned shown = token_percent(&_stats);
+        pct = [NSString stringWithFormat:@"%u%%", shown];
+        tokenFrac = (CGFloat)shown / 100.0;
+        if (tokenFrac > 1)
+            tokenFrac = 1;
+    }
+    CGFloat one = tokenFrac;
+    NSColor *oneColor = tokenColor;
+    NSPoint tokenCenter = NSMakePoint(48, rowY(230));
+    draw_ring(tokenCenter, 26, 7, &one, &oneColor, 1);
+    draw_center(pct, tokenCenter, centerFont, fg);
+    draw_legend(rowY(184), tokenColor, @"Context", pct, rowFont, dim, fg);
+    draw_legend(rowY(202), nil, @"In", fmt_tokens(_stats.tokens_in), rowFont, dim, fg);
+    draw_legend(rowY(220), nil, @"Cached", fmt_tokens(_stats.tokens_cached), rowFont, dim, fg);
+    draw_legend(rowY(238), nil, @"Out", fmt_tokens(_stats.tokens_out), rowFont, dim, fg);
+    draw_legend(rowY(256), nil, @"Cost", fmt_cost(_stats.cost_micros), rowFont, dim, fg);
+
+    NSUInteger roleCount = _roleLabels.count;
+    if (roleCount > 0 && _roleValues.count == roleCount) {
+        [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.08] setFill];
+        NSRectFill(NSMakeRect(14, rowY(274), bounds.size.width - 28, 1));
+        draw_text(@"Roles", NSMakeRect(14, rowY(288), 80, 16), sectionFont, fg, NSTextAlignmentLeft);
+        for (NSUInteger i = 0; i < roleCount; ++i) {
+            draw_role(rowY(310 + (CGFloat)i * 16), _roleLabels[i], _roleValues[i], rowFont, dim, fg);
+        }
+    }
+}
+
+@end
+
+@interface KomaUsageBar : NSObject <NSPopoverDelegate>
+- (void)install;
+- (void)apply:(const KomaUsageStats *)stats;
+- (void)setRoles:(const char *const *)labels values:(const char *const *)values count:(uint32_t)count;
+@end
+
+@implementation KomaUsageBar {
+    NSStatusItem *_item;
+    NSPopover *_popover;
+    KomaUsageView *_view;
+    BOOL _suppressToggle;
+}
+
+- (void)install {
+    if (_item != nil)
+        return;
+    _item = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    NSStatusBarButton *button = _item.button;
+    button.title = @"Koma";
+    button.target = self;
+    button.action = @selector(toggle:);
+    button.toolTip = @"Koma memory, tokens, and models";
+    button.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightMedium];
+
+    _view = [[KomaUsageView alloc] initWithFrame:NSMakeRect(0, 0, kCardW, kCardH)];
+    NSViewController *controller = [[NSViewController alloc] init];
+    controller.view = _view;
+    _popover = [[NSPopover alloc] init];
+    _popover.behavior = NSPopoverBehaviorTransient;
+    _popover.animates = YES;
+    _popover.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    _popover.contentViewController = controller;
+    _popover.contentSize = NSMakeSize(kCardW, kCardH);
+    _popover.delegate = self;
+}
+
+- (void)apply:(const KomaUsageStats *)stats {
+    if (_view == nil || stats == nullptr)
+        return;
+    [_view setStats:*stats];
+    NSStatusBarButton *button = _item.button;
+    if (button != nil)
+        button.title = menu_title(stats);
+}
+
+- (void)setRoles:(const char *const *)labels values:(const char *const *)values count:(uint32_t)count {
+    if (_view == nil)
+        return;
+    [_view setRoles:labels values:values count:count];
+    CGFloat height = [_view cardHeight];
+    [_view setFrameSize:NSMakeSize(kCardW, height)];
+    if (_popover != nil)
+        _popover.contentSize = NSMakeSize(kCardW, height);
+}
+
+- (void)toggle:(id)sender {
+    if (_suppressToggle) {
+        _suppressToggle = NO;
+        return;
+    }
+    if (_popover.shown) {
+        [_popover performClose:sender];
+        return;
+    }
+    NSStatusBarButton *button = _item.button;
+    if (button == nil)
+        return;
+    [_popover showRelativeToRect:button.bounds ofView:button preferredEdge:NSRectEdgeMinY];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification {
+    (void)notification;
+    // A click on the status item both closes a transient popover and fires
+    // the button action. Ignore that action or the card reopens immediately.
+    _suppressToggle = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_suppressToggle = NO;
+    });
+}
+
+@end
+
+static KomaUsageBar *sharedUsageBar = nil;
+
+extern "C" void koma_usage_bar_update(const KomaUsageStats *stats) {
+    if (stats == nullptr)
+        return;
+    @autoreleasepool {
+        if (sharedUsageBar == nil) {
+            sharedUsageBar = [KomaUsageBar new];
+            [sharedUsageBar install];
+        }
+        [sharedUsageBar apply:stats];
+    }
+}
+
+extern "C" void koma_usage_bar_set_roles(const char *const *labels, const char *const *values, uint32_t count) {
+    @autoreleasepool {
+        if (sharedUsageBar == nil) {
+            sharedUsageBar = [KomaUsageBar new];
+            [sharedUsageBar install];
+        }
+        [sharedUsageBar setRoles:labels values:values count:count];
     }
 }

@@ -8,8 +8,7 @@
     <?error Unsupported value of sys.BUILDARCH=$(sys.BUILDARCH)?>
 <?endif?>
 
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Product
             Id="*"
             Name="{{product_name}}"
@@ -45,17 +44,6 @@
                 OnlyDetect="no"
                 Property="WIX_UPGRADE_DETECTED" />
         </Upgrade>
-
-        <!-- Close a running koma.exe so the upgrade can replace the file. WM_CLOSE, then
-             end-session, then terminate. RebootPrompt must stay no when TerminateProcess is set. -->
-        <util:CloseApplication Id="CloseKoma"
-                               Target="koma.exe"
-                               Description="Koma is open and will be closed so the upgrade can replace it."
-                               CloseMessage="yes"
-                               EndSessionMessage="yes"
-                               RebootPrompt="no"
-                               TerminateProcess="0"
-                               Timeout="15" />
 
         <InstallExecuteSequence>
             <RemoveExistingProducts After="InstallInitialize" />

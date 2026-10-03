@@ -37,7 +37,7 @@ use super::tutorial_host;
 const GUI_IDLE_BUDGET: Duration = Duration::from_millis(100);
 
 /// Snapshot of the full `Status` envelope payload.
-/// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, mode)`.
+/// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, context_window, mode)`.
 type StatusSnapshot = (
     bool,
     Option<String>,
@@ -46,6 +46,7 @@ type StatusSnapshot = (
     u64,
     u64,
     f64,
+    u64,
     String,
 );
 
@@ -69,7 +70,7 @@ pub(super) struct PushState {
     /// Last reasoning buffer pushed (empty once cleared).
     pub(super) reasoning: String,
     /// Last `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost,
-    /// mode)` pushed — the full `Status` envelope payload, so a counter tick, a
+    /// context_window, mode)` pushed — the full `Status` envelope payload, so a counter tick, a
     /// mode flip, or a working/toast change each independently re-emit `Status`.
     /// `cost` is `f64`; plain `!=` (`PartialEq`, not `Eq`) is fine here — this tuple
     /// is only ever compared, never hashed or used as a map key.

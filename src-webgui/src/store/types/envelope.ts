@@ -96,9 +96,9 @@ export type PushEnvelope =
   // + generic host toasts). `kind` is the severity token ("error"/"info") the
   // host now carries alongside the text so the GUI can colour error vs info —
   // optional-tolerant: a host build that doesn't project it yet defaults to info.
-  // The five usage fields (tokensIn/tokensCached/tokensOut/cost/mode) drive the
-  // chat column's UsageFooter statusline; optional-tolerant for an older host
-  // build that doesn't project them yet (default 0 / 'auto' in the reducer).
+  // The usage fields (tokensIn/tokensCached/tokensOut/cost/contextWindow/mode)
+  // drive the chat column's UsageFooter statusline; optional-tolerant for an
+  // older host build that doesn't project them yet (default 0 / 'auto' in the reducer).
   | {
       k: 'Status'
       session: string
@@ -109,7 +109,19 @@ export type PushEnvelope =
       tokensCached?: number
       tokensOut?: number
       cost?: number
+      // Effective context window for the usage card. Optional: an older host
+      // omits it and the reducer keeps the previous value.
+      contextWindow?: number
       mode?: 'auto' | 'normal' | 'plan' | 'yolo' | 'sdlc'
+    }
+  // Resident-memory sample from the GUI process itself (not the session
+  // daemon). Pushed when a 1 MiB bucket changes.
+  | {
+      k: 'UsageLive'
+      memWindow?: number
+      memAgent?: number
+      memServices?: number
+      memSystem?: number
     }
   | {
       k: 'Hub'

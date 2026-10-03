@@ -10,9 +10,11 @@
   the wix.template config key). That vendored template adds Arguments="gui" to
   the *default* Desktop + Start Menu shortcuts, so they launch `koma gui` (the
   desktop GUI) instead of bare koma.exe (the ratatui TUI) — the shortcut side is
-  handled there, not in this fragment. This fragment now fills only the one
-  remaining gap the built-in template leaves:
+  handled there, not in this fragment. This fragment fills the gaps the
+  built-in template leaves:
 
+    - CloseKoma: util:CloseApplication for koma.exe. It cannot live in main.wxs
+      because cargo-packager compiles that file with no WiX extension.
     - KomaPathEnvComponent: adds [INSTALLDIR] to the current *user's* PATH
       (HKCU-scoped, System="no") so `koma` is runnable from any shell after
       install, without requiring elevation for the env var propagation.
@@ -37,8 +39,21 @@
   `-dSourceDir` passed on the command line), so it is undefined when this
   file is compiled on its own.
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Fragment>
+
+    <!-- cargo-packager compiles main.wxs with no -ext. It scans fragments for
+         xmlns and passes WixUtilExtension.dll only for those candle runs.
+         CloseApplication has to live in this referenced fragment. -->
+    <util:CloseApplication Id="CloseKoma"
+                           Target="koma.exe"
+                           Description="Koma is open and will be closed so the upgrade can replace it."
+                           CloseMessage="yes"
+                           EndSessionMessage="yes"
+                           RebootPrompt="no"
+                           TerminateProcess="0"
+                           Timeout="15" />
 
     <!-- User-scope PATH entry: avoids requiring elevation for env propagation. -->
     <DirectoryRef Id="INSTALLDIR">
