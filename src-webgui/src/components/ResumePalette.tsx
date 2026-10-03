@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Plus } from 'lucide-react'
+import { FolderOpen, Search } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
@@ -215,7 +215,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                     {remotePathBusy ? (
                       <BrailleSpinner size={12} className="flex-none" />
                     ) : (
-                      <Plus size={12} className="flex-none" />
+                      <FolderOpen size={12} className="flex-none" />
                     )}
                     New session
                   </button>
