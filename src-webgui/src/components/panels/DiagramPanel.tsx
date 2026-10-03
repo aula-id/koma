@@ -5,7 +5,7 @@ import { BrailleSpinner } from '../BrailleSpinner'
 import { AddBtn, Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
-import { fileKey, type FileTreeEntry } from '../../store/coding'
+import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
 import { SHAPE_MIME, diagramFileName, isDiagramPath, type DiagramKind } from '../../lib/diagram'
 import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
 import { DiagramRefMenuItems } from '../DiagramVisual'
@@ -22,11 +22,6 @@ const SHAPES: { kind: DiagramKind; label: string }[] = [
 function rootLabel(root: string): string {
   const parts = root.split('/').filter(Boolean)
   return parts[parts.length - 1] || root
-}
-
-function missingDir(error: string | null | undefined): boolean {
-  if (!error) return false
-  return /no such file|not found|os error 2/i.test(error)
 }
 
 function InlineNameInput({
@@ -198,7 +193,7 @@ export function DiagramPanel() {
   if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((e) => !e.isDir && isDiagramPath(e.path))
-  const gone = missingDir(dir?.error)
+  const gone = isMissingCodingDirError(dir?.error)
   const busy = (path: string) => {
     if (!activeRoot) return false
     return !!docs[fileKey(activeRoot, path)]?.saving
