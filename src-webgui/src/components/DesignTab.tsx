@@ -2039,6 +2039,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                 selectedIds={vectorEditId ? [] : selection}
                 editing={editing}
                 dragCursor={dragCursor}
+                zoom={view.zoom}
                 enteredContainerId={enteredContainerId}
                 overrideTargetId={overrideTargetId}
                 cropEditId={cropEdit ? selectedId : null}

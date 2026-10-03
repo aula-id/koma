@@ -22,6 +22,8 @@ export const ZOOM_MIN = 0.25
 export const ZOOM_MAX = 64
 export const SELECTION = 'var(--koma-accent)'
 export const SHAPE_FILL = '#d9d9d9'
+/** Default text color on the canvas — not tied to the app theme. */
+export const TEXT_COLOR_DEFAULT = '#1c1c1c'
 export const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }[] = [
   { id: 'nw', x: '0%', y: '0%', cursor: 'nwse-resize' },
   { id: 'n', x: '50%', y: '0%', cursor: 'ns-resize' },
@@ -177,4 +179,26 @@ export function weightCss(weight: DesignWeight): number {
   if (weight === 'bold') return 700
   if (weight === 'medium') return 500
   return 400
+}
+
+/** Counter-scale text edited inside a CSS `scale(zoom)` canvas so glyphs stay crisp. */
+export function counterZoomTextStyle(
+  zoom: number,
+  style: Record<string, string | number | undefined>,
+): Record<string, string | number | undefined> {
+  if (!(zoom > 0) || Math.abs(zoom - 1) < 0.001) return style
+  const out = { ...style }
+  const scaleFont = (px: number) => px * zoom
+  if (typeof out.fontSize === 'number') out.fontSize = scaleFont(out.fontSize)
+  if (typeof out.lineHeight === 'string' && out.lineHeight.endsWith('px')) {
+    out.lineHeight = `${scaleFont(parseFloat(out.lineHeight))}px`
+  }
+  if (typeof out.letterSpacing === 'string' && out.letterSpacing.endsWith('px')) {
+    out.letterSpacing = `${scaleFont(parseFloat(out.letterSpacing))}px`
+  }
+  out.width = `${zoom * 100}%`
+  out.height = `${zoom * 100}%`
+  out.transform = `scale(${1 / zoom})`
+  out.transformOrigin = 'top left'
+  return out
 }

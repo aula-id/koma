@@ -124,7 +124,7 @@ export function Chips<T extends string>({
 // be rendered in a body portal (fixed positioning) that no `overflow` ancestor
 // can clip. Recomputes on scroll (capture: catches inner scroll containers) and
 // resize; clears when closed.
-function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | null>) {
+export function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | null>) {
   const [rect, setRect] = useState<DOMRect | null>(null)
   useEffect(() => {
     if (!open) {
