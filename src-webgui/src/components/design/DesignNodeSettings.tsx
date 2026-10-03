@@ -1268,7 +1268,7 @@ export function NodeSettings({
               <option value="bold">Bold</option>
             </KomaSelect>
           </LabeledControl>
-          <LabeledControl label="Font" wide>
+          <FieldGroup label="Font">
             <FontFamilyPicker
               value={multi ? '' : node.fontFamily ?? ''}
               mixed={fontFamilyField.mixed}
@@ -1279,7 +1279,7 @@ export function NodeSettings({
                 else applyType({ fontFamily: family })
               }}
             />
-          </LabeledControl>
+          </FieldGroup>
           <FieldGroup label="Align">
             <div className="flex flex-wrap gap-0.5">
               <AlignButton label="Align left" pressed={!textAlignField.mixed && textAlignField.value === 'left'} onClick={() => setField({}, ['textAlign'])}><TextAlignStart size={14} /></AlignButton>

@@ -1978,7 +1978,11 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
           style={{ backgroundColor: '#e6e8ed', ...canvasBackdrop(doc.snap, grid, view) }}
         >
           <DesignRulers panX={view.panX} panY={view.panY} zoom={view.zoom} bounds={selection.length ? designSelectionCanvasBox(doc, selection) : null} />
-          <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
+          {/* Translate only on the outer layer; CSS `zoom` on the inner layer
+              re-layouts/paints at screen resolution so text and shapes stay sharp
+              (unlike `transform: scale()`, which upscales a low-res raster). */}
+          <div className="pointer-events-none absolute left-0 top-0" style={{ transform: `translate(${view.panX}px, ${view.panY}px)`, transformOrigin: '0 0' }}>
+            <div style={{ zoom: view.zoom }}>
             {flowBar ? (
               <div className="pointer-events-none absolute z-10" style={{ left: flowBar.x, top: flowBar.y, width: flowBar.w, height: flowBar.h, background: SELECTION }} />
             ) : null}
@@ -2324,6 +2328,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
               </>
             )
           })() : null}
+            </div>
           </div>
           <DesignSelectionChrome
             doc={doc}
