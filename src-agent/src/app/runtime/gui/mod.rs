@@ -466,6 +466,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         req: Arc::clone(&live_req),
         marks: Arc::clone(&live_marks),
         view: Arc::clone(&live_view),
+        loop_proxy: proxy.clone(),
     };
 
     // --- 3. WebView + ipc handler ----------------------------------------------
@@ -883,6 +884,21 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 // The background install may have just written icon-256.png.
                 #[cfg(target_os = "macos")]
                 apply_dock_icon();
+            }
+            Event::UserEvent(UserEvent::PickFolder { kill }) => {
+                // Posted on macOS and Windows. The dialog is modal and owned
+                // by this window. Linux keeps its picker on a worker thread.
+                match dispatch::pick_session_folder(&window) {
+                    Some(folder) => {
+                        let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::New {
+                            workdir: Some(folder),
+                            kill,
+                        });
+                    }
+                    None => {
+                        let _ = computer_ctl.send(crate::app::runtime::client::HostCtl::RefreshHub);
+                    }
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
