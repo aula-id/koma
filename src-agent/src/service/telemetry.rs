@@ -15,7 +15,7 @@
 //! process cannot rewind.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -290,11 +290,8 @@ pub(crate) fn advance_acked_at(path: &std::path::Path, new: i64) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let tmp = path.with_extension("json.tmp");
-    if File::create(&tmp).and_then(|mut f| f.write_all(&json)).is_err() {
-        return;
-    }
-    let _ = std::fs::rename(tmp, path);
+    // Same POSIX/NTFS rename-over used for config.json — Windows replace-safe.
+    let _ = crate::model::memory::atomic_write(path, &json);
 }
 
 fn advance_acked(new: i64) {
