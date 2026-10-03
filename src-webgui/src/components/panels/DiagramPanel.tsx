@@ -229,7 +229,7 @@ export function DiagramPanel() {
           <Select
             value={activeRoot ?? workdir[0] ?? ''}
             options={workdir.map((r) => ({ value: r, label: rootLabel(r) }))}
-            onChange={(root) => setActiveCodingRoot(root)}
+            onChange={(root) => setActiveCodingRoot(root, { closeTabs: true })}
             disabled={creating || renaming != null || deleting != null}
           />
         </div>

@@ -719,7 +719,7 @@ export function CodingPanel() {
           <Select
             value={activeRoot ?? roots[0] ?? ''}
             options={roots.map((r) => ({ value: r, label: rootLabel(r) }))}
-            onChange={(root) => setActiveCodingRoot(root)}
+            onChange={(root) => setActiveCodingRoot(root, { closeTabs: true })}
             disabled={!!draft}
           />
         </div>

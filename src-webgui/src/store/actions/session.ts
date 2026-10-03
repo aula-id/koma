@@ -281,6 +281,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     ),
   detachSession: () => {
     useComputerPreview.getState().hide()
+    get().closeAllTabsExceptChat({ force: true })
     set((s) => ({
       computer: null,
       computerError: null,
@@ -293,7 +294,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       // tracks on macOS/Windows WebViews after the session died.
       ui: normalizeGroups({
         ...s.ui,
-        tabs: [makeChatTab(), ...s.ui.tabs.filter((t) => t.kind === 'terminal' || t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')],
+        tabs: [makeChatTab()],
         activeTabId: 'chat',
         groups: [DEFAULT_GROUP],
         tabGroup: {},

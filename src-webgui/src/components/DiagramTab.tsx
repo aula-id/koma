@@ -3,6 +3,7 @@ import { Circle, Diamond, HandGrab, MousePointer2, PanelRightClose, PanelRightOp
 import { useKoma, type Tab } from '../store/koma'
 import { recordCodingHistory } from '../lib/coding-recovery'
 import { fileKey } from '../store/coding'
+import { isTerminalInputTarget } from '../lib/terminalInput'
 import { isTabVisible } from '../store/editorGroups'
 import { BrailleSpinner } from './BrailleSpinner'
 import { showCodingHistory } from './CodingHistory'
@@ -431,6 +432,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
+      if (isTerminalInputTarget(e.target)) return
       const target = e.target as HTMLElement | null
       const typing = !!target?.closest('input, textarea, [contenteditable="true"]')
       if (e.code === 'Space' && !typing) {

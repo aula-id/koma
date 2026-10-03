@@ -9,6 +9,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 
 import '@xterm/xterm/css/xterm.css'
+import { attachTerminalKeyGuards, normalizeTerminalInput } from '../lib/terminalInput'
 
 type TerminalTabProps = {
   tab: { id: string; kind: 'terminal'; terminalId: string; title: string }
@@ -71,6 +72,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
 
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
+    attachTerminalKeyGuards(term)
     term.open(containerRef.current)
 
     // Fit to container.
@@ -97,7 +99,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
 
     // Forward keystrokes from xterm to the host PTY.
     const disposable = term.onData((data) => {
-      req({ r: 'TerminalInput', id: terminalId, data })
+      req({ r: 'TerminalInput', id: terminalId, data: normalizeTerminalInput(data) })
     })
 
     return () => {
@@ -166,6 +168,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
       ref={containerRef}
       className="h-full w-full overflow-hidden bg-koma-bg"
       style={{ padding: '4px 0 0 4px' }}
+      onMouseDown={() => termRef.current?.focus()}
     />
   )
 }

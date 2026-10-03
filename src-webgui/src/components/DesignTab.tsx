@@ -4,6 +4,7 @@ import { KomaSelect } from './KomaSelect'
 import { TokenEditor } from './panels/DesignPanel'
 import { DesignMenu, type DesignMenuItem } from './DesignMenu'
 import { getDesignUi, publishDesignUi, type DesignLayerOp } from '../lib/designUi'
+import { isTerminalInputTarget } from '../lib/terminalInput'
 import {
   COMPONENT_MIME,
   DESIGN_MIME,
@@ -949,6 +950,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
   useEffect(() => {
     if (!active) return
     const onKey = (event: KeyboardEvent) => {
+      if (isTerminalInputTarget(event.target)) return
       const typing = !!(event.target as HTMLElement | null)?.closest('input, textarea, [contenteditable="true"]')
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
         event.preventDefault()

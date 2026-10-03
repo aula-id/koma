@@ -332,4 +332,24 @@ useKoma.getState().req({ r: 'FileCreate', root, path: 'new', kind: 'file', reque
 assert.match(useKoma.getState().ui.toast?.text ?? '', /IPC error.*bridge down/)
 assert.equal(useKoma.getState().ui.toast?.kind, 'error')
 
+// Workspace folder pick closes every tab except chat, even when re-picking the same root.
+{
+  const designId = `design:${root}:.koma/x.kdsgn`
+  useKoma.setState((s) => ({
+    ui: {
+      ...s.ui,
+      tabs: [
+        { id: 'chat', kind: 'chat' as const },
+        { id: `coding:${root}:open.ts`, kind: 'codingFile' as const, root, path: 'open.ts', title: 'open.ts' },
+        { id: designId, kind: 'design' as const, root, path: '.koma/x.kdsgn', title: 'x.kdsgn' },
+      ],
+      activeTabId: designId,
+    },
+  }))
+  useKoma.getState().setActiveCodingRoot(root, { closeTabs: true })
+  assert.deepEqual(useKoma.getState().ui.tabs.map((t) => t.id), ['chat'])
+  assert.equal(useKoma.getState().ui.activeTabId, 'chat')
+  assert.equal(useKoma.getState().coding.activeRoot, root)
+}
+
 console.log('coding.test.ts: all assertions passed')
