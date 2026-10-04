@@ -55,6 +55,7 @@ pub use runtime::run_mcp_daemon;
 pub use runtime::run_oauth_daemon;
 pub use runtime::run_remote_fs;
 pub use runtime::run_remote_git;
+pub use runtime::run_host_agent;
 #[cfg(feature = "linker")]
 pub use runtime::run_remote_linker;
 pub use runtime::run_server;

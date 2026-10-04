@@ -293,6 +293,9 @@ pub struct Opts {
     /// (`koma remote-linker` positional verb). Feature-gated like `linker_daemon`.
     #[cfg(feature = "linker")]
     pub remote_linker: bool,
+    /// When `true`, multiplex remote services over one SSH stdio
+    /// (`koma host-agent`).
+    pub host_agent: bool,
     /// When `true`, `koma remote` opens the saved remote-host selector.
     pub remote_picker: bool,
     /// When `true`, enter the remote client directly and open its remote resume hub.
@@ -564,6 +567,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("remote-usage") => opts.remote_usage = true,
         #[cfg(feature = "linker")]
         Some("remote-linker") => opts.remote_linker = true,
+        Some("host-agent") => opts.host_agent = true,
         Some("sessions") => opts.sessions = true,
         Some("remote") => {
             // `remote <user@host>` connects directly; bare `remote` opens the saved-host picker.

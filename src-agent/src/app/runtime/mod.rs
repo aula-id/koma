@@ -53,6 +53,7 @@ mod server;
 mod session_mgmt;
 mod signals;
 pub(crate) mod stdio_bridge;
+mod host_agent;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
 pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]
@@ -98,6 +99,7 @@ pub use headless_run::run_cli as run_headless;
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
 pub use remote_fs_svc::run_remote_fs;
 pub use remote_git_svc::run_remote_git;
+pub use host_agent::run_host_agent;
 #[cfg(feature = "linker")]
 pub use remote_linker_svc::run_remote_linker;
 pub use server::run_server;

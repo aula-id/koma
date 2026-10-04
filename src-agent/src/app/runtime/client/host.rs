@@ -99,6 +99,7 @@ fn bootstrap_remote_attach_step(
             target,
             password,
             koma_path,
+            home: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }),
         session_id: session_id.to_string(),
         cwd,
@@ -469,6 +470,34 @@ fn expand_remote_home(
         );
     }
     path.to_string()
+}
+
+/// Expand `~` using the cached remote home when we already know it.
+/// SSH `printf $HOME` only on a cache miss, and never on the GUI pump —
+/// callers spawn this.
+fn expand_cached(ctx: &super::remote_ctl::RemoteCtx, path: &str) -> String {
+    let path = path.trim();
+    if let Some(home) = ctx.cached_home() {
+        if path.is_empty() || path == "~" {
+            return home;
+        }
+        if let Some(rest) = path.strip_prefix("~/") {
+            return format!(
+                "{}/{}",
+                home.trim_end_matches('/'),
+                rest.trim_start_matches('/')
+            );
+        }
+    }
+    if path.starts_with('/') {
+        return path.to_string();
+    }
+    let auth = ctx.make_auth().ok().flatten();
+    let expanded = expand_remote_home(&ctx.target, auth.as_ref(), path);
+    if path.is_empty() || path == "~" {
+        ctx.remember_home(expanded.clone());
+    }
+    expanded
 }
 
 /// Off-thread `list_dirs` for the remote path picker.
@@ -1808,9 +1837,8 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     *current = None;
     push_state.reset();
 
-    // Remote hub: cooking sessions on this host, empty local history.
-    let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
-    push_hub(&hub, push, push_state);
+    // Remote hub list is fetched off this thread. Config and the host list
+    // are local and can paint immediately.
     push_swapper_config(push, push_state);
     push_remote_hosts_list(push, Some(&ctx.host_id));
 
@@ -1822,6 +1850,18 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
     // Off-thread path-list replies (attempt id ignores races with cancel).
     let (path_tx, path_rx) = std::sync::mpsc::channel::<PathListReply>();
     let mut path_attempt: u64 = 0;
+    let (confirm_tx, confirm_rx) = std::sync::mpsc::channel::<(String, String)>();
+    let (hub_tx, hub_rx) = std::sync::mpsc::channel::<crate::app::mode::SessionHub>();
+    let mut hub_inflight = true;
+    {
+        let target = ctx.target.clone();
+        let password = ctx.password.clone();
+        let tx = hub_tx.clone();
+        std::thread::spawn(move || {
+            let hub = super::swapper::build_remote_hub(&target, password.as_deref(), None);
+            let _ = tx.send(hub);
+        });
+    }
     let _ = remote_state_tx;
 
     loop {
@@ -1871,11 +1911,31 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
             }
         }
 
+        if let Ok((session_id, cwd)) = confirm_rx.try_recv() {
+            return HostStep::RemoteAttach {
+                ctx: Box::new(ctx),
+                session_id,
+                cwd: Some(cwd),
+            };
+        }
+        while let Ok(hub) = hub_rx.try_recv() {
+            hub_inflight = false;
+            push_state.reset();
+            push_hub(&hub, push, push_state);
+        }
+
         match ctl_rx.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
-                let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
-                push_state.reset();
-                push_hub(&hub, push, push_state);
+                if !hub_inflight {
+                    hub_inflight = true;
+                    let target = ctx.target.clone();
+                    let password = ctx.password.clone();
+                    let tx = hub_tx.clone();
+                    std::thread::spawn(move || {
+                        let hub = super::swapper::build_remote_hub(&target, password.as_deref(), None);
+                        let _ = tx.send(hub);
+                    });
+                }
                 push_swapper_config(push, push_state);
                 // Keep remoteState = ready so the GUI stays in remote mode.
                 push_remote_state(
@@ -1935,9 +1995,17 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 // (Phase 4 may disconnect-then-connect inline; Phase 1 returns to swapper
                 // after pushing disconnect so the user can reconnect.)
                 if host_id == ctx.host_id {
-                    // Already on this host — refresh hub.
-                    let hub = super::swapper::build_remote_hub(&ctx.target, ctx.password(), None);
-                    push_hub(&hub, push, push_state);
+                    if !hub_inflight {
+                        hub_inflight = true;
+                        let target = ctx.target.clone();
+                        let password = ctx.password.clone();
+                        let tx = hub_tx.clone();
+                        std::thread::spawn(move || {
+                            let hub =
+                                super::swapper::build_remote_hub(&target, password.as_deref(), None);
+                            let _ = tx.send(hub);
+                        });
+                    }
                     continue;
                 }
                 crate::remote::ssh::exit_multiplex(&ctx.target);
@@ -1991,13 +2059,9 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 );
             }
             Ok(HostCtl::ConfirmRemotePath { path }) => {
-                // Expand ~ before attach so the remote daemon gets an absolute cwd.
-                let auth = ctx.make_auth().ok().flatten();
-                let cwd = expand_remote_home(&ctx.target, auth.as_ref(), &path);
                 let new_id = uuid::Uuid::new_v4().to_string();
-                // Close the picker BEFORE Switching — without this the GUI keeps
-                // remotePath.state at ready/listing (z-70) over the switcher (z-60)
-                // and freezes the whole chrome until something else clears it.
+                // Close the picker and paint Switching before any SSH. Home
+                // expansion runs on a worker; the attach starts when it replies.
                 let close = serde_json::json!({
                     "k": "RemotePathPicker",
                     "state": "cancelled",
@@ -2006,11 +2070,12 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                     push(json);
                 }
                 push_switching(push, &new_id);
-                return HostStep::RemoteAttach {
-                    ctx: Box::new(ctx),
-                    session_id: new_id,
-                    cwd: Some(cwd),
-                };
+                let ctx_clone = ctx.clone();
+                let tx = confirm_tx.clone();
+                std::thread::spawn(move || {
+                    let cwd = expand_cached(&ctx_clone, &path);
+                    let _ = tx.send((new_id, cwd));
+                });
             }
             Ok(HostCtl::CancelRemotePath) => {
                 path_attempt = path_attempt.wrapping_add(1);

@@ -247,6 +247,7 @@ fn main() -> anyhow::Result<()> {
         && !opts.remote_fs
         && !opts.remote_git
         && !opts.remote_usage
+        && !opts.host_agent
     {
         #[cfg(feature = "linker")]
         if !opts.linker_daemon && !opts.remote_linker {
@@ -384,6 +385,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "linker")]
     if opts.remote_linker {
         return app::run_remote_linker(opts);
+    }
+    if opts.host_agent {
+        return app::run_host_agent(opts);
     }
 
     // --- headless path: run the koma-daemon event loop (no TUI) ---

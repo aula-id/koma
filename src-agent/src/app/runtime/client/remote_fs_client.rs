@@ -41,6 +41,7 @@ pub(super) struct RemoteFsClient {
     /// Cached remote workdirs (absolute paths on the remote machine).
     /// Updated from SettingsValues / Snapshot; used as SetRoots + sandbox list.
     roots: std::sync::Mutex<Vec<String>>,
+    reply_bus: std::sync::Mutex<Option<Sender<super::remote_ctl::RemoteReply>>>,
 }
 
 impl RemoteFsClient {
@@ -77,6 +78,7 @@ impl RemoteFsClient {
             tx,
             join: Some(join),
             roots: std::sync::Mutex::new(initial_roots.clone()),
+            reply_bus: std::sync::Mutex::new(None),
         };
         if !initial_roots.is_empty() {
             let _ = client.set_roots(initial_roots);
@@ -111,27 +113,41 @@ impl RemoteFsClient {
 
     /// Round-trip one request. Always returns a `RemoteFsRep` (Error on timeout/IO).
     pub fn request(&self, req: RemoteFsReq) -> RemoteFsRep {
-        let (resp_tx, resp_rx) = mpsc::channel();
-        if self
-            .tx
-            .send(ClientMsg::Req {
-                req: req.clone(),
-                resp: resp_tx,
-            })
-            .is_err()
-        {
-            return RemoteFsRep::Error {
-                error: "remote-fs client stopped".to_string(),
-                request_id: req_id_of(&req),
-            };
+        request_via(self.tx.clone(), req)
+    }
+
+    /// Install the pump's reply mailbox. File* ops then return without waiting.
+    pub fn set_reply_bus(&self, tx: Sender<super::remote_ctl::RemoteReply>) {
+        if let Ok(mut g) = self.reply_bus.lock() {
+            *g = Some(tx);
         }
-        match resp_rx.recv_timeout(REQ_TIMEOUT) {
-            Ok(rep) => rep,
-            Err(_) => RemoteFsRep::Error {
-                error: "remote-fs request timed out".to_string(),
-                request_id: req_id_of(&req),
-            },
-        }
+    }
+
+    /// Enqueue a File* op and return. The reply is pushed on the bus when it
+    /// arrives, so the GUI pump is not stuck in `recv_timeout`.
+    pub fn handle_file_ctl_async(&self, ctl: &super::HostCtl, session_id: &str) {
+        let Some(bus) = self.reply_bus.lock().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        let save_as = matches!(ctl, super::HostCtl::FileDownloadBytes { save_as: true, .. });
+        let Some(req) = hostctl_to_req(ctl) else {
+            return;
+        };
+        let ctl = ctl.clone();
+        let tx = self.tx.clone();
+        let sid = session_id.to_string();
+        let _ = std::thread::Builder::new()
+            .name("koma-remote-fs-reply".into())
+            .spawn(move || {
+                let rep = request_via(tx, req);
+                let push = |json: String| {
+                    let _ = bus.send(super::remote_ctl::RemoteReply {
+                        session_id: sid.clone(),
+                        json,
+                    });
+                };
+                emit_file_reply(&ctl, save_as, rep, &push);
+            });
     }
 
     /// Map a File* HostCtl to a remote-fs request, await the reply, push the
@@ -146,36 +162,7 @@ impl RemoteFsClient {
             None => return,
         };
         let rep = self.request(req);
-        // A transport error still needs the original file/request identity.
-        // A generic FileTree error leaves save/read state stuck in the editor.
-        if let RemoteFsRep::Error { error, .. } = &rep {
-            let env = match ctl {
-                super::HostCtl::FileSave { root, path, request_id, .. } => Some(PushEnvelope::FileSave {
-                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
-                    fingerprint: String::new(),
-                    error: Some(format!("conflict: could not confirm whether the remote save completed ({error}). Your local edits are retained; compare with the remote file before reloading.")),
-                }),
-                super::HostCtl::FileRead { root, path, request_id } => Some(PushEnvelope::FileRead {
-                    root: root.clone(), path: path.clone(), request_id: request_id.clone(),
-                    content: None, fingerprint: String::new(), binary: false, too_large: false,
-                    error: Some(error.clone()),
-                }),
-                _ => None,
-            };
-            if let Some(env) = env {
-                if let Ok(json) = serde_json::to_string(&env) {
-                    push(json);
-                }
-                return;
-            }
-        }
-        let rep = match rep {
-            RemoteFsRep::DownloadBytes(r) if save_as => {
-                RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))
-            }
-            other => other,
-        };
-        push_rep(push, rep);
+        emit_file_reply(ctl, save_as, rep, push);
     }
 
     /// Stop the IO thread and reap the SSH child.
@@ -442,6 +429,79 @@ fn push_rep(push: &dyn Fn(String), rep: RemoteFsRep) {
     if let Ok(json) = serde_json::to_string(&env) {
         push(json);
     }
+}
+
+fn request_via(tx: Sender<ClientMsg>, req: RemoteFsReq) -> RemoteFsRep {
+    // Called from the koma-remote-fs-reply thread, never from the GUI pump.
+    let (resp_tx, resp_rx) = mpsc::channel();
+    if tx
+        .send(ClientMsg::Req {
+            req: req.clone(),
+            resp: resp_tx,
+        })
+        .is_err()
+    {
+        return RemoteFsRep::Error {
+            error: "remote-fs client stopped".to_string(),
+            request_id: req_id_of(&req),
+        };
+    }
+    match resp_rx.recv_timeout(REQ_TIMEOUT) {
+        Ok(rep) => rep,
+        Err(_) => RemoteFsRep::Error {
+            error: "remote-fs request timed out".to_string(),
+            request_id: req_id_of(&req),
+        },
+    }
+}
+
+fn emit_file_reply(ctl: &super::HostCtl, save_as: bool, rep: RemoteFsRep, push: &dyn Fn(String)) {
+    if let RemoteFsRep::Error { error, .. } = &rep {
+        let env = match ctl {
+            super::HostCtl::FileSave {
+                root,
+                path,
+                request_id,
+                ..
+            } => Some(PushEnvelope::FileSave {
+                root: root.clone(),
+                path: path.clone(),
+                request_id: request_id.clone(),
+                fingerprint: String::new(),
+                error: Some(format!(
+                    "conflict: could not confirm whether the remote save completed ({error}). Your local edits are retained; compare with the remote file before reloading."
+                )),
+            }),
+            super::HostCtl::FileRead {
+                root,
+                path,
+                request_id,
+            } => Some(PushEnvelope::FileRead {
+                root: root.clone(),
+                path: path.clone(),
+                request_id: request_id.clone(),
+                content: None,
+                fingerprint: String::new(),
+                binary: false,
+                too_large: false,
+                error: Some(error.clone()),
+            }),
+            _ => None,
+        };
+        if let Some(env) = env {
+            if let Ok(json) = serde_json::to_string(&env) {
+                push(json);
+            }
+            return;
+        }
+    }
+    let rep = match rep {
+        RemoteFsRep::DownloadBytes(r) if save_as => {
+            RemoteFsRep::DownloadBytes(super::file_ops::finalize_download_bytes(r, true))
+        }
+        other => other,
+    };
+    push_rep(push, rep);
 }
 
 fn io_thread(session: SshSession, rx: Receiver<ClientMsg>) {

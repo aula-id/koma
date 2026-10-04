@@ -270,6 +270,21 @@ fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
     }
 }
 
+/// Skip `evaluate_script` while the titlebar drag/resize tracking loop is
+/// re-entering this thread, and for one frame after a slow inject.
+pub(crate) fn should_inject(dragging: bool, last_took: std::time::Duration) -> bool {
+    !dragging && last_took < std::time::Duration::from_millis(8)
+}
+
+/// True when adding `next_bytes` to a non-empty batch would cross `cap`.
+/// An empty batch always accepts the next envelope so a fat Snapshot can leave.
+pub(crate) fn hold_rest_for_cap(batch_bytes: usize, next_bytes: usize, cap: usize) -> bool {
+    batch_bytes > 0 && batch_bytes.saturating_add(next_bytes) > cap
+}
+
+/// Soft cap for one `evaluate_script` batch. A solo envelope may exceed it.
+const INJECT_BYTE_CAP: usize = 32_768;
+
 /// Peek the `"k"` tag from a serialized push envelope without a full parse.
 fn peek_push_kind(json: &str) -> Option<&str> {
     const KEY: &str = "\"k\":";
@@ -614,6 +629,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let mut pending_pushes: VecDeque<String> = VecDeque::new();
     let mut next_push_at: Option<Instant> = None;
     let mut last_push_at: Option<Instant> = None;
+    // Native titlebar drag/resize re-enters this loop. Injects during that
+    // tracking stall the cursor. Cleared when drag_window / drag_resize return.
+    let mut dragging = false;
+    // Duration of the previous evaluate_script. A slow one skips the next
+    // frame so paint can catch the cursor.
+    let mut last_inject_took = Duration::ZERO;
     // Memory is local to this process. Wake at least every 2s so the menu bar
     // and the footer card move without a host Status tick.
     let mut usage_ticker = usage_bar::UsageTicker::new();
@@ -745,11 +766,17 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                 }
                 if next_push_at.is_some_and(|at| now >= at) && !pending_pushes.is_empty() {
+                    if !should_inject(dragging, last_inject_took) {
+                        // Drag owns the UI thread. A slow inject yields one frame.
+                        last_inject_took = Duration::ZERO;
+                        next_push_at = Some(now + PUSH_FRAME_BUDGET);
+                    } else {
                     // Switching/Loading must reach WebKit before Snapshot so the
                     // overlay can paint. A fat Snapshot in the same evaluate_script
                     // freezes the UI thread (and CSS braille) until parse returns.
                     let mut batch_jsons: Vec<String> = Vec::new();
                     let mut hold_rest = false;
+                    let mut batch_bytes = 0usize;
                     while let Some(json) = pending_pushes.pop_front() {
                         // Fat transcript envelopes ride alone so Switching/Loading
                         // paint first and WebKit never parses Snapshot+Head together.
@@ -763,6 +790,14 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                             hold_rest = true;
                             break;
                         }
+                        // Hold the rest of a batch that would exceed the inject cap.
+                        // A solo envelope still goes — otherwise a fat Snapshot sits forever.
+                        if hold_rest_for_cap(batch_bytes, json.len(), INJECT_BYTE_CAP) {
+                            pending_pushes.push_front(json);
+                            hold_rest = true;
+                            break;
+                        }
+                        batch_bytes = batch_bytes.saturating_add(json.len());
                         batch_jsons.push(json);
                         if solo {
                             hold_rest = !pending_pushes.is_empty();
@@ -808,11 +843,13 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         );
                     }
                     last_push_at = Some(now);
-                    next_push_at = if hold_rest {
+                    last_inject_took = took;
+                    next_push_at = if hold_rest || took >= Duration::from_millis(8) {
                         Some(now + PUSH_FRAME_BUDGET)
                     } else {
                         None
                     };
+                    }
                 }
             }
             // Custom-titlebar window commands: the window is undecorated, so
@@ -838,7 +875,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                 }
                 WinCmd::Drag => {
+                    dragging = true;
                     let _ = window.drag_window();
+                    dragging = false;
+                    last_inject_took = Duration::ZERO;
+                    next_push_at = Some(Instant::now());
+                    *control_flow = ControlFlow::Poll;
                 }
                 WinCmd::Minimize => window.set_minimized(true),
                 WinCmd::ToggleMax => window.set_maximized(!window.is_maximized()),
@@ -851,7 +893,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
+                    dragging = true;
                     let _ = window.drag_resize_window(dir);
+                    dragging = false;
+                    last_inject_took = Duration::ZERO;
+                    next_push_at = Some(Instant::now());
+                    *control_flow = ControlFlow::Poll;
                 }
                 WinCmd::OpenDevTools => {
                     // with_devtools(true) only enables the inspector; open it
@@ -916,6 +963,28 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             *control_flow = wait_for(next_push_at, usage_ticker.deadline());
         }
     });
+}
+
+#[cfg(test)]
+mod inject_gate_tests {
+    use super::{hold_rest_for_cap, should_inject, INJECT_BYTE_CAP};
+    use std::time::Duration;
+
+    #[test]
+    fn skips_drag_and_slow_frames() {
+        assert!(!should_inject(true, Duration::ZERO));
+        assert!(!should_inject(false, Duration::from_millis(8)));
+        assert!(!should_inject(false, Duration::from_millis(40)));
+        assert!(should_inject(false, Duration::from_millis(7)));
+        assert!(should_inject(false, Duration::ZERO));
+    }
+
+    #[test]
+    fn byte_cap_holds_the_rest_but_not_a_solo_envelope() {
+        assert!(hold_rest_for_cap(100, INJECT_BYTE_CAP, INJECT_BYTE_CAP));
+        assert!(!hold_rest_for_cap(0, INJECT_BYTE_CAP + 8_000, INJECT_BYTE_CAP));
+        assert!(!hold_rest_for_cap(1_000, 1_000, INJECT_BYTE_CAP));
+    }
 }
 
 #[cfg(test)]

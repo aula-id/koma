@@ -36,6 +36,7 @@ fn remote_ctx_is_cloneable_and_make_auth_key_mode() {
         },
         password: None,
         koma_path: "/home/u/.local/bin/koma".into(),
+        home: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
     let cloned = ctx.clone();
     assert_eq!(cloned.host_label(), "u@example.com");
@@ -55,6 +56,7 @@ fn remote_ctx_make_auth_password_mode() {
         },
         password: Some("secret".into()),
         koma_path: "/usr/bin/koma".into(),
+        home: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
     let auth = ctx.make_auth().unwrap().expect("password auth");
     assert_eq!(auth.password(), "secret");

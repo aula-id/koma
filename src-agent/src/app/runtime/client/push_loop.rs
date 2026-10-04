@@ -237,6 +237,13 @@ pub(super) fn push_loop(
     let (hub_tx, hub_rx) = std::sync::mpsc::channel::<SessionHub>();
     let mut refresh_inflight = false;
     let current_owned: Option<String> = current_session.map(str::to_string);
+    // Plan: File* replies land on a channel the pump drains. The pump never
+    // recv_timeouts on SSH.
+    let (remote_reply_tx, remote_reply_rx) =
+        std::sync::mpsc::channel::<super::remote_ctl::RemoteReply>();
+    if let Some(fs) = remote_fs {
+        fs.set_reply_bus(remote_reply_tx);
+    }
 
     // --- FILE CHANGED diff fetch (FileDiff) ---
     // `compute_file_diff` shells out to git + reads the file, both blocking, so — same
@@ -1299,7 +1306,10 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::FileContentSearch { .. })
                 | Ok(ctl @ super::HostCtl::FileContentReplace { .. }) => {
                     if let Some(fs) = remote_fs {
-                        fs.handle_file_ctl(&ctl, push);
+                        fs.handle_file_ctl_async(
+                            &ctl,
+                            current_owned.as_deref().unwrap_or(""),
+                        );
                     } else if remote_ctx.is_some() {
                         // Remote attach but remote-fs child failed to start — never
                         // fall back to the laptop filesystem (paths are remote).
@@ -1899,6 +1909,13 @@ pub(super) fn push_loop(
                     None
                 }
             }));
+        }
+
+        // Remote File* replies arrive off-thread. Drop ones for a session we left.
+        while let Ok(reply) = remote_reply_rx.try_recv() {
+            if super::remote_ctl::accept_reply(current_owned.as_deref(), &reply.session_id) {
+                push(reply.json);
+            }
         }
 
         // --- (c) serialise + push whatever changed (the draw seam) ---

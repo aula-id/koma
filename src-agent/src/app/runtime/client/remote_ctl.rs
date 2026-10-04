@@ -30,6 +30,9 @@ pub(super) struct RemoteCtx {
     pub target: RemoteTarget,
     pub password: Option<String>,
     pub koma_path: String,
+    /// Cached remote `$HOME`. The approved lag plan: folder confirm must not
+    /// SSH `printf $HOME` on the GUI pump, and a second confirm reuses this.
+    pub home: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl RemoteCtx {
@@ -56,6 +59,32 @@ impl RemoteCtx {
     pub fn host_label(&self) -> String {
         format!("{}@{}", self.target.user, self.target.host)
     }
+
+    pub fn cached_home(&self) -> Option<String> {
+        self.home.lock().ok().and_then(|g| g.clone())
+    }
+
+    pub fn remember_home(&self, home: String) {
+        if home.is_empty() {
+            return;
+        }
+        if let Ok(mut g) = self.home.lock() {
+            if g.is_none() {
+                *g = Some(home);
+            }
+        }
+    }
+}
+
+/// A remote fs/git/linker reply that finished off the GUI pump.
+pub(super) struct RemoteReply {
+    pub session_id: String,
+    pub json: String,
+}
+
+/// Drop a reply that belongs to a session the pump has already left.
+pub(super) fn accept_reply(current: Option<&str>, reply_session: &str) -> bool {
+    current == Some(reply_session)
 }
 
 pub(super) struct RemoteSessionShared {
@@ -564,6 +593,7 @@ fn remote_connect_worker(
             target,
             password,
             koma_path,
+            home: std::sync::Arc::new(std::sync::Mutex::new(None)),
         },
         sessions,
     });
