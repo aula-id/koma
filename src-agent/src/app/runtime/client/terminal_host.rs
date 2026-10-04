@@ -29,6 +29,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -48,6 +49,40 @@ fn platform_shell() -> String {
     }
 }
 
+fn shell_is_zsh(shell: &str) -> bool {
+    shell.ends_with("zsh") || shell.ends_with("/zsh")
+}
+
+/// On macOS, login zsh from GUI PTYs often mis-handles xterm erase/delete
+/// (Backspace → space, Delete → "~") even when TERM is set. Point ZDOTDIR at a
+/// tiny rc that loads the user's config then re-binds xterm-style keys.
+#[cfg(target_os = "macos")]
+fn macos_zsh_zdot(cmd: &mut CommandBuilder, shell: &str) -> Option<PathBuf> {
+    if !shell_is_zsh(shell) {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("koma-zdot-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let zprofile = r#"[[ -f "$HOME/.zprofile" ]] && source "$HOME/.zprofile"
+[[ -f "$HOME/.zlogin" ]] && source "$HOME/.zlogin"
+"#;
+    let zshrc = r#"# Koma GUI PTY — xterm.js / WebKit key sequences for zsh.
+[[ -f "$HOME/.zshrc" ]] && source "$HOME/.zshrc"
+bindkey '^?' backward-delete-char
+bindkey '^H' backward-delete-char
+bindkey '^[[3~' delete-char
+"#;
+    std::fs::write(dir.join(".zprofile"), zprofile).ok()?;
+    std::fs::write(dir.join(".zshrc"), zshrc).ok()?;
+    cmd.env("ZDOTDIR", &dir);
+    Some(dir)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_zsh_zdot(_cmd: &mut CommandBuilder, _shell: &str) -> Option<PathBuf> {
+    None
+}
+
 /// A single live terminal session.
 struct TerminalSession {
     /// The PTY master -- kept alive so the reader thread can drain it. Dropping
@@ -64,6 +99,8 @@ struct TerminalSession {
     /// Keeps the askpass script alive for password-auth remote shells. Dropped
     /// only when the session is killed (SshAuth::Drop deletes the temp file).
     _auth: Option<SshAuth>,
+    /// macOS zsh: temp ZDOTDIR so login shells bind xterm erase/delete keys.
+    _zdot_dir: Option<PathBuf>,
 }
 
 /// Manages all live terminal sessions for the host-relay. Shared between the
@@ -98,8 +135,9 @@ impl TerminalManager {
         if let Some(dir) = &cwd {
             cmd.cwd(dir);
         }
+        let zdot_dir = macos_zsh_zdot(&mut cmd, &shell);
 
-        self.spawn_cmd(id, cmd, None)
+        self.spawn_cmd(id, cmd, None, zdot_dir)
     }
 
     /// Spawn a PTY whose child is `ssh -t` into `target` (interactive remote
@@ -119,7 +157,7 @@ impl TerminalManager {
             None => None,
         };
         let cmd = ssh::interactive_shell_command(target, auth.as_ref(), cwd)?;
-        self.spawn_cmd(id, cmd, auth)
+        self.spawn_cmd(id, cmd, auth, None)
     }
 
     fn spawn_cmd(
@@ -127,6 +165,7 @@ impl TerminalManager {
         id: String,
         cmd: CommandBuilder,
         auth: Option<SshAuth>,
+        zdot_dir: Option<PathBuf>,
     ) -> anyhow::Result<()> {
         let pty_size = PtySize {
             rows: 24,
@@ -158,6 +197,7 @@ impl TerminalManager {
             child,
             writer,
             _auth: auth,
+            _zdot_dir: zdot_dir,
         };
         self.sessions.insert(id.clone(), session);
 
@@ -211,6 +251,9 @@ impl TerminalManager {
             drop(session.master);
             drop(session.writer);
             drop(session._auth);
+            if let Some(dir) = session._zdot_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
             push_terminal_exit(&*self.push, id, None);
         }
     }

@@ -32,7 +32,12 @@ import {
   type DesignPaint,
   type DesignWeight,
 } from '../../lib/design'
-import { SHAPE_FILL, TEXT_COLOR_DEFAULT, counterZoomTextStyle, paintCss, weightCss } from './tabShared'
+import {
+  SHAPE_FILL,
+  TEXT_COLOR_DEFAULT,
+  paintCss,
+  weightCss,
+} from './tabShared'
 
 export function DesignNodeView({
   doc,
@@ -120,6 +125,18 @@ export function DesignNodeView({
   const lockChildren = locked || !!node.locked || (opaqueUntilEnter && !enteredHere)
   const childIds = lockChildren ? [] : selectedIds
   const hitHere = !locked
+  const textColor = paintCss(doc, style.color, TEXT_COLOR_DEFAULT)
+  const textTypeStyle = {
+    fontSize: style.fontSize,
+    fontFamily: style.fontFamily || undefined,
+    fontWeight: weightCss(style.weight),
+    fontStyle: node.italic ? 'italic' : undefined,
+    textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined,
+    textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined,
+    lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined,
+    letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined,
+    color: textColor,
+  } as const
   return (
     <div
       className={`absolute select-none ${hitHere ? 'pointer-events-auto' : 'pointer-events-none'}`}
@@ -263,23 +280,17 @@ export function DesignNodeView({
               }
             }}
             className="z-10 h-full w-full resize-none border-0 bg-transparent px-1 shadow-none outline-none"
-            style={counterZoomTextStyle(zoom, {
-              fontSize: style.fontSize,
-              fontFamily: style.fontFamily || undefined,
-              fontWeight: weightCss(style.weight),
-              fontStyle: node.italic ? 'italic' : undefined,
-              textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined,
-              textAlign: style.align,
-              textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined,
-              lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined,
-              letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined,
-              color: paintCss(doc, style.color, TEXT_COLOR_DEFAULT),
-            })}
+            style={{ ...textTypeStyle, textAlign: style.align }}
           />
         ) : node.kind === 'text' ? (
           <div
             className="flex h-full w-full px-1"
-            style={{ fontSize: style.fontSize, fontFamily: style.fontFamily || undefined, fontWeight: weightCss(style.weight), fontStyle: node.italic ? 'italic' : undefined, textDecoration: [node.underline ? 'underline' : '', node.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined, textTransform: node.textCase === 'upper' ? 'uppercase' : node.textCase === 'lower' ? 'lowercase' : node.textCase === 'title' ? 'capitalize' : undefined, justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start', textAlign: style.align, alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center', lineHeight: style.lineHeight ? `${style.lineHeight}px` : undefined, letterSpacing: style.letterSpacing ? `${style.letterSpacing}px` : undefined, color: paintCss(doc, style.color, TEXT_COLOR_DEFAULT) }}
+            style={{
+              ...textTypeStyle,
+              justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start',
+              textAlign: style.align,
+              alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center',
+            }}
           >
             <span className="whitespace-pre-wrap">
               {splitTextByRuns(node.text || 'Text', node.runs).map((part, index) => (
