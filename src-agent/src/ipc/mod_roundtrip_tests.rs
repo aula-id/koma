@@ -228,6 +228,7 @@ fn client_request_variants_roundtrip() {
         ClientRequest::ListSkills {
             request_id: "skills-1".to_string(),
             session_epoch: 7,
+            workspace: String::new(),
         },
         ClientRequest::GetSkillDetail {
             skill_id: "opaque".to_string(),

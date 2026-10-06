@@ -712,10 +712,12 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GetSkills {
                     request_id,
                     session_epoch,
+                    workspace,
                 }) => {
                     let _ = req_tx.send(ClientRequest::ListSkills {
                         request_id,
                         session_epoch,
+                        workspace,
                     });
                 }
                 Ok(super::HostCtl::GetSkillDetail {

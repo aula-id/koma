@@ -1,13 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Info, Lock, Plus, RefreshCw, Search, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { ArrowLeft, Info, Plus, Search, X } from 'lucide-react'
 import { useKoma, type SkillCatalogueEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty } from './helpers'
+import { Segmented, Select } from './form'
 import { SkillDeleteConfirm } from '../SkillDeleteConfirm'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
 import { nextSkillSelection } from '../skillListSelection'
 
 type SkillsPanelView = 'list' | 'methods'
+
+const EMPTY_ROOTS: string[] = []
+
+function rootLabel(root: string): string {
+  const parts = root.split(/[/\\]/).filter(Boolean)
+  return parts[parts.length - 1] || root
+}
+
+function underWorkspace(path: string, root: string): boolean {
+  const file = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const base = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  return file === base || file.startsWith(`${base}/`)
+}
 
 const SKILL_CREATION_TEMPLATE = `Help me create a new Koma skill. A skill is a SKILL.md file with YAML frontmatter (description, optional triggers, optional allowed-tools) plus a Markdown instruction body.
 
@@ -28,12 +43,88 @@ function operationId(kind: string) {
   return `${kind}-${operationSeq}`
 }
 
-function ScopeBadge({ scope }: { scope: SkillCatalogueEntry['scope'] }) {
-  return (
-    <span className="flex flex-none items-center gap-0.5 rounded bg-koma-head px-1 py-px text-[9px] uppercase tracking-wide text-koma-fg opacity-60">
-      {scope === 'external' && <Lock size={9} aria-hidden="true" />}
-      {scope}
-    </span>
+type SkillMenuState = { x: number; y: number; skillIds: string[] }
+
+function SkillContextMenu({
+  state,
+  skills,
+  sessionId,
+  loaded,
+  onClose,
+  onLoad,
+  onRemove,
+  onReload,
+  onDuplicate,
+  onDelete,
+}: {
+  state: SkillMenuState
+  skills: SkillCatalogueEntry[]
+  sessionId: string | null
+  loaded: Set<string>
+  onClose: () => void
+  onLoad: (skills: SkillCatalogueEntry[]) => void
+  onRemove: (skills: SkillCatalogueEntry[]) => void
+  onReload: (skills: SkillCatalogueEntry[]) => void
+  onDuplicate: (skills: SkillCatalogueEntry[]) => void
+  onDelete: (skills: SkillCatalogueEntry[]) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: state.x, top: state.y })
+  const loadedSkills = skills.filter((skill) => loaded.has(skill.name))
+  const unloadedSkills = skills.filter((skill) => !loaded.has(skill.name))
+  const owned = skills.filter((skill) => skill.scope !== 'external')
+  const external = skills.filter((skill) => skill.scope === 'external')
+  const onlyExternal = external.length > 0 && external.length === skills.length
+  const onlyOwned = owned.length > 0 && owned.length === skills.length
+
+  useEffect(() => {
+    const el = ref.current
+    if (el) {
+      setPos({
+        left: Math.max(4, Math.min(state.x, window.innerWidth - el.offsetWidth - 4)),
+        top: Math.max(4, Math.min(state.y, window.innerHeight - el.offsetHeight - 4)),
+      })
+    }
+    const outside = (event: MouseEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose()
+    }
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', outside, true)
+    window.addEventListener('keydown', key)
+    return () => {
+      window.removeEventListener('mousedown', outside, true)
+      window.removeEventListener('keydown', key)
+    }
+  }, [onClose, state.x, state.y])
+
+  const item = 'flex w-full items-center px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35'
+  const run = (action: (skills: SkillCatalogueEntry[]) => void, targets: SkillCatalogueEntry[]) => {
+    action(targets)
+    onClose()
+  }
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      data-tour="skills-context-menu"
+      style={{ position: 'fixed', ...pos, width: 196, zIndex: 95 }}
+      className="overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm"
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="truncate px-2.5 py-1 text-[10px] text-koma-dim">
+        {skills.length > 1 ? `${skills.length} selected` : skills[0]?.name}
+      </div>
+      <button type="button" role="menuitem" disabled={!sessionId || !unloadedSkills.length} title={!sessionId ? 'Open a chat to load skills into it' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} className={item} onClick={() => run(onLoad, unloadedSkills)}>Load into chat</button>
+      <button type="button" role="menuitem" disabled={!sessionId || !loadedSkills.length} title={!sessionId ? 'Open a chat to remove skills from it' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} className={item} onClick={() => run(onRemove, loadedSkills)}>Remove from chat</button>
+      <button type="button" role="menuitem" disabled={!sessionId || !loadedSkills.length} title={!sessionId ? 'Open a chat to reload skills from disk' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} className={item} onClick={() => run(onReload, loadedSkills)}>Reload from disk</button>
+      <div className="my-1 border-t border-koma-border" />
+      <button type="button" role="menuitem" disabled={!onlyExternal} title={onlyExternal ? 'Duplicate selected External skills' : 'Only External skills can be duplicated to Koma'} className={item} onClick={() => run(onDuplicate, external)}>Duplicate</button>
+      <button type="button" role="menuitem" disabled={!onlyOwned} title={onlyOwned ? 'Delete selected skills' : 'External skills cannot be deleted'} className={item} onClick={() => run(onDelete, owned)}>Delete</button>
+    </div>,
+    document.body,
   )
 }
 
@@ -58,6 +149,9 @@ export function SkillsPanel() {
   const refreshSkills = useKoma((s) => s.refreshSkills)
   const setQuery = useKoma((s) => s.setSkillQuery)
   const setFilter = useKoma((s) => s.setSkillFilter)
+  const workdirs = useKoma((s) => s.settingsValues?.workdir ?? EMPTY_ROOTS)
+  const activeRoot = useKoma((s) => s.coding.activeRoot)
+  const setActiveCodingRoot = useKoma((s) => s.setActiveCodingRoot)
   const setSelection = useKoma((s) => s.setSkillSelection)
   const openSkillTab = useKoma((s) => s.openSkillTab)
   const openUploadSkillTab = useKoma((s) => s.openUploadSkillTab)
@@ -71,6 +165,7 @@ export function SkillsPanel() {
   const discoveredEpochRef = useRef<number | null>(null)
   const [view, setView] = useState<SkillsPanelView>('list')
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [menu, setMenu] = useState<SkillMenuState | null>(null)
   const [duplicate, setDuplicate] = useState<SkillCatalogueEntry[] | null>(null)
   const [deleting, setDeleting] = useState<SkillCatalogueEntry[] | null>(null)
 
@@ -85,22 +180,44 @@ export function SkillsPanel() {
     if (!useKoma.getState().skillsLoading) refreshSkills()
   }, [epoch, refreshSkills, sessionId, preserveTabsOnNextSession, preservedTabsTargetSession])
 
+  const projectRoot = activeRoot && workdirs.includes(activeRoot) ? activeRoot : workdirs[0] ?? ''
+
+  useEffect(() => {
+    if (filter !== 'project' || workdirs.length === 0) return
+    if (!activeRoot || !workdirs.includes(activeRoot)) setActiveCodingRoot(workdirs[0])
+  }, [filter, workdirs, activeRoot, setActiveCodingRoot])
+
+  const scannedWorkspace = useRef<string | null>(null)
+  useEffect(() => {
+    if (filter !== 'project' || !sessionId || !projectRoot) return
+    if (scannedWorkspace.current === projectRoot) return
+    scannedWorkspace.current = projectRoot
+    refreshSkills()
+  }, [filter, sessionId, projectRoot, refreshSkills])
+
   const loaded = useMemo(() => new Set(loadedNames), [loadedNames])
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
-    return skills.filter((skill) => {
-      if (filter === 'loaded' && !loaded.has(skill.name)) return false
+    const matched = skills.filter((skill) => {
+      const tab = skill.scope === 'project' || skill.sourceTier === 'claude' ? 'project' : 'global'
+      if (tab !== filter) return false
+      if (filter === 'project' && projectRoot && skill.sourcePath && !underWorkspace(skill.sourcePath, projectRoot)) return false
       return !needle || [skill.name, skill.description, skill.triggers]
         .some((value) => value.toLocaleLowerCase().includes(needle))
     })
-  }, [filter, loaded, query, skills])
+    return matched.slice().sort((a, b) => {
+      const rank = (name: string) => (loaded.has(name) ? 0 : 1)
+      const byLoaded = rank(a.name) - rank(b.name)
+      if (byLoaded !== 0) return byLoaded
+      return a.name.localeCompare(b.name)
+    })
+  }, [filter, loaded, projectRoot, query, skills])
   const visibleIds = useMemo(() => visible.map((skill) => skill.skillId), [visible])
   const selectedSet = useMemo(() => new Set(selection), [selection])
-  const selected = visible.filter((skill) => selectedSet.has(skill.skillId))
-  const selectedLoaded = selected.filter((skill) => loaded.has(skill.name))
-  const selectedUnloaded = selected.filter((skill) => !loaded.has(skill.name))
-  const selectedOwned = selected.filter((skill) => skill.scope !== 'external')
-  const selectedExternal = selected.filter((skill) => skill.scope === 'external')
+  const menuSkills = useMemo(
+    () => (menu ? visible.filter((skill) => menu.skillIds.includes(skill.skillId)) : []),
+    [menu, visible],
+  )
 
   useEffect(() => {
     const kept = selection.filter((id) => visibleIds.includes(id))
@@ -109,14 +226,30 @@ export function SkillsPanel() {
     if (focusId && !visibleIds.includes(focusId)) setFocusId(visibleIds[0] ?? null)
   }, [focusId, selection, setSelection, visibleIds])
 
-  const choose = (skillId: string, event: React.MouseEvent<HTMLButtonElement>) => {
+  const closeMenu = () => setMenu(null)
+
+  const choose = (skill: SkillCatalogueEntry, event: React.MouseEvent<HTMLButtonElement>) => {
     // Embedded WebViews may leave DOM focus elsewhere after a pointer click.
     // Make the clicked row the actual arrow-key starting point.
     event.currentTarget.focus()
-    const next = nextSkillSelection(visibleIds, selection, anchorRef.current, skillId, event)
-    setSelection(next.selected)
-    anchorRef.current = next.anchor
-    setFocusId(skillId)
+    setFocusId(skill.skillId)
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      const next = nextSkillSelection(visibleIds, selection, anchorRef.current, skill.skillId, event)
+      setSelection(next.selected)
+      anchorRef.current = next.anchor
+      return
+    }
+    openSkill(skill)
+  }
+
+  const openMenu = (skill: SkillCatalogueEntry, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const skillIds = selectedSet.has(skill.skillId)
+      ? visibleIds.filter((id) => selectedSet.has(id))
+      : [skill.skillId]
+    setMenu({ x: event.clientX, y: event.clientY, skillIds })
+    setFocusId(skill.skillId)
   }
 
   const operate = (r: 'SetSkillsLoaded' | 'ReloadSkills', names: string[], loadedValue?: boolean) => {
@@ -143,8 +276,8 @@ export function SkillsPanel() {
     else if (event.key === 'ArrowUp') next = Math.max(0, current < 0 ? 0 : current - 1)
     else if (event.key === 'Home') next = 0
     else if (event.key === 'End') next = visibleIds.length - 1
-    else if (event.key === 'Enter' && focusId) {
-      const skill = skills.find((item) => item.skillId === focusId)
+    else if (event.key === 'Enter' && currentId) {
+      const skill = skills.find((item) => item.skillId === currentId)
       if (skill) openSkill(skill)
       return
     } else return
@@ -179,18 +312,42 @@ export function SkillsPanel() {
         else if (query) setQuery('')
       }
     }}>
-      <div className="flex-none border-b border-koma-border px-2 py-2">
+      <div className="flex-none px-2 pb-1.5 pt-1.5">
+        <div data-tour="skills-filters" aria-label="Skill filter">
+          <Segmented
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: 'global', label: 'Global' },
+              {
+                value: 'project',
+                label: 'Project',
+                disabled: !sessionId,
+                title: !sessionId ? 'Open a chat to see Project skills' : undefined,
+                describedBy: !sessionId ? 'skills-no-active-chat' : undefined,
+              },
+            ]}
+          />
+        </div>
+      </div>
+      {filter === 'project' && (
+        <div className="flex flex-none items-center gap-1 px-2 pb-1.5">
+          <div className="min-w-0 flex-1" title={projectRoot}>
+            <Select
+              value={projectRoot}
+              options={workdirs.map((root) => ({ value: root, label: rootLabel(root) }))}
+              onChange={(root) => setActiveCodingRoot(root)}
+              disabled={!sessionId || workdirs.length === 0}
+              placeholder={sessionId ? 'No workspace' : 'Open a chat'}
+            />
+          </div>
+        </div>
+      )}
+      <div className="flex-none border-b border-koma-border px-2 pb-2">
         <div className="relative">
           <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 opacity-45" />
           <input data-tour="skills-search" ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search skills…" aria-label="Search skills" className="h-7 min-w-0 w-full rounded border border-koma-border bg-koma-bg pl-7 pr-7 text-[11px] text-koma-fg outline-none placeholder:text-koma-dim focus:border-koma-grip" />
           {query && <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-50 hover:opacity-100"><X size={12} /></button>}
-        </div>
-        <div className="mt-1.5 flex min-w-0 items-center gap-0.5">
-          <div data-tour="skills-filters" className="flex min-w-0 flex-1 items-center gap-0.5" aria-label="Skill filter">
-            <button type="button" onClick={() => setFilter('all')} aria-pressed={filter === 'all'} className={`flex-none rounded px-1 py-0.5 text-[9px] ${filter === 'all' ? 'bg-koma-head' : 'opacity-50 hover:opacity-80'}`}>All</button>
-            <button type="button" onClick={() => setFilter('loaded')} disabled={!sessionId} title={!sessionId ? 'Open a chat to filter skills loaded into it' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} aria-pressed={filter === 'loaded'} className={`min-w-0 whitespace-nowrap rounded px-1 py-0.5 text-[9px] disabled:cursor-not-allowed ${filter === 'loaded' ? 'bg-koma-head' : 'opacity-50 hover:opacity-80'} disabled:opacity-30`}>Loaded in chat</button>
-          </div>
-          <button type="button" onClick={refreshSkills} disabled={loading} aria-label="Rescan skill locations" title="Rescan skill locations" className="flex h-6 w-5 flex-none items-center justify-center rounded opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait">{loading ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}</button>
         </div>
       </div>
 
@@ -206,10 +363,11 @@ export function SkillsPanel() {
       <div data-tour="skills-list" role="listbox" aria-label="Skills" aria-multiselectable="true" className="min-h-0 flex-1 overflow-auto py-1" onKeyDown={onListKeyDown}>
         {loading && !skills.length ? <div className="flex justify-center py-10"><BrailleSpinner size={16} /></div>
           : error ? <Empty>{error}</Empty>
-          : !visible.length ? <Empty>{query ? `No skills match “${query}”` : filter === 'loaded' ? 'No skills loaded' : 'No skills installed'}</Empty>
+          : !visible.length ? <Empty>{query ? `No skills match “${query}”` : filter === 'project' ? 'No project skills' : 'No global skills'}</Empty>
           : visible.map((skill, index) => {
             const isSelected = selectedSet.has(skill.skillId)
             const isOpen = activeSkillId === skill.skillId
+            const isLoaded = loaded.has(skill.name)
             return (
               <button
                 key={skill.skillId}
@@ -221,24 +379,14 @@ export function SkillsPanel() {
                 aria-current={isOpen ? 'true' : undefined}
                 tabIndex={(focusId ?? visibleIds[0]) === skill.skillId ? 0 : -1}
                 onFocus={() => setFocusId(skill.skillId)}
-                onClick={(event) => choose(skill.skillId, event)}
+                onClick={(event) => choose(skill, event)}
                 onDoubleClick={() => openSkill(skill)}
-                className={`relative flex min-h-[46px] w-full min-w-0 items-center px-2 py-1.5 text-left transition-[background-color] focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-koma-accent ${isSelected ? 'bg-koma-head' : isOpen ? 'bg-koma-hover' : 'hover:bg-koma-hover'}`}
+                onContextMenu={(event) => openMenu(skill, event)}
+                className={`group flex min-h-[42px] w-full min-w-0 items-center border-l-2 px-3 py-1.5 text-left hover:bg-koma-hover ${isLoaded ? 'border-l-koma-accent' : 'border-l-transparent'} ${isSelected ? 'bg-koma-head' : ''}`}
               >
-                {(isSelected || isOpen) && (
-                  <span
-                    aria-hidden="true"
-                    data-skill-marker={isSelected ? 'selected' : 'open'}
-                    className={`absolute left-0 w-0.5 bg-koma-accent ${isSelected ? 'inset-y-0' : 'inset-y-1.5 rounded-r'}`}
-                  />
-                )}
+                {isLoaded && <span aria-hidden="true" data-skill-marker="loaded" className="sr-only" />}
                 <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-1">
-                    <span className="truncate text-[12px] text-koma-fg">{skill.name}</span>
-                    <ScopeBadge scope={skill.scope} />
-                    {isOpen && <span className="flex-none rounded bg-koma-accent/15 px-1 py-px text-[9px] uppercase tracking-wide text-koma-accent">Open</span>}
-                    {loaded.has(skill.name) && <span className="flex-none rounded bg-koma-accent/15 px-1 py-px text-[9px] uppercase tracking-wide text-koma-accent">Loaded</span>}
-                  </span>
+                  <span className="block truncate text-[12px] text-koma-fg">{skill.name}</span>
                   {skill.description && <span className="block truncate text-[10px] text-koma-fg opacity-45">{skill.description}</span>}
                 </span>
                 <span className="sr-only">item {index + 1} of {visible.length}</span>
@@ -247,19 +395,20 @@ export function SkillsPanel() {
           })}
       </div>
 
-      {selected.length ? (
-        <div data-tour="skills-bulk" className="flex-none border-t border-koma-border bg-koma-panel p-2 text-[10px]" aria-live="polite">
-          <div className="mb-1 flex items-center justify-between"><span>{selected.length} selected</span><button type="button" onClick={() => setSelection([])} aria-label="Clear selection"><X size={12} /></button></div>
-          <div className="flex flex-wrap gap-1">
-            <button type="button" disabled={!sessionId || !selectedUnloaded.length} title={!sessionId ? 'Open a chat to load skills into it' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} onClick={() => operate('SetSkillsLoaded', selectedUnloaded.map((skill) => skill.name), true)} className="rounded border border-koma-border px-1.5 py-1 disabled:opacity-30">Load into chat</button>
-            <button type="button" disabled={!sessionId || !selectedLoaded.length} title={!sessionId ? 'Open a chat to remove skills from it' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} onClick={() => operate('SetSkillsLoaded', selectedLoaded.map((skill) => skill.name), false)} className="rounded border border-koma-border px-1.5 py-1 disabled:opacity-30">Remove from chat</button>
-            <button type="button" disabled={!sessionId || !selectedLoaded.length} title={!sessionId ? 'Open a chat to reload skills from disk' : undefined} aria-describedby={!sessionId ? 'skills-no-active-chat' : undefined} onClick={() => operate('ReloadSkills', selectedLoaded.map((skill) => skill.name))} className="rounded border border-koma-border px-1.5 py-1 disabled:opacity-30">Reload from disk</button>
-            <button type="button" disabled={!selectedExternal.length || selectedExternal.length !== selected.length} title={selectedExternal.length !== selected.length ? 'Only External skills can be duplicated to Koma' : 'Duplicate selected External skills'} onClick={() => setDuplicate(selectedExternal)} className="rounded border border-koma-border px-1.5 py-1 disabled:opacity-30">Duplicate</button>
-            <button type="button" disabled={!selectedOwned.length || selectedOwned.length !== selected.length} title={selectedOwned.length !== selected.length ? 'External skills cannot be deleted' : 'Delete selected skills'} onClick={() => setDeleting(selectedOwned)} className="rounded border border-koma-border px-1.5 py-1 disabled:opacity-30">Delete</button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" onClick={() => setView('methods')} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"><Plus size={13} /> Add skill</button></div>
+      <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" onClick={() => setView('methods')} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"><Plus size={13} /> Add skill</button></div>
+      {menu && menuSkills.length > 0 && (
+        <SkillContextMenu
+          state={menu}
+          skills={menuSkills}
+          sessionId={sessionId}
+          loaded={loaded}
+          onClose={closeMenu}
+          onLoad={(targets) => operate('SetSkillsLoaded', targets.map((skill) => skill.name), true)}
+          onRemove={(targets) => operate('SetSkillsLoaded', targets.map((skill) => skill.name), false)}
+          onReload={(targets) => operate('ReloadSkills', targets.map((skill) => skill.name))}
+          onDuplicate={setDuplicate}
+          onDelete={setDeleting}
+        />
       )}
       {lastOp?.tabId === 'skills-panel' && <span className="sr-only" role="status" aria-live="polite">{lastOp.outcomes.map((outcome) => `${outcome.name}: ${outcome.status}${outcome.error ? `, ${outcome.error}` : ''}`).join('. ')}</span>}
       {duplicate && <SkillDuplicateDialog skills={duplicate} onClose={() => setDuplicate(null)} />}

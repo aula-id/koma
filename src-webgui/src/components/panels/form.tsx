@@ -56,7 +56,7 @@ export function Segmented<T extends string>({
   onChange,
 }: {
   value: T
-  options: { value: T; label: string }[]
+  options: { value: T; label: string; disabled?: boolean; title?: string; describedBy?: string }[]
   onChange: (v: T) => void
 }) {
   return (
@@ -65,8 +65,12 @@ export function Segmented<T extends string>({
         <button
           key={o.value}
           type="button"
+          disabled={o.disabled}
+          title={o.title}
+          aria-describedby={o.describedBy}
+          aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
-          className={`flex-1 rounded px-2 py-0.5 text-[11px] transition-colors ${
+          className={`min-w-0 flex-1 overflow-hidden rounded px-2 py-0.5 text-[11px] leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
             value === o.value
               ? 'bg-koma-hover text-koma-fg opacity-100'
               : 'text-koma-fg opacity-55 hover:opacity-80'

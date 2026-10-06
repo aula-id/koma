@@ -249,7 +249,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
     expect(content).toContain('Project — <project>/.agent/skills')
     expect(content).toContain('Project — <project>/.agents/skills')
     expect(content).toContain('External — locations configured above')
-    expect(content).toContain('Locations are scanned when the Skills panel opens. To scan again, use the circular-arrow button in that panel (Rescan skill locations). Project locations require an active chat.')
+    expect(content).toContain('Locations are scanned when the Skills panel opens. To scan again, use the circular-arrow button in the Skills header (Rescan skill locations). Project locations require an active chat.')
     expect(content).toContain('If skills have the same name, the location listed later wins.')
 
     useKoma.setState({ settingsValues: settingsValues(['/opt/shared-skills']) })

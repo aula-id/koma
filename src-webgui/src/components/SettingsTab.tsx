@@ -818,7 +818,7 @@ function ExternalSkillRootsSettings() {
             <li><strong className="font-semibold text-koma-fg">Project</strong> — <code>&lt;project&gt;/.agents/skills</code></li>
             <li><strong className="font-semibold text-koma-fg">External</strong> — locations configured above</li>
           </ul>
-          <p>Locations are scanned when the Skills panel opens. To scan again, use the circular-arrow button in that panel (<strong className="font-semibold text-koma-fg">Rescan skill locations</strong>). Project locations require an active chat.</p>
+          <p>Locations are scanned when the Skills panel opens. To scan again, use the circular-arrow button in the Skills header (<strong className="font-semibold text-koma-fg">Rescan skill locations</strong>). Project locations require an active chat.</p>
           <p>If skills have the same name, the location listed later wins.</p>
         </div>
       </details>

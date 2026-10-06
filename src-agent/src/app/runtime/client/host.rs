@@ -1549,6 +1549,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GetSkills {
                 request_id,
                 session_epoch,
+                workspace: _,
             }) => push_skill_values(
                 push,
                 request_id,

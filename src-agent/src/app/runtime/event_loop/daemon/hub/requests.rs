@@ -249,7 +249,8 @@ impl DaemonHub {
             ClientRequest::ListSkills {
                 request_id,
                 session_epoch,
-            } => self.list_skills(idx, state, request_id, session_epoch),
+                workspace,
+            } => self.list_skills(idx, state, request_id, session_epoch, workspace),
             ClientRequest::GetSkillDetail {
                 skill_id,
                 generation,

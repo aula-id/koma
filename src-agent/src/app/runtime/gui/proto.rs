@@ -758,6 +758,9 @@ pub(super) enum GuiReq {
         request_id: String,
         #[serde(default, rename = "sessionEpoch")]
         session_epoch: u64,
+        /// Selected project workspace. Empty scans the primary workdir.
+        #[serde(default)]
+        workspace: String,
     },
     GetSkillDetail {
         #[serde(rename = "skillId")]

@@ -16,7 +16,7 @@ function GuiSkillsPage() {
         <section>
           <h2 className="mb-1 text-base font-semibold text-koma-fg">Scope and ownership</h2>
           <p><strong>Global</strong> skills belong to Koma across projects, <strong>Project</strong> skills belong to the active chat&apos;s workspace, and <strong>External</strong> skills are read-only. Koma automatically discovers <code>~/.koma/skills</code>, <code>&lt;project&gt;/.claude/skills</code>, <code>&lt;project&gt;/.agent/skills</code>, and <code>&lt;project&gt;/.agents/skills</code>. Project locations require an active chat because its project directory supplies <code>&lt;project&gt;</code>. Settings → Skills configures only additional External locations.</p>
-          <p className="mt-2">Locations are scanned when the Skills panel opens or when the active chat changes while the panel stays open. To scan again, use the circular-arrow button in the Skills panel (<strong>Rescan skill locations</strong>). Discovery is request-driven, not a live filesystem watcher. If no catalogue reply arrives within 12 seconds, the spinner stops and the panel marks the list unconfirmed rather than claiming the scan failed; you may retry Rescan, and a delayed reply can still update the list. When the same name exists in multiple roots, later sources win: <code>Global → .claude → .agent → .agents → additional External</code>.</p>
+          <p className="mt-2">Locations are scanned when the Skills panel opens or when the active chat changes while the panel stays open. To scan again, use the circular-arrow button in the Skills header (<strong>Rescan skill locations</strong>). Discovery is request-driven, not a live filesystem watcher. If no catalogue reply arrives within 12 seconds, the spinner stops and the panel marks the list unconfirmed rather than claiming the scan failed; you may retry Rescan, and a delayed reply can still update the list. When the same name exists in multiple roots, later sources win: <code>Global → .claude → .agent → .agents → additional External</code>.</p>
         </section>
         <section>
           <h2 className="mb-1 text-base font-semibold text-koma-fg">Adding a skill</h2>
@@ -28,7 +28,7 @@ function GuiSkillsPage() {
         </section>
         <section>
           <h2 className="mb-1 text-base font-semibold text-koma-fg">Search and selection</h2>
-          <p>Search matches names, descriptions, and triggers. Click selects one row, Ctrl/Cmd-click toggles rows, Shift-click selects a visible range, and double-click or Enter opens detail. Selected skills have a tinted background and a full-height theme-accent line; an opened skill has a shorter line and an <strong>Open</strong> badge. <strong>All</strong> shows available discovered skills, while <strong>Loaded in chat</strong> shows only skills injected into the active chat. Without an active chat, the panel explains why Project skills and chat-loading actions are unavailable.</p>
+          <p>Search matches names, descriptions, and triggers. Click or Enter opens a skill. Right-click a row in the Skills panel for <strong>Load into chat</strong>, <strong>Remove from chat</strong>, <strong>Reload from disk</strong>, <strong>Duplicate</strong>, and <strong>Delete</strong>. Ctrl/Cmd-click toggles extra rows and Shift-click selects a visible range; that menu then applies to the whole selection. Ctrl-selected rows use the panel header tint. The list does not label scope or whether the editor is open. <strong>Global</strong> and <strong>Project</strong> split the catalogue by ownership. Claude project skills appear under Project, and additional External roots appear under Global. A skill loaded into the chat is sorted to the top of its tab and marked with a left accent border. Without an active chat, the panel explains why Project skills and chat-loading actions are unavailable.</p>
         </section>
         <section>
           <h2 className="mb-1 text-base font-semibold text-koma-fg">Safe editing</h2>
@@ -40,7 +40,7 @@ function GuiSkillsPage() {
         </section>
         <section>
           <h2 className="mb-1 text-base font-semibold text-koma-fg">Declared tools</h2>
-          <p>The optional <code>allowed-tools</code> frontmatter appears in the collapsed <strong>Declared tools</strong> section. It is compatibility metadata; Koma does not currently enforce it as a runtime restriction.</p>
+          <p>The optional <code>allowed-tools</code> frontmatter is edited with the same tool chips as a sub-agent. It is compatibility metadata; Koma does not currently enforce it as a runtime restriction.</p>
         </section>
       </div>
     </article>

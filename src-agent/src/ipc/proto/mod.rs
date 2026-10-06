@@ -518,6 +518,11 @@ pub enum ClientRequest {
         request_id: String,
         #[serde(default)]
         session_epoch: u64,
+        /// Project-tab workspace. Empty uses the session's primary workdir.
+        /// Must be one of the session's configured workdirs; anything else
+        /// falls back to the primary root.
+        #[serde(default)]
+        workspace: String,
     },
     /// Lazy editor detail resolved by server-issued source identity/generation.
     GetSkillDetail {

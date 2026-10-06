@@ -89,7 +89,7 @@ export type KomaState = {
   skillRequestId: string | null
   skillSessionEpoch: number
   skillQuery: string
-  skillFilter: 'all' | 'loaded'
+  skillFilter: 'global' | 'project'
   skillSelection: string[]
   skillDetails: Record<string, SkillDetail>
   skillDetailPending: Record<string, string>
@@ -415,7 +415,7 @@ export type KomaState = {
   refreshSkills: () => void
   registerSkillDelete: (requestId: string, sessionEpoch: number, items: Pick<SkillCatalogueEntry, 'skillId' | 'generation' | 'name'>[]) => void
   setSkillQuery: (query: string) => void
-  setSkillFilter: (filter: 'all' | 'loaded') => void
+  setSkillFilter: (filter: 'global' | 'project') => void
   setSkillSelection: (ids: string[]) => void
   openSkillTab: (skillId: string | null, title?: string) => void
   openUploadSkillTab: () => void

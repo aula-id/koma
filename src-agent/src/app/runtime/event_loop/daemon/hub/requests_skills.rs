@@ -4,14 +4,37 @@ use crate::model::skill::{SkillItemOutcome, SkillRegistry};
 
 use super::core::{DaemonHub, StoreReply};
 
-fn registry_for(state: &AppState) -> SkillRegistry {
+fn selected_workdir(session: &crate::model::session::Session, workspace: &str) -> std::path::PathBuf {
+    let wanted = workspace.trim();
+    if wanted.is_empty() {
+        return session.workdir();
+    }
+    session
+        .workdirs()
+        .into_iter()
+        .find(|root| root == std::path::Path::new(wanted))
+        .unwrap_or_else(|| session.workdir())
+}
+
+fn registry_for(state: &AppState, workspace: &str) -> SkillRegistry {
     let workdir = state
         .rest
         .fg()
         .session
         .as_ref()
-        .map(crate::model::session::Session::workdir);
+        .map(|session| selected_workdir(session, workspace));
     SkillRegistry::load(workdir.as_deref(), &state.rest.config.extra_skill_roots)
+}
+
+/// Catalogue snapshot from the last list, so opening a skill from a
+/// non-primary workspace still resolves. Falls back to the primary workdir.
+fn detail_registry(state: &AppState) -> SkillRegistry {
+    if let Some(session) = state.rest.fg().session.as_ref() {
+        if !session.skills.is_empty() {
+            return session.skills.clone();
+        }
+    }
+    registry_for(state, "")
 }
 
 fn loaded_names(state: &AppState) -> Vec<String> {
@@ -31,16 +54,27 @@ impl DaemonHub {
     pub(super) fn list_skills(
         &mut self,
         idx: usize,
-        state: &AppState,
+        state: &mut AppState,
         request_id: String,
         session_epoch: u64,
+        workspace: String,
     ) {
+        let workspace = if workspace.trim().is_empty() {
+            self.skill_workspace.clone()
+        } else {
+            self.skill_workspace = workspace.clone();
+            workspace
+        };
+        let registry = registry_for(state, &workspace);
+        if let Some(session) = state.rest.fg_mut().session.as_mut() {
+            session.skills = registry.clone();
+        }
         self.send_to(
             idx,
             DaemonEvent::SkillValues {
                 request_id,
                 session_epoch,
-                skills: registry_for(state).catalogue(),
+                skills: registry.catalogue(),
                 loaded_skill_names: loaded_names(state),
                 error: None,
             },
@@ -117,7 +151,7 @@ impl DaemonHub {
                 loaded_skill_names: loaded_names(state),
             },
         );
-        self.list_skills(idx, state, request_id, session_epoch);
+        self.list_skills(idx, state, request_id, session_epoch, String::new());
         self.send_settings_values(idx, state);
     }
 
@@ -132,7 +166,7 @@ impl DaemonHub {
         session_epoch: u64,
         tab_id: String,
     ) {
-        let registry = registry_for(state);
+        let registry = detail_registry(state);
         let (detail, error) = match registry.detail_by_identity(&skill_id, &generation) {
             Ok(detail) => (Some(detail), None),
             Err(error) => (None, Some(error.to_string())),
@@ -163,7 +197,7 @@ impl DaemonHub {
         session_epoch: u64,
         tab_id: String,
     ) {
-        let result = registry_for(state).read_companion_text(&skill_id, &generation, &path);
+        let result = detail_registry(state).read_companion_text(&skill_id, &generation, &path);
 
         let (file_content, error) = match result {
             Ok(content) => (Some(content), None),
@@ -230,12 +264,9 @@ impl DaemonHub {
         }
         let client_id = self.clients[idx].id;
         let tx = self.store_tx.clone();
-        let workdir = state
-            .rest
-            .fg()
-            .session
-            .as_ref()
-            .map(crate::model::session::Session::workdir);
+        let workdir = state.rest.fg().session.as_ref().map(|session| {
+            selected_workdir(session, &self.skill_workspace)
+        });
         let extra_roots = state.rest.config.extra_skill_roots.clone();
         handle.spawn_blocking(move || {
             let reply = run_skill_mutation(request, workdir, extra_roots, client_id);
@@ -257,7 +288,7 @@ impl DaemonHub {
         // The session's discovery snapshot is otherwise only refreshed by a
         // broader rebuild; rescanning the sidebar alone does not replace it.
         if state.rest.sessions[session_index].session.is_some() {
-            let fresh = registry_for(state);
+            let fresh = registry_for(state, &self.skill_workspace);
             if let Some(session) = state.rest.sessions[session_index].session.as_mut() {
                 session.skills = fresh;
             }
@@ -380,7 +411,7 @@ impl DaemonHub {
                 },
             );
             if changes_filesystem {
-                self.list_skills(idx, state, request_id, session_epoch);
+                self.list_skills(idx, state, request_id, session_epoch, String::new());
             }
         }
     }

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { render } from 'vitest-browser-react'
 import { useKoma, type Tab } from '../../store/koma'
 import { SkillsPanel } from './SkillsPanel'
+import { Sidebar } from '../Sidebar'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
 
 const entries = Array.from({ length: 8 }, (_, index) => ({
@@ -83,7 +84,7 @@ beforeEach(() => {
     skillsLoading: false,
     skillsError: null,
     skillQuery: '',
-    skillFilter: 'all',
+    skillFilter: 'global',
     skillSelection: [],
     refreshSkills: () => {},
     req,
@@ -93,6 +94,24 @@ beforeEach(() => {
 function DuplicateDialogHarness() {
   const [open, setOpen] = useState(false)
   return <div><button type="button" onClick={() => setOpen(true)}>Open duplicate</button>{open && <SkillDuplicateDialog skills={[entries[7]]} onClose={() => setOpen(false)} />}</div>
+}
+
+function openSkillMenu(row: HTMLButtonElement) {
+  const rect = row.getBoundingClientRect()
+  row.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: rect.left + 8,
+    clientY: rect.top + 12,
+  }))
+}
+
+function skillMenu() {
+  return document.querySelector<HTMLElement>('[data-tour="skills-context-menu"]')
+}
+
+function menuButton(name: string) {
+  return [...(skillMenu()?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((button) => button.textContent === name)
 }
 
 async function mount(width: number) {
@@ -114,48 +133,39 @@ describe.sequential('Skills panel browser contracts', () => {
     const search = host.querySelector<HTMLInputElement>('input[aria-label="Search skills"]')!
     expect(search.getBoundingClientRect().right).toBeLessThanOrEqual(hostRect.right + 1)
 
-    const controls = [
-      host.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!,
-      [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Skill filter"] button')].find((button) => button.textContent === 'Loaded in chat')!,
-      host.querySelector<HTMLButtonElement>('button[aria-label="Rescan skill locations"]')!,
-    ]
-    const rects = controls.map((control) => control.getBoundingClientRect())
-    for (const [index, rect] of rects.entries()) {
-      expect(rect.width).toBeGreaterThan(0)
-      expect(rect.left).toBeGreaterThanOrEqual(hostRect.left - 1)
-      expect(rect.right).toBeLessThanOrEqual(hostRect.right + 1)
-      if (index > 0) expect(rect.left).toBeGreaterThanOrEqual(rects[index - 1].right - 1)
-    }
-    expect(controls[1].scrollWidth).toBeLessThanOrEqual(controls[1].clientWidth + 1)
+    const filters = host.querySelector<HTMLElement>('[aria-label="Skill filter"]')!
+    const controls = [...filters.querySelectorAll<HTMLButtonElement>('button')]
+    expect(controls.map((button) => button.textContent)).toEqual(['Global', 'Project'])
+    const filterRect = filters.getBoundingClientRect()
+    expect(filterRect.left).toBeGreaterThanOrEqual(hostRect.left - 1)
+    expect(filterRect.right).toBeLessThanOrEqual(hostRect.right + 1)
+    expect(controls[0].getAttribute('aria-pressed')).toBe('true')
+    expect(controls[1].getBoundingClientRect().left).toBeGreaterThanOrEqual(controls[0].getBoundingClientRect().right - 1)
+    expect(host.querySelector('button[aria-label="Rescan skill locations"]')).toBeNull()
   })
 
-  it('uses session-scoped labels and keeps enabled bulk actions inside a 150px panel', async () => {
+  it('opens session actions from a right-click and keeps the menu inside the viewport', async () => {
     const { host } = await mount(150)
-    const hostRect = host.getBoundingClientRect()
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
 
-    rows[0].click()
+    openSkillMenu(rows[0])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const remove = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Remove from chat')!
-    const reload = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Reload from disk')!
+    const menu = skillMenu()!
+    const remove = menuButton('Remove from chat')!
+    const reload = menuButton('Reload from disk')!
     expect(remove.disabled).toBe(false)
     expect(reload.disabled).toBe(false)
-    for (const button of [remove, reload]) {
-      const rect = button.getBoundingClientRect()
-      expect(rect.width).toBeGreaterThan(0)
-      expect(rect.left).toBeGreaterThanOrEqual(hostRect.left - 1)
-      expect(rect.right).toBeLessThanOrEqual(hostRect.right + 1)
-    }
+    const menuRect = menu.getBoundingClientRect()
+    expect(menuRect.width).toBeGreaterThan(0)
+    expect(menuRect.left).toBeGreaterThanOrEqual(0)
+    expect(menuRect.right).toBeLessThanOrEqual(window.innerWidth)
+    expect(host.querySelector('[data-tour="skills-context-menu"]')).toBeNull()
 
-    useKoma.getState().setSkillSelection([])
-    rows[1].click()
+    openSkillMenu(rows[1])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const load = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Load into chat')!
+    const load = menuButton('Load into chat')!
     expect(load.disabled).toBe(false)
-    const loadRect = load.getBoundingClientRect()
-    expect(loadRect.width).toBeGreaterThan(0)
-    expect(loadRect.left).toBeGreaterThanOrEqual(hostRect.left - 1)
-    expect(loadRect.right).toBeLessThanOrEqual(hostRect.right + 1)
+    expect(load.getBoundingClientRect().width).toBeGreaterThan(0)
   })
 
   it('explains detached discovery and removes the notice when a chat becomes active', async () => {
@@ -164,50 +174,56 @@ describe.sequential('Skills panel browser contracts', () => {
     const notice = host.querySelector<HTMLElement>('[data-testid="skills-no-active-chat"]')!
     expect(notice.textContent).toContain('Open a chat to discover Project skills and load skills into chat.')
 
-    const loadedFilter = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Skill filter"] button')].find((button) => button.textContent === 'Loaded in chat')!
-    expect(loadedFilter.disabled).toBe(true)
-    expect(loadedFilter.title).toContain('Open a chat')
-    expect(loadedFilter.getAttribute('aria-describedby')).toBe('skills-no-active-chat')
+    const projectTab = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Skill filter"] button')].find((button) => button.textContent === 'Project')!
+    expect(projectTab.disabled).toBe(true)
+    expect(projectTab.title).toContain('Open a chat')
+    expect(projectTab.getAttribute('aria-describedby')).toBe('skills-no-active-chat')
 
     const rows = host.querySelectorAll<HTMLButtonElement>('[role="option"]')
-    rows[1].click()
+    openSkillMenu(rows[1])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const load = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Load into chat')!
-    const deleteButton = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Delete')!
+    const load = menuButton('Load into chat')!
+    const deleteButton = menuButton('Delete')!
     expect(load.disabled).toBe(true)
     expect(load.title).toContain('Open a chat')
     expect(load.getAttribute('aria-describedby')).toBe('skills-no-active-chat')
     expect(deleteButton.disabled).toBe(false)
 
-    useKoma.getState().setSkillSelection([])
-    rows[7].click()
+    openSkillMenu(rows[7])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const duplicateButton = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Duplicate')!
+    const duplicateButton = menuButton('Duplicate')!
     expect(duplicateButton.disabled).toBe(false)
 
     useKoma.setState((state) => ({ session: { ...state.session, id: 'session-b' } }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
     expect(host.querySelector('[data-testid="skills-no-active-chat"]')).toBeNull()
-    expect(loadedFilter.disabled).toBe(false)
-    expect(load.disabled).toBe(false)
+    expect(projectTab.disabled).toBe(false)
+    expect(menuButton('Load into chat')?.disabled).toBe(false)
   })
 
-  it('labels refresh as a request-driven rescan', async () => {
-    const { host } = await mount(320)
-    const rescan = host.querySelector<HTMLButtonElement>('button[aria-label="Rescan skill locations"]')!
+  it('labels refresh as a request-driven rescan in the Skills header', async () => {
+    const screen = await render(
+      <div style={{ width: 320, height: 700 }}>
+        <Sidebar width={320} view="skills" />
+      </div>,
+    )
+    const rescan = document.querySelector<HTMLButtonElement>('button[aria-label="Rescan skill locations"]')!
     expect(rescan.title).toBe('Rescan skill locations')
+    expect(rescan.closest('.uppercase')).toBeTruthy()
+    screen.unmount()
   })
 
   it('rediscovers Loaded rows for A→B→A without clicking Rescan while the panel stays mounted', async () => {
     useKoma.setState({ refreshSkills: realRefreshSkills })
-    const { host, screen } = await mount(320)
+    const { host } = await mount(320)
     expect(catalogueRequests()).toHaveLength(1)
     const initial = catalogueRequests()[0]
     replyToCatalogue(initial, ['skill-0'])
-    await screen.getByRole('button', { name: 'Loaded in chat' }).click()
     useKoma.getState().setSkillQuery('skill-')
+    await nextPaint()
     const rowIds = () => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')].map((row) => row.dataset.skillId)
-    expect(rowIds()).toEqual(['opaque-0'])
+    expect(rowIds()[0]).toBe('opaque-0')
+    expect(host.querySelector('[data-skill-id="opaque-0"] [data-skill-marker="loaded"]')).toBeTruthy()
 
     switchSnapshot('session-b', ['skill-1'])
     await nextPaint()
@@ -216,15 +232,16 @@ describe.sequential('Skills panel browser contracts', () => {
     replyToCatalogue(initial, ['skill-0'])
     replyToCatalogue(catalogueRequests()[1], ['skill-1'])
     await nextPaint()
-    expect(rowIds()).toEqual(['opaque-1'])
+    expect(rowIds()[0]).toBe('opaque-1')
+    expect(host.querySelector('[data-skill-id="opaque-1"] [data-skill-marker="loaded"]')).toBeTruthy()
 
     switchSnapshot('session-a', ['skill-0'])
     await nextPaint()
     expect(catalogueRequests()).toHaveLength(3)
     replyToCatalogue(catalogueRequests()[2], ['skill-0'])
     await nextPaint()
-    expect(rowIds()).toEqual(['opaque-0'])
-    expect(host.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.textContent).toBe('Loaded in chat')
+    expect(rowIds()[0]).toBe('opaque-0')
+    expect(host.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.textContent).toBe('Global')
     expect(host.querySelector<HTMLInputElement>('input[aria-label="Search skills"]')?.value).toBe('skill-')
 
     switchSnapshot('session-empty', [])
@@ -232,7 +249,8 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(catalogueRequests()).toHaveLength(4)
     replyToCatalogue(catalogueRequests()[3], [])
     await nextPaint()
-    expect(rowIds()).toEqual([])
+    expect(rowIds().length).toBeGreaterThan(0)
+    expect(host.querySelector('[data-skill-marker="loaded"]')).toBeNull()
     expect(useKoma.getState().loadedSkillNames).toEqual([])
   })
 
@@ -272,20 +290,25 @@ describe.sequential('Skills panel browser contracts', () => {
       ui: { ...state.ui, preserveTabsOnNextSession: true, preservedTabsTargetSession: null },
       refreshSkills: realRefreshSkills,
     }))
-    const { host } = await mount(320)
+    const screen = await render(
+      <div style={{ width: 320, height: 700 }}>
+        <Sidebar width={320} view="skills" />
+      </div>,
+    )
     expect(catalogueRequests()).toHaveLength(1)
     const first = catalogueRequests()[0]
     // The store's fake-timer test covers the 12-second transition. Here we
-    // exercise the real panel control once that unconfirmed state is visible.
+    // exercise the header refresh once that unconfirmed state is visible.
     useKoma.setState({ skillsLoading: false, skillsUnconfirmed: 'Skill catalogue response not confirmed.' })
     await nextPaint()
-    host.querySelector<HTMLButtonElement>('button[aria-label="Rescan skill locations"]')!.click()
+    document.querySelector<HTMLButtonElement>('button[aria-label="Rescan skill locations"]')!.click()
     expect(catalogueRequests()).toHaveLength(2)
     expect(catalogueRequests()[1].requestId).not.toBe(first.requestId)
     replyToCatalogue(first, ['skill-0'])
     expect(useKoma.getState().skillsLoading).toBe(true)
     replyToCatalogue(catalogueRequests()[1], [])
     expect(useKoma.getState().skillsLoading).toBe(false)
+    screen.unmount()
   })
 
   it('uses the selected Autumn foreground roles in list and Add views', async () => {
@@ -350,32 +373,37 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(useKoma.getState().ui.composerRefill).toContain('Help me create a new Koma skill.')
   })
 
-  it('enables Duplicate only for External selections', async () => {
+  it('enables Duplicate only for an External right-click', async () => {
     const { host } = await mount(320)
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    rows[0].click()
+    openSkillMenu(rows[0])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(host.querySelector<HTMLButtonElement>('button[title*="Only External"]')?.disabled).toBe(true)
-    useKoma.getState().setSkillSelection([])
-    rows[7].click()
+    expect(menuButton('Duplicate')?.disabled).toBe(true)
+    expect(menuButton('Duplicate')?.title).toContain('Only External')
+    openSkillMenu(rows[7])
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(host.querySelector<HTMLButtonElement>('button[title="Duplicate selected External skills"]')?.disabled).toBe(false)
+    expect(menuButton('Duplicate')?.disabled).toBe(false)
+    expect(menuButton('Duplicate')?.title).toBe('Duplicate selected External skills')
   })
 
-  it('clears bulk intent and marks the active skill when double-click opens it', async () => {
+  it('opens a skill on click and clears a Ctrl selection', async () => {
     const { host } = await mount(320)
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    rows[0].click()
+    rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    openSkillMenu(rows[0])
     await new Promise((resolve) => requestAnimationFrame(resolve))
     expect(rows[0].getAttribute('aria-selected')).toBe('true')
-    expect(host.querySelector('[data-tour="skills-bulk"]')).toBeTruthy()
+    expect(skillMenu()?.textContent).toContain('skill-0')
 
-    rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    rows[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    rows[0].click()
     await new Promise((resolve) => requestAnimationFrame(resolve))
     expect(useKoma.getState().skillSelection).toEqual([])
-    expect(host.querySelector('[data-tour="skills-bulk"]')).toBeNull()
+    expect(skillMenu()).toBeNull()
     expect(rows[0].getAttribute('aria-current')).toBe('true')
-    expect(rows[0].textContent).toContain('Open')
+    expect(rows[0].textContent).not.toContain('Open')
+    expect(rows[0].textContent).not.toMatch(/global|project|external/i)
     expect(rows[0].querySelector('svg')).toBeNull()
 
     useKoma.getState().activateTab('chat')
@@ -383,25 +411,24 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(host.querySelector('[role="option"][aria-current="true"]')).toBeNull()
   })
 
-  it('clears bulk intent when Enter opens the focused skill', async () => {
+  it('opens the focused skill on Enter without a selection chrome', async () => {
     const { host } = await mount(320)
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    rows[1].click()
     rows[1].focus()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
     rows[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
     expect(useKoma.getState().skillSelection).toEqual([])
     expect(rows[1].getAttribute('aria-current')).toBe('true')
-    expect(host.querySelector('[data-tour="skills-bulk"]')).toBeNull()
+    expect(skillMenu()).toBeNull()
+    expect(host.querySelector('[data-tour="skills-add"]')).toBeTruthy()
   })
 
-  it('keeps Open separate from multi-selection without right-side checks', async () => {
+  it('keeps Open separate from a Ctrl multi-selection and offers it on right-click', async () => {
     const { host } = await mount(320)
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
-    await new Promise((resolve) => requestAnimationFrame(resolve))
     rows[0].click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
     rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -410,41 +437,38 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(rows[0].getAttribute('aria-current')).toBe('true')
     expect(rows[0].getAttribute('aria-selected')).toBe('true')
     expect(rows[1].getAttribute('aria-selected')).toBe('true')
-    expect(host.querySelector('[data-tour="skills-bulk"]')?.textContent).toContain('2 selected')
+    expect(rows[0].textContent).not.toContain('Open')
+    openSkillMenu(rows[0])
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(skillMenu()?.textContent).toContain('2 selected')
     expect(host.querySelector('input[type="checkbox"]')).toBeNull()
     expect(rows[1].querySelector('svg')).toBeNull()
-    expect(rows[7].querySelector('svg')).toBeTruthy()
+    expect(rows[7].querySelector('svg')).toBeNull()
   })
 
-  it('shows a full-height theme accent for all three selected skills, distinct from Open', async () => {
+  it('tints Ctrl-selected rows with the panel header color and draws no accent bar', async () => {
     const { host } = await mount(320)
     const rows = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
-    rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    rows[0].click()
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    rows[1].click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    for (const row of [rows[2], rows[3]]) {
+    for (const row of [rows[1], rows[2], rows[3]]) {
       row.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
       await new Promise((resolve) => requestAnimationFrame(resolve))
     }
 
     expect(useKoma.getState().skillSelection).toEqual(['opaque-1', 'opaque-2', 'opaque-3'])
-    expect(host.querySelector('[data-tour="skills-bulk"]')?.textContent).toContain('3 selected')
-    const openMarker = rows[0].querySelector<HTMLElement>('[data-skill-marker="open"]')!
-    expect(openMarker).toBeTruthy()
-    expect(rows[0].textContent).toContain('Open')
+    expect(rows[0].getAttribute('aria-current')).toBe('true')
+    expect(rows[0].textContent).not.toContain('Open')
     for (const row of rows.slice(1, 4)) {
-      const marker = row.querySelector<HTMLElement>('[data-skill-marker="selected"]')!
-      expect(marker).toBeTruthy()
-      expect(marker.getBoundingClientRect().height).toBeGreaterThan(openMarker.getBoundingClientRect().height)
-      expect(getComputedStyle(marker).backgroundColor).toBe(getComputedStyle(openMarker).backgroundColor)
       expect(row.className).toContain('bg-koma-head')
+      expect(getComputedStyle(row).outlineStyle).not.toBe('solid')
     }
-    expect(rows[4].querySelector('[data-skill-marker]')).toBeNull()
+    expect(rows[4].className).not.toContain('bg-koma-head')
     rows[3].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(host.querySelectorAll('[data-skill-marker="selected"]')).toHaveLength(0)
-    expect(rows[0].querySelector('[data-skill-marker="open"]')).toBeTruthy()
+    expect(rows[1].getAttribute('aria-selected')).toBe('false')
+    expect(rows[0].getAttribute('aria-current')).toBe('true')
+    expect(host.querySelector('[data-tour="skills-add"]')).toBeTruthy()
   })
 
   it('moves real DOM focus through the roving listbox with ArrowDown', async () => {
@@ -469,17 +493,13 @@ describe.sequential('Skills panel browser contracts', () => {
     await new Promise((resolve) => requestAnimationFrame(resolve))
     expect(useKoma.getState().skillSelection).toEqual([])
     expect(document.activeElement).toBe(rows[0])
-    const focusColor = getComputedStyle(rows[0]).outlineColor
-    expect(focusColor).toMatch(/^rgb\(/)
-    expect(getComputedStyle(rows[0]).outlineWidth).toBe('2px')
+    expect(getComputedStyle(rows[0]).outlineStyle).not.toBe('solid')
     for (let index = 1; index < rows.length; index++) {
       await userEvent.keyboard('{ArrowDown}')
       await new Promise((resolve) => requestAnimationFrame(resolve))
       expect(document.activeElement).toBe(rows[index])
       expect(rows.filter((row) => row.tabIndex === 0)).toEqual([rows[index]])
-      expect(getComputedStyle(rows[index]).outlineStyle).toBe('solid')
-      expect(getComputedStyle(rows[index]).outlineWidth).toBe('2px')
-      expect(getComputedStyle(rows[index]).outlineColor).toBe(focusColor)
+      expect(getComputedStyle(rows[index]).outlineStyle).not.toBe('solid')
     }
     await userEvent.keyboard('{ArrowDown}')
     expect(document.activeElement).toBe(rows[3])

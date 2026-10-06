@@ -162,7 +162,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   skillRequestId: null,
   skillSessionEpoch: 0,
   skillQuery: '',
-  skillFilter: 'all',
+  skillFilter: 'global',
   skillSelection: [],
   skillDetails: {},
   skillDetailPending: {},

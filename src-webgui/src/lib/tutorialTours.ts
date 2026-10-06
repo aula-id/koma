@@ -577,27 +577,34 @@ function buildTour(id: TourId): BuiltTour | null {
           }),
           step({
             targets: ['[data-tour="skills-filters"]', '[data-tour="skills-panel"]'],
-            title: 'All and Loaded in chat',
-            description: 'All shows every discovered skill. Loaded in chat shows only skills injected into the active chat. Use Rescan skill locations to scan the applicable locations again.',
+            title: 'Global and Project',
+            description: 'Global lists skills from ~/.koma/skills. Project lists skills from the active chat workspace. A skill loaded into the chat is pinned to the top of its tab and marked with an accent bar. Use the refresh button in the Skills header to scan again.',
             side: 'right',
           }),
           step({
             targets: ['[data-tour="skills-list"]'],
             title: 'Ownership and selection',
-            description: 'Global and Project skills are Koma-owned. External skills are read-only. Click selects; Ctrl/Cmd and Shift build a multi-selection; double-click or Enter opens detail.',
+            description: 'Global and Project skills are Koma-owned. External skills are read-only. Click or Enter opens a skill. Right-click a row for Load, Remove, Reload, Duplicate, and Delete. Ctrl/Cmd-click and Shift-click select several skills for that menu.',
             side: 'right',
             onNext: async () => {
               const first = qs<HTMLElement>('[data-tour="skills-list"] [role="option"]')
-              first?.click()
-              await sleep(100)
+              const rect = first?.getBoundingClientRect()
+              first?.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                clientX: rect ? rect.left + 8 : 24,
+                clientY: rect ? rect.top + 12 : 24,
+              }))
+              await waitFor('[data-tour="skills-context-menu"]', 1200)
             },
           }),
           step({
-            targets: ['[data-tour="skills-bulk"]', '[data-tour="skills-list"]'],
+            targets: ['[data-tour="skills-context-menu"]', '[data-tour="skills-list"]'],
             title: 'Session actions',
-            description: 'Load into chat and Remove from chat change only the active chat. Save writes disk; Save & Reload also updates the current chat when the owned skill is loaded. Reload from disk remains for edits made outside the editor. Duplicate to Koma is for External skills; Delete is only for owned skills.',
+            description: 'Right-click a skill, or a Ctrl/Cmd selection, for chat actions. Load into chat and Remove from chat change only the active chat. Save writes disk; Save & Reload also updates the current chat when the owned skill is loaded. Reload from disk remains for edits made outside the editor. Duplicate to Koma is for External skills; Delete is only for owned skills.',
             side: 'right',
             onNext: async () => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
               useKoma.getState().setSkillSelection([])
               await waitFor('[data-tour="skills-add"]', 1200)
             },

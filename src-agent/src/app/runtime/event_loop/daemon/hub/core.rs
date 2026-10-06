@@ -275,6 +275,10 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// state change; it's an unconditional belt-and-suspenders reset. Consumed (reset to
     /// `false`) at the top of `stream_deltas`.
     pub(super) force_resync: bool,
+    /// Last project workspace the Skills panel asked to scan. Empty means the
+    /// session's primary workdir. Follow-up catalogue refreshes reuse it so a
+    /// save does not jump the Project tab back to the primary root.
+    pub(super) skill_workspace: String,
 }
 
 impl DaemonHub {
@@ -306,6 +310,7 @@ impl DaemonHub {
                 store_tx,
                 store_rx,
                 force_resync: false,
+                skill_workspace: String::new(),
             },
             msg_tx,
         )

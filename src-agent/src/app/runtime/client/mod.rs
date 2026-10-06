@@ -432,6 +432,7 @@ pub(crate) enum HostCtl {
     GetSkills {
         request_id: String,
         session_epoch: u64,
+        workspace: String,
     },
     /// UN-ATTACHED lazy Skills detail. Project-only identities naturally return
     /// stale/unavailable because no session workdir is authoritative.

@@ -42,8 +42,9 @@ export function skillActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'new
   refreshSkills: () => {
     const requestId = mintSkillRequestId('catalogue')
     const sessionEpoch = get().skillSessionEpoch
+    const workspace = get().skillFilter === 'project' ? (get().coding.activeRoot ?? '') : ''
     set({ skillsLoading: true, skillsError: null, skillsUnconfirmed: null, skillRequestId: requestId })
-    get().req({ r: 'GetSkills', requestId, sessionEpoch })
+    get().req({ r: 'GetSkills', requestId, sessionEpoch, workspace })
     waitForSkillCatalogue(set, get, requestId, sessionEpoch)
   },
   registerSkillDelete: (requestId, sessionEpoch, items) => set((s) => {

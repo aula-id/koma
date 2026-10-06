@@ -5,6 +5,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { MessageBody } from './MessageBody'
 import { SkillDeleteConfirm } from './SkillDeleteConfirm'
 import { SkillDuplicateDialog } from './SkillDuplicateDialog'
+import { Chips, Field, Select, TextInput } from './panels/form'
 
 type Props = { tab: Extract<Tab, { kind: 'skill' }> }
 let mutationSeq = 0
@@ -20,6 +21,7 @@ export default function SkillTab({ tab }: Props) {
   const epoch = useKoma((s) => s.skillSessionEpoch)
   const sessionId = useKoma((s) => s.session.id)
   const opResults = useKoma((s) => s.skillOpResults)
+  const availableTools = useKoma((s) => s.availableTools)
   const req = useKoma((s) => s.req)
   const requestDetail = useKoma((s) => s.requestSkillDetail)
   const readFile = useKoma((s) => s.readSkillFile)
@@ -51,6 +53,15 @@ export default function SkillTab({ tab }: Props) {
   const hydratedGeneration = useRef<string | null>(null)
   const editGeneration = useRef<string | null>(null)
   const dirty = useRef(false)
+
+  useEffect(() => {
+    if (availableTools.length > 0) return
+    req({ r: 'GetAgents' })
+  }, [availableTools.length, req])
+
+  useEffect(() => {
+    if (!sessionId && scope === 'project') setScope('global')
+  }, [sessionId, scope])
 
   useEffect(() => {
     if (isCreate || !entry || detail || pending[tab.id]) return
@@ -93,6 +104,11 @@ export default function SkillTab({ tab }: Props) {
       return
     }
   }, [closeTab, detail?.generation, entry, isCreate, name, openSkillTab, partial, pending, requestDetail, skills, success, tab.id])
+
+  const toolOptions = useMemo(() => {
+    const extra = tools.filter((tool) => !availableTools.includes(tool))
+    return [...availableTools, ...extra].map((tool) => ({ value: tool, label: tool }))
+  }, [availableTools, tools])
 
   const external = detail?.scope === 'external'
   const sourceUnavailable = Boolean(!isCreate && detail && !entry)
@@ -182,11 +198,11 @@ What I want to change:
   return (
     <div className="flex h-full min-w-0 flex-col bg-koma-bg text-koma-fg">
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3 px-5 py-5 sm:px-8">
-          <header className="border-b border-koma-border pb-3">
-            <h2 className="text-[15px] font-semibold">{isCreate ? 'New skill' : detail?.name}</h2>
-            <p className="mt-0.5 text-[11px] opacity-50">{isCreate ? 'Create a Global or Project skill' : external ? 'External skill — read-only; duplicate it to Koma to customize' : `${detail?.scope} skill`}</p>
-          </header>
+        <div className="mx-auto flex max-w-3xl flex-col gap-1 px-8 py-6">
+          <div className="mb-4 border-b border-koma-border pb-2">
+            <h2 className="text-[15px] font-semibold text-koma-fg">{isCreate ? 'New skill' : detail?.name}</h2>
+            <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">{isCreate ? 'Create a Global or Project skill.' : external ? 'External skill — read-only; duplicate it to Koma to customize.' : `${detail?.scope === 'project' ? 'Project' : 'Global'} skill.`}</p>
+          </div>
 
           {!isCreate && detail?.editable && !detail.structuredSaveSupported && <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">This skill uses advanced YAML. Structured Save is disabled to prevent data loss; use Edit with Koma or edit SKILL.md manually.</div>}
           {stale && detail && <div className="flex items-center justify-between gap-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"><span>{sourceUnavailable ? 'This source is no longer the current catalogue winner. The draft is preserved read-only and cannot be saved.' : 'The source changed on disk while this draft was open. The draft is preserved read-only and saving is disabled.'}</span>{entry && <button type="button" onClick={() => { dirty.current = false; hydratedGeneration.current = null; requestDetail(tab.id, entry.skillId, entry.generation) }} className="flex-none rounded border border-amber-500/30 px-2 py-1">Discard draft and refresh</button>}</div>}
@@ -197,24 +213,48 @@ What I want to change:
           {downloadSuccess && <div role="status" className="rounded border border-green-500/25 bg-green-500/10 px-3 py-2 text-[11px] text-green-300">Saved ZIP to {downloadSuccess.name}</div>}
           {downloadFailure && <div role="alert" className="rounded border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{downloadFailure}</div>}
 
-          <label className="text-[11px]"><span className="mb-1 block opacity-60">Name</span><input value={name} disabled={!isCreate} onChange={(event) => { dirty.current = true; setName(event.target.value.toLowerCase()) }} aria-invalid={isCreate && name.length > 0 && !validCreateName} className="h-8 w-full rounded border border-koma-border bg-koma-panel px-2 outline-none focus:border-koma-accent disabled:opacity-55" />{isCreate && name.length > 0 && !validCreateName && <span className="mt-1 block text-[10px] text-red-400">Use lowercase letters, numbers, hyphens, or underscores.</span>}</label>
-          {isCreate && <div className="text-[11px]"><span className="mb-1 block opacity-60">Target scope</span><div className="flex gap-1">{(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={value === 'project' && !sessionId} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'} disabled:opacity-30`}>{value === 'global' ? 'Global' : 'Project'}</button>)}</div>{!sessionId && <span className="mt-1 block text-[10px] opacity-45">Open a chat to create a Project skill.</span>}</div>}
-          <label className="text-[11px]"><span className="mb-1 block opacity-60">Description</span><input value={description} readOnly={external || stale} onChange={(event) => { dirty.current = true; setDescription(event.target.value) }} className="h-8 w-full rounded border border-koma-border bg-koma-panel px-2 outline-none focus:border-koma-accent read-only:opacity-55" /></label>
-          <label className="text-[11px]"><span className="mb-1 block opacity-60">Triggers</span><input value={triggers} readOnly={external || stale} onChange={(event) => { dirty.current = true; setTriggers(event.target.value) }} className="h-8 w-full rounded border border-koma-border bg-koma-panel px-2 outline-none focus:border-koma-accent read-only:opacity-55" /></label>
-
-          <details className="rounded border border-koma-border px-2 py-2">
-            <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider opacity-60">Declared tools</summary>
-            <p className="mt-2 text-[10px] opacity-45">Compatibility metadata from allowed-tools. Koma does not currently enforce these restrictions.</p>
-            <input value={tools.join(', ')} readOnly={external || stale} onChange={(event) => { dirty.current = true; setTools(event.target.value.split(',').map((tool) => tool.trim()).filter(Boolean)) }} placeholder="Bash, Read, Grep" className="mt-2 h-8 w-full rounded border border-koma-border bg-koma-panel px-2 text-[11px] outline-none read-only:opacity-55" />
-          </details>
+          <Field label="Name">
+            <TextInput value={name} disabled={!isCreate} autoFocus={isCreate} onChange={(event) => { dirty.current = true; setName(event.target.value.toLowerCase()) }} aria-invalid={isCreate && name.length > 0 && !validCreateName} placeholder="e.g. review-notes" />
+            {isCreate && name.length > 0 && !validCreateName && <span className="mt-0.5 text-[10px] text-koma-fg opacity-70">Use lowercase letters, numbers, hyphens, or underscores.</span>}
+          </Field>
+          {isCreate && (
+            <Field label="Scope">
+              <Select
+                value={scope}
+                onChange={setScope}
+                options={sessionId ? [{ value: 'global', label: 'Global' }, { value: 'project', label: 'Project' }] : [{ value: 'global', label: 'Global' }]}
+              />
+              {!sessionId && <span className="text-[11px] text-koma-fg opacity-45">Open a chat to create a Project skill.</span>}
+            </Field>
+          )}
+          <Field label="Description">
+            <TextInput value={description} readOnly={external || stale} onChange={(event) => { dirty.current = true; setDescription(event.target.value) }} placeholder="required — shown in the skill catalogue" />
+          </Field>
+          <Field label="Triggers">
+            <TextInput value={triggers} readOnly={external || stale} onChange={(event) => { dirty.current = true; setTriggers(event.target.value) }} placeholder="when should this skill be used?" />
+          </Field>
+          <Field label="Tools">
+            <p className="text-[11px] text-koma-fg opacity-45">Saved as allowed-tools. Koma does not currently enforce these restrictions.</p>
+            <div className={external || stale ? 'pointer-events-none opacity-55' : undefined}>
+              <Chips
+                value={tools}
+                options={toolOptions}
+                onToggle={(tool) => {
+                  if (external || stale) return
+                  dirty.current = true
+                  setTools((current) => (current.includes(tool) ? current.filter((item) => item !== tool) : [...current, tool]))
+                }}
+              />
+            </div>
+          </Field>
 
           {!isCreate && <div className="flex min-w-0 gap-1 overflow-x-auto border-b border-koma-border" role="tablist"><button type="button" role="tab" aria-selected={activeFile === null} onClick={() => setActiveFile(null)} className={`flex-none px-2 py-1 text-[11px] ${activeFile === null ? 'border-b-2 border-koma-accent' : 'opacity-50'}`}>SKILL.md</button>{companions.map((path) => <button type="button" role="tab" aria-selected={activeFile === path} key={path} onClick={() => setActiveFile(path)} className={`flex-none px-2 py-1 text-[11px] ${activeFile === path ? 'border-b-2 border-koma-accent' : 'opacity-50'}`}>{path}</button>)}</div>}
 
-          {activeFile ? <div><div className="mb-1 flex items-center justify-between"><span className="text-[10px] uppercase opacity-50">{activeFile} · read-only</span><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-head' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-head' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{pending[tab.id] && !companion ? <BrailleSpinner size={14} /> : companion?.error ? <div role="alert" className="rounded border border-red-500/25 bg-red-500/10 p-3 text-[11px] text-red-300">{companion.error}</div> : preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-panel p-3 text-[12px]">{companion?.content.trim() ? <MessageBody text={companion.content} /> : <span className="opacity-45">Empty file.</span>}</div> : <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded border border-koma-border bg-koma-panel p-3 font-mono text-[11px]">{companion?.content ?? ''}</pre>}</div> : <div><div className="mb-1 flex items-center justify-between"><span className="text-[10px] font-semibold uppercase tracking-wider opacity-50">Prompt / Instruction</span><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-head' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-head' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-panel p-3 text-[12px]">{instruction.trim() ? <MessageBody text={instruction} /> : <span className="opacity-45">Nothing to preview yet.</span>}</div> : <textarea value={instruction} readOnly={external || stale} onChange={(event) => { dirty.current = true; setInstruction(event.target.value) }} rows={14} className="w-full resize-y rounded border border-koma-border bg-koma-panel p-3 font-mono text-[12px] outline-none focus:border-koma-accent read-only:opacity-70" />}</div>}
+          {activeFile ? <Field label={activeFile}><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-hover' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-hover' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{pending[tab.id] && !companion ? <BrailleSpinner size={14} /> : companion?.error ? <div role="alert" className="text-[11px] text-koma-fg opacity-70">{companion.error}</div> : preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{companion?.content.trim() ? <MessageBody text={companion.content} /> : <span className="opacity-45">Empty file.</span>}</div> : <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded border border-koma-border bg-koma-bg p-3 font-mono text-[11px]">{companion?.content ?? ''}</pre>}</Field> : <Field label="Prompt"><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-hover' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-hover' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{instruction.trim() ? <MessageBody text={instruction} /> : <span className="opacity-45">Nothing to preview yet.</span>}</div> : <textarea value={instruction} readOnly={external || stale} onChange={(event) => { dirty.current = true; setInstruction(event.target.value) }} rows={16} spellCheck={false} placeholder="the skill instruction" className="min-h-[320px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip read-only:opacity-70" />}</Field>}
         </div>
       </div>
 
-      <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-koma-border bg-koma-panel px-4 py-2">
+      <footer className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-koma-border px-4 py-2.5">
         {!isCreate && detail && <>{external && <button type="button" onClick={() => setDuplicate(true)} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35"><Copy size={12} /> Duplicate to Koma</button>}<button type="button" onClick={editWithKoma} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px]"><Bot size={12} /> Edit with Koma</button>{!external && <button type="button" onClick={downloadZip} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35"><Download size={12} /> Download .zip</button>}{!external && <button type="button" onClick={() => setDeleting(true)} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] text-red-300 disabled:opacity-35"><Trash2 size={12} /> Delete</button>}<button type="button" title={loaded ? 'Reload from disk' : 'Load into chat'} onClick={() => contextOp(loaded ? 'ReloadSkills' : 'SetSkillsLoaded', true)} disabled={busy || stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35">{loaded && <RefreshCw size={12} />}{loaded ? 'Reload' : 'Load'}</button>{loaded && <button type="button" onClick={() => contextOp('SetSkillsLoaded', false)} disabled={busy || stale} className="rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35">Unload</button>}</>}
         {!external && <button type="button" onClick={() => mutate(isCreate ? 'create' : 'update')} disabled={!canSave || busy} className="flex items-center gap-1 rounded bg-koma-head px-3 py-1 text-[11px] disabled:opacity-35">{busy && saveAction === 'save' && !confirmationMissing && <BrailleSpinner size={12} />} Save</button>}
         {!isCreate && !external && loaded && sessionId && <button type="button" onClick={() => mutate('update', true)} disabled={!canSave || busy} className="flex items-center gap-1 rounded bg-koma-head px-3 py-1 text-[11px] disabled:opacity-35">{busy && saveAction === 'save-reload' && !confirmationMissing && <BrailleSpinner size={12} />} Save &amp; Reload</button>}

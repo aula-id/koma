@@ -61,6 +61,8 @@ export function Sidebar({ width, view }: SidebarProps) {
   // spinner for the actual fetch lifecycle, not a fixed timeout.
   const usagePreviewBusy = useKoma((s) => s.usagePreviewBusy)
   const mcpStatusBusy = useKoma((s) => s.mcpStatusBusy)
+  const refreshSkills = useKoma((s) => s.refreshSkills)
+  const skillsLoading = useKoma((s) => s.skillsLoading)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = () => {
@@ -124,6 +126,18 @@ export function Sidebar({ width, view }: SidebarProps) {
             className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
           >
             {mcpStatusBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
+          </button>
+        )}
+        {view === 'skills' && (
+          <button
+            type="button"
+            onClick={refreshSkills}
+            disabled={skillsLoading}
+            title="Rescan skill locations"
+            aria-label="Rescan skill locations"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
+          >
+            {skillsLoading ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
           </button>
         )}
         {view === 'importGraph' && (

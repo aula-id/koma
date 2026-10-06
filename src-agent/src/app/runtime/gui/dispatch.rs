@@ -667,16 +667,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GetSkills {
             request_id,
             session_epoch,
+            workspace,
         } => forward_or_host(
             &ctx.req,
             &ctx.ctl,
             ClientRequest::ListSkills {
                 request_id: request_id.clone(),
                 session_epoch,
+                workspace: workspace.clone(),
             },
             HostCtl::GetSkills {
                 request_id,
                 session_epoch,
+                workspace,
             },
         ),
         GuiReq::GetSkillDetail {

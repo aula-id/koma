@@ -27,7 +27,7 @@ beforeEach(() => {
     skillRequestId: null, skillSessionEpoch: 4, skillSelection: [], skillDetails: {},
     skillDetailPending: {}, skillDetailErrors: {}, skillFiles: {}, skillOutcomes: [], skillLastOp: null,
     skillDeletePending: {}, skillOpResults: {},
-    skillQuery: 'persist me', skillFilter: 'loaded',
+    skillQuery: 'persist me', skillFilter: 'global',
   }))
 })
 

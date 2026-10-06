@@ -258,7 +258,7 @@ declare global {
     | { r: 'SetEffort'; effort: string }
     // Dedicated Skills transport. Every request carries a session epoch and
     // correlation id; filesystem authority is only the opaque skillId + generation.
-    | { r: 'GetSkills'; requestId: string; sessionEpoch: number }
+    | { r: 'GetSkills'; requestId: string; sessionEpoch: number; workspace?: string }
     | {
         r: 'GetSkillDetail'
         skillId: string
