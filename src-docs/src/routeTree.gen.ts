@@ -28,6 +28,7 @@ import { Route as DocsGuiImportGraphRouteImport } from './routes/_docs/gui/impor
 import { Route as DocsGuiLayoutRouteImport } from './routes/_docs/gui/layout'
 import { Route as DocsGuiOauthRouteImport } from './routes/_docs/gui/oauth'
 import { Route as DocsGuiProviderModelRouteImport } from './routes/_docs/gui/provider-model'
+import { Route as DocsGuiSkillsRouteImport } from './routes/_docs/gui/skills'
 import { Route as DocsTuiIndexRouteImport } from './routes/_docs/tui/index'
 import { Route as DocsTuiCommandsAdddirRouteImport } from './routes/_docs/tui/commands-adddir'
 import { Route as DocsTuiCommandsAgentsRouteImport } from './routes/_docs/tui/commands-agents'
@@ -162,6 +163,11 @@ const DocsGuiOauthRoute = DocsGuiOauthRouteImport.update({
 const DocsGuiProviderModelRoute = DocsGuiProviderModelRouteImport.update({
   id: '/provider-model',
   path: '/provider-model',
+  getParentRoute: () => DocsGuiRoute,
+} as any)
+const DocsGuiSkillsRoute = DocsGuiSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
   getParentRoute: () => DocsGuiRoute,
 } as any)
 const DocsTuiIndexRoute = DocsTuiIndexRouteImport.update({
@@ -391,6 +397,7 @@ export interface FileRoutesByFullPath {
   '/gui/layout': typeof DocsGuiLayoutRoute
   '/gui/oauth': typeof DocsGuiOauthRoute
   '/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/gui/skills': typeof DocsGuiSkillsRoute
   '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -448,6 +455,7 @@ export interface FileRoutesByTo {
   '/gui/layout': typeof DocsGuiLayoutRoute
   '/gui/oauth': typeof DocsGuiOauthRoute
   '/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/gui/skills': typeof DocsGuiSkillsRoute
   '/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -511,6 +519,7 @@ export interface FileRoutesById {
   '/_docs/gui/layout': typeof DocsGuiLayoutRoute
   '/_docs/gui/oauth': typeof DocsGuiOauthRoute
   '/_docs/gui/provider-model': typeof DocsGuiProviderModelRoute
+  '/_docs/gui/skills': typeof DocsGuiSkillsRoute
   '/_docs/tui/commands-adddir': typeof DocsTuiCommandsAdddirRoute
   '/_docs/tui/commands-agents': typeof DocsTuiCommandsAgentsRoute
   '/_docs/tui/commands-all': typeof DocsTuiCommandsAllRoute
@@ -574,6 +583,7 @@ export interface FileRouteTypes {
     | '/gui/layout'
     | '/gui/oauth'
     | '/gui/provider-model'
+    | '/gui/skills'
     | '/tui/commands-adddir'
     | '/tui/commands-agents'
     | '/tui/commands-all'
@@ -631,6 +641,7 @@ export interface FileRouteTypes {
     | '/gui/layout'
     | '/gui/oauth'
     | '/gui/provider-model'
+    | '/gui/skills'
     | '/tui/commands-adddir'
     | '/tui/commands-agents'
     | '/tui/commands-all'
@@ -693,6 +704,7 @@ export interface FileRouteTypes {
     | '/_docs/gui/layout'
     | '/_docs/gui/oauth'
     | '/_docs/gui/provider-model'
+    | '/_docs/gui/skills'
     | '/_docs/tui/commands-adddir'
     | '/_docs/tui/commands-agents'
     | '/_docs/tui/commands-all'
@@ -876,6 +888,13 @@ declare module '@tanstack/react-router' {
       path: '/provider-model'
       fullPath: '/gui/provider-model'
       preLoaderRoute: typeof DocsGuiProviderModelRouteImport
+      parentRoute: typeof DocsGuiRoute
+    }
+    '/_docs/gui/skills': {
+      id: '/_docs/gui/skills'
+      path: '/skills'
+      fullPath: '/gui/skills'
+      preLoaderRoute: typeof DocsGuiSkillsRouteImport
       parentRoute: typeof DocsGuiRoute
     }
     '/_docs/tui/': {
@@ -1193,6 +1212,7 @@ interface DocsGuiRouteChildren {
   DocsGuiLayoutRoute: typeof DocsGuiLayoutRoute
   DocsGuiOauthRoute: typeof DocsGuiOauthRoute
   DocsGuiProviderModelRoute: typeof DocsGuiProviderModelRoute
+  DocsGuiSkillsRoute: typeof DocsGuiSkillsRoute
   DocsGuiIndexRoute: typeof DocsGuiIndexRoute
 }
 
@@ -1207,6 +1227,7 @@ const DocsGuiRouteChildren: DocsGuiRouteChildren = {
   DocsGuiLayoutRoute: DocsGuiLayoutRoute,
   DocsGuiOauthRoute: DocsGuiOauthRoute,
   DocsGuiProviderModelRoute: DocsGuiProviderModelRoute,
+  DocsGuiSkillsRoute: DocsGuiSkillsRoute,
   DocsGuiIndexRoute: DocsGuiIndexRoute,
 }
 
