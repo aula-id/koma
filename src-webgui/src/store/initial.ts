@@ -10,10 +10,21 @@ import type { ModelListEntry, RouteEntry } from '../types/config'
 
 export const ACTIVITY_BAR_STORAGE_KEY = 'koma.activitybar.layout'
 
+// Import Graph and Usage stay in the overflow menu until the user shows them.
+const DEFAULT_ACTIVITY_BAR_HIDDEN = ['importGraph', 'usage']
+// Bumped when the default hidden set changes, so an older saved layout picks
+// up the new defaults once. Later toggles are stored with this version and
+// are left alone.
+const ACTIVITY_BAR_LAYOUT_VERSION = 1
+
+function defaultActivityBarLayout(): ActivityBarLayout {
+  return { order: [], hidden: [...DEFAULT_ACTIVITY_BAR_HIDDEN] }
+}
+
 export function loadActivityBarLayout(): ActivityBarLayout {
   try {
     const raw = localStorage.getItem(ACTIVITY_BAR_STORAGE_KEY)
-    if (!raw) return { order: [], hidden: [] }
+    if (!raw) return defaultActivityBarLayout()
     const parsed = JSON.parse(raw)
     const order = Array.isArray(parsed?.order)
       ? parsed.order.filter((x: unknown): x is string => typeof x === 'string')
@@ -21,15 +32,26 @@ export function loadActivityBarLayout(): ActivityBarLayout {
     const hidden = Array.isArray(parsed?.hidden)
       ? parsed.hidden.filter((x: unknown): x is string => typeof x === 'string')
       : []
+    if (parsed?.v !== ACTIVITY_BAR_LAYOUT_VERSION) {
+      const migrated = {
+        order,
+        hidden: [...new Set([...hidden, ...DEFAULT_ACTIVITY_BAR_HIDDEN])],
+      }
+      saveActivityBarLayout(migrated)
+      return migrated
+    }
     return { order, hidden }
   } catch {
-    return { order: [], hidden: [] }
+    return defaultActivityBarLayout()
   }
 }
 
 export function saveActivityBarLayout(layout: ActivityBarLayout) {
   try {
-    localStorage.setItem(ACTIVITY_BAR_STORAGE_KEY, JSON.stringify(layout))
+    localStorage.setItem(
+      ACTIVITY_BAR_STORAGE_KEY,
+      JSON.stringify({ v: ACTIVITY_BAR_LAYOUT_VERSION, ...layout }),
+    )
   } catch {
     /* localStorage unavailable (e.g. privacy mode) — layout just won't persist */
   }
