@@ -14,6 +14,9 @@ pub const SKILL_UNLOAD_PREFIX: &str = "__skill_unload__::";
 /// Sentinel prefix on a successful `create` result. The runtime strips it and
 /// rebuilds the skill catalogue before the model sees the message.
 pub const SKILL_CREATE_PREFIX: &str = "__skill_create__::";
+/// Sentinel prefix on a successful `modify` result. The runtime strips it,
+/// rebuilds the catalogue, and refreshes the body if that skill is loaded.
+pub const SKILL_MODIFY_PREFIX: &str = "__skill_modify__::";
 
 /// Result when `load` is asked for a skill whose body is already in context.
 /// Not a load sentinel, so the runtime must not replace the stored body.
@@ -32,16 +35,18 @@ impl Tool for Skill {
     }
 
     fn description(&self) -> &'static str {
-        "Load, unload, list, or create an Agent Skill. action=\"load\" injects \
-         the body for this and later turns. If the skill is already active, \
-         load does not read the file or replace the body. action=\"unload\" \
-         removes it. action=\"list\" shows skills and marks active ones with \
-         [ACTIVE]. action=\"create\" makes a new skill. Do not use write or \
-         edit for skill files; those folders are outside the workspace. create \
-         needs name, description, and instruction. scope (or location) is \
-         project (default, this workspace) or global (every project). Only the \
-         main agent chat calls create. Dir-form skills list companion files in \
-         the load result — use `read` with absolute paths under skill_dir."
+        "Load, unload, list, create, or modify an Agent Skill. action=\"load\" \
+         injects the body for this and later turns. If the skill is already \
+         active, load does not read the file or replace the body. \
+         action=\"unload\" removes it. action=\"list\" shows skills and marks \
+         active ones with [ACTIVE]. action=\"create\" makes a new skill. \
+         action=\"modify\" changes an existing skill. Do not use write or edit \
+         for skill files; those folders are outside the workspace. create needs \
+         name, description, and instruction. modify needs name plus description \
+         or instruction (omit one to keep it). scope (or location) is project \
+         (default) or global, for create only. Only the main agent chat calls \
+         create and modify. Dir-form skills list companion files in the load \
+         result — use `read` with absolute paths under skill_dir."
     }
 
     fn parameters(&self) -> Value {
@@ -50,20 +55,20 @@ impl Tool for Skill {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load, unload, list, or create",
-                    "enum": ["load", "unload", "list", "create"]
+                    "description": "load, unload, list, create, or modify",
+                    "enum": ["load", "unload", "list", "create", "modify"]
                 },
                 "name": {
                     "type": "string",
-                    "description": "Skill name. Required for load, unload, and create. Lowercase words and hyphens, like review-notes."
+                    "description": "Skill name. Required for load, unload, create, and modify. Lowercase words and hyphens, like review-notes."
                 },
                 "description": {
                     "type": "string",
-                    "description": "create only. One line shown in the skill list."
+                    "description": "create: required. modify: new one-line list text. Omit on modify to keep the current line."
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "create only. Plain steps to follow when this skill is loaded."
+                    "description": "create: required. modify: new steps. Omit on modify to keep the current steps."
                 },
                 "scope": {
                     "type": "string",
@@ -125,6 +130,7 @@ impl Tool for Skill {
                 Ok(format!("{SKILL_UNLOAD_PREFIX}{name}"))
             }
             "create" => create_skill(ctx, args),
+            "modify" => modify_skill(ctx, args),
             "list" => {
                 let active = ctx.active_skill_names.as_deref().unwrap_or(&[]);
                 match ctx.skill_registry.as_ref() {
@@ -189,6 +195,48 @@ fn create_skill(ctx: &ToolCtx, args: &Value) -> Result<String> {
     Ok(format!(
         "{SKILL_CREATE_PREFIX}Created {scope_label} skill '{name}'.\nPath: {shown}\nIt is not loaded yet. Next, call skill({{\"action\":\"load\",\"name\":\"{name}\"}})."
     ))
+}
+
+fn modify_skill(ctx: &ToolCtx, args: &Value) -> Result<String> {
+    let name = required_text(args, "name")?.to_lowercase();
+    let description = optional_text(args, "description");
+    let instruction = optional_text(args, "instruction");
+    if description.is_none() && instruction.is_none() {
+        anyhow::bail!("modify needs description or instruction");
+    }
+    let registry = ctx
+        .skill_registry
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("unknown skill: {name}"))?;
+    let skill = registry
+        .get(&name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("unknown skill: {name}"))?;
+    let description = description.unwrap_or(skill.description.as_str());
+    let instruction = instruction.unwrap_or(skill.body.as_str());
+    let path = crate::model::skill::update_owned_skill(
+        registry,
+        &skill.skill_id,
+        &skill.generation,
+        &skill.name,
+        &crate::model::skill::SkillEdit {
+            description: description.to_string(),
+            triggers: skill.triggers.clone(),
+            allowed_tools: skill.allowed_tools.clone(),
+            instruction: instruction.to_string(),
+        },
+    )?;
+    let shown = path.to_string_lossy().replace('\\', "/");
+    Ok(format!(
+        "{SKILL_MODIFY_PREFIX}{name}\nUpdated skill '{name}'.\nPath: {shown}\nIf it is already loaded, the new text replaces the old one. Otherwise call skill({{\"action\":\"load\",\"name\":\"{name}\"}})."
+    ))
+}
+
+fn optional_text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
 }
 
 fn required_text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -310,5 +358,43 @@ mod tests {
             .to_string();
         assert!(error.contains("project"));
         assert!(error.contains("global"));
+    }
+
+    #[test]
+    fn skill_modify_changes_the_instruction_and_keeps_the_description() {
+        let root = std::env::temp_dir().join(format!("koma-skill-modify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ctx = ctx(None);
+        ctx.workspace = root.clone();
+        ctx.workspaces = vec![root.clone()];
+        Skill
+            .run(
+                &ctx,
+                &json!({
+                    "action": "create",
+                    "name": "wdym",
+                    "description": "Explain a short confusing phrase.",
+                    "instruction": "Restate the last message."
+                }),
+            )
+            .unwrap();
+        ctx.skill_registry = Some(crate::model::skill::SkillRegistry::load(Some(&root), &[]));
+        let result = Skill
+            .run(
+                &ctx,
+                &json!({
+                    "action": "modify",
+                    "name": "wdym",
+                    "instruction": "Restate the last message, then give one example."
+                }),
+            )
+            .unwrap();
+        assert!(result.starts_with(SKILL_MODIFY_PREFIX));
+        let body = std::fs::read_to_string(root.join(".agents/skills/wdym/SKILL.md")).unwrap();
+        assert!(body.contains("description: Explain a short confusing phrase."));
+        assert!(body.contains("then give one example"));
+        assert!(!body.contains("Restate the last message.\n"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

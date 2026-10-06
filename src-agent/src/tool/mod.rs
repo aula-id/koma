@@ -806,7 +806,7 @@ fn outside_workspace_message(path: &str, ws_idx: usize) -> String {
         || lower.contains("/.claude/skills/");
     if skill_file {
         format!(
-            "path '{shown}' is outside workspace [{ws_idx}]. Skill files are not written with write. Use skill with action create."
+            "path '{shown}' is outside workspace [{ws_idx}]. Skill files are not written with write. Use skill with action create or modify."
         )
     } else {
         format!("path '{shown}' is outside workspace [{ws_idx}]")

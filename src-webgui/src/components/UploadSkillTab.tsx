@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Upload } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
+import { Field } from './panels/form'
 import { insideSkillProject } from './skillProject'
 import { showToast } from '../lib/toast'
+
+const actionBtn = 'flex items-center gap-1 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40'
 
 const MAX_ZIP_BYTES = 64 * 1024 * 1024
 let uploadSeq = 0
@@ -99,21 +103,43 @@ export default function UploadSkillTab() {
   return (
     <div className="flex h-full min-w-0 flex-col bg-koma-bg text-koma-fg">
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5 py-5 sm:px-8">
-          <header className="border-b border-koma-border pb-3">
-            <h2 className="text-[15px] font-semibold">Upload skill (.zip)</h2>
-            <p className="mt-0.5 text-[11px] opacity-50">Install a bounded packaged skill into Global or Project scope</p>
-          </header>
+        <div className="mx-auto flex max-w-3xl flex-col gap-1 px-8 py-6">
+          <div className="mb-4 border-b border-koma-border pb-2">
+            <h2 className="text-[15px] font-semibold text-koma-fg">Upload skill (.zip)</h2>
+            <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">Install a packaged skill into Global or Project scope.</p>
+          </div>
 
           {!success && <>
-            <div className="text-[11px]"><span className="mb-1 block opacity-60">Target scope</span><div className="flex gap-1">{(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={busy || !insideProject} title={!insideProject ? (value === 'project' ? 'Open a project to install a Project skill' : 'Open a project to add a skill') : undefined} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'} disabled:opacity-30`}>{value === 'global' ? 'Global' : 'Project'}</button>)}</div>{!insideProject && <span className="mt-1 block opacity-45">Open a project to add a skill. Project scope stays unavailable until then.</span>}</div>
-            <button type="button" onClick={chooseFile} disabled={busy || !insideProject} title={insideProject ? undefined : 'Open a project to add a skill'} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] opacity-65 hover:border-koma-accent hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35"><Upload size={18} />{busy ? 'Installing…' : selectedFile ? `Choose another ZIP (${selectedFile})` : 'Choose .zip package'}</button>
-            <input ref={inputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
-            <p className="text-[10px] text-koma-dim">ZIP up to 64 MiB. Must contain a valid SKILL.md.</p>
+            <Field label="Target scope">
+              <div className="flex gap-1">
+                {(['global', 'project'] as const).map((value) => (
+                  <button
+                    type="button"
+                    key={value}
+                    disabled={busy || !insideProject}
+                    title={!insideProject ? (value === 'project' ? 'Open a project to install a Project skill' : 'Open a project to add a skill') : undefined}
+                    onClick={() => setScope(value)}
+                    aria-pressed={scope === value}
+                    className={`rounded border px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40 ${scope === value ? 'border-koma-accent bg-koma-accent/15' : 'border-koma-border'}`}
+                  >
+                    {value === 'global' ? 'Global' : 'Project'}
+                  </button>
+                ))}
+              </div>
+              {!insideProject && <span className="text-[11px] text-koma-fg opacity-45">Open a project to add a skill. Project scope stays unavailable until then.</span>}
+            </Field>
+            <div className="px-3 py-1.5">
+              <button type="button" onClick={chooseFile} disabled={busy || !insideProject} title={insideProject ? undefined : 'Open a project to add a skill'} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] text-koma-fg transition-colors hover:border-koma-accent hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40">
+                {busy ? <BrailleSpinner size={16} /> : <Upload size={18} className="text-koma-accent" />}
+                {busy ? 'Installing…' : selectedFile ? `Choose another ZIP (${selectedFile})` : 'Choose .zip package'}
+              </button>
+              <input ref={inputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
+              <p className="mt-2 text-[11px] text-koma-fg opacity-45">ZIP up to 64 MiB. Must contain a valid SKILL.md.</p>
+            </div>
             {/* Keep these limits aligned with src-agent/src/model/skill/persistence.rs and its safety tests. */}
-            <details className="rounded border border-koma-border px-2 py-2 text-koma-fg">
-              <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider opacity-60">Package requirements</summary>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-[10px] leading-relaxed text-koma-dim">
+            <details className="mx-3 rounded border border-koma-border px-3 py-2 text-koma-fg">
+              <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">Package requirements</summary>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-koma-fg opacity-45">
                 <li>Maximum 1,000 files and folder depth 16.</li>
                 <li>Maximum 8 MiB per companion file.</li>
                 <li>Maximum 2 MiB for SKILL.md.</li>
@@ -124,7 +150,9 @@ export default function UploadSkillTab() {
           </>}
         </div>
       </div>
-      <div className="flex-none border-t border-koma-border px-5 py-3 sm:px-8"><button type="button" onClick={() => closeTab('upload-skill')} disabled={busy} className="rounded border border-koma-border px-3 py-1.5 text-[11px] opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:opacity-30">Cancel</button></div>
+      <footer className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-koma-border px-4 py-2.5">
+        <button type="button" onClick={() => closeTab('upload-skill')} disabled={busy} className={actionBtn}>Cancel</button>
+      </footer>
     </div>
   )
 }

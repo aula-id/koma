@@ -226,8 +226,10 @@ pub fn build_system_prompt(
                  Unload with action=unload when done. \
                  Create a skill with skill({\"action\":\"create\",\"name\":\"...\",\
                  \"description\":\"...\",\"instruction\":\"...\"}). scope is \
-                 project (default) or global. Do not use write or edit; skill \
-                 folders are outside the workspace. \
+                 project (default) or global. Change one with \
+                 skill({\"action\":\"modify\",\"name\":\"...\",\"instruction\":\"...\"}). \
+                 Omit description or instruction on modify to keep it. Do not \
+                 use write or edit; skill folders are outside the workspace. \
                  Dir-form skills list companion files in the load result; \
                  read them with `read` using absolute paths under skill_dir.\n",
             );
