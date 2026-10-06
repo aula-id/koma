@@ -327,7 +327,8 @@ pub(super) fn finish_tool_round(
 
     // Live reload: if `remember` or `forget` ran this round, re-inject the updated
     // MEMORY.md into messages[0] so the model sees the change immediately.
-    // (`recall` is read-only and must NOT trigger a rebuild.)
+    // (`recall` is read-only and must NOT trigger a rebuild.) A created skill
+    // rebuilds inside the skill intercept, when action=create succeeds.
     let memory_mutated = state.rest.sessions[sess_idx]
         .pending_tool_calls
         .iter()

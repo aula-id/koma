@@ -511,7 +511,8 @@ pub struct ToolCtx {
     pub ssh_key: Option<String>,
     /// Skill catalogue snapshot from the session.
     pub skill_registry: Option<crate::model::skill::SkillRegistry>,
-    /// Names of currently active (loaded) skills, for the `list` action.
+    /// Names of currently active (loaded) skills. `list` marks them, and
+    /// `load` refuses to replace a body that is already in context.
     pub active_skill_names: Option<Vec<String>>,
     /// The GLOBAL MCP client manager.
     pub mcp_manager: Option<Arc<crate::app::mcp::McpManager>>,
@@ -790,9 +791,26 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
     let joined = ws.join(bare);
     let candidate = partial_canonicalize(&joined);
     if !candidate.starts_with(&ws) {
-        bail!("path '{bare}' is outside workspace [{ws_idx}]");
+        bail!("{}", outside_workspace_message(bare, ws_idx));
     }
     Ok(candidate)
+}
+
+fn outside_workspace_message(path: &str, ws_idx: usize) -> String {
+    let shown = path.replace('\\', "/");
+    let lower = shown.to_ascii_lowercase();
+    let skill_file = lower.ends_with("/skill.md")
+        || lower.contains("/.koma/skills/")
+        || lower.contains("/.agents/skills/")
+        || lower.contains("/.agent/skills/")
+        || lower.contains("/.claude/skills/");
+    if skill_file {
+        format!(
+            "path '{shown}' is outside workspace [{ws_idx}]. Skill files are not written with write. Use skill with action create or modify."
+        )
+    } else {
+        format!("path '{shown}' is outside workspace [{ws_idx}]")
+    }
 }
 
 /// Resolve a path for READ-ONLY tools, forgiving a dropped [N] prefix.

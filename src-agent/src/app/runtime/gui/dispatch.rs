@@ -664,6 +664,294 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        GuiReq::GetSkills {
+            request_id,
+            session_epoch,
+            workspace,
+        } => forward_or_host(
+            &ctx.req,
+            &ctx.ctl,
+            ClientRequest::ListSkills {
+                request_id: request_id.clone(),
+                session_epoch,
+                workspace: workspace.clone(),
+            },
+            HostCtl::GetSkills {
+                request_id,
+                session_epoch,
+                workspace,
+            },
+        ),
+        GuiReq::GetSkillDetail {
+            skill_id,
+            generation,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => forward_or_host(
+            &ctx.req,
+            &ctx.ctl,
+            ClientRequest::GetSkillDetail {
+                skill_id: skill_id.clone(),
+                generation: generation.clone(),
+                request_id: request_id.clone(),
+                session_epoch,
+                tab_id: tab_id.clone(),
+            },
+            HostCtl::GetSkillDetail {
+                skill_id,
+                generation,
+                request_id,
+                session_epoch,
+                tab_id,
+            },
+        ),
+        GuiReq::ReadSkillFile {
+            skill_id,
+            generation,
+            path,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => forward_or_host(
+            &ctx.req,
+            &ctx.ctl,
+            ClientRequest::ReadSkillFile {
+                skill_id: skill_id.clone(),
+                generation: generation.clone(),
+                path: path.clone(),
+                request_id: request_id.clone(),
+                session_epoch,
+                tab_id: tab_id.clone(),
+            },
+            HostCtl::ReadSkillFile {
+                skill_id,
+                generation,
+                path,
+                request_id,
+                session_epoch,
+                tab_id,
+            },
+        ),
+        GuiReq::SetSkillsLoaded {
+            names,
+            loaded,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => forward_or_host(
+            &ctx.req,
+            &ctx.ctl,
+            ClientRequest::SetSkillsLoaded {
+                names: names.clone(),
+                loaded,
+                request_id: request_id.clone(),
+                session_epoch,
+                tab_id: tab_id.clone(),
+            },
+            HostCtl::SetSkillsLoaded {
+                names,
+                loaded,
+                request_id,
+                session_epoch,
+                tab_id,
+            },
+        ),
+        GuiReq::ReloadSkills {
+            names,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::ReloadSkills {
+                names,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::CreateSkill {
+            target,
+            name,
+            description,
+            triggers,
+            allowed_tools,
+            instruction,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::CreateSkill {
+                target,
+                name,
+                description,
+                triggers,
+                allowed_tools,
+                instruction,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::InstallSkillZip {
+            target,
+            name,
+            data_b64,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::InstallSkillZip {
+                target,
+                name,
+                data_b64,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::DownloadSkillZip {
+            skill_id,
+            generation,
+            name,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let req = ctx.req.clone();
+            let ctl = ctx.ctl.clone();
+            std::thread::spawn(move || {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("ZIP archive", &["zip"])
+                    .set_file_name(format!("{name}.zip"))
+                    .save_file()
+                else {
+                    return;
+                };
+                let request = ClientRequest::DownloadSkillZip {
+                    skill_id,
+                    generation,
+                    save_path: path.to_string_lossy().into_owned(),
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                };
+                forward_or_host(&req, &ctl, request.clone(), HostCtl::SkillMutation(request));
+            });
+        }
+        GuiReq::UpdateSkill {
+            skill_id,
+            generation,
+            name,
+            description,
+            triggers,
+            allowed_tools,
+            instruction,
+            reload_after_save,
+            target_session_id,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::UpdateSkill {
+                skill_id,
+                generation,
+                name,
+                description,
+                triggers,
+                allowed_tools,
+                instruction,
+                reload_after_save,
+                target_session_id,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::DuplicateSkills {
+            target,
+            items,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::DuplicateSkills {
+                target,
+                items,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::DeleteSkills {
+            items,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::DeleteSkills {
+                items,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+        GuiReq::SetExtraSkillRoots {
+            roots,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let request = ClientRequest::SetExtraSkillRoots {
+                roots,
+                request_id,
+                session_epoch,
+                tab_id,
+            };
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                request.clone(),
+                HostCtl::SkillMutation(request),
+            );
+        }
+
         // /agents dashboard open/refresh: dual-routed like GetSettings — the attached
         // daemon (or the un-attached host) answers with an `AgentsValues` reply the host
         // re-pushes, so the dashboard populates in both host states.

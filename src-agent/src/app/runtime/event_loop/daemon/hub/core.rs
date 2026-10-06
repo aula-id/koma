@@ -23,6 +23,7 @@ const MODE_SNAPSHOT_TTL: Duration = Duration::from_millis(100);
 // `pub(crate)` (not `pub(in crate::app::runtime)`) so the per-client connection
 // task in `crate::ipc::conn` — which lives OUTSIDE this module tree — can build and
 // send these. Re-exported as `crate::app::runtime::HubInbound`.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum HubInbound {
     /// A new connection: enrol this client's frame channel (NOT yet attached — it
     /// goes live only when its `Attach` is handled, critique #2).
@@ -114,6 +115,23 @@ pub(super) enum StoreReply {
         ok: bool,
         payload: Option<serde_json::Value>,
         error: Option<String>,
+    },
+    /// Bounded filesystem skill mutation completed off the event-loop thread.
+    SkillMutation {
+        client_id: u64,
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+        operation: String,
+        outcomes: Vec<crate::model::skill::SkillItemOutcome>,
+        /// Combined update only: initiating chat, skill identity and the exact
+        /// post-write generation observed by the worker (if Save succeeded).
+        reload_target: Option<(String, String, String, String)>,
+        /// Previous directory name when this update renamed an owned skill.
+        renamed_from: Option<String>,
+        /// `None` means a Global mutation (all sessions); `Some` scopes rebuilds
+        /// to sessions whose workdir matches this project.
+        affected_project: Option<std::path::PathBuf>,
     },
 }
 
@@ -259,6 +277,10 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// state change; it's an unconditional belt-and-suspenders reset. Consumed (reset to
     /// `false`) at the top of `stream_deltas`.
     pub(super) force_resync: bool,
+    /// Last project workspace the Skills panel asked to scan. Empty means the
+    /// session's primary workdir. Follow-up catalogue refreshes reuse it so a
+    /// save does not jump the Project tab back to the primary root.
+    pub(super) skill_workspace: String,
 }
 
 impl DaemonHub {
@@ -290,6 +312,7 @@ impl DaemonHub {
                 store_tx,
                 store_rx,
                 force_resync: false,
+                skill_workspace: String::new(),
             },
             msg_tx,
         )

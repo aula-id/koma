@@ -427,6 +427,44 @@ pub(crate) enum HostCtl {
     /// DEFAULTS, and an EMPTY `name`/`workdir`. ALWAYS pushes a `SettingsValues` reply so
     /// the Settings tab's loading state can never hang.
     GetSettings,
+    /// UN-ATTACHED body-free Skills catalogue. With no foreground session this
+    /// includes Global and configured External roots and an empty Loaded set.
+    GetSkills {
+        request_id: String,
+        session_epoch: u64,
+        workspace: String,
+    },
+    /// UN-ATTACHED lazy Skills detail. Project-only identities naturally return
+    /// stale/unavailable because no session workdir is authoritative.
+    GetSkillDetail {
+        skill_id: String,
+        generation: String,
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+    },
+    /// UN-ATTACHED allow-listed companion-file read.
+    ReadSkillFile {
+        skill_id: String,
+        generation: String,
+        path: String,
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+    },
+    /// UN-ATTACHED Load/Unload attempt. The host returns a correlated failure for
+    /// every item because Loaded state requires an authoritative foreground chat.
+    SetSkillsLoaded {
+        names: Vec<String>,
+        loaded: bool,
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+    },
+    /// UN-ATTACHED owned skill mutation or explicit Reload. The host executes
+    /// filesystem-only operations against global/configured roots; operations that
+    /// require a foreground project/session return correlated failures.
+    SkillMutation(ClientRequest),
     /// UN-ATTACHED GUI /agents fetch (a [`ClientRequest::ListAgents`] serviced by the
     /// swapper / start-screen host). The host answers from `load_registry(None)` (built-in +
     /// global agents only) + the GLOBAL config catalogue. ALWAYS pushes an `AgentsValues`

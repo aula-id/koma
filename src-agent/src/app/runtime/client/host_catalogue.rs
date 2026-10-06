@@ -125,6 +125,30 @@ pub(super) async fn fetch_routes_for_provider(
         .unwrap_or_default()
 }
 
+fn host_skill_registry() -> crate::model::skill::SkillRegistry {
+    let config = crate::model::app_config::AppConfig::load();
+    crate::model::skill::SkillRegistry::load(None, &config.extra_skill_roots)
+}
+
+pub(super) fn build_host_skill_values() -> Vec<crate::model::skill::SkillCatalogueEntry> {
+    host_skill_registry().catalogue()
+}
+
+pub(super) fn build_host_skill_detail(
+    skill_id: &str,
+    generation: &str,
+) -> anyhow::Result<crate::model::skill::SkillDetail> {
+    host_skill_registry().detail_by_identity(skill_id, generation)
+}
+
+pub(super) fn read_host_skill_file(
+    skill_id: &str,
+    generation: &str,
+    path: &str,
+) -> anyhow::Result<String> {
+    host_skill_registry().read_companion_text(skill_id, generation, path)
+}
+
 /// Build the UN-ATTACHED GUI /agents reply (a [`super::HostCtl::GetAgents`] serviced by the
 /// swapper / start-screen): the built-in + global agent roster (`load_registry(None)` — no
 /// session overlay) plus the GLOBAL model / provider catalogue off the loaded config.

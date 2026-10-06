@@ -1,3 +1,4 @@
+import type { SkillCatalogueEntry, SkillDetail, SkillItemOutcome } from './skills'
 import type { GitReply } from '../../lib/gitWorkbench'
 import type { LspDiagnostic } from '../../lib/lsp-bridge'
 import type { ContentSearchFileHit, FileTreeEntry } from '../coding'
@@ -51,6 +52,7 @@ export type PushEnvelope =
       // pause or a non-classifier park). Optional-tolerant: a host build that
       // doesn't project these yet leaves the gate closed.
       awaitingApproval?: boolean
+      loadedSkillNames?: string[]
       modelRoutes?: ModelRoute[]
       approvalReason?: string | null
       pendingCall?: PendingCall | null
@@ -255,6 +257,7 @@ export type PushEnvelope =
       maxOutputTokens?: number
       contextWindowLimit?: number
       contextModelAlias?: string
+      extraSkillRoots?: string[]
     }
   // Reply to GuiReq GetEffortOptions — the composer EffortPicker's derived
   // `/effort` menu for the foreground session's current model. ALWAYS a reply
@@ -281,6 +284,33 @@ export type PushEnvelope =
   // tolerant (defaults to [] in the reducer) for an older host build that
   // doesn't project it yet — the AgentTab tools chip grid then just has
   // nothing to offer beyond whatever an existing agent already carries.
+  | {
+      k: 'SkillValues'
+      requestId: string
+      sessionEpoch: number
+      skills: SkillCatalogueEntry[]
+      loadedSkillNames: string[]
+      error: string | null
+    }
+  | {
+      k: 'SkillDetailValues'
+      requestId: string
+      sessionEpoch: number
+      tabId: string
+      detail: SkillDetail | null
+      filePath: string | null
+      fileContent: string | null
+      error: string | null
+    }
+  | {
+      k: 'SkillOp'
+      requestId: string
+      sessionEpoch: number
+      tabId: string
+      operation: string
+      outcomes: SkillItemOutcome[]
+      loadedSkillNames: string[]
+    }
   | {
       k: 'AgentsValues'
       reqSeq: number // 0 = no correlation (read-only fetch / host-built fallback)

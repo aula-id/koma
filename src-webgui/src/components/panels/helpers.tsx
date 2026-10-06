@@ -124,16 +124,26 @@ export function AddBtn({
   )
 }
 
-export function DetailHeader({ onBack, title }: { onBack: () => void; title: string }) {
+export function DetailHeader({
+  onBack,
+  title,
+  backTourId = 'connector-back',
+  tourId = 'connector-detail-header',
+}: {
+  onBack: () => void
+  title: string
+  backTourId?: string
+  tourId?: string
+}) {
   return (
     <div
       className="flex h-8 flex-none items-center gap-1 border-b border-koma-border px-2"
-      data-tour="connector-detail-header"
+      data-tour={tourId}
     >
       <button
         onClick={onBack}
         aria-label="Back"
-        data-tour="connector-back"
+        data-tour={backTourId}
         className="flex h-6 w-6 items-center justify-center rounded text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
       >
         <ChevronLeft size={16} />

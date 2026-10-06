@@ -118,6 +118,11 @@ pub fn session_snapshot(
             .map(pending_subagent_snapshot)
             .collect(),
         resolved_model_id,
+        loaded_skill_names: if rt.active_skills.is_empty() {
+            rt.projected_loaded_skill_names.iter().cloned().collect()
+        } else {
+            rt.active_skills.keys().cloned().collect()
+        },
         model_routes: rt
             .session
             .as_ref()

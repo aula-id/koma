@@ -43,6 +43,10 @@ pub struct SessionSnapshot {
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
+    /// Session-scoped skill names loaded into the current chat context.
+    /// Body-free and version-tolerant; sorted by the BTree map/set source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaded_skill_names: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_routes: Vec<crate::app::resolve::RoleResolution>,
     /// Queued mid-turn follow-up / steer messages (full text). Drives the pending

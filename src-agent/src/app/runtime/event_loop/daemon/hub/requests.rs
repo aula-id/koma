@@ -246,6 +246,67 @@ impl DaemonHub {
                 self.get_settings(idx, state);
             }
 
+            ClientRequest::ListSkills {
+                request_id,
+                session_epoch,
+                workspace,
+            } => self.list_skills(idx, state, request_id, session_epoch, workspace),
+            ClientRequest::GetSkillDetail {
+                skill_id,
+                generation,
+                request_id,
+                session_epoch,
+                tab_id,
+            } => self.get_skill_detail(
+                idx,
+                state,
+                skill_id,
+                generation,
+                request_id,
+                session_epoch,
+                tab_id,
+            ),
+            ClientRequest::ReadSkillFile {
+                skill_id,
+                generation,
+                path,
+                request_id,
+                session_epoch,
+                tab_id,
+            } => self.read_skill_file(
+                idx,
+                state,
+                skill_id,
+                generation,
+                path,
+                request_id,
+                session_epoch,
+                tab_id,
+            ),
+            request @ ClientRequest::SetSkillsLoaded { .. } => {
+                self.set_skills_loaded(idx, state, request);
+            }
+            ClientRequest::ReloadSkills {
+                names,
+                request_id,
+                session_epoch,
+                tab_id,
+            } => self.reload_skills(idx, state, names, request_id, session_epoch, tab_id),
+            ClientRequest::SetExtraSkillRoots {
+                roots,
+                request_id,
+                session_epoch,
+                tab_id,
+            } => self.set_extra_skill_roots(idx, state, roots, request_id, session_epoch, tab_id),
+            request @ (ClientRequest::CreateSkill { .. }
+            | ClientRequest::InstallSkillZip { .. }
+            | ClientRequest::DownloadSkillZip { .. }
+            | ClientRequest::UpdateSkill { .. }
+            | ClientRequest::DuplicateSkills { .. }
+            | ClientRequest::DeleteSkills { .. }) => {
+                self.spawn_skill_mutation(idx, state, request, handle);
+            }
+
             // GUI /agents dashboard read: reply with a one-shot `AgentsValues`.
             ClientRequest::ListAgents => {
                 self.list_agents(idx, state);
@@ -815,6 +876,18 @@ impl DaemonHub {
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
             | ClientRequest::GetSettings
+            | ClientRequest::ListSkills { .. }
+            | ClientRequest::GetSkillDetail { .. }
+            | ClientRequest::ReadSkillFile { .. }
+            | ClientRequest::SetSkillsLoaded { .. }
+            | ClientRequest::ReloadSkills { .. }
+            | ClientRequest::CreateSkill { .. }
+            | ClientRequest::InstallSkillZip { .. }
+            | ClientRequest::DownloadSkillZip { .. }
+            | ClientRequest::UpdateSkill { .. }
+            | ClientRequest::DuplicateSkills { .. }
+            | ClientRequest::DeleteSkills { .. }
+            | ClientRequest::SetExtraSkillRoots { .. }
             | ClientRequest::ListAgents
             | ClientRequest::GetEffortOptions
             | ClientRequest::SetStreamView { .. }
@@ -878,6 +951,13 @@ impl DaemonHub {
             max_output_tokens: s.max_output_tokens,
             context_window_limit: s.context_window_limit,
             context_model_alias: s.context_model_alias.clone(),
+            extra_skill_roots: state
+                .rest
+                .config
+                .extra_skill_roots
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
         };
         self.send_to(idx, event);
     }

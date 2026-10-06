@@ -459,7 +459,7 @@ target [0] (primary):",
         // Load the skill catalogue from known discovery roots. The registry
         // snapshot is stored on `self.skills` so the `skill` tool can resolve
         // names to file paths at load/unload time.
-        let skills_reg = SkillRegistry::load(Some(&self.workdir()));
+        let skills_reg = SkillRegistry::load(Some(&self.workdir()), &config.extra_skill_roots);
         let skills_cat = {
             let t = skills_reg.catalogue_text();
             if t.is_empty() {

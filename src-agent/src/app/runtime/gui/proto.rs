@@ -752,6 +752,149 @@ pub(super) enum GuiReq {
         effort: String,
     },
 
+    // ─── GUI Skills surface ──────────────────────────────────────────────────────
+    GetSkills {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        /// Selected project workspace. Empty scans the primary workdir.
+        #[serde(default)]
+        workspace: String,
+    },
+    GetSkillDetail {
+        #[serde(rename = "skillId")]
+        skill_id: String,
+        generation: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    ReadSkillFile {
+        #[serde(rename = "skillId")]
+        skill_id: String,
+        generation: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    SetSkillsLoaded {
+        names: Vec<String>,
+        loaded: bool,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    ReloadSkills {
+        names: Vec<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    CreateSkill {
+        target: String,
+        name: String,
+        description: String,
+        #[serde(default)]
+        triggers: String,
+        #[serde(default, rename = "allowedTools")]
+        allowed_tools: Vec<String>,
+        instruction: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    InstallSkillZip {
+        target: String,
+        name: String,
+        #[serde(rename = "dataB64")]
+        data_b64: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    DownloadSkillZip {
+        #[serde(rename = "skillId")]
+        skill_id: String,
+        generation: String,
+        name: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    UpdateSkill {
+        #[serde(rename = "skillId")]
+        skill_id: String,
+        generation: String,
+        name: String,
+        description: String,
+        #[serde(default)]
+        triggers: String,
+        #[serde(default, rename = "allowedTools")]
+        allowed_tools: Vec<String>,
+        instruction: String,
+        #[serde(default, rename = "reloadAfterSave")]
+        reload_after_save: bool,
+        #[serde(default, rename = "targetSessionId")]
+        target_session_id: Option<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    DuplicateSkills {
+        target: String,
+        items: Vec<crate::model::skill::SkillDuplicateInput>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    DeleteSkills {
+        items: Vec<crate::model::skill::SkillIdentityInput>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    SetExtraSkillRoots {
+        roots: Vec<String>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────────
     /// The /agents dashboard opened / refreshed: fetch the merged sub-agent registry +
     /// model / provider catalogue. Dual-routed like `GetSettings` via [`forward_or_host`] —
@@ -1349,4 +1492,72 @@ pub(super) enum GuiReq {
     TerminalKill {
         id: String,
     },
+}
+
+#[cfg(test)]
+mod skill_wire_tests {
+    use super::GuiReq;
+
+    #[test]
+    fn browser_skill_mutations_accept_camel_case_identity_fields() {
+        let duplicate: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "DuplicateSkills",
+            "target": "global",
+            "items": [{
+                "skillId": "opaque",
+                "generation": "generation",
+                "name": "review",
+                "destinationName": "review-copy"
+            }],
+            "requestId": "duplicate-1",
+            "sessionEpoch": 4,
+            "tabId": "duplicate-dialog"
+        }))
+        .expect("duplicate request");
+        match duplicate {
+            GuiReq::DuplicateSkills { items, .. } => {
+                assert_eq!(items[0].name, "review");
+                assert_eq!(items[0].destination_name, "review-copy");
+            }
+            _ => panic!("unexpected request"),
+        }
+
+        let upload: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "InstallSkillZip",
+            "target": "project",
+            "name": "packaged",
+            "dataB64": "UEsDBA==",
+            "requestId": "upload-1",
+            "sessionEpoch": 4,
+            "tabId": "upload-skill"
+        }))
+        .expect("upload request");
+        assert!(
+            matches!(upload, GuiReq::InstallSkillZip { data_b64, .. } if data_b64 == "UEsDBA==")
+        );
+
+        let download: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "DownloadSkillZip",
+            "skillId": "opaque",
+            "generation": "generation",
+            "name": "review",
+            "requestId": "download-1",
+            "sessionEpoch": 4,
+            "tabId": "skill:opaque"
+        }))
+        .expect("download request");
+        assert!(
+            matches!(download, GuiReq::DownloadSkillZip { skill_id, .. } if skill_id == "opaque")
+        );
+
+        let roots: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "SetExtraSkillRoots",
+            "roots": ["/opt/shared-skills"],
+            "requestId": "roots-1",
+            "sessionEpoch": 4,
+            "tabId": "settings-skills"
+        }))
+        .expect("roots request");
+        assert!(matches!(roots, GuiReq::SetExtraSkillRoots { .. }));
+    }
 }

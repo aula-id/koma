@@ -26,14 +26,16 @@ use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_analytics, compute_file_diff, compute_usage_preview};
 use super::git_host;
 use super::host_catalogue::{
-    build_host_agents_values, build_host_oauth_state, fetch_models_for_provider,
-    fetch_routes_for_provider,
+    build_host_agents_values, build_host_oauth_state, build_host_skill_detail,
+    build_host_skill_values, fetch_models_for_provider, fetch_routes_for_provider,
+    read_host_skill_file,
 };
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
     push_agents_values, push_analytics, push_file_diff, push_model_list, push_oauth_state,
-    push_remote_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
+    push_remote_state, push_route_list, push_settings_values, push_skill_detail_values,
+    push_skill_op, push_skill_values, push_switching, push_usage_preview,
 };
 use super::store_host;
 use super::swapper::build_local_hub;
@@ -551,6 +553,321 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 struct HostLocalManagers {
     terminal: std::sync::Arc<std::sync::Mutex<super::terminal_host::TerminalManager>>,
     lsp: std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
+}
+
+fn handle_detached_skill_mutation(push: &dyn Fn(String), request: ClientRequest) {
+    use crate::model::skill::{
+        create_owned_skill, delete_owned_skill, duplicate_to_owned, export_owned_skill_zip,
+        install_owned_skill_zip, update_owned_skill, OwnedSkillTarget, SkillEdit, SkillItemOutcome,
+        SkillRegistry,
+    };
+
+    let mut config = crate::model::app_config::AppConfig::load();
+    let configured_roots = config.extra_skill_roots.clone();
+    let registry = || SkillRegistry::load(None, &configured_roots);
+    let outcome = |name: String, result: anyhow::Result<std::path::PathBuf>| SkillItemOutcome {
+        name,
+        status: if result.is_ok() { "success" } else { "failed" }.to_string(),
+        error: result.err().map(|error| error.to_string()),
+    };
+    let unavailable_project = || anyhow::anyhow!("Project scope requires an active chat");
+
+    let (request_id, session_epoch, tab_id, operation, outcomes) = match request {
+        ClientRequest::ReloadSkills {
+            names,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => (
+            request_id,
+            session_epoch,
+            tab_id,
+            "reload".to_string(),
+            names
+                .into_iter()
+                .map(|name| SkillItemOutcome {
+                    name,
+                    status: "failed".to_string(),
+                    error: Some("Open a chat to reload skills".to_string()),
+                })
+                .collect(),
+        ),
+        ClientRequest::CreateSkill {
+            target,
+            name,
+            description,
+            triggers,
+            allowed_tools,
+            instruction,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let result = OwnedSkillTarget::parse(&target).and_then(|target| {
+                if target == OwnedSkillTarget::Project {
+                    return Err(unavailable_project());
+                }
+                create_owned_skill(
+                    None,
+                    target,
+                    &name,
+                    &SkillEdit {
+                        description,
+                        triggers,
+                        allowed_tools,
+                        instruction,
+                    },
+                )
+            });
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "create".to_string(),
+                vec![outcome(name, result)],
+            )
+        }
+        ClientRequest::InstallSkillZip {
+            target,
+            name,
+            data_b64,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let result = OwnedSkillTarget::parse(&target).and_then(|target| {
+                if target == OwnedSkillTarget::Project {
+                    return Err(unavailable_project());
+                }
+                use base64::Engine;
+                if data_b64.len() > 96 * 1024 * 1024 {
+                    anyhow::bail!("ZIP upload payload is too large");
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_b64.as_bytes())
+                    .map_err(|error| anyhow::anyhow!("Invalid ZIP upload data: {error}"))?;
+                install_owned_skill_zip(None, target, &name, &bytes)
+            });
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "install-zip".to_string(),
+                vec![outcome(name, result)],
+            )
+        }
+        ClientRequest::DownloadSkillZip {
+            skill_id,
+            generation,
+            save_path,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let registry = registry();
+            let result = export_owned_skill_zip(
+                &registry,
+                &skill_id,
+                &generation,
+                std::path::Path::new(&save_path),
+            );
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "download".to_string(),
+                vec![outcome(save_path, result)],
+            )
+        }
+        ClientRequest::UpdateSkill {
+            skill_id,
+            generation,
+            name,
+            description,
+            triggers,
+            allowed_tools,
+            instruction,
+            reload_after_save,
+            request_id,
+            session_epoch,
+            tab_id,
+            ..
+        } => {
+            // A detached host has no active chat: reject BEFORE writing.
+            let result = if reload_after_save {
+                Err(anyhow::anyhow!(
+                    "Open a chat with this skill loaded before Save & Reload; nothing was saved"
+                ))
+            } else {
+                update_owned_skill(
+                    &registry(),
+                    &skill_id,
+                    &generation,
+                    &name,
+                    &SkillEdit {
+                        description,
+                        triggers,
+                        allowed_tools,
+                        instruction,
+                    },
+                )
+            };
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                if reload_after_save {
+                    "update-reload"
+                } else {
+                    "update"
+                }
+                .to_string(),
+                vec![outcome(name, result)],
+            )
+        }
+        ClientRequest::DuplicateSkills {
+            target,
+            items,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let parsed = OwnedSkillTarget::parse(&target);
+            let registry = registry();
+            let outcomes = items
+                .into_iter()
+                .map(|item| {
+                    let result = parsed
+                        .as_ref()
+                        .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        .and_then(|target| {
+                            if *target == OwnedSkillTarget::Project {
+                                return Err(unavailable_project());
+                            }
+                            duplicate_to_owned(
+                                &registry,
+                                &item.skill_id,
+                                &item.generation,
+                                None,
+                                *target,
+                                &item.destination_name,
+                            )
+                        });
+                    outcome(item.name, result)
+                })
+                .collect();
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "duplicate".to_string(),
+                outcomes,
+            )
+        }
+        ClientRequest::DeleteSkills {
+            items,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let registry = registry();
+            let outcomes = items
+                .into_iter()
+                .map(|item| {
+                    outcome(
+                        item.name,
+                        delete_owned_skill(&registry, &item.skill_id, &item.generation),
+                    )
+                })
+                .collect();
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "delete".to_string(),
+                outcomes,
+            )
+        }
+        ClientRequest::SetExtraSkillRoots {
+            roots,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let requested: Vec<std::path::PathBuf> = roots
+                .into_iter()
+                .map(|root| root.trim().to_string())
+                .filter(|root| !root.is_empty())
+                .map(std::path::PathBuf::from)
+                .collect();
+            let valid = crate::model::skill::valid_extra_skill_roots(None, &requested);
+            let result = if valid.len() != requested.len() {
+                Err(anyhow::anyhow!("Every External skill root must exist, be unique, and not overlap Koma's Global skills directory"))
+            } else {
+                config.extra_skill_roots = valid.into_iter().map(|root| root.path).collect();
+                crate::app::runtime::actions::save_config_and_broadcast(&config)
+                    .map(|_| std::path::PathBuf::new())
+            };
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "set-roots".to_string(),
+                vec![outcome("External skill roots".to_string(), result)],
+            )
+        }
+        _ => return,
+    };
+
+    let changed = operation != "download" && outcomes.iter().any(|item| item.status == "success");
+    let roots_changed = changed && operation == "set-roots";
+    push_skill_op(
+        push,
+        request_id.clone(),
+        session_epoch,
+        tab_id,
+        operation,
+        outcomes,
+        Vec::new(),
+    );
+    if changed {
+        let config = crate::model::app_config::AppConfig::load();
+        push_skill_values(
+            push,
+            request_id,
+            session_epoch,
+            SkillRegistry::load(None, &config.extra_skill_roots).catalogue(),
+            Vec::new(),
+            None,
+        );
+    }
+    if roots_changed {
+        let config = crate::model::app_config::AppConfig::load();
+        let defaults = crate::model::settings::Settings::default();
+        push_settings_values(
+            push,
+            String::new(),
+            Vec::new(),
+            defaults.short_send_enabled,
+            defaults.sliding_cache,
+            defaults.bash_saving,
+            defaults.coding_autosave,
+            defaults.internet_mode.as_str().to_string(),
+            config.palette.clone(),
+            String::new(),
+            defaults.subagent_max_turns,
+            defaults.short_send_engage_n,
+            defaults.short_send_tail_n,
+            defaults.max_output_tokens,
+            defaults.context_window_limit,
+            defaults.context_model_alias,
+            config
+                .extra_skill_roots
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+        );
+    }
 }
 
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
@@ -1205,6 +1522,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GetSettings) => {
                 let cfg = crate::model::app_config::AppConfig::load();
                 let d = crate::model::settings::Settings::default();
+                let extra_skill_roots = cfg
+                    .extra_skill_roots
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
                 push_settings_values(
                     push,
                     String::new(),
@@ -1222,7 +1544,91 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     d.max_output_tokens,
                     d.context_window_limit,
                     d.context_model_alias,
+                    extra_skill_roots,
                 );
+            }
+            Ok(HostCtl::GetSkills {
+                request_id,
+                session_epoch,
+                workspace: _,
+            }) => push_skill_values(
+                push,
+                request_id,
+                session_epoch,
+                build_host_skill_values(),
+                Vec::new(),
+                None,
+            ),
+            Ok(HostCtl::GetSkillDetail {
+                skill_id,
+                generation,
+                request_id,
+                session_epoch,
+                tab_id,
+            }) => {
+                let (detail, error) = match build_host_skill_detail(&skill_id, &generation) {
+                    Ok(detail) => (Some(detail), None),
+                    Err(error) => (None, Some(error.to_string())),
+                };
+                push_skill_detail_values(
+                    push,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                    detail,
+                    None,
+                    None,
+                    error,
+                );
+            }
+            Ok(HostCtl::ReadSkillFile {
+                skill_id,
+                generation,
+                path,
+                request_id,
+                session_epoch,
+                tab_id,
+            }) => {
+                let (content, error) = match read_host_skill_file(&skill_id, &generation, &path) {
+                    Ok(content) => (Some(content), None),
+                    Err(error) => (None, Some(error.to_string())),
+                };
+                push_skill_detail_values(
+                    push,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                    None,
+                    Some(path),
+                    content,
+                    error,
+                );
+            }
+            Ok(HostCtl::SetSkillsLoaded {
+                names,
+                loaded,
+                request_id,
+                session_epoch,
+                tab_id,
+            }) => push_skill_op(
+                push,
+                request_id,
+                session_epoch,
+                tab_id,
+                if loaded { "load" } else { "unload" }.to_string(),
+                names
+                    .into_iter()
+                    .map(|name| crate::model::skill::SkillItemOutcome {
+                        name,
+                        status: "failed".to_string(),
+                        error: Some("Open a chat to load skills".to_string()),
+                    })
+                    .collect(),
+                Vec::new(),
+            ),
+            Ok(HostCtl::SkillMutation(request)) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || handle_detached_skill_mutation(&push2, request));
             }
             // GUI /agents dashboard opened while detached (StartScreen / swapper): there is
             // no foreground session, so answer from `load_registry(None)` (built-in + global

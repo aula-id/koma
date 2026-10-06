@@ -502,21 +502,142 @@ pub enum ClientRequest {
     },
 
     /// Start or stop the security daemon (headless / non-panel equivalent of the
-    /// Security panel Daemon checkbox). `enabled: true` →
-    /// [`crate::app::runtime::actions::security` start path] (sets
-    /// `security_enabled`, starts manager); `false` → stop path (also disarms
-    /// yolo). Not gui-gated: headless `koma run --security on|off` is a first-class
-    /// client of this request.
+    /// Security panel Daemon checkbox). `enabled: true` starts the manager;
+    /// `false` stops it and disarms yolo.
     SetSecurityEnabled {
         enabled: bool,
     },
-    /// Arm or disarm Layer-1 YOLO (`yolo_armed`). Arming is refused unless the
-    /// security daemon is running (same gate as the Security panel YOLO checkbox).
-    /// Disarming while in `Yolo` agent mode drops mode back to `Auto`. Headless
-    /// `koma run --mode yolo` sends `armed: true` after security is up, then
-    /// [`SetMode`] with `"yolo"`.
+    /// Arm or disarm Layer-1 YOLO. Arming requires the security daemon.
     SetYoloArmed {
         armed: bool,
+    },
+
+    // ─── GUI Skills surface ──────────────────────────────────────────────────
+    /// Body-free catalogue + authoritative foreground-session Loaded names.
+    ListSkills {
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        /// Project-tab workspace. Empty uses the session's primary workdir.
+        /// Must be one of the session's configured workdirs; anything else
+        /// falls back to the primary root.
+        #[serde(default)]
+        workspace: String,
+    },
+    /// Lazy editor detail resolved by server-issued source identity/generation.
+    GetSkillDetail {
+        skill_id: String,
+        generation: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    /// Allow-listed lazy companion-file read.
+    ReadSkillFile {
+        skill_id: String,
+        generation: String,
+        path: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    /// TUI-parity Load/Unload against the foreground session's `active_skills`.
+    SetSkillsLoaded {
+        names: Vec<String>,
+        loaded: bool,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    ReloadSkills {
+        names: Vec<String>,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    CreateSkill {
+        target: String,
+        name: String,
+        description: String,
+        triggers: String,
+        allowed_tools: Vec<String>,
+        instruction: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    InstallSkillZip {
+        target: String,
+        name: String,
+        data_b64: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    DownloadSkillZip {
+        skill_id: String,
+        generation: String,
+        save_path: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    UpdateSkill {
+        skill_id: String,
+        generation: String,
+        name: String,
+        description: String,
+        triggers: String,
+        allowed_tools: Vec<String>,
+        instruction: String,
+        #[serde(default)]
+        reload_after_save: bool,
+        #[serde(default)]
+        target_session_id: Option<String>,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    DuplicateSkills {
+        target: String,
+        items: Vec<crate::model::skill::SkillDuplicateInput>,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    DeleteSkills {
+        items: Vec<crate::model::skill::SkillIdentityInput>,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
+    SetExtraSkillRoots {
+        roots: Vec<String>,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
     },
 
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────
@@ -932,6 +1053,7 @@ pub enum DaemonEvent {
         context_window_limit: u64,
         #[serde(default)]
         context_model_alias: String,
+        extra_skill_roots: Vec<String>,
     },
     /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
     /// `/effort` menu for the foreground session's current model, from
@@ -952,6 +1074,46 @@ pub enum DaemonEvent {
         note: String,
         state: String,
     },
+    /// Body-free Skills catalogue and current foreground-session Loaded names.
+    SkillValues {
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        skills: Vec<crate::model::skill::SkillCatalogueEntry>,
+        #[serde(default)]
+        loaded_skill_names: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Correlated lazy detail or companion-file reply.
+    SkillDetailValues {
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<crate::model::skill::SkillDetail>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Correlated deterministic result for a Skills mutation.
+    SkillOp {
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+        operation: String,
+        outcomes: Vec<crate::model::skill::SkillItemOutcome>,
+        #[serde(default)]
+        loaded_skill_names: Vec<String>,
+    },
+
     /// One-shot reply to a [`ClientRequest::ListAgents`] (and the re-push after a
     /// [`ClientRequest::SetAgent`] / [`ClientRequest::DeleteAgent`]): the merged sub-agent
     /// registry + the model / provider catalogue for the GUI /agents dashboard. `agents`

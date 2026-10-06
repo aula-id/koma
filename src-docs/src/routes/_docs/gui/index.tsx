@@ -64,6 +64,12 @@ function GuiOverview() {
           — browsing, installing, and managing extensions.
         </li>
         <li>
+          <Link to="/gui/skills" className="text-koma-accent hover:underline">
+            Skills
+          </Link>{' '}
+          — discover, load, safely edit, and duplicate reusable instructions.
+        </li>
+        <li>
           <Link to="/gui/analytics" className="text-koma-accent hover:underline">
             Analytics
           </Link>{' '}

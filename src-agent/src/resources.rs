@@ -219,9 +219,17 @@ pub fn build_system_prompt(
             s.push_str("\n\n# Skills\n");
             s.push_str(
                 "Available skills (name + description only). Load one with \
-                 skill({\"action\":\"load\",\"name\":\"...\"}) when the task matches; \
-                 unload with action=unload when done. Only loaded skill bodies \
-                 appear below the cache split as \"# Skill: <name>\". \
+                 skill({\"action\":\"load\",\"name\":\"...\"}) only when the task \
+                 matches and the skill is not already active. A body under \
+                 \"# Skill: <name>\" below, or a [ACTIVE] mark from skill(list), \
+                 means that skill is already in context — do not load it again. \
+                 Unload with action=unload when done. \
+                 Create a skill with skill({\"action\":\"create\",\"name\":\"...\",\
+                 \"description\":\"...\",\"instruction\":\"...\"}). scope is \
+                 project (default) or global. Change one with \
+                 skill({\"action\":\"modify\",\"name\":\"...\",\"instruction\":\"...\"}). \
+                 Omit description or instruction on modify to keep it. Do not \
+                 use write or edit; skill folders are outside the workspace. \
                  Dir-form skills list companion files in the load result; \
                  read them with `read` using absolute paths under skill_dir.\n",
             );

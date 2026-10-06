@@ -709,6 +709,67 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GetSettings) => {
                     let _ = req_tx.send(ClientRequest::GetSettings);
                 }
+                Ok(super::HostCtl::GetSkills {
+                    request_id,
+                    session_epoch,
+                    workspace,
+                }) => {
+                    let _ = req_tx.send(ClientRequest::ListSkills {
+                        request_id,
+                        session_epoch,
+                        workspace,
+                    });
+                }
+                Ok(super::HostCtl::GetSkillDetail {
+                    skill_id,
+                    generation,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                }) => {
+                    let _ = req_tx.send(ClientRequest::GetSkillDetail {
+                        skill_id,
+                        generation,
+                        request_id,
+                        session_epoch,
+                        tab_id,
+                    });
+                }
+                Ok(super::HostCtl::ReadSkillFile {
+                    skill_id,
+                    generation,
+                    path,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                }) => {
+                    let _ = req_tx.send(ClientRequest::ReadSkillFile {
+                        skill_id,
+                        generation,
+                        path,
+                        request_id,
+                        session_epoch,
+                        tab_id,
+                    });
+                }
+                Ok(super::HostCtl::SetSkillsLoaded {
+                    names,
+                    loaded,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                }) => {
+                    let _ = req_tx.send(ClientRequest::SetSkillsLoaded {
+                        names,
+                        loaded,
+                        request_id,
+                        session_epoch,
+                        tab_id,
+                    });
+                }
+                Ok(super::HostCtl::SkillMutation(request)) => {
+                    let _ = req_tx.send(request);
+                }
                 // GUI /agents fetch raced in while attached (routed to the daemon via
                 // `live_req` normally; only lands here on an attach-state flip). Forward the
                 // daemon request — it replies with `AgentsValues`, re-pushed above.

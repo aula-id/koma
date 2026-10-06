@@ -178,6 +178,19 @@ export type StoreSlice = {
 // omnisearch overlay's open/closed flag. Kept in the store (rather than
 // component state) so the Composer, nested under a different route subtree
 // than RootLayout's overlay mount point, can open it without prop drilling.
+export type PreservedTabLayout = {
+  tabs: Tab[]
+  activeTabId: string
+  groups: EditorGroupId[]
+  tabGroup: Record<string, EditorGroupId>
+  groupActive: Record<EditorGroupId, string>
+  activeGroupId: EditorGroupId
+  splitDir: SplitDir
+  groupSizes: Record<EditorGroupId, number>
+  splitTree: EditorLayoutNode
+  groupSplitDir: Record<EditorGroupId, SplitDir>
+}
+
 export type UiSlice = {
   omnisearchOpen: boolean
   // One-shot signal: a workspace path picked from OmniSearchPalette, queued
@@ -232,6 +245,18 @@ export type UiSlice = {
   // authoritative Snapshot is the only reliable clear point. `null` = no
   // swap in flight.
   switchingTo: string | null
+  // One-shot intent used by guided Skills drafts that must create a chat while
+  // detached. The next Snapshot consumes it and preserves all existing editor
+  // tabs even if the host reports the attach as a session replacement.
+  preserveTabsOnNextSession: boolean
+  // Concrete fallback captured with the intent. Intermediate host/workspace
+  // transitions may normalize or reset the live layout before Snapshot arrives;
+  // retaining only the boolean cannot recover tabs already removed by then.
+  preservedTabLayout: PreservedTabLayout | null
+  // The host's Switching envelope identifies the chat requested by the guided
+  // action. An older in-flight Snapshot may arrive first; only the target one
+  // consumes the preservation intent.
+  preservedTabsTargetSession: string | null
   // Active transient toast (host safeguard/harness/generic notice), or null when
   // none is showing. Set from the Status envelope's `toast`/`kind`; cleared by
   // ToastContainer's auto-dismiss (or a newer toast replacing it). Deduped by

@@ -175,6 +175,7 @@ const PRODUCTS: ProductDef[] = [
           { label: 'Git & Diff', to: '/gui/git-diff' },
           { label: 'Import Graph', to: '/gui/import-graph' },
           { label: 'Extensions', to: '/gui/extensions' },
+          { label: 'Skills', to: '/gui/skills' },
           { label: 'Analytics', to: '/gui/analytics' },
         ],
       },

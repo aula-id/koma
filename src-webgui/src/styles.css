@@ -436,13 +436,29 @@ svg.animate-spin {
 *::-webkit-scrollbar-corner { background: transparent; }
 
 /* driver.js popover themed to koma palette (Tutorial tours).
-   Colors/fonts only — do NOT override position/transform/arrow geometry. */
-.koma-driver-theme {
+   Driver's CSS is loaded with the lazy Tutorial chunk, after this stylesheet.
+   Include `.driver-popover` to outrank its later one-class white background;
+   otherwise theme-colored text is painted on Driver's default white surface. */
+.driver-popover.koma-driver-theme {
   background-color: var(--koma-bg, #0b0e14);
   color: var(--koma-fg, #c8d3f5);
-  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+  border: 1px solid color-mix(in srgb, var(--koma-fg, #c8d3f5) 18%, var(--koma-bg, #0b0e14));
   border-radius: 8px;
   box-shadow: 0 8px 28px color-mix(in srgb, #000 45%, transparent);
+}
+/* Driver draws the arrow with one opaque border edge. Match that edge to the
+   popover surface for every placement while leaving its geometry untouched. */
+.driver-popover.koma-driver-theme .driver-popover-arrow-side-left {
+  border-left-color: var(--koma-bg, #0b0e14);
+}
+.driver-popover.koma-driver-theme .driver-popover-arrow-side-right {
+  border-right-color: var(--koma-bg, #0b0e14);
+}
+.driver-popover.koma-driver-theme .driver-popover-arrow-side-top {
+  border-top-color: var(--koma-bg, #0b0e14);
+}
+.driver-popover.koma-driver-theme .driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--koma-bg, #0b0e14);
 }
 .koma-driver-theme .driver-popover-title {
   color: var(--koma-fg, #c8d3f5);
