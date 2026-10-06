@@ -134,8 +134,8 @@ desktop-template = "../packaging/linux/koma.desktop.hbs"
 
 [package.metadata.packager.wix]
 template = "../packaging/windows/main.wxs"
-fragment-paths = ["../packaging/windows/path-and-shortcut.wxs", "../packaging/windows/ocr-files.wxs"]
-component-group-refs = ["KomaPathAndShortcut", "KomaOcrFiles"]
+fragment-paths = ["../packaging/windows/path-and-shortcut.wxs", "../packaging/windows/ocr-files.wxs", "../packaging/windows/shell-files.wxs"]
+component-group-refs = ["KomaPathAndShortcut", "KomaOcrFiles", "KomaShellFiles"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = { version = "2.21", optional = true }

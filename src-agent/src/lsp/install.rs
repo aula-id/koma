@@ -554,37 +554,184 @@ fn npm_binary_names(binary: &str) -> Vec<String> {
 
 // ─── pip venv (basedpyright) ─────────────────────────────────────────────────
 
+/// Names tried in each PATH directory. On Windows `python.exe` comes first so a
+/// real CPython install is seen before a later `python3.exe`. The Microsoft
+/// Store alias is skipped separately (it is often named `python3.exe`).
+fn python_exe_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["python.exe", "python3.exe"]
+    } else {
+        &["python3", "python"]
+    }
+}
+
+/// True for `%LOCALAPPDATA%\Microsoft\WindowsApps\...`, the App Execution Alias
+/// that exits 9009 instead of running Python.
+fn is_windowsapps_path(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    normalized.contains("\\microsoft\\windowsapps\\")
+}
+
+/// Store aliases are zero-byte reparse points. Reject those, and anything under
+/// WindowsApps, before spawning.
+fn rejected_python_candidate(path: &Path) -> bool {
+    if is_windowsapps_path(path) {
+        return true;
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() == 0 => true,
+        _ => false,
+    }
+}
+
+/// `python -c` prints `major.minor`. basedpyright requires 3.10+.
+fn python_version_at_least_3_10(text: &str) -> bool {
+    let nums: Vec<u32> = text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .take(2)
+        .collect();
+    match nums.as_slice() {
+        [major, minor] => *major > 3 || (*major == 3 && *minor >= 10),
+        _ => false,
+    }
+}
+
+fn python_version_text(program: &Path, prefix_args: &[&str]) -> String {
+    let mut cmd = Command::new(program);
+    cmd.args(prefix_args);
+    cmd.args(["-c", "import sys; print('%d.%d' % sys.version_info[:2])"]);
+    crate::tool::shell::no_console_window(&mut cmd);
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => String::new(),
+    }
+}
+
+fn acceptable_python(path: &Path) -> bool {
+    path.is_file()
+        && !rejected_python_candidate(path)
+        && python_version_at_least_3_10(&python_version_text(path, &[]))
+}
+
+/// Absolute `KOMA_PYTHON_EXECUTABLE` from the language pack, when it is a real
+/// interpreter. A bare `python` name is ignored so PATH search can run.
+fn python_from_env() -> Option<PathBuf> {
+    let raw = std::env::var("KOMA_PYTHON_EXECUTABLE").ok()?;
+    let path = PathBuf::from(raw.trim());
+    if !path.is_absolute() {
+        return None;
+    }
+    acceptable_python(&path).then_some(path)
+}
+
+fn python_on_path() -> Option<PathBuf> {
+    let path_var = crate::coding::environment::host_path();
+    for dir in std::env::split_paths(&path_var) {
+        for name in python_exe_names() {
+            let candidate = dir.join(name);
+            if is_windowsapps_path(&candidate) {
+                continue;
+            }
+            if acceptable_python(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// `py -3` prints the real interpreter. Used when Python is installed but not
+/// on PATH (common right after a winget install).
+#[cfg(windows)]
+fn python_via_py_launcher() -> Option<PathBuf> {
+    let py = resolve::find_on_path("py")?;
+    if rejected_python_candidate(&py) {
+        return None;
+    }
+    let text = python_version_text(&py, &["-3"]);
+    if !python_version_at_least_3_10(&text) {
+        return None;
+    }
+    let mut cmd = Command::new(&py);
+    cmd.args(["-3", "-c", "import sys; print(sys.executable)"]);
+    crate::tool::shell::no_console_window(&mut cmd);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let exe = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if exe.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(exe);
+    acceptable_python(&path).then_some(path)
+}
+
+fn find_python_for_pip(spec_id: &str) -> Result<PathBuf> {
+    if let Some(path) = python_from_env() {
+        return Ok(path);
+    }
+    if let Some(path) = python_on_path() {
+        return Ok(path);
+    }
+    #[cfg(windows)]
+    if let Some(path) = python_via_py_launcher() {
+        return Ok(path);
+    }
+    bail!(
+        "Python >= 3.10 not found on PATH — install Python 3.10 or newer to manage {spec_id}. \
+         The Microsoft Store python alias is ignored."
+    )
+}
+
+fn output_tail(output: &std::process::Output) -> String {
+    let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if text.is_empty() {
+        text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    }
+    const MAX: usize = 2000;
+    let count = text.chars().count();
+    if count > MAX {
+        text = text.chars().skip(count - MAX).collect();
+    }
+    text
+}
+
+fn run_checked(cmd: &mut Command, label: &str) -> Result<()> {
+    crate::tool::shell::no_console_window(cmd);
+    let output = cmd.output().with_context(|| format!("spawn {label}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = output_tail(&output);
+    if detail.is_empty() {
+        bail!("{label} failed (status {})", output.status);
+    }
+    bail!("{label} failed (status {})\n{detail}", output.status)
+}
+
 fn install_pip_venv(spec: &ServerSpec, progress: &mut Option<ProgressFn>) -> Result<()> {
-    let python = resolve::find_on_path("python3")
-        .or_else(|| resolve::find_on_path("python"))
-        .ok_or_else(|| {
-            anyhow!(
-                "python3 not found on PATH — install Python 3 to manage {}",
-                spec.id
-            )
-        })?;
+    let python = find_python_for_pip(spec.id)?;
     let dir = prepare_server_dir(spec.id)?;
     let venv = dir.join("venv");
     report(progress, spec.id, 10, None);
     println!("python -m venv {} ...", venv.display());
-    let status = Command::new(&python)
-        .args(["-m", "venv"])
-        .arg(&venv)
-        .status()
-        .context("spawn python -m venv")?;
-    if !status.success() {
-        bail!("python -m venv failed (status {status})");
-    }
+    let mut venv_cmd = Command::new(&python);
+    venv_cmd.args(["-m", "venv"]).arg(&venv);
+    run_checked(&mut venv_cmd, "python -m venv")?;
     report(progress, spec.id, 40, None);
     let pip = venv_python(&venv);
     println!("pip install {} ...", spec.package);
-    let status = Command::new(&pip)
-        .args(["-m", "pip", "install", "--upgrade", spec.package])
-        .status()
-        .context("spawn pip install")?;
-    if !status.success() {
-        bail!("pip install {} failed (status {status})", spec.package);
-    }
+    let mut pip_cmd = Command::new(&pip);
+    pip_cmd.args(["-m", "pip", "install", "--upgrade", spec.package]);
+    run_checked(&mut pip_cmd, &format!("pip install {}", spec.package))?;
     report(progress, spec.id, 90, None);
     let bin_rel = format!(
         "venv/{}/{}",
@@ -794,6 +941,67 @@ mod tests {
         ));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn windowsapps_python_alias_is_rejected() {
+        let alias = Path::new(r"C:\Users\a\AppData\Local\Microsoft\WindowsApps\python3.exe");
+        assert!(is_windowsapps_path(alias));
+        assert!(rejected_python_candidate(alias));
+        let real = Path::new(r"C:\Users\a\AppData\Local\Programs\Python\Python313\python.exe");
+        assert!(!is_windowsapps_path(real));
+    }
+
+    #[test]
+    fn python_version_gate_requires_3_10() {
+        assert!(python_version_at_least_3_10("3.10\n"));
+        assert!(python_version_at_least_3_10("3.13"));
+        assert!(!python_version_at_least_3_10("3.9"));
+        assert!(!python_version_at_least_3_10("2.7"));
+        assert!(!python_version_at_least_3_10(""));
+    }
+
+    #[test]
+    fn empty_file_is_rejected_python_candidate() {
+        let dir = tempfile_dir("koma-py-empty");
+        let file = dir.join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python"
+        });
+        std::fs::write(&file, b"").unwrap();
+        assert!(rejected_python_candidate(&file));
+        std::fs::write(&file, b"not-empty").unwrap();
+        assert!(!rejected_python_candidate(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn python_candidates_follow_platform_name_order() {
+        let dir = tempfile_dir("koma-py-order");
+        for name in python_exe_names() {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let got: Vec<String> = python_exe_names()
+            .iter()
+            .map(|name| dir.join(name))
+            .filter(|path| path.is_file() && !rejected_python_candidate(path))
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let expect: Vec<String> = python_exe_names()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(got, expect);
+        assert_eq!(
+            got[0],
+            if cfg!(windows) {
+                "python.exe"
+            } else {
+                "python3"
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

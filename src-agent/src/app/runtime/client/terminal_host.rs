@@ -8,7 +8,8 @@
 //!
 //! ## Local vs remote
 //!
-//! - **Local** — spawn the host `$SHELL` (or COMSPEC) in a PTY.
+//! - **Local** — spawn Git Bash when it is installed or bundled beside koma,
+//!   otherwise `COMSPEC`. Unix uses `$SHELL`.
 //! - **Remote** — spawn `ssh -t user@host '…login shell…'` in a local PTY, reusing
 //!   the same ControlMaster / askpass path as the remote agent bridge. Input /
 //!   resize / output protocol is identical; only the child argv changes.
@@ -41,10 +42,20 @@ use crate::remote::RemoteTarget;
 use super::push_proto::{push_terminal_exit, push_terminal_output};
 
 /// Resolve the default shell for the current platform.
+///
+/// Windows prefers Git for Windows (or the MSI fallback under `shell\`), and
+/// uses `cmd.exe` only when neither exists. The GUI itself stays a native
+/// process; only this child is Bash.
 fn platform_shell() -> String {
-    if cfg!(target_os = "windows") {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
-    } else {
+    #[cfg(windows)]
+    {
+        if let Some(bash) = crate::tool::shell::find_git_bash() {
+            return bash.display().to_string();
+        }
+        return std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    }
+    #[cfg(not(windows))]
+    {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
     }
 }
@@ -129,7 +140,20 @@ impl TerminalManager {
         let shell = platform_shell();
 
         let mut cmd = CommandBuilder::new(&shell);
-        if cfg!(not(target_os = "windows")) {
+        #[cfg(windows)]
+        if let Some(bash) = crate::tool::shell::find_git_bash() {
+            if shell == bash.display().to_string() {
+                // Interactive, not `--login`, so a bundled tree does not need
+                // Git's profile. `MSYSTEM` and `usr\bin` come from the same
+                // helper the agent shell uses.
+                cmd.arg("-i");
+                for (key, value) in crate::tool::shell::git_bash_env(&bash) {
+                    cmd.env(key, value);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
             cmd.arg("--login");
         }
         if let Some(dir) = &cwd {

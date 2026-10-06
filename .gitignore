@@ -31,4 +31,6 @@ src-docs/.vite/
 # Generated GUI release runtime payloads / WiX manifest.
 packaging/windows/ocr/
 packaging/windows/ocr-files.wxs
+packaging/windows/shell/
+packaging/windows/shell-files.wxs
 packaging/linux/gstreamer/

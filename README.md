@@ -54,7 +54,7 @@ koma run --prompt-file ./instructions.txt --name batch-1 --workdir "$PWD"
 
 Unknown commands (e.g. `koma docker`) print help and exit 1.
 
-Works on Linux, macOS, and Windows. On Windows, use the PowerShell installer — it downloads and runs the MSI directly, no Git Bash required:
+Works on Linux, macOS, and Windows. On Windows, use the PowerShell installer — it downloads and runs the MSI directly. A separate Git Bash install is not required: the MSI uses Git for Windows when it is already present, and otherwise ships a fallback shell:
 
 ```powershell
 irm https://koma.run/install.ps1 | iex
@@ -68,7 +68,7 @@ The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gu
 
 - **macOS** — the install.sh binary already has `gui` baked in; `koma gui` just works. install.sh also adds a user-level app at `~/Applications/Koma.app` that opens the desktop client from Finder, Launchpad, and Spotlight.
 - **Linux** — the raw install.sh binary is GUI-featured and needs WebKitGTK 4.1, GTK 3, and libXtst at runtime. On Debian and Ubuntu, install.sh installs those shared libraries (including the GTK and soup libraries WebKit pulls in; `libgtk-3-0` or `libgtk-3-0t64`, whichever apt has). The `koma` launcher still checks for them and prints an install command if they are missing. install.sh also installs a **user-level** `.desktop` entry + icons under `~/.local/share` so Koma appears in the app drawer (useful on immutable/atomic desktops like Fedora Bluefin where `.deb` is awkward). If you prefer a package that handles dependencies automatically, grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a system desktop entry that launches straight into `koma gui`. Prebuilt Linux binaries target **glibc 2.35 (Ubuntu 22.04 LTS)** and run on 22.04 and all newer releases.
-- **Windows** — `irm https://koma.run/install.ps1 | iex` installs the `.msi` (GUI build with WebView2 runtime bundled). WebView2 ships with Windows 11 and most patched Windows 10 machines already. Security tools and full-internet/research mode are not supported on Windows.
+- **Windows** — `irm https://koma.run/install.ps1 | iex` installs the `.msi` (GUI build with WebView2 runtime bundled, plus a fallback shell so agent commands and the built-in terminal are not stuck on `cmd`). WebView2 ships with Windows 11 and most patched Windows 10 machines already. If Git for Windows is installed, koma uses that Bash instead of the bundled one. Security tools and full-internet/research mode are not supported on Windows.
 
 Grab the platform installer from the [latest release](https://github.com/aula-id/koma/releases/latest): `koma-x64.deb` / `koma-arm64.deb`, `koma-x64.AppImage` / `koma-arm64.AppImage`, `koma-x64.msi`.
 
