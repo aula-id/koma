@@ -258,9 +258,11 @@ pub fn update_owned_skill(
     registry: &SkillRegistry,
     skill_id: &str,
     generation: &str,
+    name: &str,
     edit: &SkillEdit,
 ) -> Result<PathBuf> {
-    update_owned_skill_with_generation(registry, skill_id, generation, edit).map(|(path, _)| path)
+    update_owned_skill_with_generation(registry, skill_id, generation, name, edit)
+        .map(|(path, _)| path)
 }
 
 /// Return the generation of the exact rendered bytes written, not a subsequent
@@ -269,10 +271,17 @@ pub(crate) fn update_owned_skill_with_generation(
     registry: &SkillRegistry,
     skill_id: &str,
     generation: &str,
+    name: &str,
     edit: &SkillEdit,
 ) -> Result<(PathBuf, String)> {
     validate_edit(edit)?;
+    let requested = checked_name(name)?;
     let skill = current_skill(registry, skill_id, generation)?;
+    let renamed_path = if requested == skill.name {
+        None
+    } else {
+        Some(rename_destination(skill, &requested)?)
+    };
     if !skill.source.editable() {
         bail!("External skills are read-only; duplicate the skill into Koma first");
     }
@@ -321,7 +330,119 @@ pub(crate) fn update_owned_skill_with_generation(
     revalidate_owned_entry(skill)?;
     let saved_generation = generation_for_bytes(&bytes);
     atomic_replace(&skill.file_path, &bytes)?;
-    Ok((skill.file_path.clone(), saved_generation))
+    let path = if let Some(destination) = renamed_path {
+        std::fs::rename(&destination.from, &destination.to).with_context(|| {
+            format!(
+                "rename skill '{}' to '{}'",
+                destination.from.display(),
+                destination.to.display()
+            )
+        })?;
+        let root = destination
+            .to
+            .parent()
+            .ok_or_else(|| anyhow!("Renamed skill has no root"))?;
+        if let Err(error) = renamed_entry_stays_in_root(root, &destination.entry) {
+            let _ = std::fs::rename(&destination.to, &destination.from);
+            return Err(error);
+        }
+        destination.entry
+    } else {
+        skill.file_path.clone()
+    };
+    Ok((path, saved_generation))
+}
+
+struct RenameDestination {
+    from: PathBuf,
+    to: PathBuf,
+    entry: PathBuf,
+}
+
+/// The skill name is one directory (or flat file stem). macOS uses the same
+/// `Path` joins as Linux. Windows must not treat the name as a drive, a UNC
+/// prefix, a separator, or a reserved device.
+fn rename_destination(skill: &SkillDef, requested: &str) -> Result<RenameDestination> {
+    if !is_single_path_component(requested) || is_windows_reserved_name(requested) {
+        bail!("Invalid skill name '{requested}'");
+    }
+    if let Some(directory) = skill.skill_dir.clone() {
+        let parent = directory
+            .parent()
+            .ok_or_else(|| anyhow!("Skill directory has no parent"))?;
+        let to = parent.join(requested);
+        if to.parent() != Some(parent) {
+            bail!("Rename escaped the skill root");
+        }
+        refuse_existing(&to, requested)?;
+        let file_name = skill
+            .file_path
+            .file_name()
+            .ok_or_else(|| anyhow!("Skill entry has no file name"))?;
+        return Ok(RenameDestination {
+            from: directory,
+            to: to.clone(),
+            entry: to.join(file_name),
+        });
+    }
+    let parent = skill
+        .file_path
+        .parent()
+        .ok_or_else(|| anyhow!("Skill file has no parent"))?;
+    let to = parent.join(format!("{requested}.md"));
+    if to.parent() != Some(parent) {
+        bail!("Rename escaped the skill root");
+    }
+    refuse_existing(&to, requested)?;
+    Ok(RenameDestination {
+        from: skill.file_path.clone(),
+        to: to.clone(),
+        entry: to,
+    })
+}
+
+fn is_single_path_component(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    match components.next() {
+        Some(Component::Normal(part)) if part == std::ffi::OsStr::new(name) => {
+            components.next().is_none()
+        }
+        _ => false,
+    }
+}
+
+/// `CON`, `NUL`, `COM1`, and the other legacy device names. They are ordinary
+/// filenames on macOS and Linux, and unusable paths on Windows.
+#[cfg(not(windows))]
+fn is_windows_reserved_name(_name: &str) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn is_windows_reserved_name(name: &str) -> bool {
+    let base = name.split(['.', ':']).next().unwrap_or(name);
+    matches!(base, "con" | "prn" | "aux" | "nul")
+        || ((base.starts_with("com") || base.starts_with("lpt"))
+            && base.len() == 4
+            && base.as_bytes()[3].is_ascii_digit())
+}
+
+fn refuse_existing(path: &Path, requested: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => bail!("A skill named '{requested}' already exists"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context(format!("check {}", path.display())),
+    }
+}
+
+fn renamed_entry_stays_in_root(root: &Path, entry: &Path) -> Result<()> {
+    let canonical_root = std::fs::canonicalize(root)?;
+    let canonical_entry = std::fs::canonicalize(entry)?;
+    if canonical_entry.starts_with(&canonical_root) {
+        Ok(())
+    } else {
+        bail!("Renamed skill escaped its root");
+    }
 }
 
 pub fn delete_owned_skill(
@@ -842,7 +963,14 @@ mod tests {
         .unwrap();
         let registry = SkillRegistry::load_isolated(Some(&tmp), &[]);
         let skill = registry.get("demo").unwrap();
-        update_owned_skill(&registry, &skill.skill_id, &skill.generation, &edit("New")).unwrap();
+        update_owned_skill(
+            &registry,
+            &skill.skill_id,
+            &skill.generation,
+            &skill.name,
+            &edit("New"),
+        )
+        .unwrap();
         let written = std::fs::read_to_string(root.join("SKILL.md")).unwrap();
         assert!(written.contains("author: Ada"));
         assert!(written.contains("description: New"));
@@ -850,11 +978,69 @@ mod tests {
             &registry,
             &skill.skill_id,
             &skill.generation,
+            &skill.name,
             &edit("Again")
         )
         .unwrap_err()
         .to_string()
         .contains("changed on disk"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn update_can_rename_the_owned_directory() {
+        let tmp = std::env::temp_dir().join(format!("koma-skill-rename-{}", uuid::Uuid::new_v4()));
+        let root = tmp.join(".agents/skills/demo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\ndescription: Old\n---\nOld body",
+        )
+        .unwrap();
+        std::fs::write(root.join("notes.md"), "keep me").unwrap();
+        let registry = SkillRegistry::load_isolated(Some(&tmp), &[]);
+        let skill = registry.get("demo").unwrap();
+        let path = update_owned_skill(
+            &registry,
+            &skill.skill_id,
+            &skill.generation,
+            "renamed",
+            &edit("New"),
+        )
+        .unwrap();
+        assert!(path.ends_with(".agents/skills/renamed/SKILL.md"));
+        // Parent equality is component-wise, so macOS matches Linux and a
+        // Windows drive or UNC prefix cannot be compared as a `/` string.
+        assert_eq!(path.parent().and_then(|dir| dir.parent()), root.parent());
+        assert!(!root.exists());
+        let taken = tmp.join(".agents/skills/taken");
+        std::fs::create_dir_all(&taken).unwrap();
+        let again = SkillRegistry::load_isolated(Some(&tmp), &[]);
+        let skill = again.get("renamed").unwrap();
+        assert!(update_owned_skill(
+            &again,
+            &skill.skill_id,
+            &skill.generation,
+            "taken",
+            &edit("New")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("already exists"));
+        assert!(update_owned_skill(
+            &again,
+            &skill.skill_id,
+            &skill.generation,
+            "other/name",
+            &edit("New")
+        )
+        .is_err());
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("description: New"));
+        assert_eq!(
+            std::fs::read_to_string(path.parent().unwrap().join("notes.md")).unwrap(),
+            "keep me"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -868,10 +1054,14 @@ mod tests {
         std::fs::write(&entry, original).unwrap();
         let registry = SkillRegistry::load_isolated(Some(&tmp), &[]);
         let skill = registry.get("demo").unwrap();
-        assert!(
-            update_owned_skill(&registry, &skill.skill_id, &skill.generation, &edit("New"))
-                .is_err()
-        );
+        assert!(update_owned_skill(
+            &registry,
+            &skill.skill_id,
+            &skill.generation,
+            &skill.name,
+            &edit("New")
+        )
+        .is_err());
         assert_eq!(std::fs::read_to_string(&entry).unwrap(), original);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -892,6 +1082,7 @@ mod tests {
             &registry,
             &skill.skill_id,
             &skill.generation,
+            &skill.name,
             &edit("Changed")
         )
         .unwrap_err()
@@ -1055,6 +1246,7 @@ mod tests {
             &registry,
             &skill.skill_id,
             &skill.generation,
+            &skill.name,
             &edit("Changed")
         )
         .is_err());

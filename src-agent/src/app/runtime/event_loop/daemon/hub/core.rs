@@ -127,6 +127,8 @@ pub(super) enum StoreReply {
         /// Combined update only: initiating chat, skill identity and the exact
         /// post-write generation observed by the worker (if Save succeeded).
         reload_target: Option<(String, String, String, String)>,
+        /// Previous directory name when this update renamed an owned skill.
+        renamed_from: Option<String>,
         /// `None` means a Global mutation (all sessions); `Some` scopes rebuilds
         /// to sessions whose workdir matches this project.
         affected_project: Option<std::path::PathBuf>,

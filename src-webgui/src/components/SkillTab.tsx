@@ -7,6 +7,7 @@ import { SkillDeleteConfirm } from './SkillDeleteConfirm'
 import { SkillDuplicateDialog } from './SkillDuplicateDialog'
 import { Chips, Field, Select, TextInput } from './panels/form'
 import { insideSkillProject } from './skillProject'
+import { showToast } from '../lib/toast'
 
 type Props = { tab: Extract<Tab, { kind: 'skill' }> }
 let mutationSeq = 0
@@ -124,7 +125,7 @@ export default function SkillTab({ tab }: Props) {
   const stale = sourceUnavailable || sourceChanged
   const loaded = Boolean(detail && loadedNames.includes(detail.name))
   const validCreateName = /^[a-z0-9][a-z0-9_-]*$/.test(name.trim())
-  const canSave = Boolean((!isCreate || insideProject) && !stale && name.trim() && (!isCreate || validCreateName) && description.trim() && (isCreate || (detail?.editable && detail.structuredSaveSupported)))
+  const canSave = Boolean((!isCreate || insideProject) && !stale && validCreateName && description.trim() && (isCreate || (detail?.editable && detail.structuredSaveSupported)))
   const busy = Boolean(requestId && !ownResult)
   const confirmationMissing = busy && (requestTimedOut || (requestEpoch.current !== null && requestEpoch.current !== epoch))
   useEffect(() => {
@@ -132,6 +133,33 @@ export default function SkillTab({ tab }: Props) {
     const timeout = window.setTimeout(() => setRequestTimedOut(true), 15_000)
     return () => window.clearTimeout(timeout)
   }, [busy, confirmationMissing])
+  const operationNotice = confirmationMissing
+    ? { text: 'Koma did not confirm this operation. It may already have changed the file; check the disk version before trying again. Rescan skill locations and reopen the skill to verify.', kind: 'warn' as const }
+    : failure
+      ? { text: failure, kind: 'error' as const }
+      : partial
+        ? { text: partial, kind: 'warn' as const }
+        : downloadFailure
+          ? { text: downloadFailure, kind: 'error' as const }
+          : success
+            ? {
+                text: ownResult?.operation === 'update-reload'
+                  ? 'Saved and reloaded in this chat.'
+                  : loaded && ownResult?.operation === 'update'
+                    ? 'Saved. Reload to update the current chat context.'
+                    : `${ownResult?.operation ?? 'Operation'} completed.`,
+                kind: 'success' as const,
+              }
+            : downloadSuccess
+              ? { text: `Saved ZIP to ${downloadSuccess.name}`, kind: 'success' as const }
+              : null
+  const noticeText = operationNotice?.text ?? null
+  const noticeKind = operationNotice?.kind ?? null
+  useEffect(() => {
+    if (!noticeText || !noticeKind) return
+    showToast(noticeText, noticeKind)
+  }, [noticeText, noticeKind, ownResult?.requestId, downloadResult?.requestId])
+
   const companionKey = activeFile ? `${tab.id}:${activeFile}` : null
   const companion = companionKey ? files[companionKey] : undefined
 
@@ -150,7 +178,7 @@ export default function SkillTab({ tab }: Props) {
     if (kind === 'create') {
       req({ r: 'CreateSkill', target: scope, name: name.trim(), description: description.trim(), triggers, allowedTools: tools, instruction, requestId: id, sessionEpoch: epoch, tabId: tab.id })
     } else if (detail) {
-      req({ r: 'UpdateSkill', skillId: detail.skillId, generation: editGeneration.current ?? detail.generation, name: detail.name, description: description.trim(), triggers, allowedTools: tools, instruction, reloadAfterSave, targetSessionId: reloadAfterSave ? sessionId ?? undefined : undefined, requestId: id, sessionEpoch: epoch, tabId: tab.id })
+      req({ r: 'UpdateSkill', skillId: detail.skillId, generation: editGeneration.current ?? detail.generation, name: name.trim(), description: description.trim(), triggers, allowedTools: tools, instruction, reloadAfterSave, targetSessionId: reloadAfterSave ? sessionId ?? undefined : undefined, requestId: id, sessionEpoch: epoch, tabId: tab.id })
     }
   }
 
@@ -214,16 +242,9 @@ What I want to change:
 
           {!isCreate && detail?.editable && !detail.structuredSaveSupported && <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">This skill uses advanced YAML. Structured Save is disabled to prevent data loss; use Edit with Koma or edit SKILL.md manually.</div>}
           {stale && detail && <div className="flex items-center justify-between gap-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"><span>{sourceUnavailable ? 'This source is no longer the current catalogue winner. The draft is preserved read-only and cannot be saved.' : 'The source changed on disk while this draft was open. The draft is preserved read-only and saving is disabled.'}</span>{entry && <button type="button" onClick={() => { dirty.current = false; hydratedGeneration.current = null; requestDetail(tab.id, entry.skillId, entry.generation) }} className="flex-none rounded border border-amber-500/30 px-2 py-1">Discard draft and refresh</button>}</div>}
-          {success && <div role="status" className="rounded border border-green-500/25 bg-green-500/10 px-3 py-2 text-[11px] text-green-300">{ownResult?.operation === 'update-reload' ? 'Saved and reloaded in this chat.' : loaded && ownResult?.operation === 'update' ? 'Saved. Reload to update the current chat context.' : `${ownResult?.operation ?? 'Operation'} completed.`}</div>}
-          {partial && <div role="alert" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">{partial}</div>}
-          {failure && <div role="alert" className="rounded border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{failure}</div>}
-          {confirmationMissing && <div role="alert" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">Koma did not confirm this operation. It may already have changed the file; check the disk version before trying again. Rescan skill locations and reopen the skill to verify.</div>}
-          {downloadSuccess && <div role="status" className="rounded border border-green-500/25 bg-green-500/10 px-3 py-2 text-[11px] text-green-300">Saved ZIP to {downloadSuccess.name}</div>}
-          {downloadFailure && <div role="alert" className="rounded border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{downloadFailure}</div>}
-
           <Field label="Name">
-            <TextInput value={name} disabled={!isCreate} autoFocus={isCreate} onChange={(event) => { dirty.current = true; setName(event.target.value.toLowerCase()) }} aria-invalid={isCreate && name.length > 0 && !validCreateName} placeholder="e.g. review-notes" />
-            {isCreate && name.length > 0 && !validCreateName && <span className="mt-0.5 text-[10px] text-koma-fg opacity-70">Use lowercase letters, numbers, hyphens, or underscores.</span>}
+            <TextInput value={name} disabled={external || stale} autoFocus={isCreate} onChange={(event) => { dirty.current = true; setName(event.target.value.toLowerCase()) }} aria-invalid={name.length > 0 && !validCreateName} placeholder="e.g. review-notes" />
+            {name.length > 0 && !validCreateName && <span className="mt-0.5 text-[10px] text-koma-fg opacity-70">Use lowercase letters, numbers, hyphens, or underscores.</span>}
           </Field>
           {isCreate && (
             <Field label="Scope">

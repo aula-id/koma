@@ -133,7 +133,8 @@ describe.sequential('Skills UX copy and disclosures', () => {
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
     input.dispatchEvent(new Event('change', { bubbles: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe('ZIP package exceeds the 64 MiB upload limit.')
+    expect(useKoma.getState().ui.toast?.text).toBe('ZIP package exceeds the 64 MiB upload limit.')
+    expect(useKoma.getState().ui.toast?.kind).toBe('error')
   })
 
   it('keeps two visible skill tabs when Edit with Koma focuses an active chat', async () => {

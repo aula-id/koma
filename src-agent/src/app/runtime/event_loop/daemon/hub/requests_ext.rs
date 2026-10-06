@@ -435,6 +435,7 @@ impl DaemonHub {
                     outcomes,
                     reload_target,
                     affected_project,
+                    renamed_from,
                 } => self.finish_skill_mutation(
                     state,
                     client_id,
@@ -445,6 +446,7 @@ impl DaemonHub {
                     outcomes,
                     reload_target,
                     affected_project,
+                    renamed_from,
                 ),
                 // W8 panel bridge: turn a panel.msg outcome into a seq'd `ExtPanelReply` to the
                 // REQUESTING client (matched by id — a client that vanished mid-flight is silently

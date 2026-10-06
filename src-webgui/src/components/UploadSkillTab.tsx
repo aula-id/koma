@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Check, Upload } from 'lucide-react'
+import { Upload } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { insideSkillProject } from './skillProject'
+import { showToast } from '../lib/toast'
 
 const MAX_ZIP_BYTES = 64 * 1024 * 1024
 let uploadSeq = 0
@@ -89,6 +90,12 @@ export default function UploadSkillTab() {
   }, [epoch, req, scope])
 
   const error = localError ?? backendError
+  useEffect(() => {
+    if (success) showToast('Skill installed successfully.', 'success')
+  }, [success, requestId])
+  useEffect(() => {
+    if (error) showToast(error, 'error')
+  }, [error])
   return (
     <div className="flex h-full min-w-0 flex-col bg-koma-bg text-koma-fg">
       <div className="min-h-0 flex-1 overflow-auto">
@@ -97,9 +104,6 @@ export default function UploadSkillTab() {
             <h2 className="text-[15px] font-semibold">Upload skill (.zip)</h2>
             <p className="mt-0.5 text-[11px] opacity-50">Install a bounded packaged skill into Global or Project scope</p>
           </header>
-
-          {success && <div role="status" className="flex items-center gap-2 rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-500"><Check size={14} />Skill installed successfully.</div>}
-          {error && !success && <div role="alert" className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-400">{error}</div>}
 
           {!success && <>
             <div className="text-[11px]"><span className="mb-1 block opacity-60">Target scope</span><div className="flex gap-1">{(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={busy || !insideProject} title={!insideProject ? (value === 'project' ? 'Open a project to install a Project skill' : 'Open a project to add a skill') : undefined} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'} disabled:opacity-30`}>{value === 'global' ? 'Global' : 'Project'}</button>)}</div>{!insideProject && <span className="mt-1 block opacity-45">Open a project to add a skill. Project scope stays unavailable until then.</span>}</div>

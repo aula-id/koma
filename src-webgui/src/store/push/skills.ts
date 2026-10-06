@@ -7,7 +7,21 @@ export function pushSkills(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'SkillValues': {
         if (env.sessionEpoch !== get().skillSessionEpoch) return true
         if (get().skillRequestId && env.requestId !== get().skillRequestId) return true
-        set({
+        const op = get().skillOpResults[env.requestId]
+        const renamed = op && (op.operation === 'update' || op.operation === 'update-reload') && op.outcomes[0]?.status === 'success'
+          ? env.skills.find((skill) => skill.name === op.outcomes[0]?.name)
+          : undefined
+        const currentTabs = get().ui.tabs
+        let retarget: { tabId: string; skillId: string; generation: string } | null = null
+        const nextTabs = renamed && op
+          ? currentTabs.map((tab) => {
+              if (tab.id !== op.tabId || tab.kind !== 'skill' || !tab.skillId || tab.skillId === renamed.skillId) return tab
+              if (env.skills.some((skill) => skill.skillId === tab.skillId)) return tab
+              retarget = { tabId: tab.id, skillId: renamed.skillId, generation: renamed.generation }
+              return { ...tab, skillId: renamed.skillId, title: renamed.name }
+            })
+          : currentTabs
+        set((state) => ({
           skills: env.skills,
           loadedSkillNames: env.loadedSkillNames,
           skillsLoading: false,
@@ -16,7 +30,9 @@ export function pushSkills(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           // Retain the accepted id so an older same-epoch reply arriving later
           // cannot become acceptable merely because this request completed.
           skillRequestId: env.requestId,
-        })
+          ...(retarget ? { ui: { ...state.ui, tabs: nextTabs } } : {}),
+        }))
+        if (retarget) get().requestSkillDetail(retarget.tabId, retarget.skillId, retarget.generation)
         return true
       }
       case 'SkillDetailValues': {

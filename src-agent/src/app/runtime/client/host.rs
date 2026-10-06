@@ -703,6 +703,7 @@ fn handle_detached_skill_mutation(push: &dyn Fn(String), request: ClientRequest)
                     &registry(),
                     &skill_id,
                     &generation,
+                    &name,
                     &SkillEdit {
                         description,
                         triggers,

@@ -4,7 +4,10 @@ use crate::model::skill::{SkillItemOutcome, SkillRegistry};
 
 use super::core::{DaemonHub, StoreReply};
 
-fn selected_workdir(session: &crate::model::session::Session, workspace: &str) -> std::path::PathBuf {
+fn selected_workdir(
+    session: &crate::model::session::Session,
+    workspace: &str,
+) -> std::path::PathBuf {
     let wanted = workspace.trim();
     if wanted.is_empty() {
         return session.workdir();
@@ -238,13 +241,22 @@ impl DaemonHub {
         } = &request
         {
             let session = state.rest.fg().session.as_ref();
+            // Match the loaded skill by identity. `name` may be a new folder
+            // name, so it is not yet the active-skills key.
+            let loaded_name = session.and_then(|session| {
+                session
+                    .skills
+                    .get_by_identity(skill_id)
+                    .map(|skill| skill.name.clone())
+            });
             let valid = session.is_some_and(|session| {
                 target_session_id.as_ref() == Some(&session.id)
-                    && session
-                        .skills
-                        .get(name)
-                        .is_some_and(|skill| &skill.skill_id == skill_id)
-                    && state.rest.fg().active_skills.contains_key(name)
+                    && loaded_name.is_some()
+                    && state
+                        .rest
+                        .fg()
+                        .active_skills
+                        .contains_key(loaded_name.as_deref().unwrap_or(""))
             });
             if !valid {
                 self.send_to(idx, DaemonEvent::SkillOp {
@@ -264,9 +276,12 @@ impl DaemonHub {
         }
         let client_id = self.clients[idx].id;
         let tx = self.store_tx.clone();
-        let workdir = state.rest.fg().session.as_ref().map(|session| {
-            selected_workdir(session, &self.skill_workspace)
-        });
+        let workdir = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|session| selected_workdir(session, &self.skill_workspace));
         let extra_roots = state.rest.config.extra_skill_roots.clone();
         handle.spawn_blocking(move || {
             let reply = run_skill_mutation(request, workdir, extra_roots, client_id);
@@ -355,6 +370,7 @@ impl DaemonHub {
         mut outcomes: Vec<SkillItemOutcome>,
         reload_target: Option<(String, String, String, String)>,
         affected_project: Option<std::path::PathBuf>,
+        renamed_from: Option<String>,
     ) {
         let changes_filesystem = operation != "download";
         if changes_filesystem && outcomes.iter().any(|outcome| outcome.status == "success") {
@@ -375,7 +391,37 @@ impl DaemonHub {
             }
             self.force_resync = true;
         }
-        if operation == "update-reload" && outcomes.iter().any(|item| item.status == "success") {
+        if let Some(previous) = renamed_from.as_ref() {
+            let new_name = outcomes
+                .first()
+                .map(|item| item.name.clone())
+                .unwrap_or_default();
+            if !new_name.is_empty() && new_name != *previous {
+                for runtime in &mut state.rest.sessions {
+                    let replacement = runtime.session.as_ref().and_then(|session| {
+                        if session.skills.get(previous).is_some() {
+                            return None;
+                        }
+                        session
+                            .skills
+                            .get(&new_name)
+                            .map(|skill| crate::app::state::ActiveSkill {
+                                body: skill.body.clone(),
+                                skill_dir: skill.skill_dir.clone(),
+                            })
+                    });
+                    if let Some(replacement) = replacement {
+                        if runtime.active_skills.remove(previous).is_some() {
+                            runtime.active_skills.insert(new_name.clone(), replacement);
+                        }
+                    }
+                }
+            }
+        }
+        if renamed_from.is_none()
+            && operation == "update-reload"
+            && outcomes.iter().any(|item| item.status == "success")
+        {
             let replacement = reload_target.as_ref().and_then(|target| {
                 let foreground = state.rest.fg();
                 let session = foreground.session.as_ref()?;
@@ -552,6 +598,7 @@ fn run_skill_mutation(
     };
 
     let mut saved_generation = None;
+    let mut renamed_from = None;
     let reload_intent = match &request {
         ClientRequest::UpdateSkill {
             reload_after_save: true,
@@ -672,6 +719,9 @@ fn run_skill_mutation(
             ..
         } => {
             let registry = registry();
+            let previous_name = registry
+                .get_by_identity(&skill_id)
+                .map(|skill| skill.name.clone());
             let affected =
                 registry
                     .get_by_identity(&skill_id)
@@ -687,6 +737,7 @@ fn run_skill_mutation(
                 &registry,
                 &skill_id,
                 &generation,
+                &name,
                 &SkillEdit {
                     description,
                     triggers,
@@ -699,6 +750,13 @@ fn run_skill_mutation(
                     .as_ref()
                     .ok()
                     .map(|(_, generation)| generation.clone());
+            }
+            if result.is_ok() {
+                if let Some(previous) = previous_name {
+                    if !previous.eq_ignore_ascii_case(&name) {
+                        renamed_from = Some(previous);
+                    }
+                }
             }
             let result = result.map(|(path, _)| path);
             (
@@ -820,6 +878,7 @@ fn run_skill_mutation(
         outcomes,
         reload_target,
         affected_project,
+        renamed_from,
     }
 }
 

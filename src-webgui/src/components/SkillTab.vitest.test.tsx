@@ -138,7 +138,8 @@ describe('SkillTab parity and stale safety', () => {
     expect(request.r).toBe('UpdateSkill')
     act(() => useKoma.getState().push({ k: 'SkillOp', requestId: request.requestId, sessionEpoch: 4, tabId: tab.id, operation: 'update', outcomes: [{ name: 'alpha', status: 'success' }], loadedSkillNames: [] }))
     act(() => useKoma.getState().push({ k: 'SkillOp', requestId: 'another-tab', sessionEpoch: 4, tabId: 'skills-panel', operation: 'load', outcomes: [{ name: 'beta', status: 'success' }], loadedSkillNames: ['beta'] }))
-    expect(screen.getByRole('status').textContent).toContain('update completed')
+    expect(useKoma.getState().ui.toast?.text).toContain('update completed')
+    expect(useKoma.getState().ui.toast?.kind).toBe('success')
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeNull()
   })
 
@@ -150,7 +151,8 @@ describe('SkillTab parity and stale safety', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeTruthy()
     act(() => vi.advanceTimersByTime(15_000))
-    expect(screen.getByRole('alert').textContent).toContain('did not confirm')
+    expect(useKoma.getState().ui.toast?.text).toContain('did not confirm')
+    expect(useKoma.getState().ui.toast?.kind).toBe('warn')
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeNull()
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true)
   })
@@ -161,7 +163,8 @@ describe('SkillTab parity and stale safety', () => {
     render(<SkillTab tab={tab} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     act(() => useKoma.setState({ skillSessionEpoch: 5, skillOpResults: {} }))
-    expect(screen.getByRole('alert').textContent).toContain('did not confirm')
+    expect(useKoma.getState().ui.toast?.text).toContain('did not confirm')
+    expect(useKoma.getState().ui.toast?.kind).toBe('warn')
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeNull()
   })
 
@@ -177,7 +180,8 @@ describe('SkillTab parity and stale safety', () => {
     expect(updates[0]).toMatchObject({ reloadAfterSave: true, targetSessionId: 'session-a', sessionEpoch: 4, tabId: tab.id })
     expect(postMessage.mock.calls.some(([message]) => JSON.parse(message).r === 'ReloadSkills')).toBe(false)
     act(() => useKoma.getState().push({ k: 'SkillOp', requestId: updates[0].requestId, sessionEpoch: 4, tabId: tab.id, operation: 'update-reload', outcomes: [{ name: 'alpha', status: 'success' }], loadedSkillNames: ['alpha'] }))
-    expect(screen.getByRole('status').textContent).toContain('Saved and reloaded in this chat.')
+    expect(useKoma.getState().ui.toast?.text).toContain('Saved and reloaded in this chat.')
+    expect(useKoma.getState().ui.toast?.kind).toBe('success')
   })
 
   it('reports disk-only partial success without claiming that the chat reloaded', () => {
@@ -188,7 +192,8 @@ describe('SkillTab parity and stale safety', () => {
     const calls = vi.mocked(window.ipc!.postMessage).mock.calls
     const request = JSON.parse(calls[calls.length - 1][0])
     act(() => useKoma.getState().push({ k: 'SkillOp', requestId: request.requestId, sessionEpoch: 4, tabId: tab.id, operation: 'update-reload', outcomes: [{ name: 'alpha', status: 'partial', error: 'Saved on disk, but the current chat was not reloaded' }], loadedSkillNames: ['alpha'] }))
-    expect(screen.getByRole('alert').textContent).toContain('Saved on disk')
+    expect(useKoma.getState().ui.toast?.text).toContain('Saved on disk')
+    expect(useKoma.getState().ui.toast?.kind).toBe('warn')
     expect(screen.queryByText('Saved and reloaded in this chat.')).toBeNull()
   })
 
@@ -196,7 +201,8 @@ describe('SkillTab parity and stale safety', () => {
     useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' }, skills: [entry] }))
     render(<SkillTab tab={tab} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(screen.getByRole('alert').textContent).toContain('save was not sent')
+    expect(useKoma.getState().ui.toast?.text).toContain('save was not sent')
+    expect(useKoma.getState().ui.toast?.kind).toBe('error')
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeNull()
   })
 
