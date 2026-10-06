@@ -164,7 +164,7 @@ export function Select<T extends string>({
   triggerTitle,
 }: {
   value: T | ''
-  options: { value: T; label: string; icon?: ReactNode }[]
+  options: { value: T; label: string; icon?: ReactNode; disabled?: boolean; title?: string }[]
   onChange: (v: T) => void
   placeholder?: string
   disabled?: boolean
@@ -260,13 +260,15 @@ export function Select<T extends string>({
               <button
                 key={o.value}
                 type="button"
-                title={o.label}
+                title={o.title ?? o.label}
                 aria-label={o.label}
+                disabled={o.disabled}
                 onMouseDown={(e) => {
                   e.preventDefault()
+                  if (o.disabled) return
                   pick(o.value)
                 }}
-                className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
+                className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                   o.value === value
                     ? 'bg-koma-hover text-koma-fg'
                     : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'

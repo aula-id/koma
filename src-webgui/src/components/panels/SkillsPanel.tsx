@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeft, Info, Plus, Search, X } from 'lucide-react'
+import { ChevronRight, FilePlus, Info, Plus, Search, Sparkles, Upload, X, type LucideIcon } from 'lucide-react'
 import { useKoma, type SkillCatalogueEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { Empty } from './helpers'
+import { DetailHeader, Empty } from './helpers'
 import { Segmented, Select } from './form'
 import { SkillDeleteConfirm } from '../SkillDeleteConfirm'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
 import { nextSkillSelection } from '../skillListSelection'
+import { insideSkillProject, skillProjectRoot } from '../skillProject'
 
 type SkillsPanelView = 'list' | 'methods'
 
@@ -156,7 +157,6 @@ export function SkillsPanel() {
   const openSkillTab = useKoma((s) => s.openSkillTab)
   const openUploadSkillTab = useKoma((s) => s.openUploadSkillTab)
   const refillComposer = useKoma((s) => s.refillComposer)
-  const newSessionPreservingTabs = useKoma((s) => s.newSessionPreservingTabs)
   const activateTab = useKoma((s) => s.activateTab)
   const req = useKoma((s) => s.req)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -180,7 +180,12 @@ export function SkillsPanel() {
     if (!useKoma.getState().skillsLoading) refreshSkills()
   }, [epoch, refreshSkills, sessionId, preserveTabsOnNextSession, preservedTabsTargetSession])
 
-  const projectRoot = activeRoot && workdirs.includes(activeRoot) ? activeRoot : workdirs[0] ?? ''
+  const projectRoot = skillProjectRoot(workdirs, activeRoot)
+  const insideProject = insideSkillProject(sessionId, workdirs, activeRoot)
+
+  useEffect(() => {
+    if (!insideProject && view === 'methods') setView('list')
+  }, [insideProject, view])
 
   useEffect(() => {
     if (filter !== 'project' || workdirs.length === 0) return
@@ -287,16 +292,56 @@ export function SkillsPanel() {
     rowRefs.current.get(id)?.focus()
   }
 
-  if (view === 'methods') {
+  if (view === 'methods' && insideProject) {
+    const methods: { title: string; subtitle: string; icon: LucideIcon; onClick: () => void }[] = [
+      {
+        title: 'Create new',
+        subtitle: 'Global or Project skill',
+        icon: FilePlus,
+        onClick: () => { openSkillTab(null); setView('list') },
+      },
+      {
+        title: 'Upload .zip',
+        subtitle: 'Install a packaged skill',
+        icon: Upload,
+        onClick: () => { openUploadSkillTab(); setView('list') },
+      },
+      {
+        title: 'Create with Koma',
+        subtitle: 'Start a guided chat draft',
+        icon: Sparkles,
+        onClick: () => {
+          if (!insideProject) return
+          refillComposer(SKILL_CREATION_TEMPLATE)
+          activateTab('chat')
+          setView('list')
+        },
+      },
+    ]
     return (
       <div data-tour="skills-panel" className="flex h-full min-w-0 flex-col overflow-hidden bg-koma-panel text-koma-fg">
-        <div className="flex-none border-b border-koma-border px-2 py-2">
-          <button type="button" data-tour="skills-add-back" onClick={() => setView('list')} className="flex items-center gap-1 rounded px-1 py-1 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"><ArrowLeft size={13} /> Add skill</button>
-        </div>
-        <div data-tour="skills-add-methods" className="min-h-0 flex-1 space-y-1.5 overflow-auto p-2">
-          <button type="button" onClick={() => { openSkillTab(null); setView('list') }} className="w-full rounded border border-koma-border px-2.5 py-2 text-left text-[11px] text-koma-fg hover:border-koma-accent hover:bg-koma-hover"><span className="block font-semibold">Create new</span><span className="block text-[10px] text-koma-dim">Global or Project skill</span></button>
-          <button type="button" onClick={() => { openUploadSkillTab(); setView('list') }} className="w-full rounded border border-koma-border px-2.5 py-2 text-left text-[11px] text-koma-fg hover:border-koma-accent hover:bg-koma-hover"><span className="block font-semibold">Upload .zip</span><span className="block text-[10px] text-koma-dim">Install a packaged skill</span></button>
-          <button type="button" onClick={() => { if (!sessionId) newSessionPreservingTabs(); refillComposer(SKILL_CREATION_TEMPLATE); activateTab('chat'); setView('list') }} className="w-full rounded border border-koma-border px-2.5 py-2 text-left text-[11px] text-koma-fg hover:border-koma-accent hover:bg-koma-hover"><span className="block font-semibold">Create with Koma</span><span className="block text-[10px] text-koma-dim">Start a guided chat draft</span></button>
+        <DetailHeader onBack={() => setView('list')} title="Add skill" backTourId="skills-add-back" tourId="skills-add-header" />
+        <div data-tour="skills-add-methods" className="min-h-0 flex-1 overflow-auto py-1">
+          <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">
+            Choose a method
+          </div>
+          <div className="flex flex-col gap-0.5 px-2">
+            {methods.map((method) => (
+              <button
+                key={method.title}
+                type="button"
+                onClick={method.onClick}
+                className="flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-koma-hover"
+              >
+                <method.icon size={14} className="flex-none text-koma-accent" />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-[12.5px] text-koma-fg">{method.title}</span>
+                  <span className="truncate text-[10.5px] text-koma-fg opacity-40">{method.subtitle}</span>
+                </span>
+                <ChevronRight size={13} className="flex-none text-koma-fg opacity-30" />
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -382,20 +427,20 @@ export function SkillsPanel() {
                 onClick={(event) => choose(skill, event)}
                 onDoubleClick={() => openSkill(skill)}
                 onContextMenu={(event) => openMenu(skill, event)}
-                className={`group flex min-h-[42px] w-full min-w-0 items-center border-l-2 px-3 py-1.5 text-left hover:bg-koma-hover ${isLoaded ? 'border-l-koma-accent' : 'border-l-transparent'} ${isSelected ? 'bg-koma-head' : ''}`}
+                className={`group flex min-h-[42px] w-full min-w-0 items-start border-l-2 px-3 py-1.5 text-left hover:bg-koma-hover ${isLoaded ? 'border-l-koma-accent' : 'border-l-transparent'} ${isSelected ? 'bg-koma-head' : ''}`}
               >
-                {isLoaded && <span aria-hidden="true" data-skill-marker="loaded" className="sr-only" />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12px] text-koma-fg">{skill.name}</span>
                   {skill.description && <span className="block truncate text-[10px] text-koma-fg opacity-45">{skill.description}</span>}
                 </span>
+                {isLoaded && <span data-skill-marker="loaded" className="ml-2 mt-0.5 flex-none self-start rounded-full bg-koma-accent/15 px-1.5 py-0.5 text-[9px] font-medium text-koma-accent">active</span>}
                 <span className="sr-only">item {index + 1} of {visible.length}</span>
               </button>
             )
           })}
       </div>
 
-      <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" onClick={() => setView('methods')} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"><Plus size={13} /> Add skill</button></div>
+      <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" disabled={!insideProject} title={insideProject ? 'Add skill' : 'Open a project to add a skill'} onClick={() => { if (insideProject) setView('methods') }} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"><Plus size={13} /> Add skill</button></div>
       {menu && menuSkills.length > 0 && (
         <SkillContextMenu
           state={menu}

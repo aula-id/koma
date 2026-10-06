@@ -458,22 +458,31 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
                 Some((n, b)) => (n.to_string(), b.trim().to_string()),
                 None => (rest.to_string(), String::new()),
             };
-            // Look up skill_dir from the skill registry on the session.
-            let skill_dir = state.rest.sessions[sess_idx]
-                .session
-                .as_ref()
-                .and_then(|sess| sess.skills.get(&name))
-                .and_then(|s| s.skill_dir.clone());
-            // Build companion inventory when dir-form.
-            let companion_msg = skill_dir.as_ref().map(|dir| list_companions(dir, &name));
-            // Install into active_skills.
-            state.rest.sessions[sess_idx].active_skills.insert(
-                name.clone(),
-                crate::app::state::ActiveSkill { body, skill_dir },
-            );
-            match companion_msg {
-                Some(msg) => msg,
-                None => format!("loaded skill '{name}' — body injected into context."),
+            // A skill loaded earlier this turn is already in context. Do not
+            // replace its body; the panel's Reload action is the explicit refresh.
+            if state.rest.sessions[sess_idx]
+                .active_skills
+                .contains_key(&name)
+            {
+                crate::tool::skill::already_active_message(&name)
+            } else {
+                // Look up skill_dir from the skill registry on the session.
+                let skill_dir = state.rest.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .and_then(|sess| sess.skills.get(&name))
+                    .and_then(|s| s.skill_dir.clone());
+                // Build companion inventory when dir-form.
+                let companion_msg = skill_dir.as_ref().map(|dir| list_companions(dir, &name));
+                // Install into active_skills.
+                state.rest.sessions[sess_idx].active_skills.insert(
+                    name.clone(),
+                    crate::app::state::ActiveSkill { body, skill_dir },
+                );
+                match companion_msg {
+                    Some(msg) => msg,
+                    None => format!("loaded skill '{name}' — body injected into context."),
+                }
             }
         } else if let Some(name) = result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX) {
             let name = name.trim().to_string();

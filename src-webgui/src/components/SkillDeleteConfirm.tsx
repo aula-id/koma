@@ -59,7 +59,7 @@ export function SkillDeleteConfirm({ skills, onClose }: Props) {
       <div className="w-full max-w-xl rounded border border-koma-border bg-koma-panel shadow-xl">
         <div className="border-b border-koma-border px-4 py-3">
           <h2 id="delete-skills-title" className="text-[13px] font-semibold">Delete {skills.length} skill{skills.length === 1 ? '' : 's'}?</h2>
-          <p className="mt-0.5 text-[11px] text-red-400">This permanently removes exactly the owned source paths below.</p>
+          <p className="mt-0.5 text-[11px] text-koma-error">This permanently removes exactly the owned source paths below.</p>
         </div>
         <div className="max-h-[55vh] space-y-2 overflow-auto px-4 py-3">
           {skills.map((skill, index) => {
@@ -73,8 +73,8 @@ export function SkillDeleteConfirm({ skills, onClose }: Props) {
           })}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-koma-border px-4 py-3">
-          <button ref={cancelRef} type="button" onClick={onClose} disabled={Boolean(requestId) && !result} className="rounded px-3 py-1.5 text-[11px] opacity-65 hover:bg-koma-hover disabled:opacity-30">{result ? 'Close' : 'Cancel'}</button>
-          {!result && <button type="button" onClick={confirm} disabled={Boolean(requestId)} className="flex items-center gap-1.5 rounded bg-red-500/20 px-3 py-1.5 text-[11px] text-red-300 disabled:opacity-45">{requestId && <BrailleSpinner size={12} />} Delete forever</button>}
+          <button ref={cancelRef} type="button" onClick={onClose} disabled={Boolean(requestId) && !result} className="rounded px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40">{result ? 'Close' : 'Cancel'}</button>
+          {!result && <button type="button" onClick={confirm} disabled={Boolean(requestId)} className="flex items-center gap-1.5 rounded border border-koma-error/40 bg-koma-error/15 px-3 py-1 text-[12px] font-semibold text-koma-error transition-colors hover:bg-koma-error/25 disabled:cursor-not-allowed disabled:opacity-40">{requestId && <BrailleSpinner size={12} />} Delete forever</button>}
         </div>
       </div>
     </div>

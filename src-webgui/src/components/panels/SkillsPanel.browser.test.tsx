@@ -2,7 +2,7 @@ import { StrictMode, useState } from 'react'
 import { userEvent } from 'vitest/browser'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
-import { useKoma, type Tab } from '../../store/koma'
+import { useKoma, type SettingsValues, type Tab } from '../../store/koma'
 import { SkillsPanel } from './SkillsPanel'
 import { Sidebar } from '../Sidebar'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
@@ -88,6 +88,25 @@ beforeEach(() => {
     skillSelection: [],
     refreshSkills: () => {},
     req,
+    settingsValues: {
+      name: 'Browser test',
+      workdir: ['/work'],
+      shortSend: false,
+      slidingCache: false,
+      bashSaving: false,
+      codingAutosave: false,
+      internetMode: 'simple',
+      palette: 'dark',
+      effort: '',
+      subagentMaxTurns: 500,
+      shortSendEngageN: 0,
+      shortSendTailN: 0,
+      maxOutputTokens: 0,
+      contextWindowLimit: 0,
+      contextModelAlias: '',
+      extraSkillRoots: [],
+    } satisfies SettingsValues,
+    coding: { ...state.coding, activeRoot: '/work' },
   }))
 })
 
@@ -188,6 +207,7 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(load.title).toContain('Open a chat')
     expect(load.getAttribute('aria-describedby')).toBe('skills-no-active-chat')
     expect(deleteButton.disabled).toBe(false)
+    expect(host.querySelector<HTMLButtonElement>('[data-tour="skills-add"]')?.disabled).toBe(true)
 
     openSkillMenu(rows[7])
     await new Promise((resolve) => requestAnimationFrame(resolve))
@@ -223,7 +243,7 @@ describe.sequential('Skills panel browser contracts', () => {
     await nextPaint()
     const rowIds = () => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')].map((row) => row.dataset.skillId)
     expect(rowIds()[0]).toBe('opaque-0')
-    expect(host.querySelector('[data-skill-id="opaque-0"] [data-skill-marker="loaded"]')).toBeTruthy()
+    expect(host.querySelector('[data-skill-id="opaque-0"] [data-skill-marker="loaded"]')?.textContent).toBe('active')
 
     switchSnapshot('session-b', ['skill-1'])
     await nextPaint()
@@ -323,7 +343,8 @@ describe.sequential('Skills panel browser contracts', () => {
     const create = host.querySelector<HTMLButtonElement>('[data-tour="skills-add-methods"] button')!
     const description = create.querySelector<HTMLSpanElement>('span:last-child')!
     expect(getComputedStyle(create).color).toBe('rgb(241, 220, 167)')
-    expect(getComputedStyle(description).color).toBe('rgb(186, 165, 135)')
+    expect(getComputedStyle(description).color).toBe('rgb(241, 220, 167)')
+    expect(getComputedStyle(description).opacity).toBe('0.4')
   })
 
   it('shows all three Add Skill methods before opening an editor', async () => {
@@ -363,14 +384,24 @@ describe.sequential('Skills panel browser contracts', () => {
     expect(useKoma.getState().ui.tabs.map((tab) => tab.id)).toEqual(['chat', 'skill:new', 'upload-skill'])
   })
 
-  it('creates a chat for Create with Koma only when detached', async () => {
-    useKoma.setState((state) => ({ session: { ...state.session, id: null } }))
-    const { screen } = await mount(320)
-    await screen.getByRole('button', { name: 'Add skill' }).click()
-    await screen.getByRole('button', { name: /Create with Koma/ }).click()
-    expect(req.mock.calls.filter(([request]) => request.r === 'NewSession')).toHaveLength(1)
-    expect(useKoma.getState().ui.preserveTabsOnNextSession).toBe(true)
-    expect(useKoma.getState().ui.composerRefill).toContain('Help me create a new Koma skill.')
+  it('disables Add skill outside a project and still opens a global skill', async () => {
+    useKoma.setState((state) => ({
+      session: { ...state.session, id: 'session-a' },
+      settingsValues: state.settingsValues ? { ...state.settingsValues, workdir: [] } : null,
+      coding: { ...state.coding, activeRoot: null },
+    }))
+    const { host } = await mount(320)
+    const add = host.querySelector<HTMLButtonElement>('[data-tour="skills-add"]')!
+    expect(add.disabled).toBe(true)
+    expect(add.title).toContain('Open a project')
+    add.click()
+    expect(document.querySelector('[data-tour="skills-add-methods"]')).toBeNull()
+    expect(req.mock.calls.some(([request]) => request.r === 'NewSession')).toBe(false)
+
+    const row = host.querySelector<HTMLButtonElement>('[role="option"]')!
+    row.click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(useKoma.getState().ui.tabs.some((tab) => tab.kind === 'skill' && tab.skillId === 'opaque-0')).toBe(true)
   })
 
   it('enables Duplicate only for an External right-click', async () => {

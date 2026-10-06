@@ -511,7 +511,8 @@ pub struct ToolCtx {
     pub ssh_key: Option<String>,
     /// Skill catalogue snapshot from the session.
     pub skill_registry: Option<crate::model::skill::SkillRegistry>,
-    /// Names of currently active (loaded) skills, for the `list` action.
+    /// Names of currently active (loaded) skills. `list` marks them, and
+    /// `load` refuses to replace a body that is already in context.
     pub active_skill_names: Option<Vec<String>>,
     /// The GLOBAL MCP client manager.
     pub mcp_manager: Option<Arc<crate::app::mcp::McpManager>>,

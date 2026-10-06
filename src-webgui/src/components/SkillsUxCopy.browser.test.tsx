@@ -89,8 +89,13 @@ beforeEach(() => {
 
 describe.sequential('Skills UX copy and disclosures', () => {
   it('keeps ZIP guidance concise while exposing every enforced package requirement', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: null } }))
     const screen = await render(<UploadSkillTab />)
     expect(screen.getByRole('heading', { name: 'Upload skill (.zip)' })).toBeTruthy()
+    const project = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Project')
+    const choose = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Choose .zip'))
+    expect(project?.disabled).toBe(true)
+    expect(choose?.disabled).toBe(true)
     expect(screen.getByText('ZIP up to 64 MiB. Must contain a valid SKILL.md.')).toBeTruthy()
 
     const summary = document.querySelector<HTMLElement>('summary')!
@@ -118,6 +123,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
   })
 
   it('retains the client-side 64 MiB ZIP rejection', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' } }))
     await render(<UploadSkillTab />)
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
     const file = new File(['zip'], 'oversized.zip', { type: 'application/zip' })

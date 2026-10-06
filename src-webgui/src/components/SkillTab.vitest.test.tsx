@@ -200,6 +200,42 @@ describe('SkillTab parity and stale safety', () => {
     expect(screen.getByRole('button', { name: 'Save' }).querySelector('[aria-hidden]')).toBeNull()
   })
 
+  it('keeps a global skill editable and disables Project scope when no project is open', () => {
+    const createTab = { id: 'skill:new', kind: 'skill' as const, skillId: null, title: 'New skill' }
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' }, skills: [entry], settingsValues: null }))
+    const edit = render(<SkillTab tab={tab} />)
+    expect(edit.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false)
+    edit.unmount()
+
+    const create = render(<SkillTab tab={createTab} />)
+    fireEvent.change(create.getByPlaceholderText('e.g. review-notes'), { target: { value: 'new-skill' } })
+    fireEvent.change(create.getByPlaceholderText('required — shown in the skill catalogue'), { target: { value: 'Does a thing' } })
+    expect(create.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true)
+    expect(create.getByText(/Open a project to add a skill/)).toBeTruthy()
+    fireEvent.click(create.getByRole('button', { name: 'Global' }))
+    expect(create.getByRole('button', { name: 'Project' })).toHaveProperty('disabled', true)
+  })
+
+  it('allows Project scope while creating inside an open project', () => {
+    const createTab = { id: 'skill:new', kind: 'skill' as const, skillId: null, title: 'New skill' }
+    useKoma.setState((state) => ({
+      session: { ...state.session, id: 'session-a' },
+      settingsValues: {
+        name: 'test', workdir: ['/work'], shortSend: false, slidingCache: false, bashSaving: false,
+        codingAutosave: false, internetMode: 'simple', palette: 'dark', effort: '', subagentMaxTurns: 500,
+        shortSendEngageN: 0, shortSendTailN: 0, maxOutputTokens: 0, contextWindowLimit: 0,
+        contextModelAlias: '', extraSkillRoots: [],
+      },
+      coding: { ...state.coding, activeRoot: '/work' },
+    }))
+    render(<SkillTab tab={createTab} />)
+    fireEvent.change(screen.getByPlaceholderText('e.g. review-notes'), { target: { value: 'new-skill' } })
+    fireEvent.change(screen.getByPlaceholderText('required — shown in the skill catalogue'), { target: { value: 'Does a thing' } })
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false)
+    fireEvent.click(screen.getByRole('button', { name: 'Global' }))
+    expect(screen.getByRole('button', { name: 'Project' })).toHaveProperty('disabled', false)
+  })
+
   it('renders lazy companion Markdown in Preview mode', () => {
     const companionDetail = { ...detail, companionFiles: ['references/guide.md'] }
     useKoma.setState({

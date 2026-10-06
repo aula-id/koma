@@ -578,7 +578,7 @@ function buildTour(id: TourId): BuiltTour | null {
           step({
             targets: ['[data-tour="skills-filters"]', '[data-tour="skills-panel"]'],
             title: 'Global and Project',
-            description: 'Global lists skills from ~/.koma/skills. Project lists skills from the active chat workspace. A skill loaded into the chat is pinned to the top of its tab and marked with an accent bar. Use the refresh button in the Skills header to scan again.',
+            description: 'Global lists skills from ~/.koma/skills. Project lists skills from the active chat workspace. A skill loaded into the chat is pinned to the top of its tab, marked with an accent bar, and labeled active. Use the refresh button in the Skills header to scan again.',
             side: 'right',
           }),
           step({
@@ -612,9 +612,11 @@ function buildTour(id: TourId): BuiltTour | null {
           step({
             targets: ['[data-tour="skills-add"]', '[data-tour="skills-panel"]'],
             title: 'Add skill',
-            description: 'Choose Create new, upload a bounded ZIP package, or start a guided Create with Koma chat.',
+            description: 'Add skill is available while a project is open. Choose Create new, upload a bounded ZIP package, or start a guided Create with Koma chat. Global skills stay editable without a project.',
             side: 'right',
             onNext: async () => {
+              const add = qs<HTMLButtonElement>('[data-tour="skills-add"]')
+              if (!add || add.disabled) return
               click('[data-tour="skills-add"]')
               await waitFor('[data-tour="skills-add-methods"]', 1200)
             },

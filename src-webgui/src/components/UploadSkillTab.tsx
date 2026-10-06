@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Check, Upload } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { insideSkillProject } from './skillProject'
 
 const MAX_ZIP_BYTES = 64 * 1024 * 1024
 let uploadSeq = 0
@@ -31,6 +32,9 @@ export default function UploadSkillTab() {
   const closeTab = useKoma((state) => state.closeTab)
   const epoch = useKoma((state) => state.skillSessionEpoch)
   const sessionId = useKoma((state) => state.session.id)
+  const workdirs = useKoma((state) => state.settingsValues?.workdir)
+  const activeRoot = useKoma((state) => state.coding.activeRoot)
+  const insideProject = insideSkillProject(sessionId, workdirs, activeRoot)
   const lastOp = useKoma((state) => state.skillLastOp)
   const [scope, setScope] = useState<'global' | 'project'>('global')
   const [requestId, setRequestId] = useState<string | null>(null)
@@ -44,6 +48,10 @@ export default function UploadSkillTab() {
   const busy = Boolean(requestId && !result)
 
   useEffect(() => {
+    if (!insideProject && scope === 'project') setScope('global')
+  }, [insideProject, scope])
+
+  useEffect(() => {
     if (!success) return
     const timer = window.setTimeout(() => closeTab('upload-skill'), 1200)
     return () => window.clearTimeout(timer)
@@ -53,7 +61,7 @@ export default function UploadSkillTab() {
   const onFile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (!file) return
+    if (!file || !insideSkillProject(useKoma.getState().session.id, useKoma.getState().settingsValues?.workdir, useKoma.getState().coding.activeRoot)) return
     setLocalError(null)
     setRequestId(null)
     setSelectedFile(file.name)
@@ -94,9 +102,9 @@ export default function UploadSkillTab() {
           {error && !success && <div role="alert" className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-400">{error}</div>}
 
           {!success && <>
-            <div className="text-[11px]"><span className="mb-1 block opacity-60">Target scope</span><div className="flex gap-1">{(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={busy || (value === 'project' && !sessionId)} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'} disabled:opacity-30`}>{value === 'global' ? 'Global' : 'Project'}</button>)}</div>{!sessionId && <span className="mt-1 block opacity-45">Open a chat to install a Project skill.</span>}</div>
-            <button type="button" onClick={chooseFile} disabled={busy} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] opacity-65 hover:border-koma-accent hover:opacity-100 disabled:cursor-wait disabled:opacity-35"><Upload size={18} />{busy ? 'Installing…' : selectedFile ? `Choose another ZIP (${selectedFile})` : 'Choose .zip package'}</button>
-            <input ref={inputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={onFile} disabled={busy} />
+            <div className="text-[11px]"><span className="mb-1 block opacity-60">Target scope</span><div className="flex gap-1">{(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={busy || !insideProject} title={!insideProject ? (value === 'project' ? 'Open a project to install a Project skill' : 'Open a project to add a skill') : undefined} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'} disabled:opacity-30`}>{value === 'global' ? 'Global' : 'Project'}</button>)}</div>{!insideProject && <span className="mt-1 block opacity-45">Open a project to add a skill. Project scope stays unavailable until then.</span>}</div>
+            <button type="button" onClick={chooseFile} disabled={busy || !insideProject} title={insideProject ? undefined : 'Open a project to add a skill'} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] opacity-65 hover:border-koma-accent hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35"><Upload size={18} />{busy ? 'Installing…' : selectedFile ? `Choose another ZIP (${selectedFile})` : 'Choose .zip package'}</button>
+            <input ref={inputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
             <p className="text-[10px] text-koma-dim">ZIP up to 64 MiB. Must contain a valid SKILL.md.</p>
             {/* Keep these limits aligned with src-agent/src/model/skill/persistence.rs and its safety tests. */}
             <details className="rounded border border-koma-border px-2 py-2 text-koma-fg">

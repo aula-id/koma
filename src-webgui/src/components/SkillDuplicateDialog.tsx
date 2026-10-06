@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillCatalogueEntry, SkillScope } from '../store/koma'
 import { useKoma } from '../store/koma'
+import { insideSkillProject } from './skillProject'
 import { BrailleSpinner } from './BrailleSpinner'
 
 let duplicateSeq = 0
@@ -13,6 +14,9 @@ export function SkillDuplicateDialog({ skills, onClose }: Props) {
   const catalogue = useKoma((s) => s.skills)
   const epoch = useKoma((s) => s.skillSessionEpoch)
   const sessionId = useKoma((s) => s.session.id)
+  const workdirs = useKoma((s) => s.settingsValues?.workdir)
+  const activeRoot = useKoma((s) => s.coding.activeRoot)
+  const insideProject = insideSkillProject(sessionId, workdirs, activeRoot)
   const lastOp = useKoma((s) => s.skillLastOp)
   const openSkillTab = useKoma((s) => s.openSkillTab)
   const [scope, setScope] = useState<Exclude<SkillScope, 'external'>>('global')
@@ -47,9 +51,13 @@ export function SkillDuplicateDialog({ skills, onClose }: Props) {
 
   const existing = useMemo(() => new Set(catalogue.map((skill) => skill.name)), [catalogue])
   const rows = skills.map((source) => ({ source, target: targets[source.skillId] ?? '' }))
-  const invalid = rows.some(({ target }) => !validName.test(target) || existing.has(target)) || (scope === 'project' && !sessionId)
+  const invalid = rows.some(({ target }) => !validName.test(target) || existing.has(target)) || (scope === 'project' && !insideProject)
   const result = requestId && lastOp?.requestId === requestId ? lastOp : null
   const complete = Boolean(result)
+
+  useEffect(() => {
+    if (!insideProject && scope === 'project') setScope('global')
+  }, [insideProject, scope])
 
   useEffect(() => {
     if (!result) return
@@ -83,7 +91,7 @@ export function SkillDuplicateDialog({ skills, onClose }: Props) {
         </div>
         <div className="max-h-[55vh] space-y-3 overflow-auto px-4 py-3">
           <div className="flex gap-1" aria-label="Target scope">
-            {(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={complete || (value === 'project' && !sessionId)} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2 py-1 text-[11px] disabled:opacity-30 ${scope === value ? 'border-koma-accent bg-koma-head' : 'border-koma-border opacity-60'}`}>{value === 'global' ? 'Global' : 'Project'}</button>)}
+            {(['global', 'project'] as const).map((value) => <button type="button" key={value} disabled={complete || (value === 'project' && !insideProject)} title={value === 'project' && !insideProject ? 'Open a project to duplicate into Project scope' : undefined} onClick={() => setScope(value)} aria-pressed={scope === value} className={`rounded border px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40 ${scope === value ? 'border-koma-accent bg-koma-accent/15' : 'border-koma-border'}`}>{value === 'global' ? 'Global' : 'Project'}</button>)}
           </div>
           {rows.map(({ source, target }) => {
             const outcome = result?.outcomes.find((item) => item.name === source.name)
@@ -95,11 +103,11 @@ export function SkillDuplicateDialog({ skills, onClose }: Props) {
               {outcome && <span className={`mt-1 block ${outcome.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>{outcome.status === 'success' ? 'Duplicated' : outcome.error ?? outcome.status}</span>}
             </label>
           })}
-          {scope === 'project' && !sessionId && <p className="text-[11px] text-amber-300">Open a chat session to duplicate into Project scope.</p>}
+          {!insideProject && <p className="text-[11px] text-koma-fg opacity-45">Open a project to duplicate into Project scope. Global stays available.</p>}
         </div>
         <div className="flex justify-end gap-2 border-t border-koma-border px-4 py-3">
-          <button ref={cancelRef} type="button" onClick={onClose} disabled={Boolean(requestId) && !complete} className="rounded px-3 py-1.5 text-[11px] opacity-65 hover:bg-koma-hover disabled:opacity-30">{complete ? 'Close' : 'Cancel'}</button>
-          {!complete && <button type="button" onClick={submit} disabled={invalid || Boolean(requestId)} className="flex items-center gap-1.5 rounded bg-koma-head px-3 py-1.5 text-[11px] disabled:opacity-35">{requestId && <BrailleSpinner size={12} />} Duplicate {skills.length} skill{skills.length === 1 ? '' : 's'}</button>}
+          <button ref={cancelRef} type="button" onClick={onClose} disabled={Boolean(requestId) && !complete} className="rounded px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40">{complete ? 'Close' : 'Cancel'}</button>
+          {!complete && <button type="button" onClick={submit} disabled={invalid || Boolean(requestId)} className="flex items-center gap-1.5 rounded bg-koma-accent px-3 py-1 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">{requestId && <BrailleSpinner size={12} />} Duplicate {skills.length} skill{skills.length === 1 ? '' : 's'}</button>}
         </div>
       </div>
     </div>

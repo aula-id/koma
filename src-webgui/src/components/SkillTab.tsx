@@ -6,9 +6,14 @@ import { MessageBody } from './MessageBody'
 import { SkillDeleteConfirm } from './SkillDeleteConfirm'
 import { SkillDuplicateDialog } from './SkillDuplicateDialog'
 import { Chips, Field, Select, TextInput } from './panels/form'
+import { insideSkillProject } from './skillProject'
 
 type Props = { tab: Extract<Tab, { kind: 'skill' }> }
 let mutationSeq = 0
+
+const actionBtn = 'flex items-center gap-1 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40'
+const dangerBtn = 'flex items-center gap-1 rounded border border-koma-error/40 px-2.5 py-1 text-[12px] font-semibold text-koma-error transition-colors hover:bg-koma-error/10 disabled:cursor-not-allowed disabled:opacity-40'
+const primaryBtn = 'flex items-center gap-1 rounded bg-koma-accent px-3 py-1 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40'
 
 export default function SkillTab({ tab }: Props) {
   const skills = useKoma((s) => s.skills)
@@ -20,6 +25,9 @@ export default function SkillTab({ tab }: Props) {
   const loadedNames = useKoma((s) => s.loadedSkillNames)
   const epoch = useKoma((s) => s.skillSessionEpoch)
   const sessionId = useKoma((s) => s.session.id)
+  const workdirs = useKoma((s) => s.settingsValues?.workdir)
+  const activeRoot = useKoma((s) => s.coding.activeRoot)
+  const insideProject = insideSkillProject(sessionId, workdirs, activeRoot)
   const opResults = useKoma((s) => s.skillOpResults)
   const availableTools = useKoma((s) => s.availableTools)
   const req = useKoma((s) => s.req)
@@ -60,8 +68,8 @@ export default function SkillTab({ tab }: Props) {
   }, [availableTools.length, req])
 
   useEffect(() => {
-    if (!sessionId && scope === 'project') setScope('global')
-  }, [sessionId, scope])
+    if (!insideProject && scope === 'project') setScope('global')
+  }, [insideProject, scope])
 
   useEffect(() => {
     if (isCreate || !entry || detail || pending[tab.id]) return
@@ -116,7 +124,7 @@ export default function SkillTab({ tab }: Props) {
   const stale = sourceUnavailable || sourceChanged
   const loaded = Boolean(detail && loadedNames.includes(detail.name))
   const validCreateName = /^[a-z0-9][a-z0-9_-]*$/.test(name.trim())
-  const canSave = Boolean(!stale && name.trim() && (!isCreate || validCreateName) && description.trim() && (isCreate || (detail?.editable && detail.structuredSaveSupported)))
+  const canSave = Boolean((!isCreate || insideProject) && !stale && name.trim() && (!isCreate || validCreateName) && description.trim() && (isCreate || (detail?.editable && detail.structuredSaveSupported)))
   const busy = Boolean(requestId && !ownResult)
   const confirmationMissing = busy && (requestTimedOut || (requestEpoch.current !== null && requestEpoch.current !== epoch))
   useEffect(() => {
@@ -133,7 +141,7 @@ export default function SkillTab({ tab }: Props) {
   }, [activeFile, companion, detail, pending, readFile, tab.id])
 
   const mutate = (kind: 'create' | 'update', reloadAfterSave = false) => {
-    if (!canSave || busy || (reloadAfterSave && (!loaded || !sessionId))) return
+    if (!canSave || busy || (kind === 'create' && !insideProject) || (reloadAfterSave && (!loaded || !sessionId))) return
     const id = `${kind}-${++mutationSeq}`
     requestEpoch.current = epoch
     setSaveAction(reloadAfterSave ? 'save-reload' : 'save')
@@ -222,9 +230,12 @@ What I want to change:
               <Select
                 value={scope}
                 onChange={setScope}
-                options={sessionId ? [{ value: 'global', label: 'Global' }, { value: 'project', label: 'Project' }] : [{ value: 'global', label: 'Global' }]}
+                options={[
+                  { value: 'global', label: 'Global' },
+                  { value: 'project', label: 'Project', disabled: !insideProject, title: insideProject ? 'Project' : 'Open a project to create a Project skill' },
+                ]}
               />
-              {!sessionId && <span className="text-[11px] text-koma-fg opacity-45">Open a chat to create a Project skill.</span>}
+              {!insideProject && <span className="text-[11px] text-koma-fg opacity-45">Open a project to add a skill. Project scope stays unavailable until then.</span>}
             </Field>
           )}
           <Field label="Description">
@@ -248,16 +259,23 @@ What I want to change:
             </div>
           </Field>
 
-          {!isCreate && <div className="flex min-w-0 gap-1 overflow-x-auto border-b border-koma-border" role="tablist"><button type="button" role="tab" aria-selected={activeFile === null} onClick={() => setActiveFile(null)} className={`flex-none px-2 py-1 text-[11px] ${activeFile === null ? 'border-b-2 border-koma-accent' : 'opacity-50'}`}>SKILL.md</button>{companions.map((path) => <button type="button" role="tab" aria-selected={activeFile === path} key={path} onClick={() => setActiveFile(path)} className={`flex-none px-2 py-1 text-[11px] ${activeFile === path ? 'border-b-2 border-koma-accent' : 'opacity-50'}`}>{path}</button>)}</div>}
+          {!isCreate && <div className="flex min-w-0 gap-1 overflow-x-auto border-b border-koma-border" role="tablist"><button type="button" role="tab" aria-selected={activeFile === null} onClick={() => setActiveFile(null)} className={`flex-none px-2 py-1 text-[11px] text-koma-fg hover:bg-koma-hover ${activeFile === null ? 'border-b-2 border-koma-accent' : ''}`}>SKILL.md</button>{companions.map((path) => <button type="button" role="tab" aria-selected={activeFile === path} key={path} onClick={() => setActiveFile(path)} className={`flex-none px-2 py-1 text-[11px] text-koma-fg hover:bg-koma-hover ${activeFile === path ? 'border-b-2 border-koma-accent' : ''}`}>{path}</button>)}</div>}
 
-          {activeFile ? <Field label={activeFile}><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-hover' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-hover' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{pending[tab.id] && !companion ? <BrailleSpinner size={14} /> : companion?.error ? <div role="alert" className="text-[11px] text-koma-fg opacity-70">{companion.error}</div> : preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{companion?.content.trim() ? <MessageBody text={companion.content} /> : <span className="opacity-45">Empty file.</span>}</div> : <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded border border-koma-border bg-koma-bg p-3 font-mono text-[11px]">{companion?.content ?? ''}</pre>}</Field> : <Field label="Prompt"><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${!preview ? 'bg-koma-hover' : 'opacity-50'}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${preview ? 'bg-koma-hover' : 'opacity-50'}`}><Eye size={11} /> Preview</button></div></div>{preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{instruction.trim() ? <MessageBody text={instruction} /> : <span className="opacity-45">Nothing to preview yet.</span>}</div> : <textarea value={instruction} readOnly={external || stale} onChange={(event) => { dirty.current = true; setInstruction(event.target.value) }} rows={16} spellCheck={false} placeholder="the skill instruction" className="min-h-[320px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip read-only:opacity-70" />}</Field>}
+          {activeFile ? <Field label={activeFile}><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-koma-fg transition-colors hover:bg-koma-hover ${!preview ? 'bg-koma-hover' : ''}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-koma-fg transition-colors hover:bg-koma-hover ${preview ? 'bg-koma-hover' : ''}`}><Eye size={11} /> Preview</button></div></div>{pending[tab.id] && !companion ? <BrailleSpinner size={14} /> : companion?.error ? <div role="alert" className="text-[11px] text-koma-fg opacity-70">{companion.error}</div> : preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{companion?.content.trim() ? <MessageBody text={companion.content} /> : <span className="opacity-45">Empty file.</span>}</div> : <pre className="max-h-[440px] overflow-auto whitespace-pre-wrap rounded border border-koma-border bg-koma-bg p-3 font-mono text-[11px]">{companion?.content ?? ''}</pre>}</Field> : <Field label="Prompt"><div className="mb-1 flex justify-end"><div className="flex rounded border border-koma-border p-0.5"><button type="button" onClick={() => setPreview(false)} aria-pressed={!preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-koma-fg transition-colors hover:bg-koma-hover ${!preview ? 'bg-koma-hover' : ''}`}><Code2 size={11} /> Code</button><button type="button" onClick={() => setPreview(true)} aria-pressed={preview} className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-koma-fg transition-colors hover:bg-koma-hover ${preview ? 'bg-koma-hover' : ''}`}><Eye size={11} /> Preview</button></div></div>{preview ? <div className="min-h-[260px] rounded border border-koma-border bg-koma-bg p-3 text-[12px]">{instruction.trim() ? <MessageBody text={instruction} /> : <span className="opacity-45">Nothing to preview yet.</span>}</div> : <textarea value={instruction} readOnly={external || stale} onChange={(event) => { dirty.current = true; setInstruction(event.target.value) }} rows={16} spellCheck={false} placeholder="the skill instruction" className="min-h-[320px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip read-only:opacity-70" />}</Field>}
         </div>
       </div>
 
       <footer className="flex flex-none flex-wrap items-center justify-end gap-2 border-t border-koma-border px-4 py-2.5">
-        {!isCreate && detail && <>{external && <button type="button" onClick={() => setDuplicate(true)} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35"><Copy size={12} /> Duplicate to Koma</button>}<button type="button" onClick={editWithKoma} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px]"><Bot size={12} /> Edit with Koma</button>{!external && <button type="button" onClick={downloadZip} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35"><Download size={12} /> Download .zip</button>}{!external && <button type="button" onClick={() => setDeleting(true)} disabled={stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] text-red-300 disabled:opacity-35"><Trash2 size={12} /> Delete</button>}<button type="button" title={loaded ? 'Reload from disk' : 'Load into chat'} onClick={() => contextOp(loaded ? 'ReloadSkills' : 'SetSkillsLoaded', true)} disabled={busy || stale} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35">{loaded && <RefreshCw size={12} />}{loaded ? 'Reload' : 'Load'}</button>{loaded && <button type="button" onClick={() => contextOp('SetSkillsLoaded', false)} disabled={busy || stale} className="rounded border border-koma-border px-2 py-1 text-[11px] disabled:opacity-35">Unload</button>}</>}
-        {!external && <button type="button" onClick={() => mutate(isCreate ? 'create' : 'update')} disabled={!canSave || busy} className="flex items-center gap-1 rounded bg-koma-head px-3 py-1 text-[11px] disabled:opacity-35">{busy && saveAction === 'save' && !confirmationMissing && <BrailleSpinner size={12} />} Save</button>}
-        {!isCreate && !external && loaded && sessionId && <button type="button" onClick={() => mutate('update', true)} disabled={!canSave || busy} className="flex items-center gap-1 rounded bg-koma-head px-3 py-1 text-[11px] disabled:opacity-35">{busy && saveAction === 'save-reload' && !confirmationMissing && <BrailleSpinner size={12} />} Save &amp; Reload</button>}
+        {!isCreate && detail && <>
+          {external && <button type="button" onClick={() => setDuplicate(true)} disabled={stale} className={actionBtn}><Copy size={12} /> Duplicate to Koma</button>}
+          <button type="button" onClick={editWithKoma} className={actionBtn}><Bot size={12} /> Edit with Koma</button>
+          {!external && <button type="button" onClick={downloadZip} disabled={stale} className={actionBtn}><Download size={12} /> Download .zip</button>}
+          {!external && <button type="button" onClick={() => setDeleting(true)} disabled={stale} className={dangerBtn}><Trash2 size={12} /> Delete</button>}
+          <button type="button" title={loaded ? 'Reload from disk' : 'Load into chat'} onClick={() => contextOp(loaded ? 'ReloadSkills' : 'SetSkillsLoaded', true)} disabled={busy || stale} className={actionBtn}>{loaded && <RefreshCw size={12} />}{loaded ? 'Reload' : 'Load'}</button>
+          {loaded && <button type="button" onClick={() => contextOp('SetSkillsLoaded', false)} disabled={busy || stale} className={actionBtn}>Unload</button>}
+        </>}
+        {!external && <button type="button" onClick={() => mutate(isCreate ? 'create' : 'update')} disabled={!canSave || busy} className={primaryBtn}>{busy && saveAction === 'save' && !confirmationMissing && <BrailleSpinner size={12} />} Save</button>}
+        {!isCreate && !external && loaded && sessionId && <button type="button" onClick={() => mutate('update', true)} disabled={!canSave || busy} className={primaryBtn}>{busy && saveAction === 'save-reload' && !confirmationMissing && <BrailleSpinner size={12} />} Save &amp; Reload</button>}
       </footer>
       {duplicate && detail && entry && <SkillDuplicateDialog skills={[entry]} onClose={() => setDuplicate(false)} />}
       {deleting && entry && <SkillDeleteConfirm skills={[entry]} onClose={() => setDeleting(false)} />}
