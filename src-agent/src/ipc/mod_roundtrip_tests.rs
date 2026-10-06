@@ -76,6 +76,7 @@ fn sample_session_snapshot() -> SessionSnapshot {
         // serialize -> deserialize (an empty string would alias the default).
         model_routes: Vec::new(),
         resolved_model_id: "anthropic/claude-sonnet-4-5".to_string(),
+        loaded_skill_names: vec!["review".to_string()],
         pending_steer: Vec::new(),
         bash_jobs: vec![],
         file_changes: vec![],
@@ -224,6 +225,96 @@ fn client_request_variants_roundtrip() {
         ClientRequest::QuitSession {
             session_id: "abc".to_string(),
         },
+        ClientRequest::ListSkills {
+            request_id: "skills-1".to_string(),
+            session_epoch: 7,
+        },
+        ClientRequest::GetSkillDetail {
+            skill_id: "opaque".to_string(),
+            generation: "generation".to_string(),
+            request_id: "detail-1".to_string(),
+            session_epoch: 7,
+            tab_id: "skill:opaque".to_string(),
+        },
+        ClientRequest::ReadSkillFile {
+            skill_id: "opaque".to_string(),
+            generation: "generation".to_string(),
+            path: "reference.md".to_string(),
+            request_id: "file-1".to_string(),
+            session_epoch: 7,
+            tab_id: "skill:opaque".to_string(),
+        },
+        ClientRequest::SetSkillsLoaded {
+            names: vec!["review".to_string()],
+            loaded: true,
+            request_id: "load-1".to_string(),
+            session_epoch: 7,
+            tab_id: String::new(),
+        },
+        ClientRequest::ReloadSkills {
+            names: vec!["review".to_string()],
+            request_id: "reload-1".to_string(),
+            session_epoch: 7,
+            tab_id: "skill:opaque".to_string(),
+        },
+        ClientRequest::UpdateSkill {
+            skill_id: "opaque".to_string(),
+            generation: "generation".to_string(),
+            name: "review".to_string(),
+            description: "Review".to_string(),
+            triggers: String::new(),
+            allowed_tools: vec![],
+            instruction: "Updated body".to_string(),
+            reload_after_save: true,
+            target_session_id: Some("chat-one".to_string()),
+            request_id: "save-reload-1".to_string(),
+            session_epoch: 7,
+            tab_id: "skill:opaque".to_string(),
+        },
+        ClientRequest::InstallSkillZip {
+            target: "project".to_string(),
+            name: "packaged".to_string(),
+            data_b64: "UEsDBA==".to_string(),
+            request_id: "upload-1".to_string(),
+            session_epoch: 7,
+            tab_id: "upload-skill".to_string(),
+        },
+        ClientRequest::DownloadSkillZip {
+            skill_id: "opaque".to_string(),
+            generation: "generation".to_string(),
+            save_path: "/tmp/review.zip".to_string(),
+            request_id: "download-1".to_string(),
+            session_epoch: 7,
+            tab_id: "skill:opaque".to_string(),
+        },
+        ClientRequest::DuplicateSkills {
+            target: "global".to_string(),
+            items: vec![crate::model::skill::SkillDuplicateInput {
+                skill_id: "opaque".to_string(),
+                generation: "generation".to_string(),
+                name: "review".to_string(),
+                destination_name: "review-copy".to_string(),
+            }],
+            request_id: "duplicate-1".to_string(),
+            session_epoch: 7,
+            tab_id: "duplicate-dialog".to_string(),
+        },
+        ClientRequest::DeleteSkills {
+            items: vec![crate::model::skill::SkillIdentityInput {
+                skill_id: "opaque".to_string(),
+                generation: "generation".to_string(),
+                name: "review".to_string(),
+            }],
+            request_id: "delete-1".to_string(),
+            session_epoch: 7,
+            tab_id: "delete-dialog".to_string(),
+        },
+        ClientRequest::SetExtraSkillRoots {
+            roots: vec!["/opt/shared-skills".to_string()],
+            request_id: "roots-1".to_string(),
+            session_epoch: 7,
+            tab_id: "settings-skills".to_string(),
+        },
         ClientRequest::QuitDaemon,
     ];
     for v in &variants {
@@ -252,6 +343,43 @@ fn daemon_frame_event_kinds_roundtrip() {
         DaemonFrame {
             seq: 4,
             event: DaemonEvent::Error("boom".to_string()),
+        },
+        DaemonFrame {
+            seq: 5,
+            event: DaemonEvent::SkillValues {
+                request_id: "skills-1".to_string(),
+                session_epoch: 7,
+                skills: Vec::new(),
+                loaded_skill_names: vec!["review".to_string()],
+                error: None,
+            },
+        },
+        DaemonFrame {
+            seq: 6,
+            event: DaemonEvent::SkillDetailValues {
+                request_id: "detail-1".to_string(),
+                session_epoch: 7,
+                tab_id: "skill:opaque".to_string(),
+                detail: None,
+                file_path: None,
+                file_content: None,
+                error: Some("stale".to_string()),
+            },
+        },
+        DaemonFrame {
+            seq: 7,
+            event: DaemonEvent::SkillOp {
+                request_id: "load-1".to_string(),
+                session_epoch: 7,
+                tab_id: String::new(),
+                operation: "load".to_string(),
+                outcomes: vec![crate::model::skill::SkillItemOutcome {
+                    name: "review".to_string(),
+                    status: "success".to_string(),
+                    error: None,
+                }],
+                loaded_skill_names: vec!["review".to_string()],
+            },
         },
     ];
     for f in &frames {

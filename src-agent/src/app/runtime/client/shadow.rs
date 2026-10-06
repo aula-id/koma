@@ -202,6 +202,9 @@ pub(super) fn apply_frame(
         | DaemonEvent::ModelRoutes { .. }
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
+        | DaemonEvent::SkillValues { .. }
+        | DaemonEvent::SkillDetailValues { .. }
+        | DaemonEvent::SkillOp { .. }
         | DaemonEvent::AgentsValues { .. }
         | DaemonEvent::AgentOp { .. }
         | DaemonEvent::OAuthState { .. }

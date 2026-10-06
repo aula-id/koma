@@ -90,9 +90,48 @@ pub(super) fn forward_or_host(
 ) {
     if let Ok(g) = live_req.lock() {
         if let Some(tx) = g.as_ref() {
-            let _ = tx.send(attached);
-            return;
+            if tx.send(attached).is_ok() {
+                return;
+            }
+            // During detach/swap the live slot may still hold a closed sender.
+            // Fall back to the host route rather than dropping the request and
+            // leaving its GUI operation unacknowledged.
         }
     }
     let _ = ctl.send(detached);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_attached_request_channel_uses_host_route_instead_of_losing_save() {
+        let (dead_tx, dead_rx) = std::sync::mpsc::channel();
+        drop(dead_rx);
+        let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
+        let request = ClientRequest::UpdateSkill {
+            skill_id: "opaque".into(),
+            generation: "old".into(),
+            name: "demo".into(),
+            description: "new".into(),
+            triggers: String::new(),
+            allowed_tools: vec![],
+            instruction: "body".into(),
+            reload_after_save: false,
+            target_session_id: None,
+            request_id: "save-1".into(),
+            session_epoch: 1,
+            tab_id: "skill:demo".into(),
+        };
+        forward_or_host(
+            &Mutex::new(Some(dead_tx)),
+            &ctl_tx,
+            request.clone(),
+            HostCtl::SkillMutation(request),
+        );
+        assert!(
+            matches!(ctl_rx.try_recv(), Ok(HostCtl::SkillMutation(ClientRequest::UpdateSkill { request_id, .. })) if request_id == "save-1")
+        );
+    }
 }

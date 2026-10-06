@@ -612,6 +612,10 @@ pub struct SessionRuntime {
     /// Currently loaded skill bodies (name → [`ActiveSkill`]). Injected into the
     /// volatile system tail each request. Ephemeral, never persisted.
     pub active_skills: std::collections::BTreeMap<String, ActiveSkill>,
+    /// Loaded names projected into a thin-client shadow. Kept separate so clients
+    /// never fabricate empty ActiveSkill bodies. Live daemon state uses
+    /// `active_skills`; the browser/TUI shadow uses this set.
+    pub projected_loaded_skill_names: std::collections::BTreeSet<String>,
     /// Start instant of THIS session's `/compact` animation. `Some` only while a
     /// compaction is in flight for this session (set in `Command::Compact`, cleared
     /// once the result is applied). The renderer reads the FOREGROUND session's value
@@ -811,6 +815,7 @@ impl SessionRuntime {
             #[cfg(feature = "linker")]
             graph_generation: 0,
             active_skills: std::collections::BTreeMap::new(),
+            projected_loaded_skill_names: std::collections::BTreeSet::new(),
             compact_anim_start: None,
             compact_apply_at: None,
             compact_pending: None,
