@@ -272,15 +272,15 @@ pub(super) fn push_config(
     let is_koma_free_backed = |m: &crate::model::app_config::ModelEntry| {
         koma_free_provider_uuid.is_some_and(|uuid| m.provider_uuid == uuid)
     };
-    let has_real_koma_free_entry = cfg.models.iter().any(is_koma_free_backed)
-        || cfg.session_models.iter().any(is_koma_free_backed);
-
-    // Invariant: the synthetic "advertised free" row is a placeholder for the
-    // not-yet-minted state ONLY — once a real koma-free-backed entry exists (global or
-    // local), it supersedes the synthetic row instead of duplicating it; that real entry
-    // gets `free:true` so the FREE badge moves onto it. (React re-sorts `free` to the top
-    // regardless, but ordering the synthetic row first here keeps the raw list honest.)
-    let mut models: Vec<PushModel> = if has_real_koma_free_entry {
+    // The quick-picker only lists GLOBAL models. `/free` and the synthetic-row
+    // pick write a SESSION-LOCAL override and never a `config.models` entry, so a
+    // local koma-free row must not hide the advertised one — otherwise picking
+    // koma free (or switching away from it) removes it from the list while the
+    // TUI `/free` command still works. A GLOBAL koma-free model (onboarding
+    // `ensure_koma_free_config`) does supersede the synthetic row, and that real
+    // entry gets `free:true` so the badge moves onto it.
+    let has_global_koma_free_entry = cfg.models.iter().any(is_koma_free_backed);
+    let mut models: Vec<PushModel> = if has_global_koma_free_entry {
         Vec::new()
     } else {
         vec![koma_free_synthetic_model(&cfg.providers)]
@@ -414,5 +414,95 @@ pub(super) fn push_config(
             last.config_json = Some(json.clone());
             push(json);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::app_config::{ApiType, ModelEntry, ModelRole, ProviderConn};
+    use crate::service::koma_free::{KOMA_FREE_MODEL, KOMA_FREE_SENTINEL};
+
+    fn projection(models: Vec<ModelEntry>, session_models: Vec<ModelEntry>) -> ConfigProjection {
+        ConfigProjection {
+            providers: vec![ProviderConn {
+                uuid: "free-prov".into(),
+                name: "koma free".into(),
+                api_type: ApiType::KomaFree,
+                endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.into(),
+                api_key: String::new(),
+                ext_id: None,
+            }],
+            models,
+            session_models,
+            main_configured: Some(true),
+            mcp_servers: vec![],
+            oauth_conn_uuids: vec![],
+            palette: PushPalette {
+                bg: "#000000".into(),
+                fg: "#ffffff".into(),
+                accent: "#39ff14".into(),
+                dim: "#888888".into(),
+                panel: "#111111".into(),
+                warn: "#ffb43c".into(),
+                success: "#00c853".into(),
+                info: "#50c8ff".into(),
+                error: "#ff3c3c".into(),
+                dark: true,
+            },
+            palette_name: "koma".into(),
+            mcp_status: std::collections::HashMap::new(),
+            mcp_errors: std::collections::HashMap::new(),
+            ext_recommended: std::collections::HashMap::new(),
+        }
+    }
+
+    fn local_free() -> ModelEntry {
+        ModelEntry {
+            uuid: "local-free".into(),
+            name: "koma free".into(),
+            model_id: KOMA_FREE_MODEL.into(),
+            provider_uuid: "free-prov".into(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        }
+    }
+
+    /// Global model ids the quick-picker actually lists (`scope == "global"`).
+    fn global_picker_ids(cfg: &ConfigProjection) -> Vec<String> {
+        let mut last = PushState::new();
+        let json = std::cell::RefCell::new(String::new());
+        push_config(Some(cfg), &|s| *json.borrow_mut() = s, &mut last);
+        let v: serde_json::Value = serde_json::from_str(&json.borrow()).unwrap();
+        v["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["scope"] == "global")
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn session_local_koma_free_keeps_advertised_picker_row() {
+        let ids = global_picker_ids(&projection(vec![], vec![local_free()]));
+        assert!(
+            ids.iter().any(|id| id == KOMA_FREE_SENTINEL),
+            "picker lost koma free after a session pin: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn global_koma_free_model_replaces_synthetic_row() {
+        let global = ModelEntry {
+            uuid: "global-free".into(),
+            ..local_free()
+        };
+        let ids = global_picker_ids(&projection(vec![global], vec![]));
+        assert!(
+            !ids.iter().any(|id| id == KOMA_FREE_SENTINEL),
+            "synthetic row duplicated a global koma-free model: {ids:?}"
+        );
+        assert!(ids.iter().any(|id| id == "global-free"));
     }
 }
