@@ -80,6 +80,7 @@ export function pushConfig(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             maxOutputTokens: env.maxOutputTokens ?? 0,
             contextWindowLimit: env.contextWindowLimit ?? 0,
             contextModelAlias: env.contextModelAlias ?? '',
+            extraSkillRoots: env.extraSkillRoots ?? [],
           },
           ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { settings: 'done' }) } : {}),
         }))

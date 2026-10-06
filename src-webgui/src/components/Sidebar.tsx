@@ -7,6 +7,7 @@ import { CodingPanel } from './panels/CodingPanel'
 import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
 import { AgentsPanel } from './panels/AgentsPanel'
+import { SkillsPanel } from './panels/SkillsPanel'
 import { UsagePanel } from './panels/UsagePanel'
 import { ImportGraphPanel } from './panels/ImportGraphPanel'
 import { StorePanel } from './panels/StorePanel'
@@ -17,7 +18,7 @@ import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 import { ErrorBoundary } from './ErrorBoundary'
 
-export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'importGraph' | 'agents' | 'usage' | 'store' | 'remote' | 'diagram' | 'design'
+export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'importGraph' | 'agents' | 'skills' | 'usage' | 'store' | 'remote' | 'diagram' | 'design'
 
 type SidebarProps = {
   width: number
@@ -32,6 +33,7 @@ const TITLES: Record<SidebarView, string> = {
   connector: 'Connector',
   importGraph: 'Import Graph',
   agents: 'Agents',
+  skills: 'Skills',
   usage: 'Usage',
   store: 'Extensions',
   remote: 'Remote',
@@ -148,6 +150,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'connector' && <ConnectorPanel />}
         {view === 'importGraph' && <ImportGraphPanel />}
         {view === 'agents' && <AgentsPanel />}
+        {view === 'skills' && <SkillsPanel />}
         {view === 'usage' && <UsagePanel />}
         {view === 'store' && <StorePanel />}
         {view === 'remote' && <RemotePanel />}

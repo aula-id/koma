@@ -14,6 +14,7 @@ import {
   UserCircle,
   X,
   Download,
+  Library,
   Monitor,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -32,7 +33,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys' | 'computer'
+type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'skills' | 'lsp' | 'sshKeys' | 'computer'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
@@ -44,6 +45,7 @@ const SECTION_ORDER: SectionId[] = [
   'session',
   'computer',
   'activityBar',
+  'skills',
   'lsp',
   'sshKeys',
 ]
@@ -60,13 +62,14 @@ export default function SettingsTab() {
   const sessionRef = useRef<HTMLDivElement>(null)
   const computerRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
+  const skillsRef = useRef<HTMLDivElement>(null)
   const lspRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<SectionId>('account')
 
   const sectionRef = (id: SectionId) => ({
     account: accountRef, appearance: appearanceRef, session: sessionRef,
-    computer: computerRef, activityBar: activityBarRef, lsp: lspRef, sshKeys: sshKeysRef,
+    computer: computerRef, activityBar: activityBarRef, skills: skillsRef, lsp: lspRef, sshKeys: sshKeysRef,
   })[id]
 
   // Nav click → smooth-scroll the pane to the section header.
@@ -124,6 +127,7 @@ export default function SettingsTab() {
           active={active === 'activityBar'}
           onClick={() => goto('activityBar')}
         />
+        <NavItem icon={<Library size={15} />} label="Skills" active={active === 'skills'} onClick={() => goto('skills')} />
         <NavItem
           icon={<Code2 size={15} />}
           label="Language servers"
@@ -172,6 +176,11 @@ export default function SettingsTab() {
               desc="Show or hide activity-bar icons. Hidden icons move into the “…” overflow menu instead of disappearing — drag an icon on the activity bar itself to reorder it."
             />
             <ActivityBarSettings />
+          </section>
+
+          <section ref={skillsRef} className="mt-12">
+            <SectionHeader title="Skills" desc="Add optional read-only External skill locations." />
+            <ExternalSkillRootsSettings />
           </section>
 
           <section ref={lspRef} className="mt-12">
@@ -730,6 +739,89 @@ function SettingRow({
         {desc && <div className="mt-0.5 text-[11.5px] leading-snug text-koma-fg opacity-45">{desc}</div>}
       </div>
       <div className="flex-none">{children}</div>
+    </div>
+  )
+}
+
+// ── Skills ───────────────────────────────────────────────────────────────────
+
+function ExternalSkillRootsSettings() {
+  const values = useKoma((s) => s.settingsValues)
+  const epoch = useKoma((s) => s.skillSessionEpoch)
+  const lastOp = useKoma((s) => s.skillLastOp)
+  const req = useKoma((s) => s.req)
+  const [roots, setRoots] = useState<string[]>([])
+  const [dirty, setDirty] = useState(false)
+  const [requestId, setRequestId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!dirty) setRoots(values?.extraSkillRoots ?? [])
+  }, [dirty, values?.extraSkillRoots])
+
+  const result = requestId && lastOp?.requestId === requestId ? lastOp : null
+  const error = result?.outcomes.find((outcome) => outcome.status === 'failed')?.error
+  const success = result?.outcomes.some((outcome) => outcome.status === 'success')
+  const busy = Boolean(requestId && !result)
+
+  useEffect(() => {
+    if (!success) return
+    setDirty(false)
+  }, [success])
+
+  const update = (index: number, value: string) => {
+    setDirty(true)
+    setRequestId(null)
+    setRoots((current) => current.map((root, i) => i === index ? value : root))
+  }
+
+  const save = () => {
+    const id = `set-roots-${Date.now()}`
+    setRequestId(id)
+    req({
+      r: 'SetExtraSkillRoots',
+      roots: roots.map((root) => root.trim()).filter(Boolean),
+      requestId: id,
+      sessionEpoch: epoch,
+      tabId: 'settings-skills',
+    })
+  }
+
+  return (
+    <div className="space-y-2">
+      {roots.map((root, index) => (
+        <div key={index} className="flex min-w-0 items-center gap-2">
+          <input
+            value={root}
+            onChange={(event) => update(index, event.target.value)}
+            aria-label={`External skill root ${index + 1}`}
+            placeholder="/absolute/path/to/skills"
+            className="h-8 min-w-0 flex-1 rounded border border-koma-border bg-koma-panel px-2 font-mono text-[11px] outline-none focus:border-koma-accent"
+          />
+          <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => current.filter((_, i) => i !== index)) }} aria-label={`Remove External skill root ${index + 1}`} className="flex h-8 w-8 flex-none items-center justify-center rounded border border-koma-border text-red-300 opacity-70 hover:bg-koma-hover hover:opacity-100"><Trash2 size={13} /></button>
+        </div>
+      ))}
+      {!roots.length && <p className="text-[11px] opacity-45">No additional External skill locations configured.</p>}
+      <p className="text-[11px] text-koma-dim">Existing directories only. External locations are read-only.</p>
+      {error && <p role="alert" className="text-[11px] text-red-400">{error}</p>}
+      {success && !dirty && <p role="status" className="text-[11px] text-green-400">External skill locations saved.</p>}
+      <div className="flex items-center gap-2 pt-1">
+        <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => [...current, '']) }} className="flex items-center gap-1 rounded border border-koma-border px-2 py-1 text-[11px] opacity-70 hover:bg-koma-hover hover:opacity-100"><Plus size={12} /> Add location</button>
+        <button type="button" onClick={save} disabled={!dirty || busy || roots.some((root) => !root.trim())} className="flex items-center gap-1 rounded bg-koma-head px-3 py-1 text-[11px] disabled:opacity-35">{busy && <BrailleSpinner size={12} />} Save</button>
+      </div>
+      <details className="rounded border border-koma-border px-2 py-2 text-koma-fg">
+        <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider opacity-60">Automatically searched locations</summary>
+        <div className="mt-2 space-y-2 text-[10px] leading-relaxed text-koma-dim">
+          <ul className="space-y-1">
+            <li><strong className="font-semibold text-koma-fg">Global</strong> — <code>~/.koma/skills</code></li>
+            <li><strong className="font-semibold text-koma-fg">Compatibility (Claude project folder)</strong> — <code>&lt;project&gt;/.claude/skills</code></li>
+            <li><strong className="font-semibold text-koma-fg">Project</strong> — <code>&lt;project&gt;/.agent/skills</code></li>
+            <li><strong className="font-semibold text-koma-fg">Project</strong> — <code>&lt;project&gt;/.agents/skills</code></li>
+            <li><strong className="font-semibold text-koma-fg">External</strong> — locations configured above</li>
+          </ul>
+          <p>Locations are scanned when the Skills panel opens. To scan again, use the circular-arrow button in that panel (<strong className="font-semibold text-koma-fg">Rescan skill locations</strong>). Project locations require an active chat.</p>
+          <p>If skills have the same name, the location listed later wins.</p>
+        </div>
+      </details>
     </div>
   )
 }

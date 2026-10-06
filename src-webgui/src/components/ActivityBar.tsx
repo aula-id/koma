@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, GraduationCap, Shapes, Frame } from 'lucide-react'
+import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, GraduationCap, Shapes, Frame, Library } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -47,6 +47,7 @@ export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
   { view: 'connector', icon: Brain, label: 'Connector' },
   { view: 'importGraph', icon: Network, label: 'Import Graph' },
   { view: 'agents', icon: Bot, label: 'Agents' },
+  { view: 'skills', icon: Library, label: 'Skills' },
   { view: 'usage', icon: ChartColumn, label: 'Usage' },
   { view: 'store', icon: Blocks, label: 'Extensions' },
   { view: 'remote', icon: Server, label: 'Remote' },

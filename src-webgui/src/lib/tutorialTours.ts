@@ -14,6 +14,7 @@ export type TourId =
   | 'sessions-hub'
   | 'composer'
   | 'agents'
+  | 'skills'
   | 'git'
   | 'mcp'
   | 'remote'
@@ -69,6 +70,12 @@ export const TOUR_CATALOGUE: TourMeta[] = [
     id: 'agents',
     title: 'Agents',
     blurb: 'Built-in and custom sub-agents.',
+    kind: 'spotlight',
+  },
+  {
+    id: 'skills',
+    title: 'Skills',
+    blurb: 'Discover, create, load, edit, duplicate, and package reusable instructions.',
     kind: 'spotlight',
   },
   {
@@ -183,6 +190,7 @@ async function ensureSidebarView(view: string, panelSel?: string): Promise<boole
     const labels: Record<string, string> = {
       connector: 'Connector',
       agents: 'Agents',
+      skills: 'Skills',
       git: 'Source Control',
       mcp: 'MCP',
       remote: 'Remote',
@@ -539,6 +547,75 @@ function buildTour(id: TourId): BuiltTour | null {
             targets: ['[data-tour-view="agents"]'],
             title: 'Agents',
             description: 'Built-in and custom sub-agents.',
+            side: 'right',
+          }),
+        ],
+      }
+
+    case 'skills':
+      return {
+        bootstrap: async () => {
+          useKoma.getState().setSkillSelection([])
+          await ensureSidebarView('skills', '[data-tour="skills-panel"]')
+          if (qs('[data-tour="skills-add-back"]')) {
+            click('[data-tour="skills-add-back"]')
+            await waitFor('[data-tour="skills-list"]', 1500)
+          }
+        },
+        steps: [
+          step({
+            targets: ['[data-tour-view="skills"]'],
+            title: 'Skills panel',
+            description: 'Open the dedicated Skills catalogue. Skills stay separate from sub-agents.',
+            side: 'right',
+          }),
+          step({
+            targets: ['[data-tour="skills-search"]', '[data-tour="skills-panel"]'],
+            title: 'Search skills',
+            description: 'Search by name, description, or triggers. Ctrl/Cmd+F focuses this field while the panel is open.',
+            side: 'right',
+          }),
+          step({
+            targets: ['[data-tour="skills-filters"]', '[data-tour="skills-panel"]'],
+            title: 'All and Loaded in chat',
+            description: 'All shows every discovered skill. Loaded in chat shows only skills injected into the active chat. Use Rescan skill locations to scan the applicable locations again.',
+            side: 'right',
+          }),
+          step({
+            targets: ['[data-tour="skills-list"]'],
+            title: 'Ownership and selection',
+            description: 'Global and Project skills are Koma-owned. External skills are read-only. Click selects; Ctrl/Cmd and Shift build a multi-selection; double-click or Enter opens detail.',
+            side: 'right',
+            onNext: async () => {
+              const first = qs<HTMLElement>('[data-tour="skills-list"] [role="option"]')
+              first?.click()
+              await sleep(100)
+            },
+          }),
+          step({
+            targets: ['[data-tour="skills-bulk"]', '[data-tour="skills-list"]'],
+            title: 'Session actions',
+            description: 'Load into chat and Remove from chat change only the active chat. Save writes disk; Save & Reload also updates the current chat when the owned skill is loaded. Reload from disk remains for edits made outside the editor. Duplicate to Koma is for External skills; Delete is only for owned skills.',
+            side: 'right',
+            onNext: async () => {
+              useKoma.getState().setSkillSelection([])
+              await waitFor('[data-tour="skills-add"]', 1200)
+            },
+          }),
+          step({
+            targets: ['[data-tour="skills-add"]', '[data-tour="skills-panel"]'],
+            title: 'Add skill',
+            description: 'Choose Create new, upload a bounded ZIP package, or start a guided Create with Koma chat.',
+            side: 'right',
+            onNext: async () => {
+              click('[data-tour="skills-add"]')
+              await waitFor('[data-tour="skills-add-methods"]', 1200)
+            },
+          }),
+          step({
+            targets: ['[data-tour="skills-add-methods"]', '[data-tour="skills-panel"]'],
+            title: 'Three creation methods',
+            description: 'Create new opens the structured editor. Upload .zip installs a packaged Global/Project skill. Create with Koma starts an editable guided-chat draft.',
             side: 'right',
           }),
         ],

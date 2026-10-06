@@ -281,10 +281,12 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     ),
   detachSession: () => {
     useComputerPreview.getState().hide()
-    get().closeAllTabsExceptChat({ force: true })
+    // A guided first-chat retains its captured editor tabs through detach.
+    if (!get().ui.preserveTabsOnNextSession) get().closeAllTabsExceptChat({ force: true })
     set((s) => ({
       computer: null,
       computerError: null,
+      skillDeletePending: {},
       // Fresh object (not spread from the old session) — nothing about the
       // just-killed session is worth preserving, mirrors initialSession's
       // shape exactly.
@@ -305,6 +307,9 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
         splitTree: { type: 'leaf' as const, id: DEFAULT_GROUP },
         groupSplitDir: {},
         switchingTo: null,
+        preserveTabsOnNextSession: s.ui.preserveTabsOnNextSession,
+        preservedTabLayout: s.ui.preservedTabLayout,
+        preservedTabsTargetSession: s.ui.preservedTabsTargetSession,
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,

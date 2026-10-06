@@ -16,17 +16,37 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         // view). The set reuses it to drop the OLD session's in-flight stream/
         // reasoning (it belongs to the old session — don't let it bleed into the new
         // view until the next send clears it) + reset the editor tabs.
-        const switched = env.session !== get().session.id
+        const previousSessionId = get().session.id
+        const switched = env.session !== previousSessionId
+        const preservedTabLayout = get().ui.preservedTabLayout
+        const preserveEditorTabs = get().ui.preserveTabsOnNextSession || preservedTabLayout !== null
+        const targetSession = get().ui.preservedTabsTargetSession
+        const consumePreservedTabs = preserveEditorTabs && targetSession === env.session
         if (switched) {
           cancelGitRequests()
           useComputerPreview.getState().hide()
           set({ computer: null, computerError: null })
-          get().closeAllTabsExceptChat({ force: true })
+          // Preview.7 releases host resources on a real A→B switch. A guided
+          // detached first-chat attach must retain its captured editor layout.
+          if (previousSessionId !== null && !preserveEditorTabs) {
+            get().closeAllTabsExceptChat({ force: true })
+          }
         }
         // Re-attaching the same session id is still a GUI bootstrap even though
         // it must not discard that session's existing tabs/slices.
         const bootstrapping = !!get().ui.bootstrap
         set((s) => {
+          const uiBeforeSnapshot = preservedTabLayout
+            ? {
+                ...s.ui,
+                ...preservedTabLayout,
+                tabs: preservedTabLayout.tabs.map((tab) => ({ ...tab })),
+                tabGroup: { ...preservedTabLayout.tabGroup },
+                groupActive: { ...preservedTabLayout.groupActive },
+                groupSizes: { ...preservedTabLayout.groupSizes },
+                groupSplitDir: { ...preservedTabLayout.groupSplitDir },
+              }
+            : s.ui
           return {
             session: {
               ...s.session,
@@ -84,17 +104,21 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
+            loadedSkillNames: env.loadedSkillNames ?? [],
             // Snapshot proves attach landed — drop switch chrome immediately so
             // chat can paint. Do NOT invent a synthetic Loading splash here:
             // that held "indexing workspace" over WebKit while the fat Snapshot
             // still parsed, freezing Mac/Linux reopen. Real warm-up still shows
             // when the host emits Loading{active:true}.
             ui: normalizeGroups<KomaState['ui']>({
-              ...s.ui,
+              ...uiBeforeSnapshot,
               switchingTo: null,
+              preserveTabsOnNextSession: preserveEditorTabs && !consumePreservedTabs,
+              preservedTabLayout: consumePreservedTabs ? null : preservedTabLayout,
+              preservedTabsTargetSession: consumePreservedTabs ? null : targetSession,
               ...(switched || bootstrapping
                 ? {
-                    ...(switched
+                    ...(switched && previousSessionId !== null && !preserveEditorTabs
                       ? {
                           tabs: [makeChatTab()],
                           activeTabId: 'chat',
@@ -143,6 +167,21 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                   // Coding documents belong to the host/workspace, not chat.
                   repos: [],
                   activeRepoRoot: null,
+                  skills: [],
+                  skillsLoading: false,
+                  skillsError: null,
+                  skillsUnconfirmed: null,
+                  skillRequestId: null,
+                  skillSessionEpoch: s.skillSessionEpoch + 1,
+                  skillSelection: [],
+                  skillDetails: {},
+                  skillDetailPending: {},
+                  skillDetailErrors: {},
+                  skillFiles: {},
+                  skillOutcomes: [],
+                  skillLastOp: null,
+                  skillOpResults: {},
+                  skillDeletePending: {},
                 }
               : {}),
           }
@@ -153,6 +192,14 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         // session's sub-agent/bash target (the new session's daemon starts with none
         // anyway). Fired AFTER the set so it reads the reset tab state.
         if (switched) get().syncStreamView()
+        // Preserved Skill tabs outlive the session-scoped catalogue/detail cache.
+        // Re-discover in the NEW chat's workdir, then each mounted SkillTab can
+        // request its detail at the new epoch. Do not discover for an unrelated
+        // in-flight Snapshot while a guided chat's target is still pending.
+        if (switched && (!preserveEditorTabs || consumePreservedTabs) &&
+            get().ui.tabs.some((tab) => tab.kind === 'skill' && tab.skillId !== null)) {
+          get().refreshSkills()
+        }
         // Settings / repos after the Snapshot turn so they cannot join the fat
         // apply and freeze the overlay paint.
         if (switched || bootstrapping) {
@@ -173,7 +220,7 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
           // against the hub rows; else fall back to a generic label (e.g. a
           // daemon-driven new session with no hub row yet). Never clobber a
           // nicer label with a raw uuid.
-          if (s.ui.switchingTo && s.ui.bootstrap) return s
+          if (s.ui.switchingTo && s.ui.bootstrap && !s.ui.preserveTabsOnNextSession) return s
           const row =
             s.hub.cooking.find((c) => c.id === env.to) ??
             s.hub.history.find((h) => h.id === env.to)
@@ -181,6 +228,7 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
             ui: {
               ...s.ui,
               switchingTo: s.ui.switchingTo ?? row?.name ?? 'session',
+              preservedTabsTargetSession: s.ui.preserveTabsOnNextSession ? env.to : s.ui.preservedTabsTargetSession,
               bootstrap: s.ui.bootstrap ?? makeBootstrapState(),
               loadingDismissed: false,
             },
@@ -413,7 +461,7 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
             ...(midAttach || !s.ui.switchingTo
               ? {}
               : {
-                  ui: { ...s.ui, switchingTo: null, loading: null, bootstrap: null },
+                  ui: { ...s.ui, switchingTo: null, preserveTabsOnNextSession: false, preservedTabLayout: null, preservedTabsTargetSession: null, loading: null, bootstrap: null },
                 }),
           }
         })

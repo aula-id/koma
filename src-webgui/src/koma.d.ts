@@ -256,6 +256,96 @@ declare global {
     // SettingsValues push (the picker's trigger-pill label updates off that
     // same channel — no dedicated ack).
     | { r: 'SetEffort'; effort: string }
+    // Dedicated Skills transport. Every request carries a session epoch and
+    // correlation id; filesystem authority is only the opaque skillId + generation.
+    | { r: 'GetSkills'; requestId: string; sessionEpoch: number }
+    | {
+        r: 'GetSkillDetail'
+        skillId: string
+        generation: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'ReadSkillFile'
+        skillId: string
+        generation: string
+        path: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'SetSkillsLoaded'
+        names: string[]
+        loaded: boolean
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | { r: 'ReloadSkills'; names: string[]; requestId: string; sessionEpoch: number; tabId: string }
+    | {
+        r: 'CreateSkill'
+        target: 'global' | 'project'
+        name: string
+        description: string
+        triggers: string
+        allowedTools: string[]
+        instruction: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'InstallSkillZip'
+        target: 'global' | 'project'
+        name: string
+        dataB64: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'DownloadSkillZip'
+        skillId: string
+        generation: string
+        name: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'UpdateSkill'
+        skillId: string
+        generation: string
+        name: string
+        description: string
+        triggers: string
+        allowedTools: string[]
+        instruction: string
+        reloadAfterSave?: boolean
+        targetSessionId?: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'DuplicateSkills'
+        target: 'global' | 'project'
+        items: { skillId: string; generation: string; name: string; destinationName: string }[]
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'DeleteSkills'
+        items: { skillId: string; generation: string; name: string }[]
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | { r: 'SetExtraSkillRoots'; roots: string[]; requestId: string; sessionEpoch: number; tabId: string }
     // Agents dashboard: fetch the current agent list + model/provider
     // catalogues. Reply lands as the AgentsValues push envelope — ALWAYS,
     // even un-attached (the host answers with built-in + global agents only,

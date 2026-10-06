@@ -221,7 +221,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
           const hostChanged = (s.remoteState.hostId ?? 'local') !== (env.hostId ?? 'local')
           const languageReset = hostChanged ? { lspDiagnostics: {}, lspDiagCounts: { errors: 0, warnings: 0 }, lspRuntime: [], lspServers: [], lspProgress: {} } : {}
           const hostView = codingHostViews.get(env.hostId ?? 'local')
-          const restoredUi = hostChanged ? normalizeGroups({
+          const restoredUi = hostChanged && !s.ui.preserveTabsOnNextSession ? normalizeGroups({
             ...s.ui,
             tabs: [makeChatTab(), ...(hostView?.ui.tabs.filter(t => t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design') ?? [])],
             activeTabId: hostView?.ui.tabs.some(t => t.id === hostView.ui.activeTabId && (t.kind === 'codingFile' || t.kind === 'diagram' || t.kind === 'design')) ? hostView.ui.activeTabId : 'chat',

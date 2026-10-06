@@ -152,6 +152,7 @@ export function Composer() {
   const composerInsert = useKoma((s) => s.ui.composerInsert)
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
   const composerRefill = useKoma((s) => s.ui.composerRefill)
+  const preserveTabsOnNextSession = useKoma((s) => s.ui.preserveTabsOnNextSession)
   const consumeComposerRefill = useKoma((s) => s.consumeComposerRefill)
   const pendingRewindIndex = useKoma((s) => s.ui.pendingRewindIndex)
   const clearRewind = useKoma((s) => s.clearRewind)
@@ -323,21 +324,9 @@ export function Composer() {
     consumePasteBody()
   }, [pasteBody, consumePasteBody])
 
-  // Consume one-shot rewind refills: REPLACE the draft with the rewound
-  // message's text (unlike composerInsert, which appends) so the user can edit
-  // and resend it. Ack immediately so it doesn't re-fire on rerender.
-  useEffect(() => {
-    if (composerRefill === null) return
-    const draft = chipsFromMessage(composerRefill)
-    setDiagramChips(draft.chips)
-    setDesignChips(draft.designs)
-    setLocalPastes(draft.pastes)
-    setInput(draft.prose)
-    consumeComposerRefill()
-  }, [composerRefill, consumeComposerRefill])
-
   // First mount must not wipe in-flight diagram attaches. Only a real session
-  // change clears the draft.
+  // change clears the draft. Run BEFORE the refill effect: the guided first-chat
+  // template should be applied after the new session has cleared the old draft.
   const sessionSeenRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     if (sessionSeenRef.current === undefined) {
@@ -359,6 +348,18 @@ export function Composer() {
     consumePendingComposerAttachmentInserts()
     seenAttachmentMarkers.current = new Set()
   }, [sessionId, consumePendingComposerAttachmentInserts])
+
+  // Rewind refills apply immediately. A guided Skills draft must wait for the
+  // requested chat's Snapshot; otherwise the session-change reset erases it.
+  useEffect(() => {
+    if (composerRefill === null || preserveTabsOnNextSession) return
+    const draft = chipsFromMessage(composerRefill)
+    setDiagramChips(draft.chips)
+    setDesignChips(draft.designs)
+    setLocalPastes(draft.pastes)
+    setInput(draft.prose)
+    consumeComposerRefill()
+  }, [composerRefill, consumeComposerRefill, preserveTabsOnNextSession])
 
   // Steer cap: the daemon queues at most 5 pending mid-turn submits; the 6th is
   // dropped host-side with a toast, so gate send at the cap.
