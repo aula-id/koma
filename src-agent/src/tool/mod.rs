@@ -791,9 +791,26 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
     let joined = ws.join(bare);
     let candidate = partial_canonicalize(&joined);
     if !candidate.starts_with(&ws) {
-        bail!("path '{bare}' is outside workspace [{ws_idx}]");
+        bail!("{}", outside_workspace_message(bare, ws_idx));
     }
     Ok(candidate)
+}
+
+fn outside_workspace_message(path: &str, ws_idx: usize) -> String {
+    let shown = path.replace('\\', "/");
+    let lower = shown.to_ascii_lowercase();
+    let skill_file = lower.ends_with("/skill.md")
+        || lower.contains("/.koma/skills/")
+        || lower.contains("/.agents/skills/")
+        || lower.contains("/.agent/skills/")
+        || lower.contains("/.claude/skills/");
+    if skill_file {
+        format!(
+            "path '{shown}' is outside workspace [{ws_idx}]. Skill files are not written with write. Use skill with action create."
+        )
+    } else {
+        format!("path '{shown}' is outside workspace [{ws_idx}]")
+    }
 }
 
 /// Resolve a path for READ-ONLY tools, forgiving a dropped [N] prefix.

@@ -11,6 +11,9 @@ use super::{Tool, ToolCtx};
 pub const SKILL_LOAD_PREFIX: &str = "__skill_load__::";
 /// Sentinel prefix on a successful `unload` result.
 pub const SKILL_UNLOAD_PREFIX: &str = "__skill_unload__::";
+/// Sentinel prefix on a successful `create` result. The runtime strips it and
+/// rebuilds the skill catalogue before the model sees the message.
+pub const SKILL_CREATE_PREFIX: &str = "__skill_create__::";
 
 /// Result when `load` is asked for a skill whose body is already in context.
 /// Not a load sentinel, so the runtime must not replace the stored body.
@@ -20,7 +23,7 @@ pub fn already_active_message(name: &str) -> String {
     )
 }
 
-/// Load, unload, or list Agent Skills.
+/// Load, unload, list, or create Agent Skills.
 pub struct Skill;
 
 impl Tool for Skill {
@@ -29,14 +32,16 @@ impl Tool for Skill {
     }
 
     fn description(&self) -> &'static str {
-        "Load or unload an Agent Skill into the session context. Skills are \
-         catalogues of name+description in the system prompt; full bodies are \
-         only injected after load. action=\"load\" loads the body for this and \
-         later turns. If the skill is already active, load does not read the \
-         file or replace the body. action=\"unload\" removes it; action=\"list\" \
-         shows available skills and marks active ones with [ACTIVE]. Dir-form \
-         skills (bar/SKILL.md) list companion files in the load result — use \
-         `read` with absolute paths under skill_dir to access them."
+        "Load, unload, list, or create an Agent Skill. action=\"load\" injects \
+         the body for this and later turns. If the skill is already active, \
+         load does not read the file or replace the body. action=\"unload\" \
+         removes it. action=\"list\" shows skills and marks active ones with \
+         [ACTIVE]. action=\"create\" makes a new skill. Do not use write or \
+         edit for skill files; those folders are outside the workspace. create \
+         needs name, description, and instruction. scope (or location) is \
+         project (default, this workspace) or global (every project). Only the \
+         main agent chat calls create. Dir-form skills list companion files in \
+         the load result — use `read` with absolute paths under skill_dir."
     }
 
     fn parameters(&self) -> Value {
@@ -45,12 +50,25 @@ impl Tool for Skill {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load, unload, or list",
-                    "enum": ["load", "unload", "list"]
+                    "description": "load, unload, list, or create",
+                    "enum": ["load", "unload", "list", "create"]
                 },
                 "name": {
                     "type": "string",
-                    "description": "Skill name (for load/unload)"
+                    "description": "Skill name. Required for load, unload, and create. Lowercase words and hyphens, like review-notes."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "create only. One line shown in the skill list."
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "create only. Plain steps to follow when this skill is loaded."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "global"],
+                    "description": "create only. Where to save: project (default) or global. location is accepted as the same field."
                 }
             },
             "required": ["action"]
@@ -106,6 +124,7 @@ impl Tool for Skill {
                     .to_lowercase();
                 Ok(format!("{SKILL_UNLOAD_PREFIX}{name}"))
             }
+            "create" => create_skill(ctx, args),
             "list" => {
                 let active = ctx.active_skill_names.as_deref().unwrap_or(&[]);
                 match ctx.skill_registry.as_ref() {
@@ -128,6 +147,73 @@ impl Tool for Skill {
             other => Err(anyhow::anyhow!("unknown action: {other}")),
         }
     }
+}
+
+fn create_skill(ctx: &ToolCtx, args: &Value) -> Result<String> {
+    let name = required_text(args, "name")?;
+    let description = required_text(args, "description")?;
+    let instruction = required_text(args, "instruction")?;
+    let scope = args
+        .get("scope")
+        .or_else(|| args.get("location"))
+        .and_then(Value::as_str)
+        .unwrap_or("project")
+        .trim()
+        .to_lowercase();
+    let target = match scope.as_str() {
+        "" | "project" => crate::model::skill::OwnedSkillTarget::Project,
+        "global" => crate::model::skill::OwnedSkillTarget::Global,
+        _ => anyhow::bail!("scope must be \"project\" or \"global\""),
+    };
+    let workdir = match target {
+        crate::model::skill::OwnedSkillTarget::Project => Some(project_root(ctx)?),
+        crate::model::skill::OwnedSkillTarget::Global => None,
+    };
+    let path = crate::model::skill::create_owned_skill(
+        workdir,
+        target,
+        name,
+        &crate::model::skill::SkillEdit {
+            description: description.to_string(),
+            triggers: String::new(),
+            allowed_tools: Vec::new(),
+            instruction: instruction.to_string(),
+        },
+    )?;
+    let shown = path.to_string_lossy().replace('\\', "/");
+    let scope_label = if matches!(target, crate::model::skill::OwnedSkillTarget::Global) {
+        "global"
+    } else {
+        "project"
+    };
+    Ok(format!(
+        "{SKILL_CREATE_PREFIX}Created {scope_label} skill '{name}'.\nPath: {shown}\nIt is not loaded yet. Next, call skill({{\"action\":\"load\",\"name\":\"{name}\"}})."
+    ))
+}
+
+fn required_text<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing {key}"))
+}
+
+fn project_root(ctx: &ToolCtx) -> Result<&std::path::Path> {
+    ctx.workspaces
+        .iter()
+        .find(|path| !path.as_os_str().is_empty())
+        .map(std::path::PathBuf::as_path)
+        .or_else(|| {
+            if ctx.workspace.as_os_str().is_empty() {
+                None
+            } else {
+                Some(ctx.workspace.as_path())
+            }
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("No project is open. Use scope \"global\", or open a project.")
+        })
 }
 
 #[cfg(test)]
@@ -173,5 +259,56 @@ mod tests {
             .unwrap();
         assert_eq!(result, already_active_message("te33"));
         assert!(!result.starts_with(SKILL_LOAD_PREFIX));
+    }
+
+    #[test]
+    fn skill_create_defaults_to_the_project_folder() {
+        let root = std::env::temp_dir().join(format!("koma-skill-maker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ctx = ctx(None);
+        ctx.workspace = root.clone();
+        ctx.workspaces = vec![root.clone()];
+        let result = Skill
+            .run(
+                &ctx,
+                &json!({
+                    "action": "create",
+                    "name": "wdym",
+                    "description": "Explain a short confusing phrase.",
+                    "instruction": "Restate the user's last message in plain words."
+                }),
+            )
+            .unwrap();
+        assert!(result.starts_with(SKILL_CREATE_PREFIX));
+        let result = result.trim_start_matches(SKILL_CREATE_PREFIX);
+        let entry = root.join(".agents/skills/wdym/SKILL.md");
+        assert!(entry.is_file(), "{result}");
+        assert!(result.contains("Created project skill 'wdym'."));
+        assert!(result.contains("skill({\"action\":\"load\",\"name\":\"wdym\"})"));
+        let body = std::fs::read_to_string(&entry).unwrap();
+        assert!(body.contains("description: Explain a short confusing phrase."));
+        assert!(body.contains("Restate the user's last message"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn skill_create_rejects_a_bad_scope_without_writing() {
+        let ctx = ctx(None);
+        let error = Skill
+            .run(
+                &ctx,
+                &json!({
+                    "action": "create",
+                    "name": "wdym",
+                    "description": "Explain.",
+                    "instruction": "Explain.",
+                    "scope": "home"
+                }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("project"));
+        assert!(error.contains("global"));
     }
 }

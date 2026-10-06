@@ -224,6 +224,10 @@ pub fn build_system_prompt(
                  \"# Skill: <name>\" below, or a [ACTIVE] mark from skill(list), \
                  means that skill is already in context — do not load it again. \
                  Unload with action=unload when done. \
+                 Create a skill with skill({\"action\":\"create\",\"name\":\"...\",\
+                 \"description\":\"...\",\"instruction\":\"...\"}). scope is \
+                 project (default) or global. Do not use write or edit; skill \
+                 folders are outside the workspace. \
                  Dir-form skills list companion files in the load result; \
                  read them with `read` using absolute paths under skill_dir.\n",
             );

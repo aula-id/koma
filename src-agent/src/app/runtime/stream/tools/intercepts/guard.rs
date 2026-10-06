@@ -484,6 +484,11 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
                     None => format!("loaded skill '{name}' — body injected into context."),
                 }
             }
+        } else if let Some(message) = result.strip_prefix(crate::tool::skill::SKILL_CREATE_PREFIX) {
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                sess.rebuild_system();
+            }
+            message.to_string()
         } else if let Some(name) = result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX) {
             let name = name.trim().to_string();
             state.rest.sessions[sess_idx].active_skills.remove(&name);
