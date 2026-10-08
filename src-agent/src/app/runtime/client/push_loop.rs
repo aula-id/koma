@@ -1549,16 +1549,42 @@ pub(super) fn push_loop(
                 // Terminal sessions are managed host-side via the shared
                 // TerminalManager. On a live remote attach, spawn ssh -t into
                 // the remote host (same mux/auth as the agent bridge).
-                Ok(super::HostCtl::TerminalCreate { id, cwd }) => {
+                Ok(super::HostCtl::TerminalShells {
+                    request_id,
+                    context,
+                }) => {
+                    if context
+                        == remote_ctx
+                            .map(|ctx| ctx.host_id.as_str())
+                            .unwrap_or("local")
+                    {
+                        super::terminal_host::discover_async(
+                            terminal_manager.clone(),
+                            request_id,
+                            context,
+                            remote_ctx
+                                .map(|ctx| (ctx.target.clone(), ctx.password().map(str::to_owned))),
+                        );
+                    }
+                }
+                Ok(super::HostCtl::TerminalCreate { id, cwd, shell_id }) => {
                     if let Ok(mut mgr) = terminal_manager.lock() {
                         let result = if let Some(ctx) = remote_ctx {
                             // Prefer explicit cwd from the UI; else session workdir
                             // is unknown here — remote $HOME via interactive shell.
-                            mgr.create_remote(id, &ctx.target, ctx.password(), cwd.as_deref())
+                            mgr.create_remote(
+                                id.clone(),
+                                &ctx.target,
+                                &ctx.host_id,
+                                ctx.password(),
+                                cwd.as_deref(),
+                                shell_id.as_deref(),
+                            )
                         } else {
-                            mgr.create(id, cwd)
+                            mgr.create(id.clone(), cwd, shell_id.as_deref())
                         };
                         if let Err(e) = result {
+                            mgr.report_error(&id, &e.to_string());
                             crate::model::store::append_global_error_log(
                                 "terminal",
                                 &format!("terminal create failed: {e}"),

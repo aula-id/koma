@@ -1607,9 +1607,23 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // Terminal sessions are managed host-side via the shared
             // TerminalManager. These routes delegate to it; the reader
             // threads spawned by `create` push output/exit envelopes.
-            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+            Ok(HostCtl::TerminalShells {
+                request_id,
+                context,
+            }) => {
+                if context == "local" {
+                    super::terminal_host::discover_async(
+                        terminal_manager.clone(),
+                        request_id,
+                        context,
+                        None,
+                    );
+                }
+            }
+            Ok(HostCtl::TerminalCreate { id, cwd, shell_id }) => {
                 if let Ok(mut mgr) = terminal_manager.lock() {
-                    if let Err(e) = mgr.create(id, cwd) {
+                    if let Err(e) = mgr.create(id.clone(), cwd, shell_id.as_deref()) {
+                        mgr.report_error(&id, &e.to_string());
                         crate::model::store::append_global_error_log(
                             "terminal",
                             &format!("terminal create failed: {e}"),
@@ -2053,13 +2067,32 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 // Mutations intentionally deferred — hub stays on current host.
                 push_remote_hosts_list(push, Some(&ctx.host_id));
             }
-            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+            Ok(HostCtl::TerminalShells {
+                request_id,
+                context,
+            }) => {
+                if context == ctx.host_id.as_str() {
+                    super::terminal_host::discover_async(
+                        terminal_manager.clone(),
+                        request_id,
+                        context,
+                        Some((ctx.target.clone(), ctx.password().map(str::to_owned))),
+                    );
+                }
+            }
+            Ok(HostCtl::TerminalCreate { id, cwd, shell_id }) => {
                 // Remote hub: always open a shell on the live remote host, never
                 // the local machine the GUI is running on.
                 if let Ok(mut mgr) = terminal_manager.lock() {
-                    if let Err(e) =
-                        mgr.create_remote(id, &ctx.target, ctx.password(), cwd.as_deref())
-                    {
+                    if let Err(e) = mgr.create_remote(
+                        id.clone(),
+                        &ctx.target,
+                        &ctx.host_id,
+                        ctx.password(),
+                        cwd.as_deref(),
+                        shell_id.as_deref(),
+                    ) {
+                        mgr.report_error(&id, &e.to_string());
                         crate::model::store::append_global_error_log(
                             "terminal",
                             &format!("terminal create failed: {e}"),

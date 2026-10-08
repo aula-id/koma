@@ -757,6 +757,7 @@ export type PushEnvelope =
       dirs?: string[]
       error?: string | null
     }
+  | ({ k: 'TerminalShells' } & import('../../lib/terminalShells').TerminalShellReply)
   // ─── GUI terminal view ──────────────────────────────────────────────
   | {
       k: 'TerminalOutput'

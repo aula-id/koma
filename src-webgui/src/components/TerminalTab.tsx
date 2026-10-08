@@ -89,6 +89,9 @@ export function TerminalTab({ tab }: TerminalTabProps) {
       term.write(data)
     }
 
+    const pending = (globalThis as any).__terminalPending
+    if (pending?.[terminalId]) { term.write(pending[terminalId]); delete pending[terminalId] }
+
     // Register exit handler.
     if (!(globalThis as any).__terminalExitHandlers) {
       ;(globalThis as any).__terminalExitHandlers = {}

@@ -110,7 +110,6 @@ function RootLayout() {
   const openTutorialTab = useKoma((s) => s.openTutorialTab)
   const openTerminalTab = useKoma((s) => s.openTerminalTab)
   // Counter for generating unique terminal IDs.
-  const terminalCountRef = useRef(0)
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
   // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
@@ -124,22 +123,11 @@ function RootLayout() {
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
   // Host opens a remote shell (ssh -t) when remote hub/session is live; local otherwise.
-  const handleTerminal = () => {
-    terminalCountRef.current += 1
-    const n = terminalCountRef.current
+  const handleTerminal = (shell: { id?: string; label: string }) => {
     const rs = useKoma.getState().remoteState
     const remoteLive = rs.state === 'ready' || rs.state === 'connected'
-    const hostLabel =
-      remoteLive && rs.user && rs.host ? `${rs.user}@${rs.host}` : null
-    const title = hostLabel
-      ? n === 1
-        ? hostLabel
-        : `${hostLabel} ${n}`
-      : n === 1
-        ? 'Terminal'
-        : `Terminal ${n}`
-    const id = `t${Date.now()}`
-    openTerminalTab(id, title)
+    const host = remoteLive && rs.host ? `${rs.user}@${rs.host}` : null
+    openTerminalTab(crypto.randomUUID(), host ? `${shell.label} · ${host}` : shell.label, shell.id)
   }
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host

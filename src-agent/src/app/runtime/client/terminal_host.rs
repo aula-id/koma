@@ -41,6 +41,194 @@ use crate::remote::RemoteTarget;
 
 use super::push_proto::{push_terminal_exit, push_terminal_output};
 
+const POSIX_DISCOVERY: &str = r#"{
+  printf '%s\n' "$SHELL"
+  if [ -r /etc/shells ]; then cat /etc/shells; fi
+  for s in bash zsh fish sh dash ksh nu pwsh; do command -v "$s" || :; done
+} | while IFS= read -r s; do
+  case "$s" in /*) if [ -f "$s" ] && [ -x "$s" ]; then
+    if command -v realpath >/dev/null 2>&1; then realpath "$s"; else printf '%s\n' "$s"; fi
+  fi;; esac
+done"#;
+
+pub(crate) fn shell_args(shell: &str) -> &'static [&'static str] {
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+    match name.trim_end_matches(".exe") {
+        "cmd" => &[],
+        "powershell" | "pwsh" => &["-NoLogo", "-NoExit"],
+        "nu" => &["--login", "--interactive"],
+        "bash" | "rbash" | "zsh" | "fish" | "sh" | "dash" | "ksh" => &["-l", "-i"],
+        _ => &[],
+    }
+}
+
+fn executable(path: &std::path::Path) -> bool {
+    let Ok(meta) = path.metadata() else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    paths
+        .into_iter()
+        .filter(|p| executable(p))
+        .filter_map(|p| {
+            let key = std::fs::canonicalize(&p).ok()?;
+            #[cfg(windows)]
+            let key = key.to_string_lossy().to_lowercase();
+            if seen.insert(key) {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn local_shells() -> anyhow::Result<Vec<String>> {
+    let mut paths = Vec::new();
+    #[cfg(not(windows))]
+    {
+        if let Ok(shell) = std::env::var("SHELL") {
+            paths.push(PathBuf::from(shell));
+        }
+        match std::fs::read_to_string("/etc/shells") {
+            Ok(shells) => paths.extend(
+                shells
+                    .lines()
+                    .map(str::trim)
+                    .filter(|s| s.starts_with('/'))
+                    .map(PathBuf::from),
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(bash) = crate::tool::shell::find_git_bash() {
+            paths.push(bash);
+        }
+        if let Ok(shell) = std::env::var("COMSPEC") {
+            paths.push(PathBuf::from(shell));
+        }
+        if let Ok(root) = std::env::var("SystemRoot") {
+            paths.push(PathBuf::from(&root).join("System32/WindowsPowerShell/v1.0/powershell.exe"));
+            paths.push(PathBuf::from(root).join("System32/cmd.exe"));
+        }
+        for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(root) = std::env::var(variable) {
+                let root = PathBuf::from(root);
+                paths.push(root.join("Git/bin/bash.exe"));
+                paths.push(root.join("Programs/Git/bin/bash.exe"));
+                if let Ok(versions) = std::fs::read_dir(root.join("PowerShell")) {
+                    paths.extend(versions.flatten().map(|v| v.path().join("pwsh.exe")));
+                }
+                paths.push(root.join("Microsoft/WindowsApps/pwsh.exe"));
+            }
+        }
+    }
+    #[cfg(windows)]
+    let names = ["bash.exe", "pwsh.exe", "powershell.exe", "cmd.exe"];
+    #[cfg(not(windows))]
+    let names = ["bash", "zsh", "fish", "sh", "dash", "ksh", "nu", "pwsh"];
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            paths.extend(names.iter().map(|name| dir.join(name)));
+        }
+    }
+    Ok(unique_paths(paths)
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
+}
+
+fn shell_label(path: &str) -> String {
+    match path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches(".exe")
+    {
+        "powershell" => "Windows PowerShell".into(),
+        "pwsh" => "PowerShell".into(),
+        #[cfg(windows)]
+        "bash" => "Git Bash".into(),
+        name => name.to_string(),
+    }
+}
+
+pub(super) fn discover_async(
+    manager: Arc<std::sync::Mutex<TerminalManager>>,
+    request_id: String,
+    context: String,
+    remote: Option<(RemoteTarget, Option<String>)>,
+) {
+    std::thread::spawn(move || {
+        let result = match remote {
+            Some((target, password)) => (|| -> anyhow::Result<Vec<String>> {
+                let auth = password.map(SshAuth::from_password).transpose()?;
+                let output = ssh::shell_discovery(&target, auth.as_ref(), POSIX_DISCOVERY)?;
+                Ok(output
+                    .lines()
+                    .filter(|s| s.starts_with('/'))
+                    .map(str::to_owned)
+                    .collect())
+            })(),
+            None => local_shells(),
+        };
+        if let Ok(mut mgr) = manager.lock() {
+            let mut shells = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let error = match result {
+                Ok(paths) => {
+                    for path in paths {
+                        if !seen.insert(path.clone()) {
+                            continue;
+                        }
+                        let id = mgr
+                            .shells
+                            .iter()
+                            .find(|(_, (host, executable))| host == &context && executable == &path)
+                            .map(|(id, _)| id.clone())
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                        shells.push(serde_json::json!({"id": id, "label": shell_label(&path)}));
+                        mgr.shells.insert(id, (context.clone(), path));
+                    }
+                    None
+                }
+                Err(e) => Some(e.to_string()),
+            };
+            let envelope = super::push_proto::PushEnvelope::TerminalShells {
+                request_id,
+                context,
+                shells,
+                error,
+            };
+            if let Ok(json) = serde_json::to_string(&envelope) {
+                (mgr.push)(json);
+            }
+        }
+    });
+}
+
 /// Resolve the default shell for the current platform.
 ///
 /// Windows prefers Git for Windows (or the MSI fallback under `shell\`), and
@@ -118,6 +306,7 @@ struct TerminalSession {
 /// host-swapper and host-attached control loops via `Arc<Mutex<...>>`.
 pub(super) struct TerminalManager {
     sessions: HashMap<String, TerminalSession>,
+    shells: HashMap<String, (String, String)>,
     /// An owned clone of the host-relay's push sink so reader threads can push
     /// envelopes without borrowing the caller's stack frame.
     push: Arc<dyn Fn(String) + Send + Sync>,
@@ -129,6 +318,7 @@ impl TerminalManager {
     pub fn new(push: impl Fn(String) + Send + Sync + 'static) -> Self {
         Self {
             sessions: HashMap::new(),
+            shells: HashMap::new(),
             push: Arc::new(push),
         }
     }
@@ -136,25 +326,43 @@ impl TerminalManager {
     /// Spawn a new **local** PTY session. `id` is a stable identifier from the
     /// React side; `cwd` is the working directory (falls back to the process cwd
     /// if `None`).
-    pub fn create(&mut self, id: String, cwd: Option<String>) -> anyhow::Result<()> {
-        let shell = platform_shell();
+    pub fn create(
+        &mut self,
+        id: String,
+        cwd: Option<String>,
+        shell_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let shell = match shell_id {
+            Some(id) => {
+                let (context, path) = self
+                    .shells
+                    .get(id)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown shell; reopen the shell picker"))?;
+                anyhow::ensure!(
+                    context == "local" && executable(std::path::Path::new(path)),
+                    "Selected shell is no longer available"
+                );
+                path.clone()
+            }
+            None => platform_shell(),
+        };
 
         let mut cmd = CommandBuilder::new(&shell);
+        let args = shell_args(&shell);
         #[cfg(windows)]
-        if let Some(bash) = crate::tool::shell::find_git_bash() {
-            if shell == bash.display().to_string() {
-                // Interactive, not `--login`, so a bundled tree does not need
-                // Git's profile. `MSYSTEM` and `usr\bin` come from the same
-                // helper the agent shell uses.
-                cmd.arg("-i");
-                for (key, value) in crate::tool::shell::git_bash_env(&bash) {
-                    cmd.env(key, value);
-                }
+        let mut args = args;
+        #[cfg(windows)]
+        if shell_label(&shell) == "Git Bash" {
+            // Every discovered Git Bash gets the same MSYS environment, including
+            // alternate installations selected from PATH or standard locations.
+            let bash = PathBuf::from(&shell);
+            args = &["-i"];
+            for (key, value) in crate::tool::shell::git_bash_env(&bash) {
+                cmd.env(key, value);
             }
         }
-        #[cfg(not(windows))]
-        {
-            cmd.arg("--login");
+        for arg in args {
+            cmd.arg(arg);
         }
         if let Some(dir) = &cwd {
             cmd.cwd(dir);
@@ -173,15 +381,35 @@ impl TerminalManager {
         &mut self,
         id: String,
         target: &RemoteTarget,
+        context: &str,
         password: Option<&str>,
         cwd: Option<&str>,
+        shell_id: Option<&str>,
     ) -> anyhow::Result<()> {
         let auth = match password {
             Some(pw) => Some(SshAuth::from_password(pw.to_string())?),
             None => None,
         };
-        let cmd = ssh::interactive_shell_command(target, auth.as_ref(), cwd)?;
+        let shell = shell_id
+            .map(|id| {
+                self.shells
+                    .get(id)
+                    .filter(|(host, _)| host == context)
+                    .map(|(_, path)| path.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Unknown shell; reopen the shell picker"))
+            })
+            .transpose()?;
+        let cmd = ssh::interactive_shell_command(target, auth.as_ref(), cwd, shell)?;
         self.spawn_cmd(id, cmd, auth, None)
+    }
+
+    pub fn report_error(&self, id: &str, error: &str) {
+        push_terminal_output(
+            &*self.push,
+            id,
+            &format!("\r\nTerminal launch failed: {error}\r\n"),
+        );
+        push_terminal_exit(&*self.push, id, Some(1));
     }
 
     fn spawn_cmd(
@@ -288,6 +516,127 @@ impl TerminalManager {
             let _ = session.child.kill();
             drop(session.master);
             drop(session._auth);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_shell_arguments() {
+        for shell in [
+            "/bin/bash",
+            "/bin/sh",
+            "/bin/dash",
+            "/bin/zsh",
+            "/bin/fish",
+            "/bin/ksh",
+        ] {
+            assert_eq!(shell_args(shell), ["-l", "-i"]);
+        }
+        assert_eq!(shell_args("/opt/nu"), ["--login", "--interactive"]);
+        assert_eq!(
+            shell_args("C:\\PowerShell\\pwsh.exe"),
+            ["-NoLogo", "-NoExit"]
+        );
+        assert_eq!(shell_args("powershell.exe"), ["-NoLogo", "-NoExit"]);
+        assert!(shell_args("cmd.exe").is_empty());
+        assert!(shell_args("/usr/bin/custom-shell").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_executable_filter_and_deduplication() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("koma-shell-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("shell");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let alias = dir.join("alias");
+        symlink(&file, &alias).unwrap();
+        assert_eq!(
+            unique_paths(vec![
+                file.clone(),
+                alias,
+                file.clone(),
+                dir.clone(),
+                dir.join("missing")
+            ]),
+            vec![file.clone()]
+        );
+        let mut mgr = TerminalManager::new(|_| {});
+        mgr.shells.insert(
+            "missing".into(),
+            ("local".into(), file.to_string_lossy().into_owned()),
+        );
+        std::fs::remove_file(&file).unwrap();
+        assert!(mgr.create("id".into(), None, Some("missing")).is_err());
+        assert!(mgr.create("id".into(), None, Some("unknown")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_posix_discovery_filters_executables() {
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", POSIX_DISCOVERY])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let paths: Vec<_> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(PathBuf::from)
+            .collect();
+        assert!(!paths.is_empty());
+        assert!(paths.iter().all(|p| executable(p)));
+        assert!(local_shells()
+            .unwrap()
+            .iter()
+            .all(|p| executable(std::path::Path::new(p))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_selected_shell_starts_in_workdir() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut manager = TerminalManager::new(move |s| {
+            let _ = tx.send(s);
+        });
+        let cwd = std::env::temp_dir();
+        for shell in ["/bin/bash", "/bin/sh", "/bin/dash"] {
+            if !executable(std::path::Path::new(shell)) {
+                continue;
+            }
+            manager
+                .shells
+                .insert(shell.into(), ("local".into(), shell.into()));
+            manager
+                .create(
+                    shell.into(),
+                    Some(cwd.to_string_lossy().into_owned()),
+                    Some(shell),
+                )
+                .unwrap();
+            manager.input(shell, "printf '\x53HELL=%s CWD=%s\n' \"$0\" \"$PWD\"\n");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let expected = format!("SHELL={shell} CWD={}", cwd.display());
+            let mut text = String::new();
+            while !text.contains(&expected) && std::time::Instant::now() < deadline {
+                if let Ok(json) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    let env: serde_json::Value = serde_json::from_str(&json).unwrap();
+                    if env["id"] == shell {
+                        text.push_str(env["data"].as_str().unwrap_or_default());
+                    }
+                }
+            }
+            manager.kill(shell);
+            assert!(text.contains(&expected), "{shell}: {text}");
         }
     }
 }

@@ -1321,6 +1321,11 @@ pub(super) enum GuiReq {
     },
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    /// Discover installed shells on the active host without blocking the relay.
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     /// Create a new interactive terminal session (PTY) at the given working
     /// directory. The host manages the PTY lifecycle and streams output back
     /// as TerminalOutput/TerminalExit push envelopes. `id` is a client-minted
@@ -1330,6 +1335,8 @@ pub(super) enum GuiReq {
         id: String,
         #[serde(default, rename = "cwd")]
         cwd: Option<String>,
+        #[serde(default)]
+        shell_id: Option<String>,
     },
     /// Forward keystroke data from xterm.js to the PTY's stdin. `id` is the
     /// terminal session id from TerminalCreate.

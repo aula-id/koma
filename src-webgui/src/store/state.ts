@@ -542,7 +542,7 @@ export type KomaState = {
   // terminalId already exists, just focus it; otherwise create a new tab and
   // send TerminalCreate to the host. `title` defaults to "Terminal" for the
   // first, "Terminal N" for subsequent ones.
-  openTerminalTab: (terminalId: string, title: string) => void
+  openTerminalTab: (terminalId: string, title: string, shellId?: string) => void
   // Stream-view chokepoint: derive {subagent, bash} from the CURRENTLY-ACTIVE tab (a
   // stream tab → its target; anything else → both null) and send SetStreamView, so
   // exactly ONE stream view is ever active (the active stream tab, else none). Called

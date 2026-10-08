@@ -702,10 +702,16 @@ pub enum ClientRequest {
     },
 
     // ─── GUI terminal view (host-local, never crosses daemon socket) ────
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     /// Forwarded from GuiReq::TerminalCreate — PTY creation is host-local.
     TerminalCreate {
         id: String,
         cwd: Option<String>,
+        #[serde(default)]
+        shell_id: Option<String>,
     },
     TerminalInput {
         id: String,

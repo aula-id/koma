@@ -933,6 +933,13 @@ pub(super) enum PushEnvelope {
     },
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    #[serde(rename_all = "camelCase")]
+    TerminalShells {
+        request_id: String,
+        context: String,
+        shells: Vec<serde_json::Value>,
+        error: Option<String>,
+    },
     /// Streaming PTY output for a terminal session. `id` is the terminal
     /// session id from TerminalCreate; `data` is raw PTY output bytes
     /// (UTF-8 decoded) to be written to xterm.js.

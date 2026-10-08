@@ -90,6 +90,7 @@ mod store_host;
 mod swapper;
 mod swapper_keys;
 mod terminal_host;
+pub(crate) use terminal_host::shell_args as terminal_shell_args;
 pub(crate) mod tutorial_host;
 
 #[cfg(test)]
@@ -961,9 +962,14 @@ pub(crate) enum HostCtl {
     CancelRemoteConnect,
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     TerminalCreate {
         id: String,
         cwd: Option<String>,
+        shell_id: Option<String>,
     },
     TerminalInput {
         id: String,

@@ -1309,8 +1309,17 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // owns the PTY lifecycle, streams output back as PushEnvelope
         // TerminalOutput/TerminalExit, and accepts input via TerminalInput.
         // These are always routed to the host-relay thread via HostCtl.
-        GuiReq::TerminalCreate { id, cwd } => {
-            let _ = ctx.ctl.send(HostCtl::TerminalCreate { id, cwd });
+        GuiReq::TerminalShells {
+            request_id,
+            context,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalShells {
+                request_id,
+                context,
+            });
+        }
+        GuiReq::TerminalCreate { id, cwd, shell_id } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalCreate { id, cwd, shell_id });
         }
         GuiReq::TerminalInput { id, data } => {
             let _ = ctx.ctl.send(HostCtl::TerminalInput { id, data });

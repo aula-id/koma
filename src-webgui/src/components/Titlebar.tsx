@@ -1,7 +1,9 @@
 import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Terminal, PenLine, FoldVertical, SquareTerminal } from 'lucide-react'
+import { Terminal, PenLine, FoldVertical } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { TerminalPicker } from './TerminalPicker'
+import type { TerminalShell } from '../lib/terminalShells'
 import { ComputerShortcut } from './ComputerShortcut'
 
 export type Platform = 'macos' | 'linux' | 'windows'
@@ -29,7 +31,7 @@ function post(msg: unknown) {
 type TitlebarProps = {
   onSearch: () => void
   onRename: () => void
-  onTerminal: () => void
+  onTerminal: (shell: TerminalShell) => void
   overlayOpen: boolean
 }
 
@@ -85,14 +87,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
               #winctl when the window narrows. Side padding reserves chrome. */}
           <div className="pointer-events-none flex min-w-0 max-w-full items-center gap-1.5">
             <ComputerShortcut />
-            <button
-              onClick={onTerminal}
-              title="New Terminal"
-              aria-label="New Terminal"
-              className="pointer-events-auto flex h-[22px] flex-none items-center rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
-            >
-              <SquareTerminal size={13} className="flex-none" />
-            </button>
+            <TerminalPicker onSelect={onTerminal} />
             <motion.button
               layoutId="cmd-search"
               transition={CMD_SEARCH_SPRING}
