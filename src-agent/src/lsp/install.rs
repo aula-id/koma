@@ -581,10 +581,7 @@ fn rejected_python_candidate(path: &Path) -> bool {
     if is_windowsapps_path(path) {
         return true;
     }
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.len() == 0 => true,
-        _ => false,
-    }
+    matches!(std::fs::metadata(path), Ok(meta) if meta.len() == 0)
 }
 
 /// `python -c` prints `major.minor`. basedpyright requires 3.10+.

@@ -244,6 +244,7 @@ fn find_git_bash_via_install_dir() -> Option<PathBuf> {
 ///
 /// `<root>\usr\bin\bash.exe` returns that directory. `<root>\bin\bash.exe` (the
 /// Git for Windows shim) returns `<root>\usr\bin`.
+#[cfg(any(windows, test))]
 pub(crate) fn git_bash_usr_bin(bash: &Path) -> PathBuf {
     if let Some(parent) = bash.parent() {
         if file_name_eq(parent, "bin") {
@@ -259,6 +260,7 @@ pub(crate) fn git_bash_usr_bin(bash: &Path) -> PathBuf {
     PathBuf::from("usr").join("bin")
 }
 
+#[cfg(any(windows, test))]
 fn file_name_eq(path: &Path, expect: &str) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().eq_ignore_ascii_case(expect))
