@@ -44,7 +44,9 @@ it('updates rich text, bullets, numbers, checkboxes and selection when the palet
       expect(getComputedStyle(item, '::marker').color).toBe(color(palette.fg))
     }
     expect(getComputedStyle(editor.querySelector('ul.list-disc')!).listStyleType).toBe('disc')
-    expect(getComputedStyle(editor.querySelector('ol')!).listStyleType).toBe('decimal')
+    const ordered = editor.querySelector('ol')!
+    expect(getComputedStyle(ordered).listStyleType).toBe('decimal')
+    expect(parseFloat(getComputedStyle(ordered).paddingLeft)).toBeGreaterThanOrEqual(24)
     const nested = [...editor.querySelectorAll('li')].find((item) => item.firstElementChild?.tagName === 'UL')!
     expect(getComputedStyle(nested).listStyleType).toBe('none')
     expect(getComputedStyle(editor.querySelector('.koma-checklist-checked')!, '::before').backgroundColor).toBe(color(palette.accent))
@@ -53,4 +55,25 @@ it('updates rich text, bullets, numbers, checkboxes and selection when the palet
     expect(selectionBackground).not.toBe('rgba(0, 0, 0, 0)')
     probe.remove()
   }
+})
+
+it('keeps ordered-list numbers inside the composer overflow box', async () => {
+  await render(<LexicalMarkdownEditor
+    profile="composer"
+    markdown={'1. Number\n2. Another'}
+    onMarkdown={() => {}}
+    className="relative z-0 max-h-[200px] min-h-[22px] overflow-y-auto m-0 box-border w-full p-0 text-[14px] leading-[22px]"
+  />)
+  const editor = document.querySelector<HTMLElement>('.koma-rich-editor')!
+  await expect.poll(() => editor.querySelector('ol')?.querySelector('li')?.textContent).toBe('Number')
+  const wrap = editor.closest('[data-composer-editor]')!
+  const ordered = editor.querySelector('ol')!
+  const item = ordered.querySelector('li')!
+  expect(getComputedStyle(ordered).listStyleType).toBe('decimal')
+  expect(getComputedStyle(item).listStyleType).not.toBe('none')
+  const pad = parseFloat(getComputedStyle(ordered).paddingLeft)
+  expect(pad).toBeGreaterThanOrEqual(24)
+  const wrapRect = wrap.getBoundingClientRect()
+  const itemRect = item.getBoundingClientRect()
+  expect(itemRect.left - wrapRect.left).toBeGreaterThanOrEqual(pad - 1)
 })

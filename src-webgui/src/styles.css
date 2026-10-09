@@ -73,6 +73,17 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
 .koma-rich-editor li::marker {
   color: var(--color-koma-fg);
 }
+/* Composer/note editors are overflow-y-auto with no extra padding. Outside
+   markers hang in the list's padding — 1rem clips a 14px-mono "1." to ".".
+   Unlayered so this wins over Tailwind preflight `list-style: none`. */
+.koma-rich-editor ol {
+  list-style: decimal outside;
+  padding-left: 2rem;
+}
+.koma-rich-editor ul:not(:has(> .koma-checklist-item)) {
+  list-style: disc outside;
+  padding-left: 1.25rem;
+}
 .koma-rich-editor::selection,
 .koma-rich-editor *::selection {
   color: var(--color-koma-fg);

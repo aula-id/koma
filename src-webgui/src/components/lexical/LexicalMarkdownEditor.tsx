@@ -1019,8 +1019,8 @@ export function LexicalMarkdownEditor({
           heading: { h1: 'my-1 text-[15px] font-semibold text-koma-accent', h2: 'my-1 text-[13px] font-semibold text-koma-accent', h3: 'my-1 text-[12px] font-semibold' },
           quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
           list: {
-            ul: 'my-1 list-disc pl-4',
-            ol: 'my-1 list-decimal pl-4',
+            ul: 'my-1 list-disc pl-5',
+            ol: 'my-1 list-decimal pl-8',
             listitem: 'my-0.5',
             nested: { listitem: 'list-none' },
             listitemChecked: 'koma-checklist-item koma-checklist-checked',
