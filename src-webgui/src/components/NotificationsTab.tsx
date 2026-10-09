@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, OctagonAlert, Search, TriangleAlert, type LucideIcon } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useNotifications, notificationRequest, scopeKey, type NotificationEntry } from '../lib/notifications'
-import { Segmented } from './panels/form'
+import { Select } from './panels/form'
 
 const SEVERITY: Record<NotificationEntry['severity'], { Icon: LucideIcon; tone: string }> = {
   info: { Icon: Info, tone: 'text-koma-info' },
@@ -46,7 +46,7 @@ export default function NotificationsTab() {
   )
   const unread = rows.filter((e) => !e.read).length
   return (
-    <div className="flex h-full min-h-0 flex-col bg-koma-bg text-[12px] leading-snug text-koma-fg" data-tour="notification-history">
+    <div className="relative flex h-full min-h-0 flex-col bg-koma-bg text-[12px] leading-snug text-koma-fg" data-tour="notification-history">
       <header className="flex-none space-y-3 border-b border-koma-border px-4 pt-4 pb-3">
         <h2 className="flex items-baseline gap-2 text-[15px] font-semibold">
           Notifications
@@ -55,9 +55,10 @@ export default function NotificationsTab() {
           </span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <div role="group" aria-label="Notification scope">
-            <Segmented
+          <div className="w-[8.5rem] flex-none" role="group" aria-label="Notification scope">
+            <Select
               value={app ? 'app' : 'session'}
+              triggerTitle="Notification scope"
               options={[
                 { value: 'session', label: 'Session', disabled: !session },
                 { value: 'app', label: 'App' },
@@ -75,58 +76,35 @@ export default function NotificationsTab() {
               className="h-7 w-full rounded border border-koma-border bg-koma-panel2 py-0 pr-2 pl-7 text-[12px] text-koma-fg outline-none placeholder:text-koma-dim focus:border-koma-accent"
             />
           </label>
-          <div role="group" aria-label="Severity">
-            <Segmented
+          <div className="w-[8.5rem] flex-none" role="group" aria-label="Severity">
+            <Select
               value={severity}
-              options={['all', 'info', 'success', 'warn', 'error'].map((k) => ({ value: k, label: k }))}
+              triggerTitle="Severity"
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'info', label: 'Info' },
+                { value: 'success', label: 'Success' },
+                { value: 'warn', label: 'Warn' },
+                { value: 'error', label: 'Error' },
+              ]}
               onChange={setSeverity}
             />
           </div>
           <button
             type="button"
-            className="rounded px-2 py-1 text-[11px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+            className="h-7 rounded border border-koma-border bg-koma-panel2 px-2.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
             onClick={() => notificationRequest(scope, { op: 'read', id: null })}
           >
             Mark all read
           </button>
           <button
             type="button"
-            className="rounded px-2 py-1 text-[11px] text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+            className="h-7 rounded border border-koma-border bg-koma-panel2 px-2.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
             onClick={() => setConfirm(true)}
           >
             Clear history
           </button>
         </div>
-        {confirm && (
-          <div
-            role="alertdialog"
-            aria-label="Clear notification history"
-            className="flex flex-wrap items-center gap-2 rounded-md border border-koma-error/40 bg-koma-error/10 px-3 py-2"
-          >
-            <AlertTriangle size={14} className="flex-none text-koma-error" aria-hidden />
-            <span className="min-w-0 flex-1 text-[12px] text-koma-fg">
-              Clear {app ? 'App' : 'Session'} history permanently?
-            </span>
-            <button
-              type="button"
-              autoFocus
-              className="rounded bg-koma-error/15 px-2 py-1 text-[11px] font-semibold text-koma-error transition-colors hover:bg-koma-error/25"
-              onClick={() => {
-                notificationRequest(scope, { op: 'clear' })
-                setConfirm(false)
-              }}
-            >
-              Confirm clear
-            </button>
-            <button
-              type="button"
-              className="rounded px-2 py-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
-              onClick={() => setConfirm(false)}
-            >
-              Cancel
-            </button>
-          </div>
-        )}
         {error && (
           <p role="alert" className="text-[12px] text-koma-error">
             History unavailable: {error}. Temporary popups still work.
@@ -173,6 +151,50 @@ export default function NotificationsTab() {
           )
         })}
       </div>
+      {confirm && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-koma-bg/70 p-6">
+          <div
+            role="alertdialog"
+            aria-labelledby="notify-clear-title"
+            aria-describedby="notify-clear-body"
+            className="w-full max-w-sm rounded-xl border border-koma-border bg-koma-panel p-4 shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <span className="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-koma-error/15 text-koma-error">
+                <AlertTriangle size={16} aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 id="notify-clear-title" className="text-[13px] font-semibold text-koma-fg">
+                  Clear {app ? 'App' : 'Session'} history
+                </h3>
+                <p id="notify-clear-body" className="mt-1 text-[12px] leading-relaxed text-koma-dim">
+                  This permanently deletes every stored notification in this scope. Live popups are not affected.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="h-7 rounded border border-koma-border bg-koma-panel2 px-2.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
+                onClick={() => setConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                autoFocus
+                className="h-7 rounded border border-koma-error/40 bg-koma-error/15 px-2.5 text-[12px] font-semibold text-koma-error transition-colors hover:bg-koma-error/25"
+                onClick={() => {
+                  notificationRequest(scope, { op: 'clear' })
+                  setConfirm(false)
+                }}
+              >
+                Confirm clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
