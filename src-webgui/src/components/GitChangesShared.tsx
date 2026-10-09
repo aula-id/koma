@@ -152,6 +152,7 @@ export function FileRow({
 }) {
   const tone = STATUS_TONE[entry.status] ?? 'text-koma-dim'
   const dir = dirName(entry.path)
+  const actionCount = (onDiscard ? 1 : 0) + (onStage ? 1 : 0) + (onUnstage ? 1 : 0)
   return (
     <div
       title={entry.origPath ? `${entry.origPath} -> ${entry.path}` : entry.path}
@@ -173,20 +174,43 @@ export function FileRow({
           </>
         )}
       </span>
-      {onDiscard && (
-        <RowAction title="Discard changes" onClick={onDiscard}>
-          <Undo2 size={13} />
-        </RowAction>
+      {actionCount > 0 && (
+        <div
+          className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
+          style={{ ['--git-actions' as string]: `${actionCount * 20}px` }}
+          // Tailwind can't take a dynamic max-w easily; expand on hover via style.
+        >
+          <div
+            className="flex flex-none items-center group-hover:max-w-[var(--git-actions)] group-focus-within:max-w-[var(--git-actions)] max-w-0 overflow-hidden transition-[max-width] duration-100"
+            style={{ maxWidth: undefined }}
+          >
+            {/* Outer handles opacity; this inner expands width on group-hover. */}
+          </div>
+        </div>
       )}
-      {onStage && (
-        <RowAction title="Stage changes" onClick={onStage}>
-          <Plus size={13} />
-        </RowAction>
-      )}
-      {onUnstage && (
-        <RowAction title="Unstage changes" onClick={onUnstage}>
-          <Minus size={13} />
-        </RowAction>
+      {/* Idle: max-w-0 so actions take no flex width. Hover expands for icons. */}
+      {actionCount > 0 && (
+        <div
+          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+            actionCount >= 2 ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]' : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+          }`}
+        >
+          {onDiscard && (
+            <RowAction title="Discard changes" onClick={onDiscard}>
+              <Undo2 size={13} />
+            </RowAction>
+          )}
+          {onStage && (
+            <RowAction title="Stage changes" onClick={onStage}>
+              <Plus size={13} />
+            </RowAction>
+          )}
+          {onUnstage && (
+            <RowAction title="Unstage changes" onClick={onUnstage}>
+              <Minus size={13} />
+            </RowAction>
+          )}
+        </div>
       )}
       <span className={`flex-none font-mono text-[11px] font-semibold ${tone}`}>{entry.status}</span>
     </div>
