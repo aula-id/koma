@@ -19,8 +19,139 @@ pub struct CallbackResult {
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
-const SUCCESS_BODY: &str = "<html><body style=\"font-family:monospace\"><h3>koma: login complete</h3>You can close this tab.</body></html>";
-const FAILURE_BODY: &str = "<html><body style=\"font-family:monospace\"><h3>koma: login failed</h3>You can close this tab and return to the terminal.</body></html>";
+/// Bundled product icon for the loopback success/failure page.
+fn logo_data_uri() -> String {
+    use base64::Engine;
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../assets/icon-128.png"
+    ));
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// Centered OAuth result page: koma logo, short status copy, and a button that
+/// tries to close the tab so the user can return to the app.
+fn callback_page(ok: bool) -> String {
+    let (title, heading, body, hint, heading_class) = if ok {
+        (
+            "koma — signed in",
+            "You're signed in",
+            "koma has your login. You can return to the app and keep working.",
+            "This browser tab is no longer needed.",
+            "ok",
+        )
+    } else {
+        (
+            "koma — sign-in failed",
+            "Sign-in didn't finish",
+            "The login was cancelled or failed. Return to koma and try again.",
+            "You can close this tab and go back to the app.",
+            "err",
+        )
+    };
+    let logo = logo_data_uri();
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{title}</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0f1115;
+    color: #e8eaed;
+  }}
+  .card {{
+    width: min(420px, 100%);
+    text-align: center;
+    padding: 40px 32px 32px;
+    border-radius: 16px;
+    background: #1a1d24;
+    border: 1px solid #2a2f3a;
+    box-shadow: 0 20px 50px rgba(0,0,0,.35);
+  }}
+  .logo {{
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    display: block;
+    margin: 0 auto 20px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  }}
+  h1 {{
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0 0 10px;
+    letter-spacing: -0.02em;
+  }}
+  h1.ok {{ color: #6bcf8e; }}
+  h1.err {{ color: #f07178; }}
+  p {{
+    margin: 0 0 8px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #a8b0bd;
+  }}
+  .hint {{
+    font-size: 0.85rem;
+    color: #7a8494;
+    margin: 0 0 28px;
+  }}
+  .btn {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 180px;
+    height: 40px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    font-size: 0.95rem;
+    background: #5b8def;
+    color: #fff;
+  }}
+  .btn:hover {{ filter: brightness(1.08); }}
+  .btn:active {{ transform: translateY(1px); }}
+</style>
+</head>
+<body>
+  <main class="card">
+    <img class="logo" width="72" height="72" alt="koma" src="{logo}"/>
+    <h1 class="{heading_class}">{heading}</h1>
+    <p>{body}</p>
+    <p class="hint" id="hint">{hint}</p>
+    <button class="btn" type="button" onclick="goBack()">Back to koma</button>
+  </main>
+  <script>
+    function goBack() {{
+      window.close();
+      // Browsers often block window.close() unless the tab was script-opened.
+      setTimeout(function () {{
+        var h = document.getElementById('hint');
+        if (h) h.textContent = 'Close this tab manually, then switch back to koma.';
+      }}, 250);
+    }}
+  </script>
+</body>
+</html>"#
+    )
+}
 
 /// Wait up to `timeout_secs` for the OAuth redirect on `127.0.0.1:port`,
 /// validate `state`, and return the authorization `code`.
@@ -72,7 +203,7 @@ pub async fn catch_callback(
                 .find(|(k, _)| k == "error")
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
-            let _ = write_response(&mut stream, "200 OK", FAILURE_BODY).await;
+            let _ = write_response(&mut stream, "200 OK", &callback_page(false)).await;
             return Err(format!("login denied or failed: {error}"));
         }
 
@@ -88,11 +219,11 @@ pub async fn catch_callback(
             .unwrap_or_default();
 
         if state != expected_state {
-            let _ = write_response(&mut stream, "200 OK", FAILURE_BODY).await;
+            let _ = write_response(&mut stream, "200 OK", &callback_page(false)).await;
             return Err("state mismatch — possible CSRF, aborting login".to_string());
         }
 
-        let _ = write_response(&mut stream, "200 OK", SUCCESS_BODY).await;
+        let _ = write_response(&mut stream, "200 OK", &callback_page(true)).await;
         return Ok(CallbackResult { code, state });
     }
 }
@@ -125,8 +256,10 @@ async fn write_response(
     body: &str,
 ) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
-    let response =
-        format!("HTTP/1.1 {status}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{body}");
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
     stream.write_all(response.as_bytes()).await
 }
 

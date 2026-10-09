@@ -115,12 +115,9 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                   onClick={onRename}
                   title="Rename session"
                   aria-label="Rename session"
-                  className="pointer-events-auto flex h-[22px] flex-none items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover min-[1101px]:px-2.5"
+                  className="pointer-events-auto flex h-[22px] w-[22px] flex-none items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg transition-colors hover:bg-koma-hover"
                 >
-                  <motion.span layout="position" className="flex items-center gap-1.5">
-                    <PenLine size={13} className="flex-none" />
-                    <span className="max-[1100px]:hidden">rename</span>
-                  </motion.span>
+                  <PenLine size={13} className="flex-none" />
                 </motion.button>
                 <button
                   onClick={() => req({ r: 'Compact' })}
