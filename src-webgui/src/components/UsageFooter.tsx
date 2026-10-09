@@ -1,3 +1,4 @@
+import { pageRect } from '../lib/uiScale'
 import { useEffect, useRef, useState } from 'react'
 import { Activity, AlertCircle, AlertTriangle, FoldVertical, Server, Terminal } from 'lucide-react'
 import { showCodingTasks } from './CodingTasks'
@@ -96,7 +97,7 @@ export function UsageFooter() {
       return
     }
     const update = () => {
-      if (usageRef.current) setUsageRect(usageRef.current.getBoundingClientRect())
+      if (usageRef.current) setUsageRect(pageRect(usageRef.current.getBoundingClientRect()))
     }
     update()
     const onDoc = (e: MouseEvent) => {

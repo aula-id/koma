@@ -657,6 +657,16 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         }
         *control_flow = wait_for(next_push_at, usage_ticker.deadline());
         match event {
+            Event::UserEvent(UserEvent::UiScale { scale, request_id }) => {
+                let error = if !proto::valid_ui_scale(scale) {
+                    Some("Unsupported UI scale".to_string())
+                } else {
+                    webview.zoom(scale).err().map(|error| error.to_string())
+                };
+                let reply = serde_json::json!({ "requestId": request_id, "scale": scale, "error": error });
+                let _ = webview.evaluate_script(&format!("window.__komaUiScaleReply?.({reply});"));
+            }
+
             // Host-relay state push: queue the already-serialised object literal.
             // `MainEventsCleared` below drains a whole burst through one JS call,
             // never one synchronous `evaluate_script` per envelope.

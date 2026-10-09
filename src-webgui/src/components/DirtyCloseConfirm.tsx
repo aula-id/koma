@@ -1,3 +1,4 @@
+import { pageRect, pagePoint } from '../lib/uiScale'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FileWarning } from 'lucide-react'
@@ -22,12 +23,12 @@ export function DirtyCloseConfirm({ anchor, title, onConfirm, onCancel }: Props)
       onCancel()
       return
     }
-    const rect = anchor.getBoundingClientRect()
+    const rect = pageRect(anchor.getBoundingClientRect())
     const w = ref.current?.offsetWidth ?? WIDTH
     const h = ref.current?.offsetHeight ?? 90
     setPos({
-      left: Math.max(4, Math.min(rect.left, window.innerWidth - w - 4)),
-      top: Math.max(4, Math.min(rect.bottom + 4, window.innerHeight - h - 4)),
+      left: Math.max(4, Math.min(rect.left, pagePoint(window.innerWidth) - w - 4)),
+      top: Math.max(4, Math.min(rect.bottom + 4, pagePoint(window.innerHeight) - h - 4)),
     })
   }, [anchor, onCancel])
 

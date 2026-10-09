@@ -1,3 +1,4 @@
+import { pageRect, pagePoint } from '../lib/uiScale'
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, GitBranch, Plus, Search } from 'lucide-react'
@@ -16,7 +17,7 @@ function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | 
       return
     }
     const update = () => {
-      if (ref.current) setRect(ref.current.getBoundingClientRect())
+      if (ref.current) setRect(pageRect(ref.current.getBoundingClientRect()))
     }
     update()
     window.addEventListener('scroll', update, true)
@@ -48,7 +49,7 @@ function useClampedVPos(
   useEffect(() => {
     if (!rect) return
     const h = ref.current?.offsetHeight ?? MENU_MAX_HEIGHT
-    setTop(Math.max(8, Math.min(rawTop(h), window.innerHeight - h - 8)))
+    setTop(Math.max(8, Math.min(rawTop(h), pagePoint(window.innerHeight) - h - 8)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rect, variant, ref, ...deps])
   return top
@@ -205,7 +206,7 @@ export function BranchSwitcher({ variant }: BranchSwitcherProps) {
               // clamps to the viewport, so an icon-triggered popover near the
               // window bottom never renders offscreen.
               top: vTop,
-              left: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
+              left: Math.max(8, Math.min(rect.left, pagePoint(window.innerWidth) - menuWidth - 8)),
               width: menuWidth,
               maxHeight: MENU_MAX_HEIGHT,
               zIndex: 80,

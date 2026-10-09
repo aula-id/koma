@@ -894,3 +894,6 @@ export function workflowSteps(id: TourId): WorkflowStep[] {
 export function workflowRegistry() {
   return TOUR_CATALOGUE.map(tour => ({ ...tour, prerequisites: SESSION_GUIDES.has(tour.id) ? ['attached-session'] : [], navigation: HELP_MANIFEST.articles.filter(a => a.workflows.includes(tour.id)).map(a => a.navigation), steps: workflowSteps(tour.id) }))
 }
+
+// Zoom changes the target bounds without replacing the running guide.
+window.addEventListener('koma-ui-scale', () => active?.refresh())

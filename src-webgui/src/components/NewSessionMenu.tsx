@@ -1,3 +1,4 @@
+import { pageRect } from '../lib/uiScale'
 import { showToast } from '../lib/toast'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
@@ -16,7 +17,7 @@ function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | 
       return
     }
     const update = () => {
-      if (ref.current) setRect(ref.current.getBoundingClientRect())
+      if (ref.current) setRect(pageRect(ref.current.getBoundingClientRect()))
     }
     update()
     window.addEventListener('scroll', update, true)

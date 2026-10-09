@@ -134,13 +134,19 @@ export function TerminalTab({ tab }: TerminalTabProps) {
     const fit = fitRef.current
     if (!container || !term || !fit) return
 
-    const observer = new ResizeObserver(() => {
+    const resize = () => {
+      const scroll = term.buffer.active.viewportY
+      const atBottom = scroll === term.buffer.active.baseY
       fit.fit()
       const dims = fit.proposeDimensions()
       if (dims) {
         req({ r: 'TerminalResize', id: terminalId, cols: dims.cols, rows: dims.rows })
       }
-    })
+      if (atBottom) term.scrollToBottom()
+      else term.scrollToLine(scroll)
+    }
+    const observer = new ResizeObserver(resize)
+    window.addEventListener('koma-ui-scale', resize)
     observer.observe(container)
 
     // Initial fit + resize.
@@ -150,7 +156,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
       req({ r: 'TerminalResize', id: terminalId, cols: dims.cols, rows: dims.rows })
     }
 
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); window.removeEventListener('koma-ui-scale', resize) }
   }, [terminalId, req])
 
   // display:none inactive panes: refit when this terminal becomes visible again.

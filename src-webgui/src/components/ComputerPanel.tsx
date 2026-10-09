@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { GripHorizontal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -7,7 +8,7 @@ import { fitComputerPreview, type PreviewBounds as Bounds } from '../lib/compute
 
 const preference = 'koma.computer.preview'
 function bounded(value: Partial<Bounds>): Bounds {
-  return fitComputerPreview(value, { width: window.innerWidth, height: window.innerHeight })
+  return fitComputerPreview(value, { width: pagePoint(window.innerWidth), height: pagePoint(window.innerHeight) })
 }
 function initialBounds(): Bounds {
   try { return bounded(JSON.parse(localStorage.getItem(preference) ?? '{}')) } catch { return bounded({}) }
@@ -47,7 +48,7 @@ export function ComputerPanel() {
   }
   function moveDrag(event: PointerEvent<HTMLElement>) {
     const start = drag.current
-    if (start) setBounds(v => bounded({ ...v, x: start.left + event.clientX - start.x, y: start.top + event.clientY - start.y }))
+    if (start) setBounds(v => bounded({ ...v, x: start.left + pagePoint(event.clientX - start.x), y: start.top + pagePoint(event.clientY - start.y) }))
   }
   if (!session || !local || !open) return null
   return <section role="dialog" aria-label="Shared computer preview"
@@ -63,8 +64,8 @@ export function ComputerPanel() {
       onPointerMove={event => {
         const start = resizing.current
         if (!start) return
-        const dx = event.clientX - start.x
-        const dy = event.clientY - start.y
+        const dx = pagePoint(event.clientX - start.x)
+        const dy = pagePoint(event.clientY - start.y)
         setBounds(v => bounded({ ...v, width: start.width + dx, height: start.height + dy }))
       }}
       onPointerUp={() => { resizing.current = null }} onPointerCancel={() => { resizing.current = null }} onLostPointerCapture={() => { resizing.current = null }}

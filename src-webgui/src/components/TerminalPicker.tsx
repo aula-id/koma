@@ -1,3 +1,4 @@
+import { pageRect, pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { SquareTerminal } from 'lucide-react'
@@ -36,7 +37,7 @@ export function TerminalPicker({ onSelect }: { onSelect: (shell: TerminalShell) 
   }, [])
   useEffect(() => {
     if (!open) return
-    const update = () => setRect(trigger.current?.getBoundingClientRect() ?? null)
+    const update = () => setRect(trigger.current ? pageRect(trigger.current.getBoundingClientRect()) : null)
     update()
     menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
     const outside = (event: MouseEvent) => {
@@ -83,7 +84,7 @@ export function TerminalPicker({ onSelect }: { onSelect: (shell: TerminalShell) 
       <SquareTerminal size={13} className="flex-none" />
     </button>
     {open && rect && createPortal(<div ref={menu} onMouseDown={event => event.stopPropagation()} role="menu" aria-label="Terminal shells"
-      style={{ position: 'fixed', top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 228)), width: 220, zIndex: 80, maxHeight: '70vh' }}
+      style={{ position: 'fixed', top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, pagePoint(window.innerWidth) - 228)), width: 220, zIndex: 80, maxHeight: '70vh' }}
       className="overflow-y-auto rounded-md border border-koma-border bg-koma-panel py-1 text-xs text-koma-fg shadow-sm">
       {rows.map((shell, index) => <button type="button" key={shell.id ?? 'default'} role="menuitem" tabIndex={-1}
         className="block w-full px-2 py-1 text-left text-[12px] text-koma-fg opacity-75 transition-colors hover:bg-koma-hover hover:opacity-100 focus:bg-koma-hover focus:opacity-100 focus:outline-none"

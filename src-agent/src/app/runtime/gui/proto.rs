@@ -9,6 +9,8 @@
 /// Events delivered to the main `tao` event loop from the ipc handler (window
 /// commands) or the host-relay client-thread (state pushes).
 pub(super) enum UserEvent {
+    /// Local GUI zoom, applied only to the main WebView on its window thread.
+    UiScale { scale: f64, request_id: String },
     /// A custom-titlebar window command posted from the webview.
     Win(WinCmd),
     /// A ready-to-inject JSON envelope from the host-relay client-thread. The GUI
@@ -100,6 +102,11 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    SetUiScale {
+        scale: f64,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     Notifications {
         request: crate::model::notifications::Request,
         #[serde(default)]
@@ -1582,5 +1589,31 @@ mod skill_wire_tests {
         }))
         .expect("roots request");
         assert!(matches!(roots, GuiReq::SetExtraSkillRoots { .. }));
+    }
+}
+
+/// Only the four advertised multipliers are accepted, including for raw IPC.
+pub(super) fn valid_ui_scale(scale: f64) -> bool {
+    matches!(scale, 1.0 | 1.5 | 2.0 | 2.5)
+}
+
+#[cfg(test)]
+mod ui_scale_tests {
+    #[test]
+    fn allowed_scales_only() {
+        for scale in [1.0, 1.5, 2.0, 2.5] {
+            assert!(super::valid_ui_scale(scale));
+        }
+        for scale in [0.0, -1.0, 1.25, 3.0, f64::NAN, f64::INFINITY] {
+            assert!(!super::valid_ui_scale(scale));
+        }
+        let request = serde_json::from_str::<super::ClientMsg>(
+            r#"{"t":"req","r":"SetUiScale","scale":2.5,"requestId":"zoom-1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request,
+            super::ClientMsg::Req(super::GuiReq::SetUiScale { scale: 2.5, .. })
+        ));
     }
 }

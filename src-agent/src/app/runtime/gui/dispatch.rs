@@ -42,6 +42,11 @@ pub(super) struct GuiReqCtx {
 /// routing the old inline `match req { GuiReq::* }` used — pure code motion.
 pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     match req {
+        GuiReq::SetUiScale { scale, request_id } => {
+            let _ = ctx
+                .loop_proxy
+                .send_event(super::proto::UserEvent::UiScale { scale, request_id });
+        }
         GuiReq::Notifications { request, local } => {
             if request.session.is_some() && !local {
                 forward_or_host(

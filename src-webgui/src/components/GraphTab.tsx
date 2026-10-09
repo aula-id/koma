@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import {
   useCallback,
   useEffect,
@@ -331,7 +332,7 @@ export default function GraphTab() {
     const startX = e.clientX
     const startW = detailW
     const onMove = (ev: MouseEvent) => {
-      const next = Math.min(DETAIL_W_MAX, Math.max(DETAIL_W_MIN, startW - (ev.clientX - startX)))
+      const next = Math.min(DETAIL_W_MAX, Math.max(DETAIL_W_MIN, startW - pagePoint(ev.clientX - startX)))
       setDetailW(next)
     }
     const onUp = () => {
@@ -353,7 +354,7 @@ export default function GraphTab() {
     const startX = e.clientX
     const startW = sidebarW
     const onMove = (ev: MouseEvent) => {
-      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + (ev.clientX - startX)))
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + pagePoint(ev.clientX - startX)))
       setSidebarW(next)
     }
     const onUp = () => {

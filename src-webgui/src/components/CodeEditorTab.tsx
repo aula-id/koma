@@ -407,6 +407,12 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
     }
   }, [tab.root, tab.path, hostId])
 
+  useEffect(() => {
+    const layout = () => editorRef.current?.layout()
+    window.addEventListener('koma-ui-scale', layout)
+    return () => window.removeEventListener('koma-ui-scale', layout)
+  }, [])
+
   // Parent uses display:none for inactive panes; force layout on reveal so the
   // editor isn't stuck at 0×0 after WebKit skips ResizeObserver.
   useEffect(() => {

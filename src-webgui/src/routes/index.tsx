@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
@@ -369,7 +370,7 @@ function RootLayout() {
     const startX = e.clientX
     const startW = sidebarWidth
     const onMove = (ev: MouseEvent) => {
-      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX))
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + pagePoint(ev.clientX - startX)))
       setSidebarWidth(next)
     }
     const onUp = () => {
@@ -885,7 +886,7 @@ function TabbedMain() {
     }
     const move = (ev: MouseEvent) => {
       const next = dir === 'row' ? ev.clientX : ev.clientY
-      pending = (pending ?? 0) + (next - prev)
+      pending = (pending ?? 0) + pagePoint(next - prev)
       prev = next
       if (!raf) raf = requestAnimationFrame(flush)
     }

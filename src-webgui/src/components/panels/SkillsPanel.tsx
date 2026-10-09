@@ -1,3 +1,4 @@
+import { pagePoint } from '../../lib/uiScale'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, FilePlus, Info, Plus, Search, Sparkles, Upload, X, type LucideIcon } from 'lucide-react'
@@ -82,8 +83,8 @@ function SkillContextMenu({
     const el = ref.current
     if (el) {
       setPos({
-        left: Math.max(4, Math.min(state.x, window.innerWidth - el.offsetWidth - 4)),
-        top: Math.max(4, Math.min(state.y, window.innerHeight - el.offsetHeight - 4)),
+        left: Math.max(4, Math.min(pagePoint(state.x), pagePoint(window.innerWidth) - el.offsetWidth - 4)),
+        top: Math.max(4, Math.min(pagePoint(state.y), pagePoint(window.innerHeight) - el.offsetHeight - 4)),
       })
     }
     const outside = (event: MouseEvent) => {

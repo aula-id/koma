@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import {
   BarChart3,
   Blocks,
@@ -229,8 +230,8 @@ function TabContextMenu({
     const el = ref.current
     if (el) {
       setPos({
-        left: Math.max(4, Math.min(state.x, window.innerWidth - el.offsetWidth - 4)),
-        top: Math.max(4, Math.min(state.y, window.innerHeight - el.offsetHeight - 4)),
+        left: Math.max(4, Math.min(pagePoint(state.x), pagePoint(window.innerWidth) - el.offsetWidth - 4)),
+        top: Math.max(4, Math.min(pagePoint(state.y), pagePoint(window.innerHeight) - el.offsetHeight - 4)),
       })
     }
     const outside = (e: MouseEvent) => {

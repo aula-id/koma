@@ -60,6 +60,12 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
     }
   }, [showEditor])
 
+  useEffect(() => {
+    const layout = () => editorRef.current?.layout()
+    window.addEventListener('koma-ui-scale', layout)
+    return () => window.removeEventListener('koma-ui-scale', layout)
+  }, [])
+
   // display:none inactive panes zero the host; WebKit often skips ResizeObserver
   // on the reveal, so force a layout when this tab becomes the visible one.
   useEffect(() => {

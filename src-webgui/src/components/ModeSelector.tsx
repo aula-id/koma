@@ -1,3 +1,4 @@
+import { pageRect, pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown, ListChecks, MessageSquare, Shield, Sparkles, type LucideIcon } from 'lucide-react'
@@ -27,7 +28,7 @@ function useAnchorRect(open: boolean, ref: React.RefObject<HTMLElement | null>) 
       return
     }
     const update = () => {
-      if (ref.current) setRect(ref.current.getBoundingClientRect())
+      if (ref.current) setRect(pageRect(ref.current.getBoundingClientRect()))
     }
     update()
     window.addEventListener('scroll', update, true)
@@ -88,8 +89,8 @@ export function ModeSelector() {
         ref={menuRef}
         style={{
           position: 'fixed',
-          left: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_W - 8)),
-          bottom: window.innerHeight - rect.top + 6,
+          left: Math.max(8, Math.min(rect.left, pagePoint(window.innerWidth) - MENU_W - 8)),
+          bottom: pagePoint(window.innerHeight) - rect.top + 6,
           width: MENU_W,
           zIndex: 80,
         }}

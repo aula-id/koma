@@ -873,3 +873,34 @@ svg.animate-spin {
   background-color: var(--color-koma-panel);
   color: var(--color-koma-fg);
 }
+
+/* Keep Settings navigation and scale controls reachable in a zoomed viewport. */
+.settings-tab { min-height: 0; }
+@container (max-width: 520px) {
+  .settings-tab { flex-direction: column; }
+  .settings-nav { width: 100%; max-height: 100px; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--color-koma-border); }
+  .settings-tab > div { min-height: 0; }
+  .settings-content { padding-inline: 12px; }
+}
+
+/* Driver uses raw viewport rectangles for its SVG cutout and popover placement.
+   Undo CSS page zoom on these portal roots, then scale the popover itself; its
+   measured rectangle includes that scale, so Driver can still clamp it. */
+html .driver-overlay, html .driver-popover { zoom: calc(1 / var(--koma-browser-zoom, 1)); }
+html .driver-popover { scale: var(--koma-browser-zoom, 1); transform-origin: top left; }
+
+html [role="menu"] {
+  max-width: calc(100vw / var(--koma-browser-zoom, 1) - 16px);
+  max-height: calc(100dvh / var(--koma-browser-zoom, 1) - 16px);
+  overflow-y: auto;
+}
+html .driver-popover {
+  min-width: 0;
+  max-width: calc(100vw / var(--koma-browser-zoom, 1) - 20px);
+  max-height: calc(100dvh / var(--koma-browser-zoom, 1) - 20px);
+  overflow-y: auto;
+}
+
+/* Authored design/diagram content keeps its own visual scale. Toolbars and
+   properties panels remain part of the scaled interface. */
+.koma-authored-canvas { zoom: calc(1 / var(--koma-ui-scale, 1)); }

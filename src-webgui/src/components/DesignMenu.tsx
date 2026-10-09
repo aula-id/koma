@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 
@@ -111,9 +112,9 @@ export function DesignMenu({
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const maxHeight = Math.min(MENU_MAX, Math.max(120, window.innerHeight - 16))
-  const left = Math.min(Math.max(8, x), window.innerWidth - 228)
-  const top = y + maxHeight > window.innerHeight - 8 ? Math.max(8, window.innerHeight - maxHeight - 8) : y
+  const maxHeight = Math.min(MENU_MAX, Math.max(120, pagePoint(window.innerHeight) - 16))
+  const left = Math.min(Math.max(8, pagePoint(x)), pagePoint(window.innerWidth) - 228)
+  const top = pagePoint(y) + maxHeight > pagePoint(window.innerHeight) - 8 ? Math.max(8, pagePoint(window.innerHeight) - maxHeight - 8) : pagePoint(y)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()

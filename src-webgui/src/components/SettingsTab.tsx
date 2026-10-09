@@ -24,6 +24,7 @@ import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
 import { WebSearchSettings } from './WebSearchSettings'
 import { ComputerSettings } from './ComputerSettings'
+import { UI_SCALES, pagePoint, setUiScale, useUiScale, type UiScale } from '../lib/uiScale'
 import { BrailleSpinner } from './BrailleSpinner'
 
 // VSCode-style Settings page, rendered as a tab over the main content column
@@ -93,15 +94,15 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
     for (const id of SECTION_ORDER) {
       const el = sectionRef(id).current
       if (!el) continue
-      const delta = el.getBoundingClientRect().top - paneTop
+      const delta = pagePoint(el.getBoundingClientRect().top - paneTop)
       if (delta < 80) current = id
     }
     setActive(current)
   }
 
   return (
-    <div className="flex h-full w-full min-w-0 bg-koma-bg text-koma-fg">
-      <nav className="flex w-40 flex-none flex-col gap-0.5 border-r border-koma-border bg-koma-panel2 p-2">
+    <div className="h-full min-w-0 [container-type:inline-size]"><div className="settings-tab flex h-full w-full min-w-0 bg-koma-bg text-koma-fg">
+      <nav className="settings-nav flex w-40 flex-none flex-col overflow-y-auto gap-0.5 border-r border-koma-border bg-koma-panel2 p-2">
         <div className="px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
           Settings
         </div>
@@ -147,7 +148,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
       </nav>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-8 py-6">
+        <div className="settings-content mx-auto max-w-3xl px-8 py-6">
           <section ref={accountRef}>
             <SectionHeader title="Account" desc="Sign in with koma.run — unlocks the extension store." />
             <AccountSettings />
@@ -155,6 +156,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
 
           <section ref={appearanceRef} className="mt-12">
             <SectionHeader title="Appearance" desc="Pick a colour theme — it applies instantly across the whole app." />
+            <UiScaleSetting />
             <PaletteGrid
               palettes={palettes}
               themes={themes}
@@ -209,7 +211,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           </section>
         </div>
       </div>
-    </div>
+    </div></div>
   )
 }
 
@@ -1375,4 +1377,17 @@ function LspSettings() {
       )}
     </div>
   )
+}
+
+export function UiScaleSetting() {
+  const { scale, pending, error } = useUiScale()
+  return <div className="mb-6" role="group" aria-label="UI scale">
+    <div className="mb-2 text-[12px] font-medium">UI scale</div>
+    <p className="mb-3 text-[11px] text-koma-dim">Scale the entire interface. 1× uses the original sizes.</p>
+    <div className="max-w-xs">
+      <Segmented value={String(scale)} options={UI_SCALES.map(value => ({ value: String(value), label: `${value}×`, disabled: pending }))}
+        onChange={value => { void setUiScale(Number(value) as UiScale) }} />
+    </div>
+    {error && <p role="alert" className="mt-2 text-[11px] text-koma-error">{error}</p>}
+  </div>
 }
