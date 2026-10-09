@@ -1,0 +1,32 @@
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import { playwright } from '@vitest/browser-playwright'
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  optimizeDeps: { include: ['react/jsx-dev-runtime', 'react-dom'] },
+  test: {
+    projects: [
+      {
+        test: {
+          name: 'logic',
+          environment: 'jsdom',
+          include: ['src/**/*.vitest.test.ts', 'src/**/*.vitest.test.tsx'],
+        },
+      },
+      {
+        test: {
+          name: 'chromium',
+          include: ['src/**/*.browser.test.ts', 'src/**/*.browser.test.tsx'],
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright(),
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+    ],
+  },
+})

@@ -29,6 +29,7 @@ Known guided tours (offer when relevant; user confirms before launch):
 - sessions-hub — start/resume sessions
 - composer — message box, model picker, attachments
 - agents — sub-agents panel
+- skills — discover Global/Project/External skills; search; session-scoped Load/Unload/Reload; create, upload ZIP, Edit with Koma, duplicate, download, and delete with ownership safety
 - git — source control panel
 - mcp — MCP servers panel
 - remote — remote SSH hosts

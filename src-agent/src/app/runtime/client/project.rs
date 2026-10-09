@@ -660,6 +660,11 @@ fn push_snapshot_if_changed(
     // the composer renders these as the follow-ups list while a turn is in flight.
     // Full text so clients can edit/remove per item.
     let pending_steer: Vec<String> = fg.pending_steer.clone();
+    let loaded_skill_names: Vec<String> = if fg.active_skills.is_empty() {
+        fg.projected_loaded_skill_names.iter().cloned().collect()
+    } else {
+        fg.active_skills.keys().cloned().collect()
+    };
 
     // Tool-approval GATE (wave-7): the foreground session parks with `awaiting_approval`
     // set when a risky/classifier call OR a `plan_ready` plan digest is waiting on a
@@ -792,6 +797,7 @@ fn push_snapshot_if_changed(
             a.name.hash(&mut h);
             a.kind.hash(&mut h);
         }
+        loaded_skill_names.hash(&mut h);
         // Fold the queued steer previews in so queuing/consuming a steer (which changes
         // nothing else in the transcript while a turn is in flight) re-emits the Snapshot.
         pending_steer.len().hash(&mut h);
@@ -881,6 +887,7 @@ fn push_snapshot_if_changed(
         for s in &pending_steer {
             s.hash(&mut h);
         }
+        loaded_skill_names.hash(&mut h);
         awaiting_approval.hash(&mut h);
         approval_reason.hash(&mut h);
         if let Some(pc) = &pending_call {
@@ -1018,6 +1025,7 @@ fn push_snapshot_if_changed(
                 attachments,
                 mode: mode.to_string(),
                 pending_steer,
+                loaded_skill_names,
                 awaiting_approval,
                 approval_reason,
                 pending_call,

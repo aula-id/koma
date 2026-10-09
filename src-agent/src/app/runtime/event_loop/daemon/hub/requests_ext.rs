@@ -426,6 +426,28 @@ impl DaemonHub {
                         );
                     }
                 }
+                StoreReply::SkillMutation {
+                    client_id,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                    operation,
+                    outcomes,
+                    reload_target,
+                    affected_project,
+                    renamed_from,
+                } => self.finish_skill_mutation(
+                    state,
+                    client_id,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                    operation,
+                    outcomes,
+                    reload_target,
+                    affected_project,
+                    renamed_from,
+                ),
                 // W8 panel bridge: turn a panel.msg outcome into a seq'd `ExtPanelReply` to the
                 // REQUESTING client (matched by id — a client that vanished mid-flight is silently
                 // dropped, same safe `position` map as the store replies above).

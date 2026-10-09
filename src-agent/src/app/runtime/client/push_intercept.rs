@@ -134,6 +134,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
         max_output_tokens,
         context_window_limit,
         context_model_alias,
+        extra_skill_roots,
     } = &frame.event
     {
         let env = PushEnvelope::SettingsValues {
@@ -152,11 +153,70 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             max_output_tokens: *max_output_tokens,
             context_window_limit: *context_window_limit,
             context_model_alias: context_model_alias.clone(),
+            extra_skill_roots: extra_skill_roots.clone(),
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
         }
     }
+    if let DaemonEvent::SkillValues {
+        request_id,
+        session_epoch,
+        skills,
+        loaded_skill_names,
+        error,
+    } = &frame.event
+    {
+        super::push_proto::push_skill_values(
+            push,
+            request_id.clone(),
+            *session_epoch,
+            skills.clone(),
+            loaded_skill_names.clone(),
+            error.clone(),
+        );
+    }
+    if let DaemonEvent::SkillDetailValues {
+        request_id,
+        session_epoch,
+        tab_id,
+        detail,
+        file_path,
+        file_content,
+        error,
+    } = &frame.event
+    {
+        super::push_proto::push_skill_detail_values(
+            push,
+            request_id.clone(),
+            *session_epoch,
+            tab_id.clone(),
+            detail.clone(),
+            file_path.clone(),
+            file_content.clone(),
+            error.clone(),
+        );
+    }
+    if let DaemonEvent::SkillOp {
+        request_id,
+        session_epoch,
+        tab_id,
+        operation,
+        outcomes,
+        loaded_skill_names,
+    } = &frame.event
+    {
+        super::push_proto::push_skill_op(
+            push,
+            request_id.clone(),
+            *session_epoch,
+            tab_id.clone(),
+            operation.clone(),
+            outcomes.clone(),
+            loaded_skill_names.clone(),
+        );
+    }
+
     // GUI /agents-dashboard reply (GetAgents / post-SetAgent / -DeleteAgent re-push):
     // re-push it as an `AgentsValues` envelope BEFORE folding (a non-visual fold no-op,
     // keeping the seq gap-free), same as the SettingsValues intercept above.

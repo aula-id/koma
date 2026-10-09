@@ -11,6 +11,7 @@ import {
   FileDiff,
   GitGraph,
   GraduationCap,
+  Library,
   Image as ImageIcon,
   MessageSquare,
   Network,
@@ -135,6 +136,10 @@ function tabVisual(
     }
     case 'agent':
       return { Icon: Bot, label: tab.agentId ?? 'new agent', title: tab.agentId ?? 'new agent' }
+    case 'skill':
+      return { Icon: Library, label: tab.title, title: tab.title }
+    case 'uploadSkill':
+      return { Icon: Package, label: 'Upload skill', title: 'Upload skill (.zip)' }
     case 'subagent':
       return { Icon: Bot, label: tab.title, title: tab.title }
     case 'bash':

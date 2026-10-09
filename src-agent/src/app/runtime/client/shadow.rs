@@ -203,6 +203,9 @@ pub(super) fn apply_frame(
         | DaemonEvent::WebSearchValues { .. }
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
+        | DaemonEvent::SkillValues { .. }
+        | DaemonEvent::SkillDetailValues { .. }
+        | DaemonEvent::SkillOp { .. }
         | DaemonEvent::AgentsValues { .. }
         | DaemonEvent::AgentOp { .. }
         | DaemonEvent::OAuthState { .. }

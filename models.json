@@ -1,6 +1,63 @@
 {
   "https://api.anthropic.com": [
     {
+      "id": "claude-fable-5-1",
+      "reasoning": {
+        "mandatory": true,
+        "supported_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "input": 10.0,
+        "cached": 0.25,
+        "output": 50.0
+      }
+    },
+    {
+      "id": "claude-opus-5-5",
+      "reasoning": {
+        "mandatory": true,
+        "supported_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "input": 4.0,
+        "cached": 0.2,
+        "output": 20.0
+      }
+    },
+    {
+      "id": "claude-sonnet-5",
+      "reasoning": {
+        "mandatory": false,
+        "supported_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "input": 2.0,
+        "cached": 0.2,
+        "output": 10.0
+      }
+    },
+    {
       "id": "claude-fable-5[1m]",
       "reasoning": {
         "mandatory": false,
@@ -59,6 +116,63 @@
     }
   ],
   "https://chatgpt.com/backend-api/codex": [
+    {
+      "id": "gpt-6-astra",
+      "reasoning": {
+        "mandatory": true,
+        "supported_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "context_length": 1050000,
+      "pricing": {
+        "input": 10.0,
+        "cached": 1.0,
+        "output": 50.0
+      }
+    },
+    {
+      "id": "gpt-6-sol",
+      "reasoning": {
+        "mandatory": false,
+        "supported_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "context_length": 1050000,
+      "pricing": {
+        "input": 2.0,
+        "cached": 0.2,
+        "output": 10.0
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "reasoning": {
+        "mandatory": false,
+        "supported_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "context_length": 1050000,
+      "pricing": {
+        "input": 0.1,
+        "cached": 0.01,
+        "output": 0.5
+      }
+    },
     {
       "id": "gpt-5.5",
       "reasoning": {
@@ -133,6 +247,22 @@
     }
   ],
   "https://api.x.ai/v1": [
+    {
+      "id": "grok-4.7",
+      "reasoning": {
+        "mandatory": true,
+        "supported_efforts": [
+          "low",
+          "high"
+        ]
+      },
+      "context_length": 500000,
+      "pricing": {
+        "input": 2.0,
+        "cached": 0.5,
+        "output": 6.0
+      }
+    },
     {
       "id": "grok-4.6",
       "reasoning": {
@@ -224,6 +354,30 @@
     }
   ],
   "https://api.commandcode.ai/provider/v1": [
+    {
+      "id": "claude-fable-5-1",
+      "context_length": 1000000
+    },
+    {
+      "id": "claude-opus-5-5",
+      "context_length": 1000000
+    },
+    {
+      "id": "gpt-6-astra",
+      "context_length": 1050000
+    },
+    {
+      "id": "gpt-6-sol",
+      "context_length": 1050000
+    },
+    {
+      "id": "gpt-6-luna",
+      "context_length": 1050000
+    },
+    {
+      "id": "xai/grok-4.7",
+      "context_length": 500000
+    },
     {
       "id": "claude-sonnet-5",
       "context_length": 1000000,

@@ -27,6 +27,8 @@ src-docs/.vite/
 # browser screenshots (transient)
 .screenshoot/
 .problems/
+.vitest-attachments/
+**/__screenshots__/
 
 # Generated GUI release runtime payloads / WiX manifest.
 packaging/windows/ocr/

@@ -214,15 +214,29 @@ recall — read a saved memory's full body by its "slug" (the id shown next to e
   Arguments: { "slug": "deploy-uses-make-ship" }
   Example:   recall({"slug": "deploy-uses-make-ship"})
 
-skill — load or unload an Agent Skill into the session context. Skills are
-  catalogues of name+description in the system prompt; full bodies are only
-  injected after load. action="load" name="<skill>" loads the body for this
-  and later turns; action="unload" name="<skill>" removes it; action="list"
-  shows available skills and which are active.
-  Arguments: { "action": "load|unload|list", "name": "..." (load/unload) }
+skill — load, unload, list, create, or modify an Agent Skill. Only the main
+  agent chat calls create and modify. Do not write ~/.koma/skills or
+  .agents/skills yourself; those paths are outside the workspace and write
+  will fail.
+  action="load" name="<skill>" loads the body for this and later turns.
+  action="unload" name="<skill>" removes it. action="list" shows skills and
+  which are active. action="create" makes a new skill. action="modify" changes
+  an existing skill. On modify, pass the fields you want to change. Omit
+  description or instruction to keep the current text.
+  create fields:
+  - name: folder name. Lowercase words and hyphens, like review-notes.
+  - description: one line shown in the skill list.
+  - instruction: plain steps to follow when the skill is loaded.
+  - scope: where to save. "project" (default, this workspace) or "global"
+    (every project). "location" is accepted as the same field.
+  Arguments: { "action": "load|unload|list|create|modify", "name": "...",
+               "description": "...", "instruction": "...", "scope": "project|global" }
   Example:   skill({"action": "load", "name": "rust-testing"})
   Example:   skill({"action": "unload", "name": "rust-testing"})
   Example:   skill({"action": "list"})
+  Example:   skill({"action": "create", "name": "wdym", "description": "Explain a short confusing phrase.", "instruction": "Restate the user's last message in plain words."})
+  Example:   skill({"action": "create", "name": "wdym", "description": "Explain a short confusing phrase.", "instruction": "Restate the user's last message in plain words.", "scope": "global"})
+  Example:   skill({"action": "modify", "name": "wdym", "instruction": "Restate the last message, then give one example."})
 
 forget — delete a saved memory by its "slug" (as listed in the memory index).
   Arguments: { "slug": "deploy-uses-make-ship" }

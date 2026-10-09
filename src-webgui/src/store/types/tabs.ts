@@ -77,6 +77,9 @@ export type Tab =
   // closing an unsaved tab discards silently (no local draft is ever
   // persisted to the store).
   | { id: string; kind: 'agent'; agentId: string | null }
+  // Lazy Skills editor; null skillId denotes Create.
+  | { id: string; kind: 'skill'; skillId: string | null; title: string }
+  | { id: 'upload-skill'; kind: 'uploadSkill' }
   // Installed-extension detail tab (Tab-B) — full manifest projection for one
   // locally-installed extension. Deduped by `extId`; closeable like a diff tab.
   | { id: string; kind: 'installedExtension'; extId: string; title: string }

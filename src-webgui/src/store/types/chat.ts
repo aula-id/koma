@@ -90,6 +90,7 @@ export type SettingsValues = {
   maxOutputTokens: number
   contextWindowLimit: number
   contextModelAlias: string
+  extraSkillRoots: string[]
 }
 
 // The composer EffortPicker's latest GetEffortOptions reply (host

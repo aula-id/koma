@@ -1,6 +1,6 @@
 //! Unit tests for the skill module.
 
-use super::def::SkillSource;
+use super::def::{SkillScopeWire, SkillSource};
 use super::parse::{load_skill_file, parse_skill, validate_skill_name};
 use super::registry::SkillRegistry;
 use std::collections::BTreeMap;
@@ -187,7 +187,7 @@ fn setup_skill_root(
 
 #[test]
 fn empty_roots_gives_empty_registry() {
-    let reg = SkillRegistry::load(None);
+    let reg = SkillRegistry::load_isolated(None, &[]);
     assert!(reg.is_empty());
     assert!(reg.catalogue_text().is_empty());
 }
@@ -430,6 +430,201 @@ fn load_skill_file_with_skill_dir() {
     assert_eq!(skill.description, "Dir load.");
     assert_eq!(skill.body, "Dir body.");
     assert_eq!(skill.skill_dir, Some(skill_root));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn oversized_skill_entry_is_rejected_before_text_read() {
+    let tmp = std::env::temp_dir().join(format!("koma-skill-oversized-{}", uuid::Uuid::new_v4()));
+    let path = tmp.join("large.md");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut bytes = b"---\ndescription: Large\n---\n".to_vec();
+    bytes.resize(2 * 1024 * 1024 + 1, b'x');
+    std::fs::write(&path, bytes).unwrap();
+    assert!(load_skill_file(&path, SkillSource::Global, None)
+        .unwrap_err()
+        .to_string()
+        .contains("2 MiB"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn parses_declared_metadata_and_preserves_unknown_frontmatter() {
+    let content = "---\ndescription: Useful\ntriggers: when asked\nallowed-tools:\n  - Read\n  - Grep\nmetadata:\n  author: Ada\n---\nInstructions";
+    let skill = parse_skill(
+        "metadata",
+        content,
+        SkillSource::Global,
+        "/tmp/metadata.md".into(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(skill.triggers, "when asked");
+    assert_eq!(skill.allowed_tools, vec!["Grep", "Read"]);
+    assert!(skill
+        .frontmatter
+        .as_ref()
+        .unwrap()
+        .contains_key(serde_yaml_ng::Value::String("metadata".into())));
+    assert!(skill
+        .raw_frontmatter
+        .as_deref()
+        .unwrap()
+        .contains("author: Ada"));
+    assert!(skill.frontmatter_roundtrip_safe);
+}
+
+#[test]
+fn advanced_yaml_is_discoverable_but_structured_save_is_fail_closed() {
+    let content = "---\ndescription: Advanced\ndefaults: &defaults\n  owner: Ada\nmetadata: *defaults\n---\nBody";
+    let skill = parse_skill(
+        "advanced",
+        content,
+        SkillSource::Global,
+        "/tmp/advanced.md".into(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(skill.description, "Advanced");
+    assert!(!skill.frontmatter_roundtrip_safe);
+}
+
+#[test]
+fn source_identity_is_stable_but_generation_tracks_entry_bytes() {
+    let first = parse_skill(
+        "identity",
+        "---\ndescription: One\n---\nBody",
+        SkillSource::Global,
+        "/tmp/identity.md".into(),
+        None,
+    )
+    .unwrap();
+    let second = parse_skill(
+        "identity",
+        "---\ndescription: Two\n---\nBody",
+        SkillSource::Global,
+        "/tmp/identity.md".into(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(first.skill_id, second.skill_id);
+    assert_ne!(first.generation, second.generation);
+}
+
+#[test]
+fn catalogue_maps_all_v040_tiers_to_safe_ownership() {
+    assert_eq!(SkillSource::Global.scope(), SkillScopeWire::Global);
+    assert_eq!(SkillSource::ProjectAgent.scope(), SkillScopeWire::Project);
+    assert_eq!(SkillSource::ProjectAgents.scope(), SkillScopeWire::Project);
+    assert_eq!(SkillSource::Claude.scope(), SkillScopeWire::External);
+    assert_eq!(SkillSource::ExtraRoot(4).scope(), SkillScopeWire::External);
+    assert!(SkillSource::Global.editable());
+    assert!(!SkillSource::Claude.editable());
+}
+
+#[test]
+fn preserves_v040_tiers_and_external_root_wins_by_name() {
+    let tmp = std::env::temp_dir().join(format!("koma-skill-all-tiers-{}", uuid::Uuid::new_v4()));
+    let project = tmp.join("project");
+    let external = tmp.join("external");
+    for (relative, description) in [
+        (".claude/skills/claude.md", "claude"),
+        (".agent/skills/agent.md", "agent"),
+        (".agents/skills/agents.md", "agents"),
+        (".agents/skills/collision.md", "project"),
+    ] {
+        let path = project.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("---\ndescription: {description}\n---\nBody")).unwrap();
+    }
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(
+        external.join("collision.md"),
+        "---\ndescription: external\n---\nBody",
+    )
+    .unwrap();
+
+    let registry = SkillRegistry::load_isolated(Some(&project), std::slice::from_ref(&external));
+    assert_eq!(registry.get("claude").unwrap().source, SkillSource::Claude);
+    assert_eq!(
+        registry.get("agent").unwrap().source,
+        SkillSource::ProjectAgent
+    );
+    assert_eq!(
+        registry.get("agents").unwrap().source,
+        SkillSource::ProjectAgents
+    );
+    assert_eq!(
+        registry.get("collision").unwrap().source,
+        SkillSource::ExtraRoot(0)
+    );
+    assert_eq!(registry.catalogue().len(), 4);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn extra_roots_are_deduplicated_and_owned_overlap_is_rejected() {
+    let tmp = std::env::temp_dir().join(format!("koma-skill-root-safety-{}", uuid::Uuid::new_v4()));
+    let project = tmp.join("project");
+    let external = tmp.join("external");
+    std::fs::create_dir_all(project.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    let regular_file = tmp.join("not-a-root");
+    std::fs::write(&regular_file, "not a directory").unwrap();
+
+    let roots = super::registry::valid_extra_skill_roots(
+        Some(&project),
+        &[
+            external.clone(),
+            external.join("."),
+            project.join(".agents/skills"),
+            project.join(".agents"),
+            tmp.join("missing"),
+            regular_file,
+        ],
+    );
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].config_index, 0);
+    assert_eq!(roots[0].path, std::fs::canonicalize(&external).unwrap());
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn companion_reads_require_inventory_identity_generation_and_containment() {
+    let tmp = std::env::temp_dir().join(format!("koma-skill-companion-{}", uuid::Uuid::new_v4()));
+    let project = tmp.join("project");
+    let skill_dir = project.join(".agents/skills/demo");
+    std::fs::create_dir_all(skill_dir.join("refs")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\ndescription: Demo\n---\nBody",
+    )
+    .unwrap();
+    std::fs::write(skill_dir.join("refs/guide.md"), "Guide").unwrap();
+    std::fs::write(tmp.join("secret.md"), "secret").unwrap();
+
+    let registry = SkillRegistry::load_isolated(Some(&project), &[]);
+    let skill = registry.get("demo").unwrap();
+    assert_eq!(skill.companion_files, vec!["refs/guide.md"]);
+    assert_eq!(
+        registry
+            .read_companion_text(&skill.skill_id, &skill.generation, "refs/guide.md")
+            .unwrap(),
+        "Guide"
+    );
+    assert!(registry
+        .read_companion_text(&skill.skill_id, &skill.generation, "../secret.md")
+        .is_err());
+    assert!(registry
+        .read_companion_text(&skill.skill_id, "stale", "refs/guide.md")
+        .is_err());
+    assert!(registry
+        .read_companion_text("wrong", &skill.generation, "refs/guide.md")
+        .is_err());
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

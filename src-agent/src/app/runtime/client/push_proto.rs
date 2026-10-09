@@ -96,6 +96,10 @@ pub(super) enum PushEnvelope {
         /// Folded into the fingerprint so queuing/consuming a steer re-emits the Snapshot.
         #[serde(rename = "pendingSteer")]
         pending_steer: Vec<String>,
+        /// Authoritative session-scoped Loaded skill names. React replaces the
+        /// entire array on every structural Snapshot.
+        #[serde(rename = "loadedSkillNames")]
+        loaded_skill_names: Vec<String>,
         /// Foreground session's tool-approval GATE (wave-7): `true` when a risky/classifier
         /// call OR a `plan_ready` plan digest has PARKED and the daemon is blocked waiting on
         /// a decision the GUI must surface. React raises the approval overlay when set; a
@@ -507,7 +511,39 @@ pub(super) enum PushEnvelope {
         context_window_limit: u64,
         #[serde(default)]
         context_model_alias: String,
+        extra_skill_roots: Vec<String>,
     },
+    /// Body-free Skills catalogue and authoritative session-scoped Loaded names.
+    #[serde(rename_all = "camelCase")]
+    SkillValues {
+        request_id: String,
+        session_epoch: u64,
+        skills: Vec<crate::model::skill::SkillCatalogueEntry>,
+        loaded_skill_names: Vec<String>,
+        error: Option<String>,
+    },
+    /// Correlated lazy Skills detail or companion-file content.
+    #[serde(rename_all = "camelCase")]
+    SkillDetailValues {
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+        detail: Option<crate::model::skill::SkillDetail>,
+        file_path: Option<String>,
+        file_content: Option<String>,
+        error: Option<String>,
+    },
+    /// Deterministic result for Load/Unload and later mutation families.
+    #[serde(rename_all = "camelCase")]
+    SkillOp {
+        request_id: String,
+        session_epoch: u64,
+        tab_id: String,
+        operation: String,
+        outcomes: Vec<crate::model::skill::SkillItemOutcome>,
+        loaded_skill_names: Vec<String>,
+    },
+
     /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
     /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
     /// dashboard. `agents` is the full roster (built-in + global + session), each entry a
@@ -1130,6 +1166,7 @@ pub(super) fn push_settings_values(
     max_output_tokens: u32,
     context_window_limit: u64,
     context_model_alias: String,
+    extra_skill_roots: Vec<String>,
 ) {
     super::render::emit(
         push,
@@ -1149,6 +1186,74 @@ pub(super) fn push_settings_values(
             max_output_tokens,
             context_window_limit,
             context_model_alias,
+            extra_skill_roots,
+        },
+    );
+}
+
+pub(super) fn push_skill_values(
+    push: &dyn Fn(String),
+    request_id: String,
+    session_epoch: u64,
+    skills: Vec<crate::model::skill::SkillCatalogueEntry>,
+    loaded_skill_names: Vec<String>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::SkillValues {
+            request_id,
+            session_epoch,
+            skills,
+            loaded_skill_names,
+            error,
+        },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_skill_detail_values(
+    push: &dyn Fn(String),
+    request_id: String,
+    session_epoch: u64,
+    tab_id: String,
+    detail: Option<crate::model::skill::SkillDetail>,
+    file_path: Option<String>,
+    file_content: Option<String>,
+    error: Option<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::SkillDetailValues {
+            request_id,
+            session_epoch,
+            tab_id,
+            detail,
+            file_path,
+            file_content,
+            error,
+        },
+    );
+}
+
+pub(super) fn push_skill_op(
+    push: &dyn Fn(String),
+    request_id: String,
+    session_epoch: u64,
+    tab_id: String,
+    operation: String,
+    outcomes: Vec<crate::model::skill::SkillItemOutcome>,
+    loaded_skill_names: Vec<String>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::SkillOp {
+            request_id,
+            session_epoch,
+            tab_id,
+            operation,
+            outcomes,
+            loaded_skill_names,
         },
     );
 }

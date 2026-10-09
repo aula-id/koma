@@ -1,3 +1,4 @@
+import type { SkillCatalogueEntry, SkillDetail, SkillItemOutcome } from './types/skills'
 import type { DesignDoc } from '../lib/design'
 import type { DiagramDoc } from '../lib/diagram'
 import type { LspDiagnostic } from '../lib/lsp-bridge'
@@ -79,6 +80,28 @@ export type KomaState = {
   // fresh Hub push confirms the kill/delete landed, so no explicit "done"
   // signal is needed.
   dyingSessions: DyingMark[]
+  // Dedicated body-free Skills state. Catalogue and Loaded arrays are
+  // authoritative replacements; detail/file replies are request-correlated.
+  skills: SkillCatalogueEntry[]
+  loadedSkillNames: string[]
+  skillsLoading: boolean
+  skillsError: string | null
+  skillsUnconfirmed: string | null
+  skillRequestId: string | null
+  skillSessionEpoch: number
+  skillQuery: string
+  skillFilter: 'global' | 'project'
+  skillSelection: string[]
+  skillDetails: Record<string, SkillDetail>
+  skillDetailPending: Record<string, string>
+  skillDetailErrors: Record<string, string>
+  skillFiles: Record<string, { content: string; error: string | null }>
+  skillOutcomes: SkillItemOutcome[]
+  skillLastOp: { requestId: string; operation: string; tabId: string; outcomes: SkillItemOutcome[] } | null
+  skillOpResults: Record<string, { requestId: string; operation: string; tabId: string; outcomes: SkillItemOutcome[] }>
+  // Captured source identities for delete requests. Outcomes preserve input order,
+  // but carry names rather than IDs; never infer a tab to close from a name alone.
+  skillDeletePending: Record<string, { sessionEpoch: number; items: Pick<SkillCatalogueEntry, 'skillId' | 'generation' | 'name'>[] }>
   // The Agents dashboard's full agent list (built-in + global + session,
   // merged daemon-side) from the latest AgentsValues push. REPLACED wholesale
   // on each push — empty until the first GetAgents reply lands.
@@ -330,6 +353,9 @@ export type KomaState = {
   // Queue text to REPLACE the Composer draft (rewind refill). Called right after
   // a RewindTo request so the rewound message drops back into the composer.
   refillComposer: (text: string) => void
+  // Create a chat while preserving every editor tab through the next Snapshot.
+  // Used only for guided drafts opened from detached, tab-rich editor state.
+  newSessionPreservingTabs: () => void
   // Composer-side ack: clears the refill one-shot after consuming it.
   consumeComposerRefill: () => void
   // Stage a rewind-on-send: remember the DISPLAY index of the message being edited
@@ -387,6 +413,15 @@ export type KomaState = {
   // (the agent's name, or `null` for a create — see the Tab union's 'agent'
   // member), activate it. Unlike Settings/Help this is NOT a singleton — a
   // different agentId opens a DIFFERENT tab (diff-tab-style dedupe).
+  refreshSkills: () => void
+  registerSkillDelete: (requestId: string, sessionEpoch: number, items: Pick<SkillCatalogueEntry, 'skillId' | 'generation' | 'name'>[]) => void
+  setSkillQuery: (query: string) => void
+  setSkillFilter: (filter: 'global' | 'project') => void
+  setSkillSelection: (ids: string[]) => void
+  openSkillTab: (skillId: string | null, title?: string) => void
+  openUploadSkillTab: () => void
+  requestSkillDetail: (tabId: string, skillId: string, generation: string) => void
+  readSkillFile: (tabId: string, skillId: string, generation: string, path: string) => void
   openAgentTab: (agentId: string | null) => void
   // Rebind an already-open agent tab's identity after a successful
   // create/rename (fired optimistically right after the SetAgent req, since

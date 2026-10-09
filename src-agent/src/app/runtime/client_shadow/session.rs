@@ -80,6 +80,7 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     rt.pending_tool_calls = s.pending_tool_calls.clone();
     rt.tool_idx = s.tool_idx;
     rt.finished_unseen = s.finished_unseen;
+    rt.projected_loaded_skill_names = s.loaded_skill_names.iter().cloned().collect();
     // Reconstruct the queued delegations (plain data) so the remote `$` panel can
     // list the same "pending" rows the local TUI shows. FIFO order is preserved.
     rt.pending_subagents = s

@@ -11,6 +11,7 @@ import { importGraphActions } from './actions/importGraph'
 import { marketplaceActions } from './actions/marketplace'
 import { remoteActions } from './actions/remote'
 import { sessionActions } from './actions/session'
+import { skillActions } from './actions/skills'
 import { tabActions } from './actions/tabs'
 import { initialCoding } from './coding'
 import { initialDesign } from './design'
@@ -45,6 +46,7 @@ import { pushGit } from './push/git'
 import { pushImportGraph } from './push/importGraph'
 import { pushMarketplace } from './push/marketplace'
 import { pushSession } from './push/session'
+import { pushSkills } from './push/skills'
 import { codingHostViews } from './runtime'
 import type { KomaState } from './state'
 import type { PushEnvelope } from './types/envelope'
@@ -118,6 +120,7 @@ export type {
   UsagePreview,
 } from './types/chat'
 export type { Tab } from './types/tabs'
+export type { SkillScope, SkillCatalogueEntry, SkillDetail, SkillItemOutcome } from './types/skills'
 export type { PushEnvelope } from './types/envelope'
 export type {
   ActivityBarLayout,
@@ -152,6 +155,24 @@ export const useKoma = create<KomaState>((set, get) => ({
   mcpStatusBusy: false,
   mcpStatusRequestId: null,
   dyingSessions: [],
+  skills: [],
+  loadedSkillNames: [],
+  skillsLoading: false,
+  skillsError: null,
+  skillsUnconfirmed: null,
+  skillRequestId: null,
+  skillSessionEpoch: 0,
+  skillQuery: '',
+  skillFilter: 'global',
+  skillSelection: [],
+  skillDetails: {},
+  skillDetailPending: {},
+  skillDetailErrors: {},
+  skillFiles: {},
+  skillOutcomes: [],
+  skillLastOp: null,
+  skillOpResults: {},
+  skillDeletePending: {},
   agents: [],
   catalogueModels: [],
   catalogueProviders: [],
@@ -190,6 +211,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (pushCoding(set, get, env)) return
     if (pushGit(set, get, env)) return
     if (pushSession(set, get, env)) return
+    if (pushSkills(set, get, env)) return
     if (pushConfig(set, get, env)) return
     if (pushAgents(set, get, env)) return
     if (pushMarketplace(set, get, env)) return
@@ -234,8 +256,26 @@ export const useKoma = create<KomaState>((set, get) => ({
       g.r === 'FileDownloadBytes' ||
       g.r === 'FileContentSearch' ||
       g.r === 'FileContentReplace'
+    // A failed bridge dispatch is definitely NOT a disk write. Report that
+    // immediately instead of leaving the skill editor waiting for SkillOp.
+    const failSkillUpdate = (reason: string) => {
+      if (g.r !== 'UpdateSkill') return
+      set((s) => {
+        const result = {
+          requestId: g.requestId,
+          operation: g.reloadAfterSave ? 'update-reload' : 'update',
+          tabId: g.tabId,
+          outcomes: [{ name: g.name, status: 'failed' as const, error: reason }],
+        }
+        return {
+          skillLastOp: result,
+          skillOpResults: { ...Object.fromEntries(Object.entries(s.skillOpResults).slice(-31)), [g.requestId]: result },
+        }
+      })
+    }
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
+      failSkillUpdate('IPC unavailable — save was not sent')
       if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC unavailable — save was not sent' })
       if (isCodingReq) {
         const text = 'IPC unavailable — coding request was not sent'
@@ -252,6 +292,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     try {
       ipc.postMessage(JSON.stringify({ t: 'req', ...g }))
     } catch (e) {
+      failSkillUpdate('IPC error — save was not sent')
       if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC error — save was not sent' })
       if (isCodingReq) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -268,6 +309,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
 
   ...sessionActions(set, get),
+  ...skillActions(set, get),
   ...remoteActions(set, get),
   ...tabActions(set, get),
   ...gitActions(set, get),

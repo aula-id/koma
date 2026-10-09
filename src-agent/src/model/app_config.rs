@@ -747,6 +747,11 @@ pub struct AppConfig {
     /// loads an older config without it cleanly. Cleared for an extension on uninstall.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub ext_preferred_models: std::collections::BTreeMap<String, String>,
+    /// Additional read-only skill discovery roots. They are normalized,
+    /// deduplicated, and ownership-checked before discovery; invalid entries
+    /// remain in config so Settings can explain the problem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_skill_roots: Vec<std::path::PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -766,6 +771,7 @@ impl Default for AppConfig {
             install_id: new_uuid(),
             installed_extensions: Vec::new(),
             ext_preferred_models: std::collections::BTreeMap::new(),
+            extra_skill_roots: Vec::new(),
         }
     }
 }
