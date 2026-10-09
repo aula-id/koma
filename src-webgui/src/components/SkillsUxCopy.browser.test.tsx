@@ -88,7 +88,7 @@ beforeEach(() => {
 })
 
 describe.sequential('Skills UX copy and disclosures', () => {
-  it('stacks Settings labels above controls and lets numeric drafts stay empty until committed', async () => {
+  it('stacks full-width inputs, keeps button controls inline and allows empty numeric drafts', async () => {
     const screen = await render(<div data-testid="settings-width" style={{ width: 1100 }}><SettingsTab /></div>)
     const width = document.querySelector<HTMLElement>('[data-testid="settings-width"]')!
     for (const size of [1100, 360]) {
@@ -96,7 +96,14 @@ describe.sequential('Skills UX copy and disclosures', () => {
       for (const row of document.querySelectorAll<HTMLElement>('.settings-row')) {
         const caption = row.firstElementChild!.getBoundingClientRect()
         const control = row.lastElementChild!.getBoundingClientRect()
-        expect(control.top).toBeGreaterThanOrEqual(caption.bottom)
+        if (row.classList.contains('settings-input-row')) {
+          expect(control.top).toBeGreaterThanOrEqual(caption.bottom)
+          const field = row.querySelector('input, textarea')!.getBoundingClientRect()
+          expect(Math.abs(field.width - row.getBoundingClientRect().width)).toBeLessThan(2)
+        } else {
+          expect(control.left).toBeGreaterThanOrEqual(caption.right)
+          expect(control.top).toBeLessThan(caption.bottom)
+        }
       }
     }
     expect(document.querySelector('.settings-content input[type="number"]')).toBeNull()

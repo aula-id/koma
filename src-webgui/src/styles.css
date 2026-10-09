@@ -886,6 +886,7 @@ svg.animate-spin {
 
 /* Keep Settings navigation and scale controls reachable in a zoomed viewport. */
 .settings-tab { min-height: 0; }
+.settings-input-row :is(input, textarea) { width: 100%; }
 /* Editable fields keep full contrast; only disabled fields are dimmed. */
 .settings-content :is(input, textarea, select) {
   color: var(--color-koma-fg);

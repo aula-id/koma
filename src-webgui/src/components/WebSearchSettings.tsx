@@ -29,9 +29,9 @@ export function WebSearchSettings() {
       const active = status.provider === id
       const disabled = pending !== null || (active && id === 'built_in') || !canEnable(status, id, drafts[id] ?? '')
       return <div key={id} className="rounded border border-koma-border bg-koma-panel2 px-3 py-2.5">
-        <div className="flex flex-col items-start gap-2">
+        <div className="flex items-center justify-between gap-3">
           <a href={website} onClick={e => { e.preventDefault(); openExternal(website) }} className="text-[13px] hover:underline">{label}</a>
-          <label className="flex flex-col items-start gap-1.5 text-xs">
+          <label className="flex items-center gap-2 text-xs">
             Enable
             <button type="button" role="switch" aria-label={`Enable ${label}`} aria-checked={active} disabled={disabled} onClick={() => toggle(id)}
               className={`relative h-4 w-7 rounded-full disabled:opacity-40 ${active ? 'bg-emerald-500/70' : 'bg-koma-grip'}`}>
