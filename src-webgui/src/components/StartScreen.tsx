@@ -275,7 +275,7 @@ export function StartScreen() {
       </div>
 
       <Card className="!p-0 overflow-hidden">
-        <div className="px-4 pt-4">
+        <div className="flex h-11 shrink-0 items-center px-4">
           {multi.hasSelection ? (
             <SessionBulkBar
               cookingIds={bulkCooking}
@@ -283,28 +283,10 @@ export function StartScreen() {
               foregroundCookingIds={fgCooking}
               onDone={() => multi.clear()}
               onClear={() => multi.clear()}
-              className="mb-2"
+              className="h-7"
             />
-          ) : (
-            <div className="mb-2 flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <SectionLabel icon={Clock}>Recent</SectionLabel>
-              </div>
-              {hasRecent && !searching && (
-                <button
-                  type="button"
-                  onClick={openSearch}
-                  aria-label="Search sessions"
-                  title="Search sessions"
-                  className="flex h-7 w-7 flex-none items-center justify-center rounded border border-koma-border text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
-                >
-                  <Search size={13} />
-                </button>
-              )}
-            </div>
-          )}
-          {searching && !multi.hasSelection && (
-            <label className="relative mb-2 block">
+          ) : searching ? (
+            <label className="relative block min-w-0 flex-1">
               <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-koma-dim" aria-hidden />
               <input
                 ref={searchRef}
@@ -323,6 +305,23 @@ export function StartScreen() {
                 <X size={12} />
               </button>
             </label>
+          ) : (
+            <div className="flex h-7 min-w-0 flex-1 items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <SectionLabel icon={Clock}>Recent</SectionLabel>
+              </div>
+              {hasRecent && (
+                <button
+                  type="button"
+                  onClick={openSearch}
+                  aria-label="Search sessions"
+                  title="Search sessions"
+                  className="flex h-7 w-7 flex-none items-center justify-center rounded border border-koma-border text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+                >
+                  <Search size={13} />
+                </button>
+              )}
+            </div>
           )}
         </div>
         {!hubReady ? (
