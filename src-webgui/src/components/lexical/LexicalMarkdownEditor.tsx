@@ -85,6 +85,7 @@ import {
   type ComposerChipPayload,
 } from '../../lib/composerIpc'
 import {
+  composerTextPasteAction,
   loneHttpUrl,
   looksLikeComposerMarkdown,
   markdownFromClipboardHtml,
@@ -849,6 +850,9 @@ function EditorPlugins({
         if (profile === 'composer' && event instanceof ClipboardEvent) {
           const data = event.clipboardData
           const plain = data?.getData('text/plain') ?? ''
+          if (composerTextPasteAction(plain) === 'collapse') {
+            return onPasteRef.current?.(event) ?? false
+          }
           const html = data?.getData('text/html') ?? ''
           const fromHtml = html ? markdownFromClipboardHtml(html) : null
           const candidate =

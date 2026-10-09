@@ -47,7 +47,6 @@ import {
   PASTE_SOFT_MAX_BYTES,
   pasteByteLength,
   pasteMarker,
-  shouldCollapsePaste,
   splitPasteMessage,
   type PastedBlock,
 } from '../lib/pasteText'
@@ -66,7 +65,7 @@ import {
   hasComposerAttachmentDrag,
   writeComposerAttachmentDrag,
 } from '../lib/composerIpc'
-import { looksLikeComposerMarkdown } from '../lib/composerMarkdownPaste'
+import { composerTextPasteAction } from '../lib/composerMarkdownPaste'
 import { parseFileRefWire } from '../lib/composerChipOpen'
 import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
@@ -761,8 +760,7 @@ export function Composer() {
       toastError('Paste is larger than 2 MB')
       return true
     }
-    if (looksLikeComposerMarkdown(text)) return false
-    if (!shouldCollapsePaste(text)) return false
+    if (composerTextPasteAction(text) !== 'collapse') return false
     e.preventDefault()
     const id = mintDiagramChipId()
     markerInsertQueue.current.push({ id, kind: 'pasted_text', markerN: null, cancelled: false })
