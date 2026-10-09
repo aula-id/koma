@@ -32,10 +32,8 @@ export function dirName(path: string): string {
   return parts.join('/')
 }
 
-// A subtle row-hover action button (stage/unstage/discard) — invisible until
-// the row is hovered/focused, mirroring VSCode's Source Control row actions.
-// Always stops propagation so clicking it never also fires the row's own
-// onClick (which opens the diff tab).
+// Row action button. Parent FileRow/RefRow wraps these in a collapsing
+// max-w-0 gutter so idle layout does not reserve empty icon width.
 export function RowAction({
   title,
   onClick,
@@ -54,7 +52,7 @@ export function RowAction({
         e.stopPropagation()
         onClick()
       }}
-      className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition-opacity hover:bg-koma-hover group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100"
+      className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 transition hover:bg-koma-hover hover:!opacity-100"
     >
       {children}
     </button>
@@ -174,25 +172,14 @@ export function FileRow({
           </>
         )}
       </span>
-      {actionCount > 0 && (
-        <div
-          className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
-          style={{ ['--git-actions' as string]: `${actionCount * 20}px` }}
-          // Tailwind can't take a dynamic max-w easily; expand on hover via style.
-        >
-          <div
-            className="flex flex-none items-center group-hover:max-w-[var(--git-actions)] group-focus-within:max-w-[var(--git-actions)] max-w-0 overflow-hidden transition-[max-width] duration-100"
-            style={{ maxWidth: undefined }}
-          >
-            {/* Outer handles opacity; this inner expands width on group-hover. */}
-          </div>
-        </div>
-      )}
-      {/* Idle: max-w-0 so actions take no flex width. Hover expands for icons. */}
+      {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
+          Hover/focus: expand and show. opacity alone would still reserve space. */}
       {actionCount > 0 && (
         <div
           className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
-            actionCount >= 2 ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]' : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+            actionCount >= 2
+              ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]'
+              : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
           }`}
         >
           {onDiscard && (
