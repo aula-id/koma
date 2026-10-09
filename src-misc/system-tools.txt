@@ -360,23 +360,6 @@ mission_clear — SDLC-only. After a mission is done (or when abandoning it with
   Example:   mission_clear({})
   Example:   mission_clear({"reset":true})
 
-mission_ready — SDLC-only. Present the mission contract for user approval
-  (goal, acceptance, graph_tasks, …). Only from SDLC when exploration is complete.
-  Calling again on an approved mission starts amendment/reapproval.
-
-mission_draft — SDLC assess-only. Lock contract fields one at a time during
-  waterfall. Call mission_ready when required locks are set.
-
-mission_verify — SDLC execute/integrate. Mark verify_bit on a leaf after evidence.
-  pass=false reopens the leaf. human_gate parks for the user's y/n.
-
-mission_prepare — SDLC prepare→execute only when still in prepare. Skip after a
-  normal approve (that already enters execute).
-
-mission_integrate — SDLC. Merge the mission branch into the frozen target, or
-  finish branch-ready (express / force_branch_only). Requires verified leaves.
-  Arguments: { "summary": "...", "force_branch_only"?: boolean }
-
 The injected "# Memory" block lists every saved memory as a pointer
 (`- [hook](slug.md)`); it is the index only, not the full bodies. Call
 recall(slug) to read one in full, remember(...) to save one, forget(slug) to
