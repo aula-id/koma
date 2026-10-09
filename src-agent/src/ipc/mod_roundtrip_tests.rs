@@ -121,7 +121,6 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         accent: "cyan".to_string(),
         // Non-default palette so the round-trip proves it survives (de)serialize.
         palette: "light".to_string(),
-        search_provider: crate::model::web_search::SearchProvider::Tavily,
         // Use a populated stage-2 payload (KeyInput) so a full mode projection
         // gets round-trip coverage, not just the unit/struct-light variants.
         mode: ModeSnapshot::KeyInput(KeyInputSnapshot {

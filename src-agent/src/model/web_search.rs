@@ -21,15 +21,6 @@ impl SearchProvider {
             Self::Exa => "Exa",
         }
     }
-    /// Short chip suffix for the tool-result box (`web · default`).
-    pub fn chip(self) -> &'static str {
-        match self {
-            Self::BuiltIn => "default",
-            Self::Firecrawl => "firecrawl",
-            Self::Tavily => "tavily",
-            Self::Exa => "exa",
-        }
-    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,13 +154,6 @@ impl SearchEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn chip_names() {
-        assert_eq!(SearchProvider::BuiltIn.chip(), "default");
-        assert_eq!(SearchProvider::Tavily.chip(), "tavily");
-        assert_eq!(SearchProvider::Firecrawl.chip(), "firecrawl");
-        assert_eq!(SearchProvider::Exa.chip(), "exa");
-    }
     #[test]
     fn authoritative_search_config_reads_every_time_and_rejects_corruption() {
         let dir = std::env::temp_dir().join(format!("koma-search-{}", uuid::Uuid::new_v4()));

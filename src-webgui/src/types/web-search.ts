@@ -1,16 +1,4 @@
 export type SearchProvider = 'built_in' | 'firecrawl' | 'tavily' | 'exa'
-export function searchChip(provider: SearchProvider | null | undefined): string {
-  switch (provider) {
-    case 'tavily':
-      return 'tavily'
-    case 'firecrawl':
-      return 'firecrawl'
-    case 'exa':
-      return 'exa'
-    default:
-      return 'default'
-  }
-}
 export type SearchStatus = { provider: SearchProvider; saved_keys: SearchProvider[] }
 export type SearchReply = { req_seq: number; status: SearchStatus; error: string | null }
 export const SEARCH_PROVIDERS: { id: SearchProvider; label: string; website: string }[] = [

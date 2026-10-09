@@ -323,19 +323,14 @@ pub(super) fn render_agent_viewer(
     // then shows the report as it streams, mirroring the live cooking pane. Cheap:
     // a clone only when something is actually streaming.
     let lines = if sa.live_text.is_empty() {
-        assemble_messages(
-            &sa.messages,
-            palette,
-            wrap_w,
-            rest.config.web_search.provider,
-        )
+        assemble_messages(&sa.messages, palette, wrap_w)
     } else {
         let mut msgs = sa.messages.clone();
         msgs.push(crate::dto::chat::ChatMessage::new(
             crate::dto::chat::Role::Assistant,
             sa.live_text.clone(),
         ));
-        assemble_messages(&msgs, palette, wrap_w, rest.config.web_search.provider)
+        assemble_messages(&msgs, palette, wrap_w)
     };
 
     // Scroll model: while the agent is RUNNING auto-follow the bottom so live

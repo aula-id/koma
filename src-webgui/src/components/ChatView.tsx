@@ -40,7 +40,6 @@ import { splitPasteMessage } from '../lib/pasteText'
 import { Composer } from './Composer'
 import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
-import { searchChip, type SearchProvider } from '../types/web-search'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -145,7 +144,6 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
   // got answered → they have a result → done. So gate the controls on both, so
   // they show on exactly the one row awaiting a decision.
   const awaitingApproval = useKoma((s) => s.session.awaitingApproval)
-  const searchProvider: SearchProvider | undefined = useKoma((s) => s.webSearchValues?.status.provider)
   const pendingIsPlan = useKoma(
     (s) =>
       s.session.pendingCall?.name === 'plan_ready' ||
@@ -242,17 +240,7 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
       )}
       {hasOutput &&
         (meta ? (
-          <ToolOutputBox
-            label={
-              call.name === 'web_search'
-                ? call.label && call.label !== 'web'
-                  ? call.label
-                  : `web · ${searchChip(searchProvider)}`
-                : (call.label ?? meta.label)
-            }
-            Icon={meta.Icon}
-            output={call.output as string}
-          />
+          <ToolOutputBox label={meta.label} Icon={meta.Icon} output={call.output as string} />
         ) : (
           <TerseResult output={call.output as string} />
         ))}

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { activation, canEnable, initialSearchSettings, searchChip, searchSettingsReducer as reduce } from './web-search.ts'
+import { activation, canEnable, initialSearchSettings, searchSettingsReducer as reduce } from './web-search.ts'
 
 let s = reduce(initialSearchSettings, { type: 'load', seq: 1 })
 s = reduce(s, { type: 'reply', reply: { req_seq: 1, status: { provider: 'built_in', saved_keys: [] }, error: null } })
@@ -30,9 +30,4 @@ assert.deepEqual(activation(s.status!, 'exa', ''), { provider: 'exa', key: null 
 s = reduce(s, { type: 'edit', provider: 'exa', key: 'replacement' })
 assert.deepEqual(activation(s.status!, 'exa', s.drafts.exa!), { provider: 'exa', key: 'replacement' })
 assert.deepEqual(initialSearchSettings.drafts, {}) // New settings mount discards drafts.
-assert.equal(searchChip(undefined), 'default')
-assert.equal(searchChip('built_in'), 'default')
-assert.equal(searchChip('tavily'), 'tavily')
-assert.equal(searchChip('firecrawl'), 'firecrawl')
-assert.equal(searchChip('exa'), 'exa')
 console.log('Web search GUI state tests passed')

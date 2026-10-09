@@ -234,9 +234,8 @@ mod computer_tests {
 /// (`view/chat/transcript.rs:631`):
 /// - `signature` = `format_tool_signature(name,args)`, the quote-less `name(args)`
 ///   header the TUI shows (already flattened + capped at 60 chars).
-/// - `label` = the box caption (`bash`/`read`/`web · tavily`/…) when this tool's
-///   output is BOXED (`tool_box_caption`), else `None` → React renders the terse
-///   one-liner fallback.
+/// - `label` = the box label (`bash`/`read`/`grep`/…) when this tool's output is BOXED
+///   (`tool_box_label`), else `None` → React renders the terse one-liner fallback.
 /// - `output` = the paired `Role::Tool` result content (`None` while in-flight).
 /// - `status` = `"done"` once a matching `Role::Tool` result exists, else `"pending"`
 ///   (drives the ⚙→✓ glyph flip; resolved fresh each Snapshot so a late-landing result

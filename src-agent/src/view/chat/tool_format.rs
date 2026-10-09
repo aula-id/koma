@@ -7,7 +7,6 @@
 //! keep resolving unchanged.
 
 use super::helpers::truncate_chars;
-use crate::model::web_search::SearchProvider;
 
 /// Map a tool's function name to a short box LABEL, or `None` when the tool's
 /// result should NOT be boxed (terse-status tools keep the compact one-liner).
@@ -30,17 +29,6 @@ pub(crate) fn tool_box_label(name: &str) -> Option<&'static str> {
         "recall" => "memory",
         _ => return None, // None → not boxed, keep the single-line rendering
     })
-}
-
-/// Box caption shown in the chip. Same as [`tool_box_label`] except `web_search`
-/// appends the active search provider (`web · default`, `web · tavily`, …).
-pub(crate) fn tool_box_caption(name: &str, search: SearchProvider) -> Option<String> {
-    let base = tool_box_label(name)?;
-    if name == "web_search" {
-        Some(format!("web · {}", search.chip()))
-    } else {
-        Some(base.to_string())
-    }
 }
 
 /// Render a tool call as a clean, quote-less signature for the transcript header:
@@ -151,39 +139,5 @@ fn generic_inner(v: &serde_json::Value, raw: &str) -> String {
             }
         }
         _ => raw.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn web_search_caption_follows_provider() {
-        assert_eq!(
-            tool_box_caption("web_search", SearchProvider::BuiltIn).as_deref(),
-            Some("web · default")
-        );
-        assert_eq!(
-            tool_box_caption("web_search", SearchProvider::Tavily).as_deref(),
-            Some("web · tavily")
-        );
-        assert_eq!(
-            tool_box_caption("web_search", SearchProvider::Firecrawl).as_deref(),
-            Some("web · firecrawl")
-        );
-        assert_eq!(
-            tool_box_caption("web_search", SearchProvider::Exa).as_deref(),
-            Some("web · exa")
-        );
-        assert_eq!(
-            tool_box_caption("web_fetch", SearchProvider::Tavily).as_deref(),
-            Some("web")
-        );
-        assert_eq!(
-            tool_box_caption("bash", SearchProvider::Exa).as_deref(),
-            Some("bash")
-        );
-        assert_eq!(tool_box_caption("write", SearchProvider::BuiltIn), None);
     }
 }

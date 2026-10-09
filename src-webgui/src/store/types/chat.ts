@@ -9,8 +9,6 @@ export type ToolCallView = {
   // Pre-formatted display signature, e.g. `bash(ls src-agent/)`. Optional —
   // derived client-side from name+args when the host doesn't supply it.
   signature?: string
-  // Box caption from the host (`web · tavily`); family name when omitted.
-  label?: string | null
   // Paired Role::Tool result content; null while the call is in flight.
   output: string | null
   // "done" once a matching tool result exists; "pending" otherwise.
