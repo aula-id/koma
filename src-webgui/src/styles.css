@@ -69,6 +69,16 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
   line-height: 1.55;
 }
 
+/* Keep rich-text selections on the active palette, including formatted text. */
+.koma-rich-editor li::marker {
+  color: var(--color-koma-fg);
+}
+.koma-rich-editor::selection,
+.koma-rich-editor *::selection {
+  color: var(--color-koma-fg);
+  background-color: color-mix(in srgb, var(--color-koma-accent) 30%, var(--color-koma-bg));
+}
+
 /* Lexical checklist items (composer + notes): role=checkbox on <li>, no native bullet. */
 [data-composer-editor] li.koma-checklist-item,
 .koma-md li.koma-checklist-item {

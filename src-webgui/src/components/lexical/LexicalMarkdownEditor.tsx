@@ -935,7 +935,7 @@ function EditorPlugins({
           <ContentEditable
             ref={editorElementRef}
             aria-label={undefined}
-            className="outline-none"
+            className="koma-rich-editor outline-none text-koma-fg caret-koma-fg"
             onKeyDown={(event) => {
               onKeyDown?.(event)
             }}
@@ -1016,12 +1016,13 @@ export function LexicalMarkdownEditor({
         nodes,
         theme: {
           paragraph: 'm-0 min-h-[1.2em]',
-          heading: { h1: 'my-1 text-[15px] font-semibold', h2: 'my-1 text-[13px] font-semibold', h3: 'my-1 text-[12px] font-semibold' },
+          heading: { h1: 'my-1 text-[15px] font-semibold text-koma-accent', h2: 'my-1 text-[13px] font-semibold text-koma-accent', h3: 'my-1 text-[12px] font-semibold' },
           quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
           list: {
             ul: 'my-1 list-disc pl-4',
             ol: 'my-1 list-decimal pl-4',
             listitem: 'my-0.5',
+            nested: { listitem: 'list-none' },
             listitemChecked: 'koma-checklist-item koma-checklist-checked',
             listitemUnchecked: 'koma-checklist-item koma-checklist-unchecked',
           },
@@ -1029,7 +1030,7 @@ export function LexicalMarkdownEditor({
             bold: 'font-semibold',
             italic: 'italic',
             strikethrough: 'line-through',
-            code: 'rounded bg-koma-panel2 px-0.5 font-mono text-[0.92em]',
+            code: 'rounded bg-koma-panel2 px-0.5 font-mono text-[0.92em] text-koma-accent',
           },
           link: 'text-koma-accent underline',
           code: 'my-1 block overflow-x-auto rounded bg-koma-bg px-2 py-1 font-mono text-[11px]',
@@ -1090,5 +1091,5 @@ function Placeholder({ text }: { text: string }) {
     })
   }, [editor])
   if (!empty) return null
-  return <div className="pointer-events-none absolute left-0 top-0 text-koma-fg/40">{text}</div>
+  return <div className="pointer-events-none absolute left-0 top-0 text-koma-dim">{text}</div>
 }
