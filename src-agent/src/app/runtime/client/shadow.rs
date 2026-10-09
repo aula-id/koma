@@ -200,6 +200,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::AttachmentLocated { .. }
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
+        | DaemonEvent::WebSearchValues { .. }
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
         | DaemonEvent::AgentsValues { .. }

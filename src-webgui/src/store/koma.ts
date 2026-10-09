@@ -144,6 +144,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   activityBar: initialActivityBar,
   modelList: initialModelList,
   routeList: initialRouteList,
+  webSearchValues: null,
   settingsValues: null,
   effortOptions: null,
   usagePreview: null,

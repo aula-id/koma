@@ -225,6 +225,8 @@ declare global {
     // internet mode) + the active palette. Sent when the tab opens or re-activates.
     // Reply lands as the SettingsValues push envelope (guaranteed for every request,
     // even detached — the host answers from global config with defaults).
+    | { r: 'GetWebSearch'; req_seq: number }
+    | { r: 'SetWebSearch'; req_seq: number; provider: import('./types/web-search').SearchProvider; key: string | null }
     | { r: 'GetSettings' }
     // Commit a PARTIAL settings update from the Settings tab's Session section. Only
     // the present fields are sent; the host applies each through the same per-field

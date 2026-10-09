@@ -103,6 +103,21 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // GUI Settings-tab reply (GetSettings / post-SetSessionPrefs re-push): re-push it as a
     // `SettingsValues` envelope BEFORE folding (a non-visual fold no-op, keeping the seq
     // gap-free), same as the ModelList/RouteList intercepts above.
+    if let DaemonEvent::WebSearchValues {
+        req_seq,
+        status,
+        error,
+    } = &frame.event
+    {
+        let env = PushEnvelope::WebSearchValues {
+            req_seq: *req_seq,
+            status: status.clone(),
+            error: error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
     if let DaemonEvent::SettingsValues {
         name,
         workdir,

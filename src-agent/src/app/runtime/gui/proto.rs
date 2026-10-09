@@ -100,6 +100,15 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer {
         action: String,
         window: Option<String>,

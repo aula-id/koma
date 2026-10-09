@@ -4,6 +4,9 @@ import type { PushEnvelope } from '../types/envelope'
 
 export function pushConfig(set: StoreSet, get: StoreGet, env: PushEnvelope): boolean {
   switch (env.k) {
+      case 'WebSearchValues':
+        set({ webSearchValues: { req_seq: env.req_seq, status: env.status, error: env.error } })
+        break
       case 'Config':
         // Empty/swapper theme: Config is pushed in BOTH the empty/swapper
         // state and the attached state, so it's the reliable carrier for the

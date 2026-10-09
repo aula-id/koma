@@ -10,6 +10,7 @@ import type { ImportGraphEdge, ImportGraphNode, ImportGraphRootInfo } from './sl
 import type { McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
 
 export type PushEnvelope =
+  | ({ k: 'WebSearchValues' } & import('../../types/web-search').SearchReply)
   | { k: 'Computer'; status: import('../../types/computer').ComputerStatus }
   | { k: 'ComputerPreview'; frame: import('../../types/computer').ComputerPreviewFrame }
   | { k: 'ComputerError'; message: string }

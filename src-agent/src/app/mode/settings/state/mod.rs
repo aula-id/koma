@@ -37,6 +37,8 @@ use super::{
 /// Esc goes back one level; Esc from the menu saves and closes.
 #[derive(Debug, Clone)]
 pub struct SettingsState {
+    pub web_search: crate::model::web_search::SearchStatus,
+    pub search_editor: Option<crate::model::web_search::SearchEditor>,
     /// Which page is currently shown.
     pub page: super::SettingsPage,
     /// Cursor index on the menu page (0-4, maps to SettingsPage::MENU_ORDER).
@@ -250,6 +252,8 @@ impl SettingsState {
                 .map(|m| map_entry(m, true)),
         );
         Self {
+            web_search: config.web_search.status(),
+            search_editor: None,
             page: super::SettingsPage::Menu,
             menu_sel: 0,
             field: 0,

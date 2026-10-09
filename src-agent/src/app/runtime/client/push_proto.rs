@@ -48,6 +48,11 @@ pub struct ImportGraphImpactResult {
 #[derive(serde::Serialize)]
 #[serde(tag = "k")]
 pub(super) enum PushEnvelope {
+    WebSearchValues {
+        req_seq: u64,
+        status: crate::model::web_search::SearchStatus,
+        error: Option<String>,
+    },
     /// Structural / commit tick (the catch-all): the full committed transcript +
     /// title + palette for `session`. `state` is always `"attached"`.
     Snapshot {

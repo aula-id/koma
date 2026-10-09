@@ -1202,6 +1202,35 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // foreground session, so answer from the GLOBAL config — the active palette +
             // `Settings` DEFAULTS (empty name/workdir). ALWAYS a reply so the tab's loading
             // state clears. Cheap, synchronous (a config load), so it runs inline.
+            Ok(HostCtl::GetWebSearch { req_seq }) => {
+                let result = crate::model::web_search::read_global_config();
+                let error = result.as_ref().err().cloned();
+                let cfg = result.ok().flatten().unwrap_or_default();
+                super::render::emit(
+                    push,
+                    &super::push_proto::PushEnvelope::WebSearchValues {
+                        req_seq,
+                        status: cfg.web_search.status(),
+                        error,
+                    },
+                );
+            }
+            Ok(HostCtl::SetWebSearch {
+                req_seq,
+                provider,
+                key,
+            }) => {
+                let mut cfg = crate::model::web_search::read_global_config().ok().flatten().unwrap_or_default();
+                let error = crate::model::web_search::save_selection(&mut cfg, provider, key).err();
+                super::render::emit(
+                    push,
+                    &super::push_proto::PushEnvelope::WebSearchValues {
+                        req_seq,
+                        status: cfg.web_search.status(),
+                        error,
+                    },
+                );
+            }
             Ok(HostCtl::GetSettings) => {
                 let cfg = crate::model::app_config::AppConfig::load();
                 let d = crate::model::settings::Settings::default();

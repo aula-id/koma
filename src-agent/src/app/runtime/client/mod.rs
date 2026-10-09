@@ -290,6 +290,15 @@ pub(in crate::app::runtime) struct StreamView {
 /// session-lifecycle intents the client-thread owns.
 #[derive(Clone)]
 pub(crate) enum HostCtl {
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer {
         action: String,
         window: Option<String>,

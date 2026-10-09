@@ -86,7 +86,12 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             // Deepest-modal priority, mirroring `handle_settings`:
             //   role picker (no text field) > model modal > provider modal >
             //   FS path picker > plain text field.
-            if s.mm_role_picker_open() {
+            if let Some(editor) = s.search_editor.as_mut() {
+                if editor.provider != crate::model::web_search::SearchProvider::BuiltIn {
+                    paste_single_line(text, |c| editor.key.0.push(c));
+                    editor.error = None;
+                }
+            } else if s.mm_role_picker_open() {
                 // Checkbox overlay — no text entry; swallow the paste.
             } else if s.model_modal.is_some() {
                 // `mm_push_char` already routes to the active model-modal field:

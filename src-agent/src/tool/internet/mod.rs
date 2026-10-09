@@ -19,6 +19,7 @@ mod describe_screenshot;
 pub(crate) mod image_inspection;
 pub(crate) mod load_image;
 mod load_screenshot;
+mod search_providers;
 mod search_screenshots;
 mod show_image;
 mod web_download;

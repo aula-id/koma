@@ -26,6 +26,7 @@ pub enum SettingField {
     /// Toggle: internet-access tier — `simple` (DDG in-process) vs `full`
     /// (scrapion Firefox subprocess, higher token usage).
     InternetMode,
+    WebSearch,
     /// Toggle: mouse-capture mode — `auto` (touch detection) / `on` / `off`.
     MouseCapture,
     /// Numeric: max agentic turns per sub-agent (when agent def has no `steps`).
@@ -51,6 +52,7 @@ impl SettingField {
             SettingField::BashSaving => "Bash shorts",
             SettingField::CodingAutosave => "Coding autosave",
             SettingField::InternetMode => "Internet mode",
+            SettingField::WebSearch => "Web search — global",
             SettingField::MouseCapture => "Mouse capture",
             SettingField::SubagentMaxTurns => "Max turns",
             SettingField::MaxOutputTokens => "Max out tokens",
@@ -69,6 +71,7 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::BashSaving,
     SettingField::CodingAutosave,
     SettingField::InternetMode,
+    SettingField::WebSearch,
     SettingField::MouseCapture,
     SettingField::SubagentMaxTurns,
     SettingField::MaxOutputTokens,

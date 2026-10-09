@@ -21,6 +21,7 @@ import { CHAT_TURNS_DEFAULT, clampChatTurns } from '../lib/chatWindow'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
+import { WebSearchSettings } from './WebSearchSettings'
 import { ComputerSettings } from './ComputerSettings'
 import { BrailleSpinner } from './BrailleSpinner'
 
@@ -32,7 +33,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys' | 'computer'
+type SectionId = 'webSearch' | 'account' | 'appearance' | 'session' | 'activityBar' | 'lsp' | 'sshKeys' | 'computer'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
@@ -42,13 +43,14 @@ const SECTION_ORDER: SectionId[] = [
   'account',
   'appearance',
   'session',
+  'webSearch',
   'computer',
   'activityBar',
   'lsp',
   'sshKeys',
 ]
 
-export default function SettingsTab() {
+export default function SettingsTab({ visible = true }: { visible?: boolean }) {
   const req = useKoma((s) => s.req)
   const activeTheme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
@@ -58,6 +60,7 @@ export default function SettingsTab() {
   const accountRef = useRef<HTMLDivElement>(null)
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
+  const webSearchRef = useRef<HTMLDivElement>(null)
   const computerRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
   const lspRef = useRef<HTMLDivElement>(null)
@@ -66,7 +69,7 @@ export default function SettingsTab() {
 
   const sectionRef = (id: SectionId) => ({
     account: accountRef, appearance: appearanceRef, session: sessionRef,
-    computer: computerRef, activityBar: activityBarRef, lsp: lspRef, sshKeys: sshKeysRef,
+    webSearch: webSearchRef, computer: computerRef, activityBar: activityBarRef, lsp: lspRef, sshKeys: sshKeysRef,
   })[id]
 
   // Nav click → smooth-scroll the pane to the section header.
@@ -117,6 +120,7 @@ export default function SettingsTab() {
           active={active === 'session'}
           onClick={() => goto('session')}
         />
+        <NavItem icon={<SlidersHorizontal size={15} />} label="Web search" active={active === 'webSearch'} onClick={() => goto('webSearch')} />
         <NavItem icon={<Monitor size={15} />} label="Computer use" active={active === 'computer'} onClick={() => goto('computer')} />
         <NavItem
           icon={<PanelLeft size={15} />}
@@ -159,6 +163,11 @@ export default function SettingsTab() {
             <SectionHeader title="Session" desc="Preferences for the current session." />
             <ChatTurnsSetting />
             <SessionSettings />
+          </section>
+
+          <section ref={webSearchRef} className="mt-12">
+            <SectionHeader title="Web search" desc="Global search provider for all sessions and subagents. Enable saves the API key and selection together." />
+            {visible && <WebSearchSettings />}
           </section>
 
           <section ref={computerRef} className="mt-12">

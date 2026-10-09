@@ -603,6 +603,34 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // the attached daemon (or the un-attached swapper) answers with a
         // `SettingsValues` reply the host re-pushes, so the tab populates in both
         // host states.
+        GuiReq::GetWebSearch { req_seq } => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::GetWebSearch { req_seq },
+                HostCtl::GetWebSearch { req_seq },
+            );
+        }
+        GuiReq::SetWebSearch {
+            req_seq,
+            provider,
+            key,
+        } => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::SetWebSearch {
+                    req_seq,
+                    provider,
+                    key: key.clone(),
+                },
+                HostCtl::SetWebSearch {
+                    req_seq,
+                    provider,
+                    key,
+                },
+            );
+        }
         GuiReq::GetSettings => {
             forward_or_host(
                 &ctx.req,

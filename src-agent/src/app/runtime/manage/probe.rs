@@ -211,6 +211,16 @@ pub fn broadcast_reload_global_catalogue() {
     }
 }
 
+/// Search preferences need no catalogue or modal rebuild.
+pub fn broadcast_reload_web_search() {
+    for status in list_live_sessions() {
+        let Ok(sock) = store::daemon_sock_path(&status.session_id) else {
+            continue;
+        };
+        let _ = send_unload_frame(&sock, &ClientRequest::ReloadWebSearch);
+    }
+}
+
 /// Connect ONE session socket, WRITE the fan-out frame, then drop it (fire-and-forget — no
 /// reply is read). A short write timeout ([`PROBE_TIMEOUT`]) bounds a wedged daemon; the
 /// tiny frame lands in the kernel buffer before close, so the daemon reads it even though we

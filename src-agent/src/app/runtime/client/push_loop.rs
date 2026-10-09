@@ -706,6 +706,20 @@ pub(super) fn push_loop(
                 // the daemon via `live_req` when attached; it only lands here if the attach
                 // state flipped between the detached-check and the send). Forward the daemon
                 // request — the daemon replies with `SettingsValues`, re-pushed above.
+                Ok(super::HostCtl::GetWebSearch { req_seq }) => {
+                    let _ = req_tx.send(ClientRequest::GetWebSearch { req_seq });
+                }
+                Ok(super::HostCtl::SetWebSearch {
+                    req_seq,
+                    provider,
+                    key,
+                }) => {
+                    let _ = req_tx.send(ClientRequest::SetWebSearch {
+                        req_seq,
+                        provider,
+                        key,
+                    });
+                }
                 Ok(super::HostCtl::GetSettings) => {
                     let _ = req_tx.send(ClientRequest::GetSettings);
                 }

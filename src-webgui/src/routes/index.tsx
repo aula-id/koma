@@ -547,7 +547,7 @@ function DiffFallback() {
   )
 }
 
-function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
+function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visible: boolean }) {
   return (
     <Suspense fallback={<DiffFallback />}>
       {tab.kind === 'gitTool' ? (
@@ -555,7 +555,7 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
       ) : tab.kind === 'diff' ? (
         <DiffTab tab={tab} />
       ) : tab.kind === 'settings' ? (
-        <SettingsTab />
+        <SettingsTab visible={visible} />
       ) : tab.kind === 'help' ? (
         <HelpTab />
       ) : tab.kind === 'tutorial' ? (
@@ -938,7 +938,7 @@ function TabbedMain() {
               }}
             >
               <div className="absolute inset-0">
-                <TabBody tab={tab} />
+                <TabBody tab={tab} visible={isTabVisible(ui, tab.id)} />
               </div>
             </div>
           )

@@ -59,6 +59,17 @@ pub struct FileSearchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ClientRequest {
+    /// Refresh only search preferences, preserving open settings drafts.
+    ReloadWebSearch,
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer(crate::app::runtime::computer::Control),
     Attach {
         foreground_id: Option<String>,
@@ -741,6 +752,11 @@ pub struct DaemonFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum DaemonEvent {
+    WebSearchValues {
+        req_seq: u64,
+        status: crate::model::web_search::SearchStatus,
+        error: Option<String>,
+    },
     ComputerStatus(crate::app::runtime::computer::Status),
     ComputerOperation(crate::app::runtime::computer::Request),
     /// Build-skew handshake (task #142): sent VERY FIRST on attach.

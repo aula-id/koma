@@ -215,6 +215,8 @@ pub fn history_entry_snapshot(e: &HistoryEntry) -> HistoryEntrySnapshot {
 
 pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
     SettingsSnapshot {
+        web_search: st.web_search.clone(),
+        search_editor: st.search_editor.as_ref().map(|e| e.masked()),
         page: settings_page_token(st.page).to_string(),
         field: st.field,
         editing: st.editing,

@@ -25,6 +25,8 @@ use crate::model::settings::{InternetMode, MouseCapture, Settings};
 /// fields) renders exactly as the daemon's would.
 pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
     SettingsState {
+        web_search: s.web_search,
+        search_editor: s.search_editor,
         page: shadow_settings_page(&s.page),
         menu_sel: s.menu_sel,
         field: s.field,

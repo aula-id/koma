@@ -26,6 +26,7 @@ impl SettingsState {
             | SettingField::ShortSendEnabled
             | SettingField::BashSaving
             | SettingField::CodingAutosave
+            | SettingField::WebSearch
             | SettingField::InternetMode
             | SettingField::MouseCapture => None,
         }

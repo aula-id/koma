@@ -13,6 +13,7 @@
 
 pub mod agent_def;
 pub mod app_config;
+pub mod web_search;
 pub mod attachment;
 pub mod conversation;
 pub mod ext_workspace;

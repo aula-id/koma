@@ -14,6 +14,7 @@ import type { ActivityBarLayout, ActivitySlice, AnalyticsSlice, ConfigSlice, Gra
 import type { ModelListEntry, RouteEntry } from '../types/config'
 
 export type KomaState = {
+  webSearchValues: import('../types/web-search').SearchReply | null
   computer: import('../types/computer').ComputerStatus | null
   computerError: string | null
   session: SessionSlice

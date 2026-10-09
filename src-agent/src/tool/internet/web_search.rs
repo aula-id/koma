@@ -303,7 +303,7 @@ impl Tool for WebSearch {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web (DuckDuckGo) for a query and return result titles, URLs, and snippets. \
+        "Search the web using the configured provider for a query and return result titles, URLs, and snippets. \
         Use to discover pages, then web_fetch the most relevant URL."
     }
 
@@ -335,6 +335,15 @@ impl Tool for WebSearch {
             .and_then(Value::as_str)
             .unwrap_or(DEFAULT_REGION);
 
+        // Read the authoritative global choice once, before starting a request.
+        // A corrupt/unreadable config is an error, never an external-to-DDG fallback.
+        let search = match crate::model::web_search::read_global_config() {
+            Ok(config) => config.map(|c| c.web_search).unwrap_or_default(),
+            Err(_) => return Ok("error: could not read web search configuration".into()),
+        };
+        if search.provider != crate::model::web_search::SearchProvider::BuiltIn {
+            return Ok(super::search_providers::search(search, query, region));
+        }
         let per_request_timeout = Duration::from_secs(12);
 
         const MAX_ATTEMPTS: usize = 3;
@@ -411,10 +420,19 @@ impl Tool for WebSearch {
     }
 }
 
-struct SearchResult {
-    title: String,
-    url: String,
-    snippet: String,
+pub(super) struct SearchResult {
+    pub(super) title: String,
+    pub(super) url: String,
+    pub(super) snippet: String,
+}
+pub(super) fn format_results(results: &[SearchResult]) -> String {
+    results
+        .iter()
+        .enumerate()
+        .map(|(i, r)| format!("{}. {}\n   {}\n   {}\n", i + 1, r.title, r.url, r.snippet))
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 /// Parse DuckDuckGo HTML results page into structured results.
