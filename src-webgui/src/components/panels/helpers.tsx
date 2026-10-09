@@ -62,19 +62,29 @@ export function Row({ leading, title, subtitle, right, confirmLabel, armed, onEd
   return (
     <div className="group flex min-h-[42px] items-center gap-2.5 px-3 py-1.5 hover:bg-koma-hover">
       {leading}
+      {/* Idle: title uses the full row. Hover expands the action gutter below,
+          which shrinks this flex slot so ellipsis moves to the button edge. */}
       <button onClick={onEdit} disabled={!onEdit} className="min-w-0 flex-1 text-left disabled:cursor-default">
         <div className="truncate text-[13px] text-koma-fg">{title}</div>
         {subtitle && <div className="truncate text-[11px] text-koma-fg opacity-45">{subtitle}</div>}
       </button>
       {right && <div className="flex-none">{right}</div>}
-      {onEdit && (
-        <IconBtn label="Edit" faded onClick={onEdit}>
-          <Pencil size={13} />
+      {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
+          Hover: expand and show. opacity alone would still reserve space. */}
+      <div
+        className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 ${
+          onEdit ? 'group-hover:max-w-[44px]' : 'group-hover:max-w-[20px]'
+        }`}
+      >
+        {onEdit && (
+          <IconBtn label="Edit" onClick={onEdit}>
+            <Pencil size={13} />
+          </IconBtn>
+        )}
+        <IconBtn label="Delete" tone="red" onClick={onArm}>
+          <Trash2 size={13} />
         </IconBtn>
-      )}
-      <IconBtn label="Delete" tone="red" faded onClick={onArm}>
-        <Trash2 size={13} />
-      </IconBtn>
+      </div>
     </div>
   )
 }
