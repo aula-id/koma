@@ -1,21 +1,20 @@
 import { pageRect, pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, ListChecks, MessageSquare, Shield, Sparkles, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, ListChecks, MessageSquare, Sparkles, type LucideIcon } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
-// Agent-mode selector for the composer toolbar — koma's Auto/Plan/Normal/SDLC (the
+// Agent-mode selector for the composer toolbar — koma's Auto/Plan/Normal (the
 // TUI Shift+Tab / `/mode` banner). The active mode is DERIVED from the
 // authoritative session.mode token the host projects on every Snapshot; picking
 // a mode fires GuiReq SetMode{mode}, and the host's set_agent_mode choke-point
 // (Plan enter/leave + system-prompt swap) re-projects the new token back. Yolo
-// is intentionally omitted — it's a double-gated /security-armed mode, not a
-// casual composer toggle.
+// and SDLC are intentionally omitted — Yolo is double-gated /security-armed;
+// SDLC stays a TUI-only cycle (`/mode`, Shift+Tab), not a casual composer toggle.
 const MODES: { value: string; label: string; Icon: LucideIcon }[] = [
   { value: 'auto', label: 'Auto', Icon: Sparkles },
   { value: 'plan', label: 'Plan', Icon: ListChecks },
   { value: 'normal', label: 'Normal', Icon: MessageSquare },
-  { value: 'sdlc', label: 'SDLC', Icon: Shield },
 ]
 
 const MENU_W = 180
@@ -68,7 +67,7 @@ export function ModeSelector() {
   }, [open])
 
   // The host token may be any of auto/normal/plan/yolo/sdlc; fall back to Auto's
-  // presentation for an unknown/unlisted token (e.g. yolo) so the trigger never
+  // presentation for an unlisted token (yolo, sdlc) so the trigger never
   // renders blank.
   const active = MODES.find((m) => m.value === mode) ?? MODES[0]
   const TriggerIcon = active.Icon
