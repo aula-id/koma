@@ -359,7 +359,9 @@ fn handle_search_editor_with(
     ) -> Result<(), String>,
 ) {
     use crate::model::web_search::SearchProvider;
-    let editor = s.search_editor.as_mut().unwrap();
+    let Some(editor) = s.search_editor.as_mut() else {
+        return;
+    };
     match key.code {
         KeyCode::Esc => {
             s.search_editor = None;

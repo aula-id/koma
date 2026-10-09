@@ -80,18 +80,20 @@ fn run_tutorial_chat(
     context: serde_json::Value,
 ) -> TutorialChatResult {
     match complete(messages, context) {
-        Ok(raw) => {
-            let answer = crate::model::help_knowledge::parse_answer(&raw)
-                .expect("complete validates answer");
-            let tour = answer.guide.clone();
-            let text = serde_json::to_string(&answer).unwrap();
-            TutorialChatResult {
+        Ok(raw) => match crate::model::help_knowledge::parse_answer(&raw) {
+            Ok(answer) => TutorialChatResult {
                 id,
-                text,
-                tour,
+                text: raw,
+                tour: answer.guide,
                 error: None,
-            }
-        }
+            },
+            Err(e) => TutorialChatResult {
+                id,
+                text: String::new(),
+                tour: None,
+                error: Some(e),
+            },
+        },
         Err(e) => TutorialChatResult {
             id,
             text: String::new(),
@@ -113,11 +115,27 @@ fn complete(messages: Vec<TutorialMsg>, context: serde_json::Value) -> Result<St
     // Tutorial-scoped session header — NOT a hub/session uuid.
     let session_id = format!("tutorial-{}", install_id);
 
+    let catalogue = serde_json::to_string(
+        &crate::model::help_knowledge::manifest()?
+            .articles
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "title": a.title,
+                    "aliases": a.aliases,
+                    "navigation": a.navigation,
+                    "workflows": a.workflows,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| format!("help catalogue: {e}"))?;
     let mut wire_msgs: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + 1);
     wire_msgs.push(serde_json::json!({
         "role": "system",
         "content": format!("{}\nFeature catalogue: {}\nUI context: {}\nRelevant articles:\n{}\nTUI commands and shortcuts: {:?} {:?}", SYSTEM_PROMPT,
-            serde_json::to_string(&crate::model::help_knowledge::manifest().articles.iter().map(|a|serde_json::json!({"id":a.id,"title":a.title,"aliases":a.aliases,"navigation":a.navigation,"workflows":a.workflows})).collect::<Vec<_>>()).unwrap(),
+            catalogue,
             crate::model::help_knowledge::redact_context(&context),
             crate::model::help_knowledge::ranked(messages.last().map(|m|m.content.as_str()).unwrap_or_default(),4).iter().filter_map(|id|crate::model::help_knowledge::article(id).map(|body|format!("Article {id}:\n{body}"))).collect::<Vec<_>>().join("\n\n"),
             crate::controller::command::COMMANDS, crate::controller::command::KEYBINDINGS),

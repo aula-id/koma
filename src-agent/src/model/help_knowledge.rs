@@ -1,8 +1,11 @@
 //! Offline product reference shared with the GUI.
 use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 static HELP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-misc/help");
-#[derive(Debug, Deserialize)]
+const MANIFEST_JSON: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src-misc/help/manifest.json"));
+#[derive(Debug, Clone, Deserialize)]
 pub struct Article {
     pub id: String,
     pub title: String,
@@ -11,23 +14,23 @@ pub struct Article {
     pub workflows: Vec<String>,
     pub file: String,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub articles: Vec<Article>,
     pub navigation: Vec<String>,
     pub workflows: Vec<String>,
 }
-pub fn manifest() -> Manifest {
-    serde_json::from_str(
-        HELP.get_file("manifest.json")
-            .unwrap()
-            .contents_utf8()
-            .unwrap(),
-    )
-    .expect("bundled help manifest")
+pub fn manifest() -> Result<Manifest, String> {
+    static MANIFEST: OnceLock<Result<Manifest, String>> = OnceLock::new();
+    MANIFEST
+        .get_or_init(|| {
+            serde_json::from_str(MANIFEST_JSON)
+                .map_err(|e| format!("bundled help/manifest.json: {e}"))
+        })
+        .clone()
 }
 pub fn article(id: &str) -> Option<String> {
-    let m = manifest();
+    let m = manifest().ok()?;
     let a = m.articles.iter().find(|a| a.id == id)?;
     Some(HELP.get_file(&a.file)?.contents_utf8()?.to_string())
 }
@@ -37,7 +40,9 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
         .filter(|w| w.len() > 2)
         .map(str::to_lowercase)
         .collect();
-    let m = manifest();
+    let Ok(m) = manifest() else {
+        return Vec::new();
+    };
     let mut scores: Vec<_> = m
         .articles
         .iter()
@@ -77,7 +82,10 @@ pub fn parse_answer(raw: &str) -> Result<Answer, String> {
     let a: Answer = serde_json::from_str(raw.trim()).map_err(|_| {
         "Help returned malformed guidance. Retry, or use Reference and Guides offline.".to_string()
     })?;
-    let m = manifest();
+    let m = match manifest() {
+        Ok(m) => m,
+        Err(e) => return Err(e),
+    };
     if a.answer.trim().is_empty()
         || a.answer.len() > 16000
         || a.articles.len() > 8
@@ -97,7 +105,10 @@ pub fn parse_answer(raw: &str) -> Result<Answer, String> {
 }
 /// Discard every unrecognized field and constrain strings to shipped IDs.
 pub fn redact_context(input: &serde_json::Value) -> serde_json::Value {
-    let m = manifest();
+    let m = manifest().ok();
+    let empty: Vec<String> = Vec::new();
+    let navigation = m.as_ref().map(|m| m.navigation.as_slice()).unwrap_or(&empty);
+    let workflows = m.as_ref().map(|m| m.workflows.as_slice()).unwrap_or(&empty);
     let mut out = serde_json::Map::new();
     for key in [
         "attached",
@@ -119,7 +130,7 @@ pub fn redact_context(input: &serde_json::Value) -> serde_json::Value {
     {
         out.insert("platform".into(), p.into());
     }
-    for (key, ids) in [("activeView", &m.navigation), ("guide", &m.workflows)] {
+    for (key, ids) in [("activeView", navigation), ("guide", workflows)] {
         if let Some(v) = input
             .get(key)
             .and_then(|v| v.as_str())
@@ -142,7 +153,7 @@ pub fn redact_context(input: &serde_json::Value) -> serde_json::Value {
                 caps.iter()
                     .filter_map(|v| {
                         v.as_str()
-                            .filter(|id| m.navigation.iter().any(|known| known == id))
+                            .filter(|id| navigation.iter().any(|known| known == id))
                     })
                     .map(|id| id.into())
                     .collect(),
@@ -237,11 +248,14 @@ mod tests {
     #[test]
     fn all_topics_and_targets_exist() {
         let m = manifest();
-        for a in &m.articles {
-            assert!(article(&a.id).is_some());
-            assert!(m.navigation.contains(&a.navigation));
-            for id in &a.workflows {
-                assert!(m.workflows.contains(id));
+        assert!(m.is_ok(), "{}", m.as_ref().err().cloned().unwrap_or_default());
+        if let Ok(m) = m {
+            for a in &m.articles {
+                assert!(article(&a.id).is_some());
+                assert!(m.navigation.contains(&a.navigation));
+                for id in &a.workflows {
+                    assert!(m.workflows.contains(id));
+                }
             }
         }
         assert!(ranked("OAuth model login", 3).contains(&"providers".to_string()));

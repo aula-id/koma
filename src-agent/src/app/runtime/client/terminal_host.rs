@@ -608,7 +608,7 @@ mod tests {
         let mut manager = TerminalManager::new(move |s| {
             let _ = tx.send(s);
         });
-        let cwd = std::env::temp_dir();
+        let cwd = std::fs::canonicalize(std::env::temp_dir()).expect("temp dir");
         for shell in ["/bin/bash", "/bin/sh", "/bin/dash"] {
             if !executable(std::path::Path::new(shell)) {
                 continue;
@@ -623,7 +623,7 @@ mod tests {
                     Some(shell),
                 )
                 .unwrap();
-            manager.input(shell, "printf '\x53HELL=%s CWD=%s\n' \"$0\" \"$PWD\"\n");
+            manager.input(shell, "printf 'SHELL=%s CWD=%s\\n' \"$0\" \"$PWD\"\n");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let expected = format!("SHELL={shell} CWD={}", cwd.display());
             let mut text = String::new();

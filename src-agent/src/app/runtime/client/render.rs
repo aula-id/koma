@@ -340,23 +340,24 @@ pub(super) fn render_loop(
             }
         }
         let fg = shadow.rest.fg();
-        if fg.toast_session.is_none()
-            && fg.toast_event_id.is_some()
-            && fg.toast_event_id != seen_app_notification
-        {
-            if let Some((message, _, kind)) = &fg.toast {
-                let mut entry = crate::model::notifications::Entry::new(
-                    message.clone(),
-                    if matches!(kind, crate::app::state::ToastKind::Error) {
-                        "error"
-                    } else {
-                        "info"
-                    },
-                    "app",
-                );
-                entry.id = fg.toast_event_id.clone().unwrap();
-                crate::model::notifications::record(None, entry);
-                seen_app_notification = fg.toast_event_id.clone();
+        if fg.toast_session.is_none() {
+            if let (Some(id), Some((message, _, kind))) =
+                (fg.toast_event_id.clone(), fg.toast.as_ref())
+            {
+                if fg.toast_event_id != seen_app_notification {
+                    let mut entry = crate::model::notifications::Entry::new(
+                        message.clone(),
+                        if matches!(kind, crate::app::state::ToastKind::Error) {
+                            "error"
+                        } else {
+                            "info"
+                        },
+                        "app",
+                    );
+                    entry.id = id;
+                    crate::model::notifications::record(None, entry);
+                    seen_app_notification = fg.toast_event_id.clone();
+                }
             }
         }
         if let Some(history) = &mut local_app_notifications {
