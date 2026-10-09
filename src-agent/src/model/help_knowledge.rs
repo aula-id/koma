@@ -82,10 +82,7 @@ pub fn parse_answer(raw: &str) -> Result<Answer, String> {
     let a: Answer = serde_json::from_str(raw.trim()).map_err(|_| {
         "Help returned malformed guidance. Retry, or use Reference and Guides offline.".to_string()
     })?;
-    let m = match manifest() {
-        Ok(m) => m,
-        Err(e) => return Err(e),
-    };
+    let m = manifest()?;
     if a.answer.trim().is_empty()
         || a.answer.len() > 16000
         || a.articles.len() > 8
