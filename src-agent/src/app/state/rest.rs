@@ -1182,7 +1182,11 @@ impl AppStateRest {
                     plan_todos_after = Some(rails);
                 } else if leaving_plan {
                     let _ = std::fs::remove_file(sess.plan_todos_path());
-                    plan_todos_after = Some(Vec::new());
+                    // Restore the session checklist so Explore keeps showing /todo.
+                    plan_todos_after = Some(crate::app::mode::todo::load_current_todos_for_mode(
+                        sess,
+                        crate::app::state::AgentMode::Auto,
+                    ));
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -1196,6 +1200,20 @@ impl AppStateRest {
                 sess.rebuild_system();
                 let _ = sess.save();
             }
+        }
+        if leaving_sdlc && !entering_plan {
+            plan_todos_after = Some(
+                self.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .map(|sess| {
+                        crate::app::mode::todo::load_current_todos_for_mode(
+                            sess,
+                            crate::app::state::AgentMode::Auto,
+                        )
+                    })
+                    .unwrap_or_default(),
+            );
         }
         if let Some(todos) = plan_todos_after {
             self.sessions[sess_idx].plan_todos = todos;

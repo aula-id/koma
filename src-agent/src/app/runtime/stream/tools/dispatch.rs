@@ -266,19 +266,13 @@ pub(super) fn finish_tool_round(
     }
 
     // Refresh the session’s todo mirror for Explore / GUI:
-    // Plan → plan_todos.md; SDLC → L2 graph projection; else empty (not TODO.md —
-    // ordinary todos are only for the TUI /todo overlay outside Plan/SDLC).
+    // Plan → plan_todos.md; SDLC → L2 graph; else → memory/TODO.md.
     let mode = state.rest.sessions[sess_idx].agent_mode;
-    state.rest.sessions[sess_idx].plan_todos = match mode {
-        crate::app::state::AgentMode::Plan | crate::app::state::AgentMode::Sdlc => {
-            state.rest.sessions[sess_idx]
-                .session
-                .as_ref()
-                .map(|sess| crate::app::mode::todo::load_current_todos_for_mode(sess, mode))
-                .unwrap_or_default()
-        }
-        _ => Vec::new(),
-    };
+    state.rest.sessions[sess_idx].plan_todos = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|sess| crate::app::mode::todo::load_current_todos_for_mode(sess, mode))
+        .unwrap_or_default();
 
     // Inject any queued mid-turn steers as ONE coalesced user message before the
     // next hop, so the model sees the tool results + the user's steer together and

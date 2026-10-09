@@ -159,20 +159,19 @@ pub fn session_snapshot(
                 status: c.status.clone(),
             })
             .collect(),
-        // Todo checklist for Explore: Plan file or SDLC graph projection.
-        plan_todos: if matches!(agent_mode, AgentMode::Plan | AgentMode::Sdlc) {
-            rt.plan_todos
-                .iter()
-                .map(|it| crate::ipc::proto::PlanTodoSnapshot {
-                    content: it.content.clone(),
-                    status: it.status.clone(),
-                    locked: it.locked,
-                    node_id: it.node_id.clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
+        // Todo checklist for Explore: Plan file, SDLC graph, or Auto `memory/TODO.md`.
+        // Locked Plan rails never leak into Auto/Normal/Yolo.
+        plan_todos: rt
+            .plan_todos
+            .iter()
+            .filter(|it| matches!(agent_mode, AgentMode::Plan | AgentMode::Sdlc) || !it.locked)
+            .map(|it| crate::ipc::proto::PlanTodoSnapshot {
+                content: it.content.clone(),
+                status: it.status.clone(),
+                locked: it.locked,
+                node_id: it.node_id.clone(),
+            })
+            .collect(),
         // SDLC fields: only projected when mode is Sdlc, cleared immediately otherwise.
         sdlc_phase: if matches!(agent_mode, AgentMode::Sdlc) {
             rt.sdlc_phase.clone()

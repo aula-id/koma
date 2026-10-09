@@ -562,18 +562,15 @@ pub struct SessionRuntime {
     /// "File changed" panel. Read-only for the TUI (it has no such panel). Never
     /// a git-status snapshot — it is what this session itself changed.
     pub file_changes: Vec<crate::model::msglog::FileChange>,
-    /// THIS session's Plan-mode todo checklist, mirroring `plan_todos.md` on disk
-    /// (empty outside Plan mode / when no plan is in progress). Refreshed
-    /// in-memory at every mutation site — `set_agent_mode`'s enter/leave-Plan rail
-    /// seed/clear, the `checklist` interception, and `plan_ready`'s rail-completion
-    /// write — and on session load (mirrors `file_changes`'s refresh pattern).
-    /// INCLUDES the two locked workflow rails ("serve plan to user"/"save plan to
-    /// file & prompt approval") — they are filtered out at the snapshot projection
-    /// boundary (`ipc::snapshot::projection::core`), not here, since they are
-    /// internal bookkeeping rather than user-facing plan content (mirrors the
-    /// `plan_ready` digest's own `!it.locked` filter). Projected into the GUI
-    /// Explore "PLAN" section; the TUI's `/todo` overlay reads `plan_todos.md`
-    /// directly and ignores this mirror.
+    /// THIS session's Explore checklist mirror.
+    /// Plan → `plan_todos.md` (plus locked workflow rails); SDLC → L2 graph;
+    /// otherwise → `memory/TODO.md`. Refreshed in-memory at every mutation site —
+    /// `set_agent_mode`'s enter/leave rails, the `checklist` interception,
+    /// `plan_ready`'s rail-completion write, `finish_tool_round`, and session load.
+    /// Locked Plan rails are filtered out of Auto/Normal/Yolo at the snapshot
+    /// projection boundary (`ipc::snapshot::projection::core`). Projected into the
+    /// GUI Explore section; the TUI's `/todo` overlay reads the mode-appropriate
+    /// file/graph directly.
     pub plan_todos: Vec<crate::app::mode::todo::TodoItem>,
     /// LIVE working-directory override for this session, set by the `cd` tool /
     /// the user `/cd` command (Phase 8). `None` means "use the session's

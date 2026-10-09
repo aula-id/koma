@@ -63,3 +63,21 @@ fn plan_path_is_session_dir_plus_plan_md() {
         std::path::PathBuf::from("/tmp/koma-sessions/sid/plan.md")
     );
 }
+
+#[test]
+fn plan_tools_are_documented_in_src_misc() {
+    let tools = include_str!("../../../src-misc/system-tools.txt");
+    assert!(tools.contains("plan_enter —"), "plan_enter missing from system-tools.txt");
+    assert!(tools.contains("plan_ready —"), "plan_ready missing from system-tools.txt");
+    let prompt = include_str!("../../../src-misc/system-prompt.txt");
+    assert!(prompt.contains("plan_enter"), "plan_enter missing from system-prompt.txt");
+    assert!(prompt.contains("plan_ready"), "plan_ready missing from system-prompt.txt");
+    assert!(
+        tools.contains("mission_clear —"),
+        "mission_clear missing from system-tools.txt"
+    );
+    assert!(
+        prompt.contains("mission_clear"),
+        "mission_clear missing from system-prompt.txt"
+    );
+}

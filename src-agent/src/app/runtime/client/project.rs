@@ -626,9 +626,8 @@ fn push_snapshot_if_changed(
         })
         .collect();
 
-    // Explore checklist projection: Plan → mirror of `plan_todos.md` (locked rails
-    // flagged, not dropped); SDLC → L2 graph via `plan_todos` runtime field.
-    // Empty = no plan/mission checklist in the foreground session right now.
+    // Explore checklist projection: Plan → `plan_todos.md` (locked rails flagged,
+    // not dropped); SDLC → L2 graph; else → `memory/TODO.md`.
     let plan_todos: Vec<PushPlanTodo> = fg
         .plan_todos
         .iter()

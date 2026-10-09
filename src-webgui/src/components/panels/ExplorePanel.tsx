@@ -179,7 +179,9 @@ export function ExplorePanel() {
       <AccordionSection
         title={isSdlc && showSdlcRail
           ? (sdlcGoalLabel ? `SDLC · ${sdlcPhaseLabel} · ${sdlcSealedCount}/${sdlcTotal}` : `SDLC · ${sdlcPhaseLabel}`)
-          : visiblePlan.length === 0 ? 'Plan' : `Plan · ${planDone}/${visiblePlan.length}`
+          : isPlan
+            ? (visiblePlan.length === 0 ? 'Plan' : `Plan · ${planDone}/${visiblePlan.length}`)
+            : (visiblePlan.length === 0 ? 'Todo' : `Todo · ${planDone}/${visiblePlan.length}`)
         }
         open={open.plan}
         onToggle={() => setOpen((s) => ({ ...s, plan: !s.plan }))}
@@ -225,26 +227,20 @@ export function ExplorePanel() {
               })
             )}
           </div>
-        ) : isPlan ? (
-          // Plan checklist: only when mode=plan. Never leaks from other modes.
-          planTodos.length === 0 ? (
-            <Empty>No todos yet</Empty>
-          ) : (
-            planTodos.map((t, i) => {
-              const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
-              const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
-              const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
-              return (
-                <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
-                  <Icon size={12} className={`flex-none ${tone}`} />
-                  <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
-                </div>
-              )
-            })
-          )
+        ) : planTodos.length === 0 ? (
+          <Empty>{isPlan ? 'No todos yet' : 'No todos'}</Empty>
         ) : (
-          // Not in Plan or SDLC mode: show empty state (no stale rows leak).
-          <Empty>No plan active</Empty>
+          planTodos.map((t, i) => {
+            const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
+            const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
+            const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
+            return (
+              <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                <Icon size={12} className={`flex-none ${tone}`} />
+                <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
+              </div>
+            )
+          })
         )}
       </AccordionSection>
       <AccordionSection

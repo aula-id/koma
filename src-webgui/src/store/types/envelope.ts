@@ -34,9 +34,8 @@ export type PushEvent =
       // Cumulative file-change log (#24). Optional-tolerant: a host build that
       // doesn't project it yet omits it, and the panel shows "No changes".
       fileChanges?: FileChangeEntry[]
-      // Plan-mode todo checklist (Explore "PLAN" section). Optional-tolerant:
-      // a host build that doesn't project it yet leaves the panel's PLAN
-      // section empty (as if no plan were in progress).
+      // Session checklist (Explore). Optional-tolerant: a host build that
+      // doesn't project it yet leaves the section empty.
       planTodos?: PlanTodoEntry[]
       attachments: AttachmentEntry[]
       // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from

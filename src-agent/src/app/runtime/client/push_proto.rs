@@ -77,9 +77,9 @@ pub(super) enum PushEnvelope {
         /// array — React REPLACES on each Snapshot. Empty when nothing was touched.
         #[serde(rename = "fileChanges")]
         file_changes: Vec<PushFileChange>,
-        /// Foreground session's Plan-mode todo checklist (Explore "PLAN" section).
-        /// Authoritative full array — React REPLACES on each Snapshot; empty when
-        /// not in Plan mode or no plan is in progress (the section hides/dims).
+        /// Foreground session checklist for Explore (Plan file, SDLC graph, or
+        /// Auto `memory/TODO.md`). Authoritative full array — React REPLACES on
+        /// each Snapshot; empty when there are no current todos.
         #[serde(rename = "planTodos")]
         plan_todos: Vec<PushPlanTodo>,
         /// Foreground session's STAGED composer attachments (chips). Authoritative full

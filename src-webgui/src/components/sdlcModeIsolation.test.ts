@@ -32,7 +32,8 @@ const snapshot = (
 })
 
 // Snapshot adopts SDLC fields only in SDLC mode and rejects stale host data otherwise.
-// Graph checklist rows ride planTodos in SDLC (L2 projection); clear in Auto.
+// Graph checklist rows ride planTodos in SDLC (L2 projection). Auto snapshots
+// adopt session TODO.md rows on planTodos (not Plan rails).
 useKoma.getState().push(snapshot('sdlc-a', 'sdlc', {
   sdlcPhase: 'execute',
   sdlcGoal: 'goal-a',
@@ -56,7 +57,7 @@ useKoma.getState().push(snapshot('auto-b', 'auto', {
   sdlcBranch: 'foreign/branch',
   sdlcOpen: 99,
   sdlcSealed: 99,
-  planTodos: [{ content: 'foreign plan', status: 'pending', locked: false }],
+  planTodos: [{ content: 'session todo', status: 'pending', locked: false }],
 }))
 session = useKoma.getState().session
 assert.equal(session.id, 'auto-b')
@@ -65,7 +66,8 @@ assert.equal(session.sdlcGoal, null)
 assert.equal(session.sdlcBranch, null)
 assert.equal(session.sdlcOpen, null)
 assert.equal(session.sdlcSealed, null)
-assert.deepEqual(session.planTodos, [])
+assert.equal(session.planTodos.length, 1)
+assert.equal(session.planTodos[0].content, 'session todo')
 
 // Plan rows are adopted only in Plan and an SDLC payload cannot leak alongside them.
 useKoma.getState().push(snapshot('plan-c', 'plan', {
