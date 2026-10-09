@@ -992,3 +992,10 @@ html .driver-popover {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-koma-fg) 25%, transparent);
   cursor: pointer;
 }
+/* Snap dots on the track — sized to sit inside the 4px track as hollow-ish
+   circles; the active draft is filled darker via utility classes. */
+.ui-scale-snap {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 1.5px var(--color-koma-bg, #111);
+}

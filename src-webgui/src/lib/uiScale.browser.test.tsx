@@ -226,8 +226,25 @@ it('does not apply scale until Apply is pressed', async () => {
   await paint()
   expect(useUiScale.getState().scale).toBe(1)
   expect(sample.getBoundingClientRect().width).toBeCloseTo(baseline, 0)
+  // Draft preview updates immediately (Lorem sample at draft absolute size).
+  const preview = screen.getByTestId('ui-scale-preview').element()
+  expect(preview.textContent).toMatch(/Lorem ipsum/)
+  expect(getComputedStyle(preview).fontSize).toBe('18px') // 12 * 1.5
   await screen.getByRole('button', { name: 'Apply' }).click()
   await paint()
   expect(useUiScale.getState().scale).toBe(1.5)
   expect(sample.getBoundingClientRect().width).toBeCloseTo(baseline * 1.5, 0)
+  // After apply, draft===scale so preview is back to 12px CSS (page zoom carries the rest).
+  expect(getComputedStyle(preview).fontSize).toBe('12px')
+})
+
+it('renders full-width slider with a snap circle per scale step', async () => {
+  const screen = await render(<div style={{ width: 640 }}><UiScaleSetting /></div>)
+  const group = screen.getByRole('group', { name: 'UI scale' }).element()
+  const slider = screen.getByRole('slider', { name: 'UI scale' }).element()
+  const snaps = group.querySelectorAll('.ui-scale-snap')
+  expect(snaps.length).toBe(UI_SCALES.length)
+  // Slider spans the content width (no max-w-sm clamp).
+  expect(slider.getBoundingClientRect().width).toBeGreaterThan(280)
+  expect(screen.getByTestId('ui-scale-preview').element().textContent).toMatch(/Lorem ipsum/)
 })

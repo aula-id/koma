@@ -1419,26 +1419,43 @@ export function UiScaleSetting() {
   const dirty = draft !== scale
   const draftIdx = Math.max(0, UI_SCALES.indexOf(draft))
   const defaultIdx = UI_SCALES.indexOf(1)
+  // Counter the live page zoom so the sample shows absolute draft size.
+  const previewZoom = draft / scale
   return (
     <div className="mb-6" role="group" aria-label="UI scale">
       <div className="mb-2 text-[12px] font-medium">UI scale</div>
       <p className="mb-3 text-[11px] text-koma-dim">
         Scale the entire interface. 1× is the default. Drag to preview a value, then Apply.
       </p>
-      <div className="max-w-sm">
+      <div className="w-full">
         <div className="flex items-center gap-3">
           <span aria-hidden className="select-none text-[11px] font-medium leading-none text-koma-dim">
             a
           </span>
           <div className="relative min-w-0 flex-1 pt-1 pb-5">
-            {/* Tick marks under the track */}
-            <div className="pointer-events-none absolute inset-x-0 top-[11px] flex justify-between px-0.5" aria-hidden>
-              {UI_SCALES.map((s) => (
-                <span
-                  key={s}
-                  className={`h-1.5 w-px ${s === 1 ? 'bg-koma-fg/50' : 'bg-koma-border'}`}
-                />
-              ))}
+            {/* Snap circles on the track (aligned with range thumb centers). */}
+            <div
+              className="pointer-events-none absolute inset-x-0 top-[11px] z-0 flex items-center justify-between"
+              aria-hidden
+            >
+              {UI_SCALES.map((s) => {
+                const active = s === draft
+                const isDefault = s === 1
+                return (
+                  <span
+                    key={s}
+                    className={[
+                      'ui-scale-snap block shrink-0 rounded-full',
+                      active
+                        ? 'bg-koma-fg'
+                        : isDefault
+                          ? 'bg-koma-fg/45'
+                          : 'bg-koma-fg/25',
+                    ].join(' ')}
+                    title={`${s}×`}
+                  />
+                )
+              })}
             </div>
             <input
               type="range"
@@ -1455,7 +1472,7 @@ export function UiScaleSetting() {
               }}
               className="ui-scale-slider relative z-[1] w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-50"
             />
-            {/* Default label under the 1× tick */}
+            {/* Default label under the 1× snap */}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4" aria-hidden>
               <span
                 className="absolute top-0 -translate-x-1/2 text-[10px] leading-none text-koma-dim"
@@ -1484,6 +1501,28 @@ export function UiScaleSetting() {
           >
             {pending ? 'Applying…' : 'Apply'}
           </button>
+        </div>
+        {/* Live type preview at the draft scale (does not commit until Apply). */}
+        <div
+          className="mt-4 overflow-hidden rounded border border-koma-border bg-koma-panel/40 px-3 py-2.5"
+          aria-live="polite"
+        >
+          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-koma-dim">
+            Preview · {draft}×
+          </div>
+          <p
+            data-testid="ui-scale-preview"
+            className="m-0 leading-relaxed text-koma-fg"
+            style={{
+              // Counter live page zoom so the sample reflects the draft absolute size
+              // (12px body at 1×). Transform would not grow the box height.
+              fontSize: `${12 * previewZoom}px`,
+            }}
+          >
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor
+            incididunt ut labore et dolore magna aliqua — the quick brown fox jumps over the lazy
+            dog.
+          </p>
         </div>
       </div>
       {error && (
