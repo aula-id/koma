@@ -501,10 +501,10 @@ fn push_snapshot_if_changed(
                                                 &c.function.name,
                                                 &c.function.arguments,
                                             ),
-                                        label: crate::view::chat::transcript::tool_box_label(
+                                        label: crate::view::chat::transcript::tool_box_caption(
                                             &c.function.name,
-                                        )
-                                        .map(str::to_string),
+                                            shadow.rest.config.web_search.provider,
+                                        ),
                                         status: if output.is_some() { "done" } else { "pending" },
                                         id: c.id.clone(),
                                         name: c.function.name.clone(),

@@ -283,6 +283,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         // Opaque registry key (like `accent`) — copied verbatim so the thin client
         // rebuilds the chosen palette instead of silently defaulting to `dark`.
         palette: state.rest.config.palette.clone(),
+        search_provider: state.rest.config.web_search.provider,
         mode,
         toast_session: state.rest.fg().toast_session.clone(),
         toast_event_id: state.rest.fg().toast_event_id.clone(),

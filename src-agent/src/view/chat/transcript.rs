@@ -10,6 +10,7 @@ use super::helpers::{
 };
 use crate::app::state::AppStateRest;
 use crate::dto::chat::Role;
+use crate::model::web_search::SearchProvider;
 use crate::view::theme::Palette;
 use ratatui::{
     layout::{Margin, Rect},
@@ -23,7 +24,7 @@ use ratatui::{
 // `crate::view::chat::transcript::{tool_box_label, format_tool_signature}` call
 // sites (the GUI push-projection in `app::runtime::client::render`) keep
 // resolving unchanged.
-pub(crate) use super::tool_format::{format_tool_signature, tool_box_label};
+pub(crate) use super::tool_format::{format_tool_signature, tool_box_caption};
 
 /// Render the transcript area into `body_chunk`.
 ///
@@ -124,6 +125,7 @@ pub(super) fn render_transcript(
                         palette,
                         wrap_w,
                         &tool_results,
+                        rest.config.web_search.provider,
                     )
                 })
                 .unwrap_or_default();
@@ -283,6 +285,7 @@ fn render_tool_result(
     name: &str,
     palette: &Palette,
     wrap_w: usize,
+    search: SearchProvider,
 ) -> Vec<Line<'static>> {
     if content.starts_with(crate::dto::chat::PLAN_NUDGE_MARK) {
         return Vec::new();
@@ -290,9 +293,9 @@ fn render_tool_result(
     if content.trim().is_empty() {
         return Vec::new();
     }
-    if let Some(lbl) = tool_box_label(name) {
+    if let Some(lbl) = tool_box_caption(name, search) {
         if wrap_w >= 8 {
-            return render_tool_box(content, lbl, palette, wrap_w);
+            return render_tool_box(content, &lbl, palette, wrap_w);
         }
     }
     // Terse fallback: first line only, truncated, dim, under a 4-col indent.
@@ -438,6 +441,7 @@ pub(super) fn render_tool_lines(
     palette: &Palette,
     wrap_w: usize,
     tool_results: &std::collections::HashMap<&str, &str>,
+    search: SearchProvider,
 ) -> Vec<Line<'static>> {
     if msg.role != Role::Assistant {
         return Vec::new();
@@ -597,6 +601,7 @@ pub(super) fn render_tool_lines(
                         &call.function.name,
                         palette,
                         wrap_w,
+                        search,
                     ));
                 }
             }
@@ -619,6 +624,7 @@ pub(super) fn assemble_messages(
     messages: &[crate::dto::chat::ChatMessage],
     palette: &Palette,
     wrap_w: usize,
+    search: SearchProvider,
 ) -> Vec<Line<'static>> {
     // Which tool calls have COMPLETED: a `tool`-role result message whose
     // `tool_call_id` points back at the call. Built from the same slice so the
@@ -641,8 +647,15 @@ pub(super) fn assemble_messages(
     for msg in messages {
         let block = render_message_block(msg, palette, wrap_w);
         let has_body = !block.is_empty();
-        let tool_lines =
-            render_tool_lines(msg, &completed, has_body, palette, wrap_w, &tool_results);
+        let tool_lines = render_tool_lines(
+            msg,
+            &completed,
+            has_body,
+            palette,
+            wrap_w,
+            &tool_results,
+            search,
+        );
         // Empty block with no tool lines (system / hidden harness) → no trace.
         if block.is_empty() && tool_lines.is_empty() {
             continue;

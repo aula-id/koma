@@ -21,6 +21,11 @@ pub struct GlobalSnapshot {
     /// Active palette registry name (see `view::theme::PALETTES`). Projected verbatim
     /// like `accent`; the thin client rebuilds its palette from this.
     pub palette: String,
+    /// Active web-search provider (`built_in` / `tavily` / `firecrawl` / `exa`).
+    /// Provider only — never keys. The GUI chip (`web · tavily`) reads this off the
+    /// reconstructed shadow; without it the shadow stays at `BuiltIn` forever.
+    #[serde(default)]
+    pub search_provider: crate::model::web_search::SearchProvider,
     pub mode: ModeSnapshot,
     pub toast: Option<(String, String)>,
     #[serde(default)]
