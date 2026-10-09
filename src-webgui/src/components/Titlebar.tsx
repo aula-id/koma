@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Terminal, PenLine, FoldVertical } from 'lucide-react'
+import { Terminal, PenLine, FoldVertical, MessagesSquare } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { TerminalPicker } from './TerminalPicker'
 import type { TerminalShell } from '../lib/terminalShells'
@@ -132,6 +132,20 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                 >
                   <FoldVertical size={13} className="flex-none" />
                   <span className="max-[1100px]:hidden">compact</span>
+                </button>
+                <button
+                  onClick={() => req({ r: 'Clear' })}
+                  disabled={working}
+                  title="Clear chat"
+                  aria-label="Clear chat"
+                  className={`pointer-events-auto flex h-[22px] flex-none items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] transition-colors min-[1101px]:px-2.5 ${
+                    working
+                      ? 'text-koma-dim opacity-40'
+                      : 'text-koma-fg hover:bg-koma-hover'
+                  }`}
+                >
+                  <MessagesSquare size={13} className="flex-none" />
+                  <span className="max-[1100px]:hidden">clear</span>
                 </button>
               </>
             )}

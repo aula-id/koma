@@ -1411,13 +1411,86 @@ function LspSettings() {
 
 export function UiScaleSetting() {
   const { scale, pending, error } = useUiScale()
-  return <div className="mb-6" role="group" aria-label="UI scale">
-    <div className="mb-2 text-[12px] font-medium">UI scale</div>
-    <p className="mb-3 text-[11px] text-koma-dim">Scale the entire interface. 1× uses the original sizes.</p>
-    <div className="max-w-xs">
-      <Segmented value={String(scale)} options={UI_SCALES.map(value => ({ value: String(value), label: `${value}×`, disabled: pending }))}
-        onChange={value => { void setUiScale(Number(value) as UiScale) }} />
+  // Draft selection — Apply commits so dragging never jump-scares the UI.
+  const [draft, setDraft] = useState<UiScale>(scale)
+  useEffect(() => {
+    setDraft(scale)
+  }, [scale])
+  const dirty = draft !== scale
+  const draftIdx = Math.max(0, UI_SCALES.indexOf(draft))
+  const defaultIdx = UI_SCALES.indexOf(1)
+  return (
+    <div className="mb-6" role="group" aria-label="UI scale">
+      <div className="mb-2 text-[12px] font-medium">UI scale</div>
+      <p className="mb-3 text-[11px] text-koma-dim">
+        Scale the entire interface. 1× is the default. Drag to preview a value, then Apply.
+      </p>
+      <div className="max-w-sm">
+        <div className="flex items-center gap-3">
+          <span aria-hidden className="select-none text-[11px] font-medium leading-none text-koma-dim">
+            a
+          </span>
+          <div className="relative min-w-0 flex-1 pt-1 pb-5">
+            {/* Tick marks under the track */}
+            <div className="pointer-events-none absolute inset-x-0 top-[11px] flex justify-between px-0.5" aria-hidden>
+              {UI_SCALES.map((s) => (
+                <span
+                  key={s}
+                  className={`h-1.5 w-px ${s === 1 ? 'bg-koma-fg/50' : 'bg-koma-border'}`}
+                />
+              ))}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={UI_SCALES.length - 1}
+              step={1}
+              value={draftIdx}
+              disabled={pending}
+              aria-label="UI scale"
+              aria-valuetext={`${draft}×${draft === 1 ? ' (default)' : ''}`}
+              onChange={(e) => {
+                const next = UI_SCALES[Number(e.target.value)]
+                if (next !== undefined) setDraft(next)
+              }}
+              className="ui-scale-slider relative z-[1] w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            {/* Default label under the 1× tick */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4" aria-hidden>
+              <span
+                className="absolute top-0 -translate-x-1/2 text-[10px] leading-none text-koma-dim"
+                style={{ left: `${(defaultIdx / (UI_SCALES.length - 1)) * 100}%` }}
+              >
+                Default
+              </span>
+            </div>
+          </div>
+          <span aria-hidden className="select-none text-[18px] font-medium leading-none text-koma-fg/70">
+            A
+          </span>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="font-mono text-[12px] text-koma-fg tabular-nums">
+            {draft}×{draft === 1 ? ' · default' : ''}
+            {dirty ? ' · pending' : ''}
+          </span>
+          <button
+            type="button"
+            disabled={pending || !dirty}
+            onClick={() => {
+              void setUiScale(draft)
+            }}
+            className="rounded bg-koma-accent px-3 py-1 text-[12px] font-semibold text-koma-bg disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            {pending ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 text-[11px] text-koma-error">
+          {error}
+        </p>
+      )}
     </div>
-    {error && <p role="alert" className="mt-2 text-[11px] text-koma-error">{error}</p>}
-  </div>
+  )
 }

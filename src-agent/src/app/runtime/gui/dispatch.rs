@@ -534,6 +534,15 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        // Titlebar Clear action: wipe live chat on the attached daemon.
+        // No session attached → silent no-op (same pattern as Compact).
+        GuiReq::Clear => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::Clear);
+                }
+            }
+        }
         // Chat hover-edit pencil: rewind the conversation to a user message.
         GuiReq::RewindTo { index } => {
             if let Ok(g) = ctx.req.lock() {

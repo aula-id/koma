@@ -196,6 +196,9 @@ declare global {
     // Trigger conversation compaction on demand (the UsageFooter's compact
     // button) — same effect as the TUI's /compact. No id: foreground session.
     | { r: 'Compact' }
+    // Wipe the live chat transcript (titlebar clear) — same effect as the
+    // TUI's /clear. Keeps system prompt + archive. No id: foreground session.
+    | { r: 'Clear' }
     // Fetch the original/modified contents of a File-changed path for a Monaco
     // diff tab. `path` is exactly as the fileChanges record carries it. Reply
     // lands as the FileDiff push envelope (guaranteed for every request).

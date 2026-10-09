@@ -10,7 +10,9 @@ use crate::service::openrouter::OpenRouterClient;
 
 mod bash;
 mod cd;
-mod clear;
+// `pub(crate)` so the GUI Clear action can call `handle_clear` — the same
+// entry point `/clear` uses.
+pub(crate) mod clear;
 mod todo;
 // `pub(crate)` so the plan-approval compaction rail (deferred/idle drain) can call
 // `handle_compact` once the post-approval turn settles — the same entry point

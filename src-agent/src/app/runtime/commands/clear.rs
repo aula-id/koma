@@ -22,7 +22,7 @@ use crate::model::msglog;
 /// Mid-stream: aborts the in-flight turn first (same full cancel as rewind),
 /// then cuts — otherwise a late stream event could re-append onto a cleared
 /// history.
-pub(super) fn handle_clear(state: &mut AppState) -> Result<()> {
+pub(crate) fn handle_clear(state: &mut AppState) -> Result<()> {
     if state.rest.fg().session.is_none() {
         state.rest.fg_mut().status = "no active session".into();
         return Ok(());

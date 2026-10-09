@@ -955,3 +955,40 @@ html .driver-popover {
 /* Authored design/diagram content keeps its own visual scale. Toolbars and
    properties panels remain part of the scaled interface. */
 .koma-authored-canvas { zoom: calc(1 / var(--koma-ui-scale, 1)); }
+
+/* UI scale slider (Settings → Appearance): track + thumb themed like the
+   type-size control (small a … large A), discrete steps via JS. */
+.ui-scale-slider {
+  height: 22px;
+}
+.ui-scale-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-koma-fg) 18%, transparent);
+}
+.ui-scale-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-koma-fg) 18%, transparent);
+}
+.ui-scale-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 2px solid var(--color-koma-bg, #111);
+  background: var(--color-koma-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-koma-fg) 25%, transparent);
+  cursor: pointer;
+}
+.ui-scale-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid var(--color-koma-bg, #111);
+  background: var(--color-koma-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-koma-fg) 25%, transparent);
+  cursor: pointer;
+}

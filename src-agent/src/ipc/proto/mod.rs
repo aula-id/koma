@@ -451,6 +451,12 @@ pub enum ClientRequest {
     /// back via the session's `status` line, exactly like `/compact`. gui-gated: the
     /// TUI drives compaction via the `/compact` slash command.
     Compact,
+    /// Clear the foreground session's live chat transcript (GUI titlebar Clear) —
+    /// the non-key equivalent of the TUI's `/clear`. Reuses
+    /// [`crate::app::runtime::commands::clear::handle_clear`] daemon-side. Keeps the
+    /// system prompt + archive; drops user/assistant/tool turns. gui-gated: the TUI
+    /// drives clear via the `/clear` slash command.
+    Clear,
     /// Fetch the foreground session's GUI-editable prefs (name / workdir / short-send /
     /// sliding-cache / bash-saving / internet-mode) + the global palette, for the GUI
     /// Settings tab. Read-only: the daemon replies with a one-shot

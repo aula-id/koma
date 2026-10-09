@@ -911,6 +911,11 @@ impl DaemonHub {
                 self.compact(idx, state, client, handle);
             }
 
+            // GUI titlebar Clear action: wipe live chat via `/clear`'s handler.
+            ClientRequest::Clear => {
+                self.clear(idx, state);
+            }
+
 
             // LIFECYCLE ERROR REPORT: the thin client's remote connect failed.
             // The C2 LOAD bracket already resolved the foreground cursor to this

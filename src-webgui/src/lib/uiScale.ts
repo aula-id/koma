@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 
-export const UI_SCALES = [1, 1.5, 2, 2.5] as const
-export type UiScale = typeof UI_SCALES[number]
+export const UI_SCALES = [0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5] as const
+export type UiScale = (typeof UI_SCALES)[number]
+export const UI_SCALE_DEFAULT: UiScale = 1
 export const UI_SCALE_KEY = 'koma.ui-scale'
 export type UiScaleReply = { requestId: string; scale: number; error: string | null }
 
 export function isUiScale(value: unknown): value is UiScale {
-  return typeof value === 'number' && UI_SCALES.includes(value as UiScale)
+  return typeof value === 'number' && (UI_SCALES as readonly number[]).includes(value)
 }
 export function readUiScale(): UiScale {
   try {

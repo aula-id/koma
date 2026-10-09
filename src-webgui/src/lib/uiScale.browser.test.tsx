@@ -7,12 +7,27 @@ import { BottomPanel } from '../components/BottomPanel'
 import { TerminalTab } from '../components/TerminalTab'
 import SettingsTab, { UiScaleSetting } from '../components/SettingsTab'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
-import { canvasPoint, setUiScale, useUiScale } from './uiScale'
+import { canvasPoint, setUiScale, useUiScale, UI_SCALES } from './uiScale'
 import { useKoma } from '../store/koma'
 
 beforeEach(async () => { await page.viewport(1280, 900) })
 const paint = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
 afterEach(async () => { await setUiScale(1); localStorage.clear() })
+
+async function pickScale(screen: Awaited<ReturnType<typeof render>>, scale: number) {
+  const slider = screen.getByRole('slider', { name: 'UI scale' })
+  const idx = UI_SCALES.indexOf(scale as (typeof UI_SCALES)[number])
+  expect(idx).toBeGreaterThanOrEqual(0)
+  const el = slider.element() as HTMLInputElement
+  // React ignores plain .value= on controlled inputs — poke the native setter.
+  const setNative = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setNative?.call(el, String(idx))
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+  await paint()
+  await screen.getByRole('button', { name: 'Apply' }).click()
+  await paint()
+}
 
 it('scales text, icons, spacing and controls exactly once at every multiplier', async () => {
   const screen = await render(<div data-testid="sample" style={{ width: 200, height: 100, padding: 10, fontSize: 12 }}>
@@ -22,9 +37,8 @@ it('scales text, icons, spacing and controls exactly once at every multiplier', 
   const baseline = sample.getBoundingClientRect()
   const icon = sample.querySelector('svg')!
   const baseIcon = icon.getBoundingClientRect().width
-  for (const scale of [1, 1.5, 2, 2.5] as const) {
-    await screen.getByRole('button', { name: `${scale}×`, exact: true }).click()
-    await paint()
+  for (const scale of UI_SCALES) {
+    await pickScale(screen, scale)
     expect(sample.getBoundingClientRect().width).toBeCloseTo(baseline.width * scale, 0)
     expect(sample.getBoundingClientRect().height).toBeCloseTo(baseline.height * scale, 0)
     expect(icon.getBoundingClientRect().width).toBeCloseTo(baseIcon * scale, 0)
@@ -36,10 +50,10 @@ it('scales text, icons, spacing and controls exactly once at every multiplier', 
   expect(sample.getBoundingClientRect().width).toBe(baseline.width)
 })
 
-it('keeps Settings and its scale selector reachable in a 2.5× viewport across session switches', async () => {
+it('keeps Settings and its scale selector reachable at 1.5× across session switches', async () => {
   useKoma.setState({ req: vi.fn() })
   await render(<div style={{ width: '100%', height: '100%' }}><SettingsTab /></div>)
-  await setUiScale(2.5)
+  await setUiScale(1.5)
   await paint()
   const group = document.querySelector('[aria-label="UI scale"]')!
   group.scrollIntoView({ block: 'center' })
@@ -48,14 +62,15 @@ it('keeps Settings and its scale selector reachable in a 2.5× viewport across s
   expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1)
   expect(rect.top).toBeGreaterThanOrEqual(0)
   expect(rect.bottom).toBeLessThanOrEqual(window.innerHeight)
-  for (const button of group.querySelectorAll('button')) expect(button.getBoundingClientRect().width).toBeGreaterThan(15)
+  const slider = group.querySelector('input[type="range"]')!
+  expect(slider.getBoundingClientRect().width).toBeGreaterThan(40)
   useKoma.getState().push({ k: 'Snapshot', session: 'another-session', state: 'idle', messages: [], title: '', subagents: [], bash: [], fileChanges: [], attachments: [], pendingSteer: [], awaitingApproval: false, palette: useKoma.getState().palette } as any)
-  expect(useUiScale.getState().scale).toBe(2.5)
+  expect(useUiScale.getState().scale).toBe(1.5)
 })
 
 it('positions a context menu at the pointer and keeps it inside the zoomed viewport', async () => {
   const screen = await render(<><div data-testid="target">Target</div><GlobalContextMenu onResume={() => {}} /></>)
-  await setUiScale(2.5)
+  await setUiScale(1.5)
   await paint()
   screen.getByTestId('target').element().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 30 }))
   await paint()
@@ -72,7 +87,7 @@ it('keeps the guide cutout and popover aligned with a zoomed target', async () =
   await import('driver.js/dist/driver.css')
   const screen = await render(<button data-testid="guide-target" style={{ marginLeft: 50, marginTop: 40 }}>Guide target</button>)
   const target = screen.getByTestId('guide-target').element()
-  for (const scale of [1, 1.5, 2, 2.5] as const) {
+  for (const scale of [1, 1.2, 1.5] as const) {
     await setUiScale(scale)
     const guide = driver({ animate: false, steps: [{ element: target, popover: { title: 'Guide', description: 'Target', side: 'bottom' } }] })
     guide.drive()
@@ -89,7 +104,7 @@ it('keeps the guide cutout and popover aligned with a zoomed target', async () =
   }
 })
 
-it('refits an existing terminal and preserves its connection and input at 2.5×', async () => {
+it('refits an existing terminal and preserves its connection and input at 1.5×', async () => {
   const req = vi.fn()
   const tab = { id: 'scale-terminal', kind: 'terminal' as const, terminalId: 'scale-terminal', title: 'Terminal' }
   useKoma.setState(state => ({ req, ui: { ...state.ui, tabs: [tab], activeTabId: tab.id, groups: ['g0'], tabGroup: { [tab.id]: 'g0' }, groupActive: { g0: tab.id }, activeGroupId: 'g0' } }))
@@ -99,7 +114,7 @@ it('refits an existing terminal and preserves its connection and input at 2.5×'
   const write = (globalThis as any).__terminalWriters[tab.terminalId]
   write('terminal output retained\r\n')
   const before = req.mock.calls.filter(([request]) => request.r === 'TerminalResize').slice(-1)[0][0]
-  await setUiScale(2.5)
+  await setUiScale(1.5)
   await paint()
   const after = req.mock.calls.filter(([request]) => request.r === 'TerminalResize').slice(-1)[0][0]
   expect(after.cols).toBeLessThan(before.cols)
@@ -125,7 +140,7 @@ it('preserves Monaco drafts, selection and font sizes while zooming and typing',
   try {
     editor.setSelection(new monaco.Selection(1, 1, 1, 6))
     const selection = editor.getSelection()
-    await setUiScale(2.5)
+    await setUiScale(1.5)
     await paint()
     editor.layout()
     expect(editor.getValue()).toBe('draft text\nsecond line')
@@ -140,7 +155,7 @@ it('preserves Monaco drafts, selection and font sizes while zooming and typing',
   } finally { editor.dispose() }
 })
 
-it('keeps notification search, confirmation and chat content usable at 2.5×', async () => {
+it('keeps notification search, confirmation and chat content usable at 1.5×', async () => {
   const { default: NotificationsTab } = await import('../components/NotificationsTab')
   const { receiveNotifications } = await import('./notifications')
   const req = vi.fn()
@@ -150,7 +165,7 @@ it('keeps notification search, confirmation and chat content usable at 2.5×', a
     <div style={{ flex: 1, minHeight: 0 }}><NotificationsTab /></div>
     <div style={{ flex: 1, minHeight: 0 }}><ChatView /></div>
   </div>)
-  await setUiScale(2.5)
+  await setUiScale(1.5)
   await paint()
   await screen.getByRole('textbox', { name: 'Search notifications' }).fill('Zoom')
   await screen.getByRole('button', { name: 'Clear history', exact: true }).click()
@@ -163,7 +178,7 @@ it('keeps notification search, confirmation and chat content usable at 2.5×', a
 
 it('uses scaled pointer deltas for a workspace drag handle', async () => {
   useKoma.setState({ bottomPanelTab: 'tasks', req: vi.fn() })
-  await setUiScale(2.5)
+  await setUiScale(1.5)
   await render(<div style={{ width: 500, height: 320 }}><BottomPanel /></div>)
   await paint()
   const handle = document.querySelector<HTMLElement>('[aria-label="Resize workspace panel"]')!
@@ -186,7 +201,7 @@ it('leaves designer and diagram artwork at its original visual scale while scali
       <div className="koma-authored-canvas" style={{ flex: 1 }}><div data-testid={name} style={{ width: 200, height: 100, fontSize: 12 }}>Authored content</div></div>
     </div>)}
   </div>)
-  for (const scale of [1, 1.5, 2, 2.5, 1] as const) {
+  for (const scale of [1, 1.2, 1.5, 1] as const) {
     await setUiScale(scale)
     await paint()
     for (const name of ['designer', 'diagram']) {
@@ -196,4 +211,23 @@ it('leaves designer and diagram artwork at its original visual scale while scali
       expect(canvasPoint(artwork.width)).toBeCloseTo(200, 0)
     }
   }
+})
+
+it('does not apply scale until Apply is pressed', async () => {
+  const screen = await render(<div data-testid="sample" style={{ width: 200, height: 100 }}><UiScaleSetting /></div>)
+  const sample = screen.getByTestId('sample').element()
+  const baseline = sample.getBoundingClientRect().width
+  const slider = screen.getByRole('slider', { name: 'UI scale' }).element() as HTMLInputElement
+  const idx = UI_SCALES.indexOf(1.5)
+  const setNative = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setNative?.call(slider, String(idx))
+  slider.dispatchEvent(new Event('input', { bubbles: true }))
+  slider.dispatchEvent(new Event('change', { bubbles: true }))
+  await paint()
+  expect(useUiScale.getState().scale).toBe(1)
+  expect(sample.getBoundingClientRect().width).toBeCloseTo(baseline, 0)
+  await screen.getByRole('button', { name: 'Apply' }).click()
+  await paint()
+  expect(useUiScale.getState().scale).toBe(1.5)
+  expect(sample.getBoundingClientRect().width).toBeCloseTo(baseline * 1.5, 0)
 })
