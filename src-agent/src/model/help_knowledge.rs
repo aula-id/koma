@@ -71,7 +71,7 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
             let is_tui = a.id.starts_with("tui-");
             if !want_tui && is_tui {
                 // Demote TUI-only articles for GUI-facing questions.
-                score = score / 4;
+                score /= 4;
             } else if !want_tui && !is_tui && score > 0 {
                 score += 2;
             } else if want_tui && is_tui && score > 0 {
@@ -104,7 +104,7 @@ pub fn extract_json_object(raw: &str) -> Option<String> {
             .strip_prefix("json")
             .or_else(|| rest.strip_prefix("JSON"))
             .unwrap_or(rest)
-            .trim_start_matches(|c: char| c == '\r' || c == '\n' || c == ' ');
+            .trim_start_matches(['\r', '\n', ' ']);
         t = rest.split("```").next().unwrap_or(rest).trim();
     }
     if t.starts_with('{') {
