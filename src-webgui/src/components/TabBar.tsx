@@ -10,7 +10,7 @@ import {
   Eye,
   FileDiff,
   GitGraph,
-  GraduationCap,
+  GraduationCap, Bell,
   Library,
   Image as ImageIcon,
   MessageSquare,
@@ -94,8 +94,10 @@ function tabVisual(
       return { Icon: Settings, label: 'Settings', title: 'Settings' }
     case 'help':
       return { Icon: CircleHelp, label: 'Help', title: 'Help' }
+    case 'notifications':
+      return { Icon: Bell, label: 'Notifications', title: 'Notifications' }
     case 'tutorial':
-      return { Icon: GraduationCap, label: 'Tutorial', title: 'Tutorial' }
+      return { Icon: CircleHelp, label: 'Help', title: 'Help' }
     case 'graph':
       return { Icon: GitGraph, label: 'Graph', title: 'Commit Graph' }
     case 'importGraph':

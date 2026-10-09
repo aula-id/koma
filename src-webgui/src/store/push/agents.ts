@@ -1,3 +1,4 @@
+import { parseHelpAnswer } from '../../lib/helpKnowledge'
 import type { StoreGet, StoreSet } from '../api'
 import { initialCoding } from '../coding'
 import { initialDesign } from '../design'
@@ -132,7 +133,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'TutorialChatDone': {
         // Stale-drop if a newer turn is in flight.
         const pending = get().tutorial.pendingId
-        if (pending && env.id !== pending) break
+        if (!pending || env.id !== pending) break
         set((s) => {
           const msgs = [...s.tutorial.messages]
           if (env.error) {
@@ -145,11 +146,17 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               },
             }
           }
+          let answer: ReturnType<typeof parseHelpAnswer>
+          try { answer = parseHelpAnswer(env.text) } catch (error) {
+            return { tutorial: { ...s.tutorial, busy: false, pendingId: null, error: String(error) } }
+          }
           msgs.push({
             id: env.id,
             role: 'assistant',
-            content: env.text || '(no reply)',
-            tour: env.tour,
+            content: answer.answer,
+            articles: answer.articles,
+            navigation: answer.navigation,
+            tour: answer.guide,
           })
           return {
             tutorial: {
@@ -157,7 +164,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
               messages: msgs,
               busy: false,
               pendingId: null,
-              pendingTour: env.tour,
+              pendingTour: answer.guide ?? null,
               error: null,
             },
           }
@@ -178,7 +185,7 @@ export function pushAgents(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         if (!env.ok && env.error) {
           const text = `agent: ${env.error}`
           set((s) => {
-            const raise = text !== s.ui.toast?.text
+            const raise = !!text
             const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
             return raise
               ? { ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } }, agentSaving: null }

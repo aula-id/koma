@@ -64,6 +64,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/select",
         "Dump full history to terminal for native copy (viewport is already selectable)",
     ),
+    (
+        "/notification",
+        "Search saved session and App notifications",
+    ),
     ("/help", "List the available commands"),
     ("/quit", "Quit koma"),
 ];
@@ -143,6 +147,7 @@ pub struct NewRequest {
 /// A parsed in-chat slash command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    Notification,
     /// Compact the conversation history to save context window space.
     Compact,
     /// Destructively clear the live chat transcript (system prompt kept;
@@ -294,6 +299,7 @@ pub fn parse(line: &str) -> Command {
             _ => Command::Unknown("resume (usage: /resume [remote])".into()),
         },
         "select" => Command::Select,
+        "notification" => Command::Notification,
         "help" => Command::Help,
         "usage" => Command::Usage,
         "quit" | "q" | "exit" => Command::Quit,

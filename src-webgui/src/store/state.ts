@@ -393,6 +393,7 @@ export type KomaState = {
   openSettingsTab: () => void
   // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
   // it. No wire request — the Help tab is static content, unlike Settings.
+  openNotificationsTab: () => void
   openHelpTab: () => void
   // Open (or focus) the singleton Tutorial tab (id 'tutorial').
   openTutorialTab: () => void

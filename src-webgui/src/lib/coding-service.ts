@@ -9,6 +9,7 @@ export type CodingReply = {
   error?: string
 }
 export type CodingOperation =
+  | { op: 'notifications'; request: import('./notifications').NotificationRequest }
   | { op: 'resourceInspect'; paths: string[] }
   | { op: 'resourceApply'; changes: { path: string; fingerprint: string; after: string | null; formatFrom?: string }[] }
   | { op: 'resourceJournals' }

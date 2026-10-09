@@ -92,6 +92,7 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
               layoutId="cmd-search"
               transition={CMD_SEARCH_SPRING}
               onClick={onSearch}
+              data-tour="change-session"
               title="Change session"
               aria-label="Change session"
               className={`pointer-events-auto flex h-[22px] min-w-0 ${CMD_SEARCH_WIDTH} items-center justify-start gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover`}

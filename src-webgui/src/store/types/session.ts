@@ -171,6 +171,9 @@ export type PendingCall = {
 // "success" are accepted here so the client is ready without a Rust change.
 // Safeguard blocks (harness flagged / classifier unavailable) arrive here.
 export type ToastEntry = {
+  eventId?: string
+  session?: string | null
+  source?: string
   id: number
   text: string
   kind: 'error' | 'warn' | 'success' | 'info'

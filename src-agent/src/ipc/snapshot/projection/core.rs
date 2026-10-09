@@ -284,6 +284,8 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         // rebuilds the chosen palette instead of silently defaulting to `dark`.
         palette: state.rest.config.palette.clone(),
         mode,
+        toast_session: state.rest.fg().toast_session.clone(),
+        toast_event_id: state.rest.fg().toast_event_id.clone(),
         toast: state.rest.fg().toast.as_ref().map(|(msg, _until, kind)| {
             let kind = match kind {
                 crate::app::state::ToastKind::Error => "error".to_string(),

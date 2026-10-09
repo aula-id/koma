@@ -27,6 +27,7 @@ pub mod markdown;
 pub mod mcp;
 pub mod message_rewind;
 pub mod model_cmd;
+pub mod notifications;
 pub mod onboard;
 pub mod onboard_provider;
 pub mod quit_confirm;
@@ -296,6 +297,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             remote::draw(frame, m, &palette);
         }
+        Mode::Notifications(n) => notifications::draw(frame, n, &palette),
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
         Mode::Model(m) => {

@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import {
   useEffect,
   useMemo,
@@ -435,12 +436,7 @@ export function Composer() {
       .getState()
       .session.messages.filter((m) => m.role === 'user' && !m.kind && m.content.trim() !== '')
 
-  const toastError = (text: string) => {
-    const id = useKoma.getState().ui.toastSeq + 1
-    useKoma.setState((s) => ({
-      ui: { ...s.ui, toastSeq: id, toast: { id, text, kind: 'error' } },
-    }))
-  }
+  const toastError = (text: string) => showToast(text, 'error')
 
   const submit = () => {
     if (submitLock.current) return

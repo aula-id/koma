@@ -94,8 +94,8 @@ export function TutorialPaperclip({ mood = 'idle', onClick, className = '', titl
     <button
       type="button"
       onClick={onClick}
-      title={title ?? 'Tutorial coach'}
-      aria-label="Tutorial coach"
+      title={title ?? 'Help assistant'}
+      aria-label="Help assistant"
       className={`relative flex h-10 w-10 flex-none items-center justify-center rounded-md text-koma-accent transition hover:bg-koma-hover ${className}`}
     >
       <span

@@ -913,7 +913,18 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     let (hub_tx, hub_rx) = std::sync::mpsc::channel::<crate::app::mode::SessionHub>();
     let mut hub_inflight = false;
 
+    let mut notification_pending: Vec<
+        std::sync::mpsc::Receiver<crate::model::notifications::Reply>,
+    > = Vec::new();
     loop {
+        notification_pending.retain(|rx| match rx.try_recv() {
+            Ok(reply) => {
+                push(serde_json::json!({"t":"push","k":"Notifications","reply":reply}).to_string());
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
         while let Ok(hub) = hub_rx.try_recv() {
             hub_inflight = false;
             push_state.reset();
@@ -1453,8 +1464,15 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::StoreBrowse { query, category }) => {
                 store_host::spawn_store_browse(P::clone(push), query, category);
             }
-            Ok(HostCtl::TutorialChat { id, messages }) => {
-                tutorial_host::spawn_tutorial_chat(P::clone(push), id, messages);
+            Ok(HostCtl::Notifications { request }) => {
+                notification_pending.push(crate::model::notifications::request(request));
+            }
+            Ok(HostCtl::TutorialChat {
+                id,
+                messages,
+                context,
+            }) => {
+                tutorial_host::spawn_tutorial_chat(P::clone(push), id, messages, context);
             }
             Ok(HostCtl::StoreDetail { id }) => {
                 store_host::spawn_store_detail(P::clone(push), id);
@@ -1537,7 +1555,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 provider,
                 key,
             }) => {
-                let mut cfg = crate::model::web_search::read_global_config().ok().flatten().unwrap_or_default();
+                let mut cfg = crate::model::web_search::read_global_config()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let error = crate::model::web_search::save_selection(&mut cfg, provider, key).err();
                 super::render::emit(
                     push,

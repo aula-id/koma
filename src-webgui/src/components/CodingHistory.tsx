@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import { useEffect, useRef, useState } from 'react'
 import { History, RotateCcw, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -36,10 +37,7 @@ export function CodingHistory() {
       restoreFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       setContext((event as CustomEvent<Context>).detail)
     }
-    const error = (event: Event) => useKoma.setState(s => {
-      const id = s.ui.toastSeq + 1
-      return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: (event as CustomEvent<string>).detail } } }
-    })
+    const error = (event: Event) => showToast((event as CustomEvent<string>).detail, 'error', { session: useKoma.getState().session.id, source: 'coding' })
     const visibility = () => { if (document.visibilityState === 'hidden') flushCodingRecovery() }
     window.addEventListener('koma-coding-history', open)
     window.addEventListener('koma-coding-recovery-error', error)

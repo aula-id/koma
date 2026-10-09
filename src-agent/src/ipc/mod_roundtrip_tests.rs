@@ -134,6 +134,8 @@ fn sample_global_snapshot() -> GlobalSnapshot {
             first_run: true,
             from_picker: false,
         }),
+        toast_session: Some("s".into()),
+        toast_event_id: Some("notification-id".into()),
         toast: Some(("info".to_string(), "saved".to_string())),
         models_cache: None,
         models_cache_endpoint: None,
@@ -425,6 +427,8 @@ fn state_delta_variants_roundtrip() {
         },
         StateDelta::SessionAdded(Box::new(sample_session_snapshot())),
         StateDelta::Toast {
+            session: Some("s".into()),
+            id: Some("notification-id".into()),
             kind: "error".to_string(),
             text: "nope".to_string(),
         },

@@ -10,7 +10,9 @@ import type { AttachmentEntry, BashJobEntry, FileChangeEntry, HubCookingEntry, H
 import type { ImportGraphEdge, ImportGraphNode, ImportGraphRootInfo } from './slices'
 import type { McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
 
-export type PushEnvelope =
+export type PushEnvelope = PushEvent & { eventId?: string }
+export type PushEvent =
+  | { k: 'Notifications'; reply: import('../../lib/notifications').NotificationReply }
   | ({ k: 'WebSearchValues' } & import('../../types/web-search').SearchReply)
   | { k: 'Computer'; status: import('../../types/computer').ComputerStatus }
   | { k: 'ComputerPreview'; frame: import('../../types/computer').ComputerPreviewFrame }
@@ -106,6 +108,8 @@ export type PushEnvelope =
       k: 'Status'
       session: string
       working: boolean
+      toastSession?: string | null
+      toastEventId?: string
       toast: string | null
       toastKind?: string
       tokensIn?: number

@@ -167,9 +167,7 @@ pub(super) fn handle_content_ctl(
 }
 
 fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
-    if let Ok(json) = serde_json::to_string(env) {
-        push(json);
-    }
+    super::render::emit(push, env);
 }
 
 /// Search file contents under `root`/`path` with VS Code-like flags.

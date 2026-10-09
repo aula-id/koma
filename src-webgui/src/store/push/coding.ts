@@ -90,7 +90,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'LspInstall':
         set((s) => {
           const text = env.error ? `lsp ${env.id || 'install'}: ${env.error}` : null
-          const raise = !!text && text !== s.ui.toast?.text
+          const raise = !!text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           const nextProgress = { ...s.lspProgress }
           if (env.id) {

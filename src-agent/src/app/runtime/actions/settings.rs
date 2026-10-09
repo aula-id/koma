@@ -372,7 +372,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 state
                     .rest
                     .fg_mut()
-                    .set_toast_info(crate::app::cascade::cascade_status_line(
+                    .set_toast_info_app(crate::app::cascade::cascade_status_line(
                         "provider/model",
                         &report,
                     ));

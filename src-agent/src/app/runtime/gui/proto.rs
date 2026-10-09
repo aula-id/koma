@@ -100,6 +100,11 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    Notifications {
+        request: crate::model::notifications::Request,
+        #[serde(default)]
+        local: bool,
+    },
     GetWebSearch {
         req_seq: u64,
     },
@@ -997,6 +1002,8 @@ pub(super) enum GuiReq {
     TutorialChat {
         id: String,
         messages: Vec<TutorialChatMsg>,
+        #[serde(default)]
+        context: serde_json::Value,
     },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────

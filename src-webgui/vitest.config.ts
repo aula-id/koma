@@ -4,11 +4,13 @@ import tailwindcss from '@tailwindcss/vite'
 import { playwright } from '@vitest/browser-playwright'
 
 export default defineConfig({
+  server: { fs: { allow: [new URL('..', import.meta.url).pathname] } },
   plugins: [react(), tailwindcss()],
   optimizeDeps: { include: ['react/jsx-dev-runtime', 'react-dom'] },
   test: {
     projects: [
       {
+        extends: true,
         test: {
           name: 'logic',
           environment: 'jsdom',
@@ -16,6 +18,7 @@ export default defineConfig({
         },
       },
       {
+        extends: true,
         test: {
           name: 'chromium',
           include: ['src/**/*.browser.test.ts', 'src/**/*.browser.test.tsx'],

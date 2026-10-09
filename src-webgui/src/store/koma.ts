@@ -1,4 +1,6 @@
+import { captureNotificationOrigin, withNotificationOrigin, publishingOrigin } from '../lib/notificationOrigins'
 import { create } from 'zustand'
+import { bindNotificationHost, publishNotification, receiveNotifications } from '../lib/notifications'
 import { codingRequest } from '../lib/coding-service'
 import { sendCodingLanguage } from '../lib/coding-language'
 import { resolveFilePreviewBytes } from '../lib/filePreview'
@@ -133,6 +135,7 @@ export type { LspDiagnostic } from '../lib/lsp-bridge'
 export { fileKey, initialCoding } from './coding'
 export { KNOWN_THEMES, resolveActivityBarOrder }
 
+const seenNotificationEvents = new Set<string>()
 export const useKoma = create<KomaState>((set, get) => ({
   computer: null,
   computerError: null,
@@ -207,6 +210,13 @@ export const useKoma = create<KomaState>((set, get) => ({
   agentSaving: null,
 
   push: (env) => {
+    if (env.eventId) {
+      if (seenNotificationEvents.has(env.eventId)) return
+      seenNotificationEvents.add(env.eventId)
+      if (seenNotificationEvents.size > 2000) seenNotificationEvents.delete(seenNotificationEvents.values().next().value!)
+    }
+    return withNotificationOrigin(env as unknown as Record<string, unknown>, get().session.id, () => {
+    if (env.k === 'Notifications') { receiveNotifications(env.reply); return }
     if (pushComputer(set, get, env)) return
     if (pushCoding(set, get, env)) return
     if (pushGit(set, get, env)) return
@@ -217,8 +227,10 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (pushMarketplace(set, get, env)) return
     if (pushAnalytics(set, get, env)) return
     if (pushImportGraph(set, get, env)) return
+    })
   },
   req: (g) => {
+    captureNotificationOrigin(g as unknown as Record<string, unknown>, get().session.id)
     if (['FileTree', 'FileRead', 'FileSave', 'FileCreate', 'FileRename', 'FileDelete', 'FileWriteBytes', 'FileDownloadBytes', 'FileContentSearch'].includes(g.r) && 'root' in g && typeof g.root === 'string') {
       const hostId = get().remoteState.hostId ?? 'local'
       const deliver = (value: Record<string, unknown>) => {
@@ -280,7 +292,6 @@ export const useKoma = create<KomaState>((set, get) => ({
       if (isCodingReq) {
         const text = 'IPC unavailable — coding request was not sent'
         set((s) => {
-          if (s.ui.toast?.text === text) return s
           const seq = s.ui.toastSeq + 1
           return {
             ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
@@ -298,7 +309,6 @@ export const useKoma = create<KomaState>((set, get) => ({
         const msg = e instanceof Error ? e.message : String(e)
         const text = `IPC error — coding request failed: ${msg}`
         set((s) => {
-          if (s.ui.toast?.text === text) return s
           const seq = s.ui.toastSeq + 1
           return {
             ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
@@ -320,3 +330,13 @@ export const useKoma = create<KomaState>((set, get) => ({
   ...diagramActions(set, get),
   ...designActions(set, get),
 }))
+
+// Capture at state publication, before rendering/expiration can replace a toast.
+// This also covers older components that write ui.toast directly.
+useKoma.subscribe((state, previous) => {
+  if (state.session.id && (state.session.id !== previous.session.id || state.remoteState.hostId !== previous.remoteState.hostId)) bindNotificationHost(state.session.id, state.remoteState.hostId)
+  const toast = state.ui.toast
+  if (!toast || toast === previous.ui.toast || toast.id === previous.ui.toast?.id) return
+  if (toast.source === 'runtime' && toast.eventId && toast.session !== null) return // saved on the session host at creation
+  publishNotification(toast.text, toast.kind, toast.session === undefined ? (publishingOrigin ? publishingOrigin.session : state.session.id) : toast.session, toast.source ?? publishingOrigin?.source, toast.eventId)
+})

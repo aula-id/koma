@@ -1,0 +1,714 @@
+{
+  "version": 1,
+  "articles": [
+    {
+      "id": "composer",
+      "title": "Chat and composer",
+      "aliases": [
+        "chat",
+        "message",
+        "attachments",
+        "stop",
+        "mode"
+      ],
+      "navigation": "chat",
+      "workflows": [
+        "composer"
+      ],
+      "file": "composer.md"
+    },
+    {
+      "id": "sessions",
+      "title": "Sessions and workspace roots",
+      "aliases": [
+        "new",
+        "resume",
+        "rename",
+        "hub",
+        "working directory"
+      ],
+      "navigation": "sessions",
+      "workflows": [
+        "sessions-hub"
+      ],
+      "file": "sessions.md"
+    },
+    {
+      "id": "providers",
+      "title": "Providers, OAuth and models",
+      "aliases": [
+        "api key",
+        "login",
+        "account",
+        "connector",
+        "main",
+        "planner",
+        "koma-free"
+      ],
+      "navigation": "connector",
+      "workflows": [
+        "oauth-setup",
+        "provider-setup",
+        "connector"
+      ],
+      "file": "providers.md"
+    },
+    {
+      "id": "settings",
+      "title": "Settings and appearance",
+      "aliases": [
+        "theme",
+        "sidebar",
+        "keyboard",
+        "account",
+        "lsp",
+        "computer",
+        "ssh"
+      ],
+      "navigation": "settings",
+      "workflows": [
+        "settings",
+        "activity-bar"
+      ],
+      "file": "settings.md"
+    },
+    {
+      "id": "web-search",
+      "title": "Web search setup",
+      "aliases": [
+        "internet",
+        "search key",
+        "tavily",
+        "firecrawl",
+        "exa",
+        "duckduckgo",
+        "search provider"
+      ],
+      "navigation": "settings",
+      "workflows": [
+        "web-search-setup"
+      ],
+      "file": "web-search.md"
+    },
+    {
+      "id": "notifications",
+      "title": "Saved notification history",
+      "aliases": [
+        "toast",
+        "bell",
+        "error history",
+        "read",
+        "notification"
+      ],
+      "navigation": "notifications",
+      "workflows": [
+        "notification-history"
+      ],
+      "file": "notifications.md"
+    },
+    {
+      "id": "terminals",
+      "title": "Terminals and shell jobs",
+      "aliases": [
+        "bash",
+        "shell",
+        "copy",
+        "selection",
+        "pty"
+      ],
+      "navigation": "terminal",
+      "workflows": [
+        "terminal-selection"
+      ],
+      "file": "terminals.md"
+    },
+    {
+      "id": "coding",
+      "title": "Coding, files and saves",
+      "aliases": [
+        "editor",
+        "monaco",
+        "save",
+        "dirty",
+        "files",
+        "explore"
+      ],
+      "navigation": "coding",
+      "workflows": [
+        "coding-file-saves"
+      ],
+      "file": "coding.md"
+    },
+    {
+      "id": "agents",
+      "title": "Agents and tasks",
+      "aliases": [
+        "sub-agent",
+        "task",
+        "background",
+        "kill"
+      ],
+      "navigation": "agents",
+      "workflows": [
+        "agents"
+      ],
+      "file": "agents.md"
+    },
+    {
+      "id": "skills",
+      "title": "Skills and reusable instructions",
+      "aliases": [
+        "load",
+        "unload",
+        "reload",
+        "zip",
+        "skill"
+      ],
+      "navigation": "skills",
+      "workflows": [
+        "skills"
+      ],
+      "file": "skills.md"
+    },
+    {
+      "id": "git",
+      "title": "Source control and Git",
+      "aliases": [
+        "commit",
+        "branch",
+        "diff",
+        "remote repository",
+        "stash"
+      ],
+      "navigation": "git",
+      "workflows": [
+        "git"
+      ],
+      "file": "git.md"
+    },
+    {
+      "id": "mcp",
+      "title": "MCP servers",
+      "aliases": [
+        "tools",
+        "model context protocol",
+        "server"
+      ],
+      "navigation": "mcp",
+      "workflows": [
+        "mcp"
+      ],
+      "file": "mcp.md"
+    },
+    {
+      "id": "remote",
+      "title": "Remote SSH sessions",
+      "aliases": [
+        "ssh",
+        "host",
+        "connect",
+        "remote"
+      ],
+      "navigation": "remote",
+      "workflows": [
+        "remote"
+      ],
+      "file": "remote.md"
+    },
+    {
+      "id": "extensions",
+      "title": "Extensions and store",
+      "aliases": [
+        "plugins",
+        "marketplace",
+        "install",
+        "extension"
+      ],
+      "navigation": "store",
+      "workflows": [
+        "store"
+      ],
+      "file": "extensions.md"
+    },
+    {
+      "id": "usage",
+      "title": "Usage and analytics",
+      "aliases": [
+        "usage"
+      ],
+      "navigation": "usage",
+      "workflows": [],
+      "file": "usage.md"
+    },
+    {
+      "id": "import-graph",
+      "title": "Import Graph",
+      "aliases": [
+        "import-graph"
+      ],
+      "navigation": "importGraph",
+      "workflows": [],
+      "file": "import-graph.md"
+    },
+    {
+      "id": "diagram",
+      "title": "Diagrams",
+      "aliases": [
+        "diagram"
+      ],
+      "navigation": "diagram",
+      "workflows": [],
+      "file": "diagram.md"
+    },
+    {
+      "id": "design",
+      "title": "Design",
+      "aliases": [
+        "design"
+      ],
+      "navigation": "design",
+      "workflows": [],
+      "file": "design.md"
+    },
+    {
+      "id": "help",
+      "title": "Help assistant, Reference and Guides",
+      "aliases": [
+        "help"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "help.md"
+    },
+    {
+      "id": "tui-new",
+      "title": "TUI /new",
+      "aliases": [
+        "/new",
+        "new"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-new.md"
+    },
+    {
+      "id": "tui-new-kill",
+      "title": "TUI /new kill",
+      "aliases": [
+        "/new kill",
+        "new"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-new-kill.md"
+    },
+    {
+      "id": "tui-new-remote",
+      "title": "TUI /new remote",
+      "aliases": [
+        "/new remote",
+        "new"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-new-remote.md"
+    },
+    {
+      "id": "tui-resume",
+      "title": "TUI /resume",
+      "aliases": [
+        "/resume",
+        "resume"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-resume.md"
+    },
+    {
+      "id": "tui-resume-remote",
+      "title": "TUI /resume remote",
+      "aliases": [
+        "/resume remote",
+        "resume"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-resume-remote.md"
+    },
+    {
+      "id": "tui-mode",
+      "title": "TUI /mode",
+      "aliases": [
+        "/mode",
+        "mode"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-mode.md"
+    },
+    {
+      "id": "tui-effort",
+      "title": "TUI /effort",
+      "aliases": [
+        "/effort",
+        "effort"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-effort.md"
+    },
+    {
+      "id": "tui-free",
+      "title": "TUI /free",
+      "aliases": [
+        "/free",
+        "free"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-free.md"
+    },
+    {
+      "id": "tui-internet",
+      "title": "TUI /internet",
+      "aliases": [
+        "/internet",
+        "internet"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-internet.md"
+    },
+    {
+      "id": "tui-settings",
+      "title": "TUI /settings",
+      "aliases": [
+        "/settings",
+        "settings"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-settings.md"
+    },
+    {
+      "id": "tui-agents",
+      "title": "TUI /agents",
+      "aliases": [
+        "/agents",
+        "agents"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-agents.md"
+    },
+    {
+      "id": "tui-mcp",
+      "title": "TUI /mcp",
+      "aliases": [
+        "/mcp",
+        "mcp"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-mcp.md"
+    },
+    {
+      "id": "tui-extension",
+      "title": "TUI /extension",
+      "aliases": [
+        "/extension",
+        "extension"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-extension.md"
+    },
+    {
+      "id": "tui-extension-use",
+      "title": "TUI /extension use",
+      "aliases": [
+        "/extension use",
+        "extension"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-extension-use.md"
+    },
+    {
+      "id": "tui-store",
+      "title": "TUI /store",
+      "aliases": [
+        "/store",
+        "store"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-store.md"
+    },
+    {
+      "id": "tui-security",
+      "title": "TUI /security",
+      "aliases": [
+        "/security",
+        "security"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-security.md"
+    },
+    {
+      "id": "tui-remote",
+      "title": "TUI /remote",
+      "aliases": [
+        "/remote",
+        "remote"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-remote.md"
+    },
+    {
+      "id": "tui-task",
+      "title": "TUI /task",
+      "aliases": [
+        "/task",
+        "task"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-task.md"
+    },
+    {
+      "id": "tui-model",
+      "title": "TUI /model",
+      "aliases": [
+        "/model",
+        "model"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-model.md"
+    },
+    {
+      "id": "tui-bash",
+      "title": "TUI /bash",
+      "aliases": [
+        "/bash",
+        "bash"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-bash.md"
+    },
+    {
+      "id": "tui-todo",
+      "title": "TUI /todo",
+      "aliases": [
+        "/todo",
+        "todo"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-todo.md"
+    },
+    {
+      "id": "tui-skill",
+      "title": "TUI /skill",
+      "aliases": [
+        "/skill",
+        "skill"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-skill.md"
+    },
+    {
+      "id": "tui-attach",
+      "title": "TUI /attach",
+      "aliases": [
+        "/attach",
+        "attach"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-attach.md"
+    },
+    {
+      "id": "tui-cd",
+      "title": "TUI /cd",
+      "aliases": [
+        "/cd",
+        "cd"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-cd.md"
+    },
+    {
+      "id": "tui-adddir",
+      "title": "TUI /adddir",
+      "aliases": [
+        "/adddir",
+        "adddir"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-adddir.md"
+    },
+    {
+      "id": "tui-compact",
+      "title": "TUI /compact",
+      "aliases": [
+        "/compact",
+        "compact"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-compact.md"
+    },
+    {
+      "id": "tui-clear",
+      "title": "TUI /clear",
+      "aliases": [
+        "/clear",
+        "clear"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-clear.md"
+    },
+    {
+      "id": "tui-usage",
+      "title": "TUI /usage",
+      "aliases": [
+        "/usage",
+        "usage"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-usage.md"
+    },
+    {
+      "id": "tui-rename",
+      "title": "TUI /rename",
+      "aliases": [
+        "/rename",
+        "rename"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-rename.md"
+    },
+    {
+      "id": "tui-select",
+      "title": "TUI /select",
+      "aliases": [
+        "/select",
+        "select"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-select.md"
+    },
+    {
+      "id": "tui-notification",
+      "title": "TUI /notification",
+      "aliases": [
+        "/notification",
+        "notification"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-notification.md"
+    },
+    {
+      "id": "tui-help",
+      "title": "TUI /help",
+      "aliases": [
+        "/help",
+        "help"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-help.md"
+    },
+    {
+      "id": "tui-quit",
+      "title": "TUI /quit",
+      "aliases": [
+        "/quit",
+        "quit"
+      ],
+      "navigation": "help",
+      "workflows": [],
+      "file": "tui-quit.md"
+    }
+  ],
+  "navigation": [
+    "chat",
+    "sessions",
+    "settings",
+    "help",
+    "notifications",
+    "explore",
+    "coding",
+    "diagram",
+    "design",
+    "git",
+    "mcp",
+    "connector",
+    "importGraph",
+    "agents",
+    "skills",
+    "usage",
+    "store",
+    "remote",
+    "analytics",
+    "graph",
+    "terminal"
+  ],
+  "workflows": [
+    "oauth-setup",
+    "provider-setup",
+    "activity-bar",
+    "sessions-hub",
+    "composer",
+    "agents",
+    "skills",
+    "git",
+    "mcp",
+    "remote",
+    "store",
+    "settings",
+    "connector",
+    "web-search-setup",
+    "notification-history",
+    "coding-file-saves",
+    "terminal-selection"
+  ],
+  "views": {
+    "chat": "composer",
+    "settings": "settings",
+    "help": "help",
+    "tutorial": "help",
+    "notifications": "notifications",
+    "diff": "git",
+    "subagent": "agents",
+    "bash": "terminals",
+    "agent": "agents",
+    "skill": "skills",
+    "uploadSkill": "skills",
+    "installedExtension": "extensions",
+    "graph": "git",
+    "importGraph": "import-graph",
+    "analytics": "usage",
+    "store": "extensions",
+    "extension": "extensions",
+    "codingFile": "coding",
+    "localFile": "coding",
+    "diagram": "diagram",
+    "design": "design",
+    "terminal": "terminals",
+    "gitTool": "git"
+  }
+}

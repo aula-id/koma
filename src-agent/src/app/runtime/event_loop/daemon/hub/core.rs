@@ -226,6 +226,7 @@ pub(super) struct HubClient {
 /// daemon's lifetime so `msg_rx` never goes `Disconnected` before any client
 /// connects.
 pub(in crate::app::runtime) struct DaemonHub {
+    pub(super) notification_pending: Vec<(u64, Receiver<crate::model::notifications::Reply>)>,
     /// Inbound client messages, drained per tick (like `active_rx`).
     pub(super) msg_rx: Receiver<HubInbound>,
     /// Enrolled clients the loop fans [`DaemonFrame`]s out to. Each owns its own
@@ -301,6 +302,7 @@ impl DaemonHub {
         let (store_tx, store_rx) = std::sync::mpsc::channel();
         (
             Self {
+                notification_pending: Vec::new(),
                 msg_rx,
                 clients: Vec::new(),
                 shutdown: false,

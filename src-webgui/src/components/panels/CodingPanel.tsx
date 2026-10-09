@@ -713,7 +713,7 @@ export function CodingPanel() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div data-tour="coding-panel" className="flex h-full min-h-0 flex-col">
       <div className="flex flex-none items-center gap-1 px-2 py-1.5">
         <div className="min-w-0 flex-1" title={activeRoot ?? ''}>
           <Select

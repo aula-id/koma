@@ -1,4 +1,4 @@
-//! Host-side GUI Tutorial chat — thin koma-free client for the Tutorial tab.
+//! Grounded GUI Help assistant with bounded article retrieval over koma-free.
 //!
 //! Runs on a one-shot [`std::thread::spawn`] worker (blocking `reqwest`), never on
 //! the tokio runtime and never through a session daemon. Mirrors [`super::store_host`]:
@@ -15,32 +15,11 @@ use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::model::app_config::{new_uuid, AppConfig};
 use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
 
-/// Stable system prompt: short multilingual help + optional tour id router.
-/// The model must end with a single `TOUR: <id>` or `TOUR: none` line the host
-/// strips before showing the user-facing text.
-const SYSTEM_PROMPT: &str = r#"You are koma's in-app GUI tutorial coach. Reply in the user's language.
-Be brief (2–6 short sentences). Explain where to click in the real desktop GUI.
-Do not invent features. Do not claim you can edit files or run tools — you only guide.
-
-Known guided tours (offer when relevant; user confirms before launch):
-- oauth-setup — connect a provider via OAuth, then pick/add a model
-- provider-setup — add a custom/API-key provider, add a model, select it in the composer
-- activity-bar — activity bar + sidebar panels overview
-- sessions-hub — start/resume sessions
-- composer — message box, model picker, attachments
-- agents — sub-agents panel
-- skills — discover Global/Project/External skills; search; session-scoped Load/Unload/Reload; create, upload ZIP, Edit with Koma, duplicate, download, and delete with ownership safety
-- git — source control panel
-- mcp — MCP servers panel
-- remote — remote SSH hosts
-- store — extension store
-- settings — settings tab
-- connector — Connector panel (providers / OAuth / models)
-
-End EVERY reply with exactly one final line, nothing after it:
-TOUR: <id>
-or
-TOUR: none
+const SYSTEM_PROMPT: &str = r#"You are koma's built-in Help assistant. Reply in the user's language.
+Use the shipped catalogue and articles as your product knowledge. Distinguish GUI controls from TUI commands. Ask a clarifying question when interface facts or documentation do not support a reliable instruction. Never invent third-party extension behavior.
+You only guide. You cannot inspect session chats, credentials, files or terminal output, run commands, change configuration, install, connect, save, commit or delete. Suggestions must use shipped navigation and workflow IDs. The user explicitly starts a guide.
+Return ONLY a JSON object with answer (plain explanatory text), articles (known article IDs), navigation (known view ID or null), guide (known workflow ID or null).
+If you need more documentation, return ONLY {"request_articles":["known-id",...]} with at most four IDs. The host permits at most two such rounds. Then produce the answer object. Reference the articles actually supporting your instructions. Never include selectors or scripts in actions.
 "#;
 
 /// One chat message on the wire (role + content).
@@ -65,9 +44,10 @@ pub(super) fn spawn_tutorial_chat(
     push: impl Fn(String) + Send + 'static,
     id: String,
     messages: Vec<TutorialMsg>,
+    context: serde_json::Value,
 ) {
     std::thread::spawn(move || {
-        let result = run_tutorial_chat(id, messages);
+        let result = run_tutorial_chat(id, messages, context);
         super::push_proto::push_tutorial_chat_done(
             &push,
             result.id,
@@ -85,18 +65,26 @@ pub(super) fn spawn_tutorial_chat_attached(
     tx: Sender<TutorialChatResult>,
     id: String,
     messages: Vec<TutorialMsg>,
+    context: serde_json::Value,
 ) {
     std::thread::spawn(move || {
-        let _ = tx.send(run_tutorial_chat(id, messages));
+        let _ = tx.send(run_tutorial_chat(id, messages, context));
     });
 }
 
 // ─── Core ────────────────────────────────────────────────────────────────────
 
-fn run_tutorial_chat(id: String, messages: Vec<TutorialMsg>) -> TutorialChatResult {
-    match complete(messages) {
+fn run_tutorial_chat(
+    id: String,
+    messages: Vec<TutorialMsg>,
+    context: serde_json::Value,
+) -> TutorialChatResult {
+    match complete(messages, context) {
         Ok(raw) => {
-            let (text, tour) = split_tour_trailer(&raw);
+            let answer = crate::model::help_knowledge::parse_answer(&raw)
+                .expect("complete validates answer");
+            let tour = answer.guide.clone();
+            let text = serde_json::to_string(&answer).unwrap();
             TutorialChatResult {
                 id,
                 text,
@@ -114,7 +102,7 @@ fn run_tutorial_chat(id: String, messages: Vec<TutorialMsg>) -> TutorialChatResu
 }
 
 /// Blocking OpenAI-compatible chat-completions call against koma-free (`stream: false`).
-fn complete(messages: Vec<TutorialMsg>) -> Result<String, String> {
+fn complete(messages: Vec<TutorialMsg>, context: serde_json::Value) -> Result<String, String> {
     let mut cfg = AppConfig::load();
     if cfg.install_id.is_empty() {
         cfg.install_id = new_uuid();
@@ -128,7 +116,11 @@ fn complete(messages: Vec<TutorialMsg>) -> Result<String, String> {
     let mut wire_msgs: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + 1);
     wire_msgs.push(serde_json::json!({
         "role": "system",
-        "content": SYSTEM_PROMPT,
+        "content": format!("{}\nFeature catalogue: {}\nUI context: {}\nRelevant articles:\n{}\nTUI commands and shortcuts: {:?} {:?}", SYSTEM_PROMPT,
+            serde_json::to_string(&crate::model::help_knowledge::manifest().articles.iter().map(|a|serde_json::json!({"id":a.id,"title":a.title,"aliases":a.aliases,"navigation":a.navigation,"workflows":a.workflows})).collect::<Vec<_>>()).unwrap(),
+            crate::model::help_knowledge::redact_context(&context),
+            crate::model::help_knowledge::ranked(messages.last().map(|m|m.content.as_str()).unwrap_or_default(),4).iter().filter_map(|id|crate::model::help_knowledge::article(id).map(|body|format!("Article {id}:\n{body}"))).collect::<Vec<_>>().join("\n\n"),
+            crate::controller::command::COMMANDS, crate::controller::command::KEYBINDINGS),
     }));
     for m in &messages {
         let role = match m.role.as_str() {
@@ -149,22 +141,29 @@ fn complete(messages: Vec<TutorialMsg>) -> Result<String, String> {
         wire_msgs = std::iter::once(system).chain(keep).collect();
     }
 
-    let body = serde_json::json!({
-        "model": KOMA_FREE_MODEL,
-        "stream": false,
-        "messages": wire_msgs,
-    });
-
     let url = format!("{KOMA_FREE_ENDPOINT}/chat/completions");
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
 
+    crate::model::help_knowledge::grounded_reply(&mut wire_msgs, |messages| {
+        request_completion(&client, &url, &install_id, &session_id, messages)
+    })
+}
+
+fn request_completion(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    install_id: &str,
+    session_id: &str,
+    messages: &[serde_json::Value],
+) -> Result<String, String> {
+    let body = serde_json::json!({"model":KOMA_FREE_MODEL,"stream":false,"messages":messages});
     let resp = client
-        .post(&url)
-        .header("X-Koma", &install_id)
-        .header("X-Session", &session_id)
+        .post(url)
+        .header("X-Koma", install_id)
+        .header("X-Session", session_id)
         .header("HTTP-Referer", HTTP_REFERER)
         .header("X-Title", APP_TITLE)
         .header("Content-Type", "application/json")
@@ -190,65 +189,4 @@ fn complete(messages: Vec<TutorialMsg>) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "koma-free returned empty content".to_string())?;
     Ok(content.to_string())
-}
-
-/// Split a trailing `TOUR: <id>` / `TOUR: none` line from the model reply.
-fn split_tour_trailer(raw: &str) -> (String, Option<String>) {
-    let trimmed = raw.trim_end();
-    let Some((head, last)) = trimmed.rsplit_once('\n') else {
-        // Single-line reply — still accept a bare TOUR line (unlikely).
-        return parse_tour_line(trimmed)
-            .map(|t| (String::new(), t))
-            .unwrap_or_else(|| (trimmed.to_string(), None));
-    };
-    if let Some(tour) = parse_tour_line(last.trim()) {
-        return (head.trim_end().to_string(), tour);
-    }
-    (trimmed.to_string(), None)
-}
-
-fn parse_tour_line(line: &str) -> Option<Option<String>> {
-    let rest = line
-        .strip_prefix("TOUR:")
-        .or_else(|| line.strip_prefix("tour:"))?
-        .trim();
-    if rest.is_empty() || rest.eq_ignore_ascii_case("none") {
-        return Some(None);
-    }
-    // Allow only known-looking ids (kebab-case).
-    if rest
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && rest.len() < 64
-    {
-        Some(Some(rest.to_string()))
-    } else {
-        Some(None)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_tour_trailer_extracts_id() {
-        let (text, tour) = split_tour_trailer("Open Connector.\n\nTOUR: oauth-setup\n");
-        assert_eq!(text, "Open Connector.");
-        assert_eq!(tour.as_deref(), Some("oauth-setup"));
-    }
-
-    #[test]
-    fn split_tour_trailer_none() {
-        let (text, tour) = split_tour_trailer("Just a tip.\nTOUR: none");
-        assert_eq!(text, "Just a tip.");
-        assert_eq!(tour, None);
-    }
-
-    #[test]
-    fn split_tour_trailer_missing() {
-        let (text, tour) = split_tour_trailer("No trailer here.");
-        assert_eq!(text, "No trailer here.");
-        assert_eq!(tour, None);
-    }
 }

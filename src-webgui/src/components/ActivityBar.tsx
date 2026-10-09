@@ -1,5 +1,6 @@
+import { useNotifications, notificationRequest } from '../lib/notifications'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, GraduationCap, Shapes, Frame, Library } from 'lucide-react'
+import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, Bell, Shapes, Frame, Library } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -71,6 +72,14 @@ const FOOTER_H = ITEM_H * 3
 // part of the managed/reorderable list), Help directly above Settings, the
 // overflow button (when shown) directly above Help.
 export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onHelp, onTutorial }: ActivityBarProps) {
+  const notificationSession = useKoma(s => s.session.id)
+  const unread = useNotifications(s => Object.entries(s.scopes).filter(([scope]) => scope === 'app' || scope === notificationSession).reduce((n, [, rows]) => n + rows.filter(e => !e.read).length, 0))
+  useEffect(() => {
+    const refresh = () => { notificationRequest(null, { op: 'list' }); if (notificationSession) notificationRequest(notificationSession, { op: 'list' }) }
+    refresh()
+    const timer = window.setInterval(refresh, 5000)
+    return () => window.clearInterval(timer)
+  }, [notificationSession])
   const order = useKoma((s) => s.activityBar.order)
   const hidden = useKoma((s) => s.activityBar.hidden)
   const setActivityBarOrder = useKoma((s) => s.setActivityBarOrder)
@@ -311,12 +320,13 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
 
       <button
         onClick={onTutorial}
-        data-tour-open="tutorial"
+        data-tour-open="notifications"
         className={`${iconBtn} ${showMenuButton ? '' : 'mt-auto'}`}
-        title="Tutorial"
-        aria-label="Tutorial"
+        title="Notifications"
+        aria-label="Notifications"
       >
-        <GraduationCap size={22} strokeWidth={1.6} />
+        <Bell size={22} strokeWidth={1.6} />
+        {unread > 0 && <span aria-label={`${unread} unread notifications`} className="absolute right-0 top-0 rounded bg-koma-accent px-1 text-[9px] text-koma-bg">{unread > 99 ? '99+' : unread}</span>}
       </button>
       <button
         onClick={onHelp}

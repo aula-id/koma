@@ -59,6 +59,9 @@ pub struct FileSearchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ClientRequest {
+    Notifications {
+        request: crate::model::notifications::Request,
+    },
     /// Refresh only search preferences, preserving open settings drafts.
     ReloadWebSearch,
     GetWebSearch {
@@ -873,6 +876,9 @@ pub struct DaemonFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum DaemonEvent {
+    Notifications {
+        reply: crate::model::notifications::Reply,
+    },
     WebSearchValues {
         req_seq: u64,
         status: crate::model::web_search::SearchStatus,
@@ -1326,6 +1332,7 @@ pub enum ModeSnapshot {
     Todo(Box<TodoSnapshot>),
     Attachments(Box<AttachmentsSnapshot>),
     Help(Box<HelpSnapshot>),
+    Notifications(Box<crate::app::mode::notifications::NotificationsState>),
     Skill(Box<SkillCmdSnapshot>),
     Effort(EffortSnapshot),
     Model(Box<ModelCmdSnapshot>),
@@ -1375,6 +1382,10 @@ pub enum StateDelta {
     },
     SessionAdded(Box<SessionSnapshot>),
     Toast {
+        #[serde(default)]
+        session: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
         kind: String,
         text: String,
     },

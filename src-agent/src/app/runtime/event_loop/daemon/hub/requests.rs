@@ -34,6 +34,21 @@ impl DaemonHub {
         client: &mut Option<Arc<OpenRouterClient>>,
         handle: &tokio::runtime::Handle,
     ) {
+        let mut ready = Vec::new();
+        self.notification_pending
+            .retain(|(id, rx)| match rx.try_recv() {
+                Ok(reply) => {
+                    ready.push((*id, reply));
+                    false
+                }
+                Err(TryRecvError::Empty) => true,
+                Err(_) => false,
+            });
+        for (id, reply) in ready {
+            if let Some(idx) = self.clients.iter().position(|c| c.id == id) {
+                self.send_to(idx, DaemonEvent::Notifications { reply });
+            }
+        }
         loop {
             match self.msg_rx.try_recv() {
                 Ok(msg) => self.handle_inbound(msg, state, client, handle),
@@ -201,6 +216,12 @@ impl DaemonHub {
                 self.file_search(idx, state, query, limit);
             }
 
+            ClientRequest::Notifications { request } => {
+                self.notification_pending.push((
+                    self.clients[idx].id,
+                    crate::model::notifications::request(request),
+                ));
+            }
             ClientRequest::UsagePreview { session, scope } => {
                 self.usage_preview(idx, session, scope);
             }
@@ -919,6 +940,7 @@ impl DaemonHub {
             | ClientRequest::SetSessionExtensions { .. }
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
+            | ClientRequest::Notifications { .. }
             | ClientRequest::UsagePreview { .. }
             | ClientRequest::Analytics { .. }
             | ClientRequest::ListModels { .. }

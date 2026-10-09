@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-changed=../src-misc/help");
     embed_windows_resource();
 
     // Only build the web UI when the gui feature is enabled.

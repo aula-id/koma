@@ -139,6 +139,8 @@ pub struct SessionRuntime {
     /// `kind` selects the box style (red "error" vs neutral "info"). Expiry is swept
     /// PER-SESSION (each session ticks its own toast). `None` when no toast is showing.
     pub toast: Option<(String, std::time::Instant, ToastKind)>,
+    pub toast_event_id: Option<String>,
+    pub toast_session: Option<String>,
     pub input: String,
     /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
     /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
@@ -714,6 +716,8 @@ impl SessionRuntime {
             status: "ready".into(),
             // Per-session toast (C6): none on a fresh session.
             toast: None,
+            toast_event_id: None,
+            toast_session: None,
             input: String::new(),
             cursor: 0,
             pending_attachments: Vec::new(),
@@ -954,6 +958,10 @@ impl SessionRuntime {
 
     /// Show an error toast (red box) for ~6 seconds on THIS session.
     pub fn set_toast(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "error", "runtime");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = self.session.as_ref().map(|s| s.id.clone());
+        crate::model::notifications::record(self.session.as_ref().map(|s| s.id.clone()), entry);
         self.toast = Some((
             msg,
             std::time::Instant::now() + std::time::Duration::from_secs(6),
@@ -965,6 +973,23 @@ impl SessionRuntime {
     /// Used for non-failure notices like the post-compaction summary, which is
     /// multi-line and shouldn't read as an error.
     pub fn set_toast_info(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "info", "runtime");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = self.session.as_ref().map(|s| s.id.clone());
+        crate::model::notifications::record(self.session.as_ref().map(|s| s.id.clone()), entry);
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(8),
+            ToastKind::Info,
+        ));
+    }
+
+    /// Installation feedback uses App history; clients mirror remote App events locally.
+    pub fn set_toast_info_app(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "info", "app");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = None;
+        crate::model::notifications::record(None, entry);
         self.toast = Some((
             msg,
             std::time::Instant::now() + std::time::Duration::from_secs(8),

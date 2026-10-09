@@ -101,11 +101,13 @@ export function TerminalTab({ tab }: TerminalTabProps) {
     }
 
     // Forward keystrokes from xterm to the host PTY.
+    const selectionDisposable = term.onSelectionChange(() => document.dispatchEvent(new CustomEvent('koma-terminal-selection', { detail: { selected: term.hasSelection() } })))
     const disposable = term.onData((data) => {
       req({ r: 'TerminalInput', id: terminalId, data: normalizeTerminalInput(data) })
     })
 
     return () => {
+      selectionDisposable.dispose()
       disposable.dispose()
       delete (globalThis as any).__terminalWriters?.[terminalId]
       delete (globalThis as any).__terminalExitHandlers?.[terminalId]
@@ -168,6 +170,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
 
   return (
     <div
+      data-tour="terminal-content"
       ref={containerRef}
       className="h-full w-full overflow-hidden bg-koma-bg"
       style={{ padding: '4px 0 0 4px' }}

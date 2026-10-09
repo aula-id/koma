@@ -54,6 +54,7 @@ type StatusSnapshot = (
 /// [`serialize_and_push`] / [`push_hub`] only emit an envelope when something
 /// actually changed (the fold loop calls them every ~16ms).
 pub(super) struct PushState {
+    pub(super) toast_event_id: Option<String>,
     /// Fingerprint of the last `Snapshot` (session + messages + title + palette).
     pub(super) snapshot_fp: Option<u64>,
     /// Last full projected messages list (for SnapshotTail / SnapshotSetLast).
@@ -94,6 +95,7 @@ pub(super) struct PushState {
 impl PushState {
     pub(super) fn new() -> Self {
         Self {
+            toast_event_id: None,
             snapshot_fp: None,
             last_messages: None,
             pending_snapshot_head: None,
@@ -412,7 +414,18 @@ pub(super) fn push_loop(
     // prebuffered frames left PushState empty and no further daemon traffic arrives yet.
     let mut force_push = true;
 
+    let mut notification_pending: Vec<
+        std::sync::mpsc::Receiver<crate::model::notifications::Reply>,
+    > = Vec::new();
     loop {
+        notification_pending.retain(|rx| match rx.try_recv() {
+            Ok(reply) => {
+                push(serde_json::json!({"t":"push","k":"Notifications","reply":reply}).to_string());
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
         #[cfg(feature = "gui")]
         while let Ok(frame) = preview_rx.try_recv() {
             if remote_ctx.is_none() && computer_worker.accepts_preview(&frame.request) {
@@ -1335,11 +1348,19 @@ pub(super) fn push_loop(
                         category,
                     );
                 }
-                Ok(super::HostCtl::TutorialChat { id, messages }) => {
+                Ok(super::HostCtl::Notifications { request }) => {
+                    notification_pending.push(crate::model::notifications::request(request));
+                }
+                Ok(super::HostCtl::TutorialChat {
+                    id,
+                    messages,
+                    context,
+                }) => {
                     tutorial_host::spawn_tutorial_chat_attached(
                         tutorial_chat_tx.clone(),
                         id,
                         messages,
+                        context,
                     );
                 }
                 Ok(super::HostCtl::StoreDetail { id }) => {

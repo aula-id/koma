@@ -332,9 +332,7 @@ pub(super) fn handle_file_ctl(
 }
 
 fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
-    if let Ok(json) = serde_json::to_string(env) {
-        push(json);
-    }
+    super::render::emit(push, env);
 }
 
 // ─── Pure exec surface ───────────────────────────────────────────────────────

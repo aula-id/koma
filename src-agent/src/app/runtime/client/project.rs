@@ -296,13 +296,16 @@ pub(super) fn serialize_and_push(
         context_window,
         mode.clone(),
     );
-    if last.status.as_ref() != Some(&status) {
+    if last.status.as_ref() != Some(&status) || last.toast_event_id != fg.toast_event_id {
+        last.toast_event_id = fg.toast_event_id.clone();
         last.status = Some(status.clone());
         super::render::emit(
             push,
             &PushEnvelope::Status {
                 session,
                 working: status.0,
+                toast_session: fg.toast_session.clone(),
+                toast_event_id: fg.toast_event_id.clone(),
                 toast: status.1,
                 toast_kind: status.2,
                 tokens_in: status.3,
@@ -651,7 +654,11 @@ fn push_snapshot_if_changed(
             } else {
                 a.file_name().to_string()
             },
-            kind: if a.is_pasted_text() { "pasted_text" } else { "image" },
+            kind: if a.is_pasted_text() {
+                "pasted_text"
+            } else {
+                "image"
+            },
             rel_path: a.rel_path.clone(),
         })
         .collect();

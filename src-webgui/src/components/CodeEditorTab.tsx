@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import { bindDebugEditor } from '../lib/coding-debug'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
@@ -260,7 +261,8 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
         mode: 'rename', snapshot: state.coding.files, generation: state.coding._sessionGen })
     } })
     editor.addAction({ id: 'koma.undoWorkspaceEdit', label: 'Undo Workspace Edit', run: async () => {
-      try { await undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, text: message, kind: 'error' } } } }) }
+      const notificationSession = useKoma.getState().session.id
+      try { await undoWorkspaceEdit() } catch (error) { const message = error instanceof Error ? error.message : String(error); showToast(message, 'error', { session: notificationSession, source: 'coding' }) }
     } })
     // Selection → composer paste pile (`file.rs:22` / `file.rs:1:2`). Body goes out on send.
     editor.addAction({
@@ -675,7 +677,7 @@ function WorkspaceCodeEditor({ tab }: { tab: CodingTab }) {
   }
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <div data-tour="code-editor" className="flex h-full w-full flex-col">
       <EditorChrome
         path={tab.path}
         onTogglePreview={openPreview}

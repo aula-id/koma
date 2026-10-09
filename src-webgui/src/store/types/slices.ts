@@ -130,6 +130,8 @@ export type TutorialMsg = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  articles?: string[]
+  navigation?: string | null
   tour?: string | null
 }
 export type TutorialSlice = {

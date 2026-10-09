@@ -24,6 +24,7 @@ mod help;
 mod key_input;
 mod mcp;
 mod model_cmd;
+pub(crate) mod notifications;
 mod onboard;
 mod onboard_provider;
 mod paste;
@@ -122,6 +123,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Attachments(a) => attachments::handle_attachments(a, &mut state.rest, key),
         Mode::Skill(s) => skill_cmd::handle_skill_cmd(s, &mut state.rest, key),
         Mode::Remote(m) => remote::handle_remote(m, key),
+        Mode::Notifications(n) => notifications::handle(n, key),
         Mode::Help(h) => help::handle_help(h, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
         Mode::Model(m) => model_cmd::handle_model_cmd(m, &mut state.rest, key),

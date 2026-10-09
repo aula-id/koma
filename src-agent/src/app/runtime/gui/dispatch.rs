@@ -1,7 +1,7 @@
 //! The native-React client -> host request dispatcher: [`handle_gui_req`]
 //! applies one decoded [`GuiReq`] by forwarding it to the attached daemon (via
 //! the shared `live_req` slot) or to the host-relay control channel, exactly
-//! as the ipc handler's giant `match req { GuiReq::* }` used to do inline.
+//! as the ipc handler's giant request match used to do inline.
 //! Split out of [`super`] (the `gui` module) for file size — pure code
 //! motion, no behaviour change.
 //!
@@ -42,6 +42,20 @@ pub(super) struct GuiReqCtx {
 /// routing the old inline `match req { GuiReq::* }` used — pure code motion.
 pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     match req {
+        GuiReq::Notifications { request, local } => {
+            if request.session.is_some() && !local {
+                forward_or_host(
+                    &ctx.req,
+                    &ctx.ctl,
+                    ClientRequest::Notifications {
+                        request: request.clone(),
+                    },
+                    HostCtl::Notifications { request },
+                );
+            } else {
+                let _ = ctx.ctl.send(HostCtl::Notifications { request });
+            }
+        }
         GuiReq::ComputerPreview { request } => {
             let _ = ctx.ctl.send(HostCtl::ComputerPreview(request));
         }
@@ -1104,7 +1118,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // GUI Tutorial tab chat: HOST-LOCAL thin koma-free completion — ALWAYS
         // routed to the host-relay thread, never the daemon, regardless of attach
         // state (works from the hub with zero session). See `tutorial_host`.
-        GuiReq::TutorialChat { id, messages } => {
+        GuiReq::TutorialChat {
+            id,
+            messages,
+            context,
+        } => {
             let messages = messages
                 .into_iter()
                 .map(
@@ -1114,7 +1132,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     },
                 )
                 .collect();
-            let _ = ctx.ctl.send(HostCtl::TutorialChat { id, messages });
+            let _ = ctx.ctl.send(HostCtl::TutorialChat {
+                id,
+                messages,
+                context,
+            });
         }
         // Extension STORE browse/detail/installed-list: HOST-LOCAL — ALWAYS routed to the
         // host-relay thread, never the daemon, regardless of attach state, same reasoning

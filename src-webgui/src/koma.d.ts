@@ -417,8 +417,10 @@ declare global {
     | { r: 'OpenExternal'; url: string }
     // GUI Tutorial tab: one chat turn via host-proxied koma-free (no daemon).
     // Reply lands as TutorialChatDone (id echoed).
-    | {
+    | { r: 'Notifications'; local?: boolean; request: import('./lib/notifications').NotificationRequest }
+  | {
         r: 'TutorialChat'
+        context?: Record<string, unknown>
         id: string
         messages: { role: string; content: string }[]
       }

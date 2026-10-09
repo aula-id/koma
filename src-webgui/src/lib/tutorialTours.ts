@@ -1,3 +1,5 @@
+import { create } from 'zustand'
+import { HELP_MANIFEST } from './helpKnowledge'
 // Guided product tours for the GUI Tutorial tab (driver.js 1.3.5).
 // One driver instance + full steps array — native Next/Done/progress.
 // DOM prep: await work in onNextClick, then driver.moveNext(). Never
@@ -21,6 +23,10 @@ export type TourId =
   | 'store'
   | 'settings'
   | 'connector'
+  | 'web-search-setup'
+  | 'notification-history'
+  | 'coding-file-saves'
+  | 'terminal-selection'
 
 export type TourMeta = {
   id: TourId
@@ -110,6 +116,34 @@ export const TOUR_CATALOGUE: TourMeta[] = [
   },
 ]
 
+TOUR_CATALOGUE.push(
+  { id: 'web-search-setup', title: 'Set up web search', blurb: 'Choose a search provider in Settings and activate it yourself.', kind: 'setup' },
+  { id: 'notification-history', title: 'Notification history', blurb: 'Select a scope, search notices and manage read state.', kind: 'spotlight' },
+  { id: 'coding-file-saves', title: 'Edit and save a file', blurb: 'Open a workspace file, edit it and confirm the save outcome.', kind: 'setup' },
+  { id: 'terminal-selection', title: 'Terminal selection', blurb: 'Select the terminal tab before copying text or typing.', kind: 'spotlight' },
+)
+export const useGuide = create<{ id: TourId | null; step: number; blocked: string | null }>(() => ({ id: null, step: 0, blocked: null }))
+let guideCleanup: (() => void) | null = null
+let initialCounts = { providers: 0, models: 0, accounts: 0 }
+const dirtyDuringGuide = new Map<string, string>()
+let terminalSelected = false
+const SESSION_GUIDES = new Set(['composer', 'agents', 'skills', 'git', 'coding-file-saves', 'terminal-selection', 'notification-history'])
+
+/** Only registered first-party navigation. Never accept model-supplied selectors. */
+export async function openHelpView(id: string): Promise<boolean> {
+  if (!HELP_MANIFEST.navigation.includes(id)) return false
+  const state = useKoma.getState()
+  if (id === 'help') { state.openHelpTab(); return true }
+  if (id === 'settings') { state.openSettingsTab(); return true }
+  if (id === 'notifications') { state.openNotificationsTab(); return true }
+  if (id === 'analytics') { state.openAnalyticsTab(); return true }
+  if (id === 'graph') { state.openGraphTab(); return true }
+  if (id === 'terminal') { const tab = state.ui.tabs.find(t => t.kind === 'terminal'); if (!tab) return false; state.activateTab(tab.id); return true }
+  if (id === 'chat') { state.activateTab('chat'); return true }
+  if (id === 'sessions') return click('[data-tour="change-session"]') || click('[data-tour="sessions-hub-open"]')
+  return ensureSidebarView(id)
+}
+
 // ─── DOM helpers ────────────────────────────────────────────────────────────
 
 function qs<T extends Element = Element>(sel: string): T | null {
@@ -131,33 +165,31 @@ function isVisible(el: Element | null): boolean {
 /** First visible match among selectors (in order). Never a comma-selector. */
 function firstVisible(...sels: string[]): Element | undefined {
   for (const sel of sels) {
-    const el = qs(sel)
-    if (el && isVisible(el)) return el
-  }
-  for (const sel of sels) {
-    const el = qs(sel)
+    const el = Array.from(document.querySelectorAll(sel)).find(isVisible)
     if (el) return el
   }
   return undefined
 }
 
 function sleep(ms: number) {
-  return new Promise<void>((r) => window.setTimeout(r, ms))
+  const gen = runGen
+  return new Promise<void>((resolve, reject) => window.setTimeout(() => gen === runGen ? resolve() : reject(new Error('Guide cancelled')), ms))
 }
 
 async function waitFor(sel: string, timeoutMs = 4000): Promise<Element | null> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     const el = qs(sel)
-    if (el) return el
+    if (el && isVisible(el)) return el
     await sleep(40)
   }
-  return qs(sel)
+  const el = qs(sel)
+  return isVisible(el) ? el : null
 }
 
 function click(sel: string): boolean {
   const el = qs<HTMLElement>(sel)
-  if (!el) return false
+  if (!el || !isVisible(el)) return false
   el.click()
   return true
 }
@@ -255,6 +287,18 @@ type Side = 'top' | 'right' | 'bottom' | 'left'
  * `onNext` (if set) owns the Next button: run prep for the *following* step,
  * then moveNext(). Without onNext, driver advances normally.
  */
+export type WorkflowStep = { targets: string[]; title: string; description: string; completion: 'manual' | 'provider-added' | 'account-connected' | 'model-added' | 'file-opened' | 'file-saved' | 'terminal-selected'; blocked: string }
+function stepComplete(completion: WorkflowStep['completion']): boolean {
+  const st = useKoma.getState()
+  if (completion === 'manual') return true
+  if (completion === 'model-added') return st.config.models.length > initialCounts.models
+  if (completion === 'provider-added') return st.config.providers.length > initialCounts.providers
+  if (completion === 'account-connected') return st.oauth.conns.length > initialCounts.accounts
+  if (completion === 'file-opened') return st.ui.tabs.some(t => t.id === st.ui.activeTabId && t.kind === 'codingFile')
+  if (completion === 'file-saved') return [...dirtyDuringGuide].some(([key, fingerprint]) => { const f = st.coding.files[key]; return f && f.fingerprint !== fingerprint && !f.dirty && !f.saving && !f.error && !f.conflict })
+  return terminalSelected
+}
+const stepMetadata = new WeakMap<DriveStep, WorkflowStep>()
 function step(opts: {
   targets: string[]
   title: string
@@ -272,32 +316,43 @@ function step(opts: {
     align: 'start',
   }
 
-  if (opts.onNext) {
-    popover.onNextClick = (_el, _s, { driver: d }) => {
-      void (async () => {
-        try {
-          await opts.onNext?.()
-        } catch {
-          /* still advance */
-        }
+  const completion: WorkflowStep['completion'] = ['Model form', 'Configure the model'].includes(opts.title) ? 'model-added' : ['Provider form', 'Endpoint + API key'].includes(opts.title) ? 'provider-added' : opts.title === 'Choose a provider' && opts.targets.some(t => t.includes('oauth-picker')) ? 'account-connected' : opts.title === 'Open a file' ? 'file-opened' : opts.title === 'Save your edit' ? 'file-saved' : opts.title === 'Terminal selection' ? 'terminal-selected' : 'manual'
+  let advancing = false
+  popover.onNextClick = (_el, _s, { driver: d }) => {
+    if (advancing) return
+    const gen = runGen
+    void (async () => {
+      const st = useKoma.getState()
+      const completed = stepComplete(completion)
+      if (completion === 'manual' && !firstVisible(...opts.targets)) { useGuide.setState({ blocked: 'Required control is unavailable or hidden.' }); return }
+      if (!completed) { useGuide.setState({ blocked: 'Complete the displayed action yourself before continuing.' }); return }
+      advancing = true
+      try {
+        await opts.onNext?.()
+        if (completion === 'model-added') st.activateTab('chat')
         await sleep(60)
-        d.moveNext()
-        window.setTimeout(() => {
-          try {
-            d.refresh()
-          } catch {
-            /* destroyed */
-          }
-        }, 140)
-      })()
-    }
+        if (gen !== runGen) return
+        const next = d.getConfig().steps?.[(d.getActiveIndex() ?? 0) + 1]
+        if (next && typeof next.element === 'function' && !isVisible(next.element())) { useGuide.setState({ blocked: 'The next target is unavailable or hidden. Open the required view, or cancel this guide.' }); return }
+        useGuide.setState({ blocked: null })
+        if (d.isLastStep()) d.destroy(); else d.moveNext()
+      } catch (error) {
+        if (gen === runGen) useGuide.setState({ blocked: error instanceof Error ? error.message : 'Navigation is unavailable.' })
+      } finally { advancing = false }
+    })()
   }
 
-  return {
+  const result: DriveStep = {
     element: resolve,
     disableActiveInteraction: opts.disableActiveInteraction,
     popover,
+    onHighlightStarted: (_el, _s, { driver: d }) => {
+      useGuide.setState({ step: d.getActiveIndex() ?? 0, blocked: firstVisible(...opts.targets) ? null : 'This target is unavailable or hidden. Check prerequisites and panel visibility.' })
+    },
     onHighlighted: (_el, _s, { driver: d }) => {
+      const visible = !!firstVisible(...opts.targets)
+      useGuide.setState({ step: d.getActiveIndex() ?? 0, blocked: visible ? null : 'This target is unavailable or hidden. Check prerequisites and panel visibility.' })
+      if (!visible) { const description = document.querySelector('.driver-popover-description'); if (description) description.textContent = 'Paused: the required control is unavailable or hidden. Check the guide prerequisites and Sidebar visibility, or cancel the guide.' }
       window.setTimeout(() => {
         try {
           d.refresh()
@@ -307,6 +362,8 @@ function step(opts: {
       }, 100)
     },
   }
+  stepMetadata.set(result, { targets: opts.targets, title: opts.title, description: opts.description, completion, blocked: 'Required control is unavailable or hidden.' })
+  return result
 }
 
 type BuiltTour = {
@@ -317,6 +374,22 @@ type BuiltTour = {
 
 function buildTour(id: TourId): BuiltTour | null {
   switch (id) {
+    case 'web-search-setup': return {
+      bootstrap: async () => { useKoma.getState().openSettingsTab(); await sleep(100); qs('[data-tour="web-search-settings"]')?.scrollIntoView() },
+      steps: [step({ targets: ['[data-tour="web-search-settings"]'], title: 'Web search', description: 'Built-in DuckDuckGo needs no key. For Firecrawl, Tavily or Exa, enter its key and activate the provider yourself. Check the displayed active state.' })],
+    }
+    case 'notification-history': return {
+      bootstrap: async () => { useKoma.getState().openNotificationsTab(); await waitFor('[data-tour="notification-history"]') },
+      steps: [step({ targets: ['[data-tour="notification-history"]'], title: 'History scopes', description: 'Select Session or App. Search and filter severity. Selecting a row marks it read. Mark all read and confirmed Clear affect the selected scope; popup expiry leaves history intact.' })],
+    }
+    case 'coding-file-saves': return {
+      bootstrap: async () => { await ensureSidebarView('coding'); },
+      steps: [step({ targets: ['[data-tour="coding-panel"]'], title: 'Open a file', description: 'Open a workspace file from the Coding tree yourself. The guide continues when an editor tab is selected.' }), step({ targets: ['[data-tour="code-editor"]'], title: 'Save your edit', description: 'Edit this file, then use Save or Ctrl+S yourself. Resolve any unsaved-change or conflict prompts. The guide recognizes a successful save after an edit.' })],
+    }
+    case 'terminal-selection': return {
+      bootstrap: async () => { const tab = useKoma.getState().ui.tabs.find(t => t.kind === 'terminal'); if (!tab) throw new Error('Open a terminal tab yourself before starting this guide.'); useKoma.getState().activateTab(tab.id); await sleep(100) },
+      steps: [step({ targets: ['[data-tour="terminal-content"]'], title: 'Terminal selection', description: 'Select text in this terminal before copying. Input is sent to the shell. A read-only Bash job stream is a different view.' })],
+    }
     case 'oauth-setup':
       return {
         bootstrap: async () => {
@@ -472,8 +545,8 @@ function buildTour(id: TourId): BuiltTour | null {
             side: 'right',
           }),
           step({
-            targets: ['[data-tour-open="tutorial"]'],
-            title: 'Tutorial & Help',
+            targets: ['[data-tour-open="help"]'],
+            title: 'Help and Notifications',
             description: 'Pinned at the bottom — always available.',
             side: 'right',
           }),
@@ -482,10 +555,10 @@ function buildTour(id: TourId): BuiltTour | null {
 
     case 'sessions-hub':
       return {
-        bootstrap: async () => {},
+        bootstrap: async () => { click('[data-tour="change-session"]'); await sleep(100) },
         steps: [
           step({
-            targets: ['[data-tour="start-screen"]', 'main'],
+            targets: ['[data-tour="session-hub"]', '[data-tour="start-screen"]'],
             title: 'Sessions hub',
             description:
               'New session, open folder, resume, remote. Resume also lives in the titlebar search.',
@@ -496,10 +569,10 @@ function buildTour(id: TourId): BuiltTour | null {
 
     case 'composer':
       return {
-        bootstrap: async () => {},
+        bootstrap: async () => { useKoma.getState().activateTab('chat'); await sleep(100) },
         steps: [
           step({
-            targets: ['[data-tour="composer"]', 'main'],
+            targets: ['[data-tour="composer"]'],
             title: 'Composer',
             description:
               'Type to chat. ! runs a local shell line. Attachments and model picker on the footer.',
@@ -746,37 +819,48 @@ export function startTour(id: TourId | string): boolean {
   active?.destroy()
   active = null
 
-  // Close Tutorial so chrome is visible, then bootstrap DOM, then drive.
+  guideCleanup?.(); guideCleanup = null
+  useGuide.setState({ id: tourId, step: 0, blocked: null })
+  const origin = useKoma.getState().session.id
+  if (SESSION_GUIDES.has(tourId) && !origin) { useGuide.setState({ blocked: 'Attach a session before starting this guide.' }); return false }
+  dirtyDuringGuide.clear(); terminalSelected = false
+  initialCounts = { providers: useKoma.getState().config.providers.length, models: useKoma.getState().config.models.length, accounts: useKoma.getState().oauth.conns.length }
+  const unsubscribe = useKoma.subscribe(s => { for (const [key, f] of Object.entries(s.coding.files)) { if (f.dirty && !dirtyDuringGuide.has(key)) dirtyDuringGuide.set(key, f.fingerprint) }; if (SESSION_GUIDES.has(tourId) && s.session.id !== origin) { stopTour(); useGuide.setState({ blocked: 'Guide cancelled because the session changed.' }) } })
+  const observeSelection = (event: Event) => { terminalSelected = (event as CustomEvent<{ selected: boolean }>).detail?.selected === true }
+  document.addEventListener('koma-terminal-selection', observeSelection)
+  const cleanupObservers = () => { unsubscribe(); document.removeEventListener('koma-terminal-selection', observeSelection) }
+  guideCleanup = cleanupObservers
+  // Help stays open; guide navigation may focus another view.
   void (async () => {
     try {
-      const st = useKoma.getState()
-      if (st.ui.activeTabId === 'tutorial') {
-        st.closeTab('tutorial')
-        await sleep(100)
-      }
-    } catch {
-      /* ignore */
-    }
-
-    try {
       await built.bootstrap()
-    } catch {
-      /* still try to drive */
+    } catch (error) {
+      if (gen === runGen) useGuide.setState({ blocked: error instanceof Error ? error.message : 'Required view is unavailable.' })
+      return
     }
     if (gen !== runGen) return
 
-    await sleep(60)
+    try { await sleep(60) } catch { return }
     if (gen !== runGen) return
 
     const d = driver({
       ...BASE,
       steps: built.steps,
       onDestroyed: () => {
-        if (active === d) active = null
+        if (active === d) { active = null; guideCleanup?.(); guideCleanup = null; useGuide.setState({ id: null, blocked: null }) }
       },
     })
     active = d
     d.drive(0)
+    const timer = window.setInterval(() => {
+      if (gen !== runGen || active !== d) return
+      const meta = stepMetadata.get(d.getConfig().steps?.[d.getActiveIndex() ?? 0]!)
+      const st = useKoma.getState()
+      const complete = meta && meta.completion !== 'manual' && stepComplete(meta.completion)
+      if (complete) d.getActiveStep()?.popover?.onNextClick?.(d.getActiveElement(), d.getActiveStep()!, { driver: d, config: d.getConfig(), state: d.getState() })
+      else if (meta && !firstVisible(...meta.targets)) useGuide.setState({ blocked: meta.blocked })
+    }, 250)
+    guideCleanup = () => { cleanupObservers(); window.clearInterval(timer) }
     window.setTimeout(() => {
       try {
         d.refresh()
@@ -791,6 +875,8 @@ export function startTour(id: TourId | string): boolean {
 
 export function stopTour() {
   runGen++
+  guideCleanup?.(); guideCleanup = null
+  useGuide.setState({ id: null, blocked: null })
   active?.destroy()
   active = null
 }
@@ -798,4 +884,13 @@ export function stopTour() {
 export function tourMeta(id: string | null | undefined): TourMeta | undefined {
   if (!id) return undefined
   return TOUR_CATALOGUE.find((t) => t.id === id)
+}
+
+/** Registered steps for coverage tooling and Reference. */
+export function workflowSteps(id: TourId): WorkflowStep[] {
+  return buildTour(id)?.steps.map(s => stepMetadata.get(s)!).filter(Boolean) ?? []
+}
+
+export function workflowRegistry() {
+  return TOUR_CATALOGUE.map(tour => ({ ...tour, prerequisites: SESSION_GUIDES.has(tour.id) ? ['attached-session'] : [], navigation: HELP_MANIFEST.articles.filter(a => a.workflows.includes(tour.id)).map(a => a.navigation), steps: workflowSteps(tour.id) }))
 }

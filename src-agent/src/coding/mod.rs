@@ -85,6 +85,9 @@ pub(crate) struct Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub(crate) enum Operation {
+    Notifications {
+        request: crate::model::notifications::Request,
+    },
     Hello,
     ServiceInfo,
     ServiceUpgrade,
@@ -418,6 +421,12 @@ fn execute(request: &Request) -> Result<Value, String> {
         return Ok(
             serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":service_build(),"upgradePending":SERVICE_DRAIN.load(std::sync::atomic::Ordering::Acquire),"clients":SERVICE_CLIENTS.load(std::sync::atomic::Ordering::Acquire),"activeJobs":tasks::has_active()||debug::has_active()}),
         );
+    }
+    if let Operation::Notifications { request } = &request.operation {
+        let reply = crate::model::notifications::request(request.clone())
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| format!("Notification history worker: {e}"))?;
+        return serde_json::to_value(reply).map_err(|e| e.to_string());
     }
     if request.operation.local_metadata() {
         return persistence::execute(request).map_err(|e| format!("{e:#}"));

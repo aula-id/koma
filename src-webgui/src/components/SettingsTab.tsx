@@ -169,7 +169,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
             <SessionSettings />
           </section>
 
-          <section ref={webSearchRef} className="mt-12">
+          <section data-tour="web-search-settings" ref={webSearchRef} className="mt-12">
             <SectionHeader title="Web search" desc="Global search provider for all sessions and subagents. Enable saves the API key and selection together." />
             {visible && <WebSearchSettings />}
           </section>

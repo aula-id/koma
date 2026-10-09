@@ -188,7 +188,7 @@ export function pushGit(set: StoreSet, get: StoreGet, env: PushEnvelope): boolea
                 : null
         const kind: 'error' | 'success' = env.error ? 'error' : 'success'
         set((s) => {
-          const raise = !!text && text !== s.ui.toast?.text
+          const raise = !!text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           return {
             ui: raise
@@ -296,7 +296,7 @@ export function pushGit(set: StoreSet, get: StoreGet, env: PushEnvelope): boolea
           // case: only start a NEW toast when the text actually differs from
           // what's already showing.
           const text = env.error && !env.private ? `ssh key reveal: ${env.error}` : null
-          const raise = !!text && text !== s.ui.toast?.text
+          const raise = !!text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           return {
             keyRevealResult: {
@@ -316,7 +316,7 @@ export function pushGit(set: StoreSet, get: StoreGet, env: PushEnvelope): boolea
           // Same de-duped toast idiom as the GitOp case above: only start a NEW
           // toast when the text actually differs from what's already showing.
           const text = env.error ? `ssh key ${env.op}: ${env.error}` : null
-          const raise = !!text && text !== s.ui.toast?.text
+          const raise = !!text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           return raise
             ? { ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } } }

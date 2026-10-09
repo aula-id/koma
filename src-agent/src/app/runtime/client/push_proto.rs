@@ -207,6 +207,10 @@ pub(super) enum PushEnvelope {
         session: String,
         working: bool,
         toast: Option<String>,
+        #[serde(rename = "toastSession")]
+        toast_session: Option<String>,
+        #[serde(rename = "toastEventId")]
+        toast_event_id: Option<String>,
         #[serde(rename = "toastKind")]
         toast_kind: Option<&'static str>,
         /// Foreground session's cumulative token/cost counters (mirrors the daemon's

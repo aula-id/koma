@@ -290,6 +290,9 @@ pub(in crate::app::runtime) struct StreamView {
 /// session-lifecycle intents the client-thread owns.
 #[derive(Clone)]
 pub(crate) enum HostCtl {
+    Notifications {
+        request: crate::model::notifications::Request,
+    },
     GetWebSearch {
         req_seq: u64,
     },
@@ -694,6 +697,7 @@ pub(crate) enum HostCtl {
     TutorialChat {
         id: String,
         messages: Vec<tutorial_host::TutorialMsg>,
+        context: serde_json::Value,
     },
     /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
     /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless

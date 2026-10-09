@@ -420,7 +420,7 @@ function RootLayout() {
           onSelect={selectView}
           onSettings={openSettingsTab}
           onHelp={openHelpTab}
-          onTutorial={openTutorialTab}
+          onTutorial={useKoma.getState().openNotificationsTab}
         />
         {sidebarOpen && (
           <>
@@ -498,6 +498,7 @@ const DiffTab = lazy(() => import('../components/DiffTab'))
 const SettingsTab = lazy(() => import('../components/SettingsTab'))
 
 // Help page — lazy so its chunk only loads when the (?) button is first clicked.
+const NotificationsTab = lazy(() => import('../components/NotificationsTab'))
 const HelpTab = lazy(() => import('../components/HelpTab'))
 
 // Tutorial coach — lazy so driver.js + chat UI only load when first opened.
@@ -558,10 +559,12 @@ function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visibl
         <DiffTab tab={tab} />
       ) : tab.kind === 'settings' ? (
         <SettingsTab visible={visible} />
+      ) : tab.kind === 'notifications' ? (
+        <NotificationsTab />
       ) : tab.kind === 'help' ? (
         <HelpTab />
       ) : tab.kind === 'tutorial' ? (
-        <TutorialTab />
+        <HelpTab />
       ) : tab.kind === 'agent' ? (
         <AgentTab tab={tab} />
       ) : tab.kind === 'skill' ? (
