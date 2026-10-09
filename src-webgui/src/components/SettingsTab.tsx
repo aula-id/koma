@@ -172,7 +172,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           </section>
 
           <section data-tour="web-search-settings" ref={webSearchRef} className="mt-12">
-            <SectionHeader title="Web search" desc="Global search provider for all sessions and subagents. Enable saves the API key and selection together." />
+            <SectionHeader title="Web search" desc="Choose a search provider for all sessions." />
             {visible && <WebSearchSettings />}
           </section>
 
@@ -184,20 +184,20 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           <section ref={activityBarRef} className="mt-12">
             <SectionHeader
               title="Sidebar"
-              desc="Show or hide activity-bar icons. Hidden icons move into the “…” overflow menu instead of disappearing — drag an icon on the activity bar itself to reorder it."
+              desc="Choose which icons appear in the sidebar. Drag sidebar icons to reorder them; hidden icons stay in the “…” menu."
             />
             <ActivityBarSettings />
           </section>
 
           <section ref={skillsRef} className="mt-12">
-            <SectionHeader title="Skills" desc="Add optional read-only External skill locations." />
+            <SectionHeader title="Skills" desc="Load skills from additional folders." />
             <ExternalSkillRootsSettings />
           </section>
 
           <section ref={lspRef} className="mt-12">
             <SectionHeader
               title="Language servers"
-              desc="Optional language servers for the coding panel. koma-managed installs land under ~/.koma/lsp/ and never touch system packages. PATH copies are detected automatically."
+              desc="Add code completion and diagnostics for your languages. Installed servers are detected automatically."
             />
             <LspSettings />
           </section>
@@ -205,7 +205,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           <section ref={sshKeysRef} className="mt-12">
             <SectionHeader
               title="SSH Keys"
-              desc="A local key vault for git remotes — generate or import keys and manage them here. Separate from the agent's own credentials."
+              desc="Manage your local SSH keys for Git connections."
             />
             <SshKeysSettings />
           </section>
@@ -246,7 +246,7 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   return (
     <div className="mb-4 border-b border-koma-border pb-2">
       <h2 className="text-[15px] font-semibold text-koma-fg">{title}</h2>
-      <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">{desc}</p>
+      <p className="mt-0.5 text-[12px] leading-relaxed text-koma-dim">{desc}</p>
     </div>
   )
 }
@@ -620,7 +620,7 @@ function SessionSettings() {
 
       <SettingRow
         label="Working directories"
-        desc="One directory per line. The first is the primary workspace root; the rest widen the harness allow-set."
+        desc="One folder per line. The first is your main workspace; the others let the agent work in additional folders."
         align="start"
       >
         <textarea
@@ -634,13 +634,13 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Normally 60–75%; oversized sessions recover using spare context within the 300k maximum window.">
+      <SettingRow label="Short-send" desc="Reduce request size by sending recent context and a compact index of earlier messages.">
         <Toggle on={shortSend} onChange={setShort} />
       </SettingRow>
 
       <SettingRow
         label="Context window limit"
-        desc="0 = automatic OpenRouter estimate, falling back to 128k when unknown. A custom limit can lower the detected window. Maximum: 300k."
+        desc="Maximum context size in tokens. Use 0 for automatic detection (128k fallback), or set a lower limit up to 300k."
       >
         <input
           type="number"
@@ -658,7 +658,7 @@ function SessionSettings() {
 
       <SettingRow
         label="Context model alias"
-        desc="Optional OpenRouter model ID for context detection, such as anthropic/claude-sonnet-4. Leaves the selected chat model unchanged."
+        desc="Optional OpenRouter model ID used to detect context size. Your chat model stays the same."
       >
         <input
           type="text"
@@ -674,8 +674,8 @@ function SessionSettings() {
       </SettingRow>
 
       <SettingRow
-        label="Max out tokens"
-        desc="Requested reply tokens. A positive custom value takes priority; 0 = 128k. Limited by remaining context and provider output limits. Codex OAuth controls its own output limit."
+        label="Reply token limit"
+        desc="Maximum reply length in tokens. Use 0 for 128k. Model limits still apply; Codex manages this automatically."
       >
         <input
           type="number"
@@ -690,15 +690,15 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Bash shorts" desc="Filter and tee bash / git output to disk to preserve command logs.">
+      <SettingRow label="Save command output" desc="Keep command logs on disk and show condensed output in chat.">
         <Toggle on={bashSaving} onChange={setBash} />
       </SettingRow>
 
-      <SettingRow label="Coding autosave" desc="Debounced auto-save for Coding panel editor tabs (750ms after edits stop).">
+      <SettingRow label="Coding autosave" desc="Save files automatically after you stop typing.">
         <Toggle on={codingAutosave} onChange={setCodingAuto} />
       </SettingRow>
 
-      <SettingRow label="Internet mode" desc="Full upgrades web_fetch to the browser backend (renders JS, higher token use).">
+      <SettingRow label="Internet mode" desc="Full mode loads JavaScript websites and may use more tokens.">
         <div className="w-40">
           <Segmented
             value={internet}
@@ -711,7 +711,7 @@ function SessionSettings() {
         </div>
       </SettingRow>
 
-      <SettingRow label="Max turns" desc="Max agentic turns per sub-agent (when agent has no step cap). Default: 500.">
+      <SettingRow label="Subagent turn limit" desc="Maximum turns per subagent unless it has its own limit. Default: 500.">
         <input
           type="number"
           min={1}
@@ -741,13 +741,13 @@ function SettingRow({
 }) {
   return (
     <div
-      className={`flex justify-between gap-6 border-b border-koma-border py-3.5 ${
+      className={`settings-row flex justify-between gap-6 border-b border-koma-border py-3.5 ${
         align === 'start' ? 'items-start' : 'items-center'
       }`}
     >
       <div className="min-w-0 flex-1">
         <div className="text-[13px] text-koma-fg">{label}</div>
-        {desc && <div className="mt-0.5 text-[11.5px] leading-snug text-koma-fg opacity-45">{desc}</div>}
+        {desc && <div className="mt-0.5 text-[11.5px] leading-relaxed text-koma-dim">{desc}</div>}
       </div>
       <div className="flex-none">{children}</div>
     </div>

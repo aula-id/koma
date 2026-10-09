@@ -32,7 +32,7 @@ export function ComputerSettings() {
         <h3 className="min-w-0 flex-1 font-medium">Screen sharing</h3>
         <span className={`flex items-center gap-1.5 rounded-full border border-koma-border px-2 py-1 text-[10px] ${enabled ? 'text-koma-accent' : 'text-koma-dim'}`}><span className={`h-1.5 w-1.5 rounded-full ${enabled ? 'bg-koma-accent' : 'bg-koma-dim'}`} />{label}</span>
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-koma-dim">The model can move the pointer, click, type, and scroll. Starting sharing is the approval.</p>
+      <p className="mt-3 text-xs leading-relaxed text-koma-dim">The model can move the pointer, click, type, and scroll. Start sharing to allow control.</p>
       {assist && <p className="mt-3 text-xs text-koma-fg">This share is view only. Pick a screen to click and type.</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         {!enabled ? <button type="button" disabled={!available || enabling} className={`${button} text-koma-accent`} onClick={() => { if (session) requestShow(session); control('enable') }}><Monitor size={14} />{enabling ? 'Enabling…' : 'Start sharing'}</button> : <>
@@ -47,7 +47,7 @@ export function ComputerSettings() {
 
     <div>
       <h3 className="font-medium">Preview</h3>
-      <p className="mt-1 text-xs leading-relaxed text-koma-dim">Resize the preview to inspect the share. Hover it to pick a screen. The model gets a separate frame.</p>
+      <p className="mt-1 text-xs leading-relaxed text-koma-dim">Resize the preview for a closer look. Hover over it to choose a screen.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className={button} disabled={!available || !enabled} onClick={() => { if (session) show(session) }}><PictureInPicture2 size={14} />Open preview</button>
         {status?.capabilities.floating && <button type="button" className={button} disabled={!enabled || status.busy} onClick={() => { hide(); window.ipc?.postMessage(JSON.stringify({ t: 'win', a: 'computer-viewer' })) }}><ExternalLink size={14} />Detach preview</button>}
@@ -56,8 +56,8 @@ export function ComputerSettings() {
       {observation && <div className="mt-3 rounded-md border border-koma-border px-3 py-2 text-xs"><p className="truncate">{observation.window.title || observation.window.application}</p><p className="mt-1 text-koma-dim">{observation.transform.width} × {observation.transform.height} · Last shared {new Date(observation.captured_ms).toLocaleTimeString()}</p></div>}
     </div>
 
-    {status && <div>
-      <h3 className="font-medium">Capabilities &amp; extraction</h3>
+    {status && <details>
+      <summary className="cursor-pointer font-medium">Screen sharing details</summary>
       <dl className="mt-3 grid grid-cols-1 gap-x-6 sm:grid-cols-2">
         {Object.entries(capabilityLabels).map(([key, title]) => {
           const supported = status.capabilities[key as keyof typeof status.capabilities] === true
@@ -68,7 +68,7 @@ export function ComputerSettings() {
         {status.capabilities.limitations.map(message => <p key={message}>{message}</p>)}
         {observation && <><p><span className="text-koma-fg">Accessibility: </span>{observation.accessibility_status}</p><p><span className="text-koma-fg">Text recognition: </span>{observation.ocr_status}</p></>}
       </div>
-    </div>}
+    </details>}
     <p className="text-xs leading-relaxed text-koma-dim">Pause and Take back control stop input and leave the share open. Stop sharing turns it off.</p>
   </div>
 }
