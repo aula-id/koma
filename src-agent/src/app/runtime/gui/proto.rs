@@ -9,6 +9,15 @@
 /// Events delivered to the main `tao` event loop from the ipc handler (window
 /// commands) or the host-relay client-thread (state pushes).
 pub(super) enum UserEvent {
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    PickSettingsFolder {
+        request_id: String,
+    },
+    #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+    SettingsFolderPicked {
+        request_id: String,
+        path: Option<std::path::PathBuf>,
+    },
     /// Local GUI zoom, applied only to the main WebView on its window thread.
     UiScale { scale: f64, request_id: String },
     /// A custom-titlebar window command posted from the webview.
@@ -102,6 +111,10 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    PickSettingsFolder {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     SetUiScale {
         scale: f64,
         #[serde(rename = "requestId")]

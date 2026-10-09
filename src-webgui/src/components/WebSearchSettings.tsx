@@ -29,9 +29,9 @@ export function WebSearchSettings() {
       const active = status.provider === id
       const disabled = pending !== null || (active && id === 'built_in') || !canEnable(status, id, drafts[id] ?? '')
       return <div key={id} className="rounded border border-koma-border bg-koma-panel2 px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col items-start gap-2">
           <a href={website} onClick={e => { e.preventDefault(); openExternal(website) }} className="text-[13px] hover:underline">{label}</a>
-          <label className="flex items-center gap-2 text-xs">
+          <label className="flex flex-col items-start gap-1.5 text-xs">
             Enable
             <button type="button" role="switch" aria-label={`Enable ${label}`} aria-checked={active} disabled={disabled} onClick={() => toggle(id)}
               className={`relative h-4 w-7 rounded-full disabled:opacity-40 ${active ? 'bg-emerald-500/70' : 'bg-koma-grip'}`}>
@@ -40,7 +40,8 @@ export function WebSearchSettings() {
           </label>
         </div>
         {id !== 'built_in' && <div className="mt-2">
-          <input type="password" aria-label={`${label} API key`} autoComplete="new-password" value={drafts[id] ?? ''}
+          <label htmlFor={`settings-search-key-${id}`} className="mb-1 block text-xs">API key</label>
+          <input id={`settings-search-key-${id}`} type="password" aria-label={`${label} API key`} autoComplete="new-password" value={drafts[id] ?? ''}
             disabled={active || pending !== null} placeholder={status.saved_keys.includes(id) ? 'Key saved' : 'API key'}
             onChange={e => dispatch({ type: 'edit', provider: id, key: e.target.value })}
             className="w-full rounded border border-koma-border bg-koma-bg px-2 py-1 text-xs disabled:opacity-50" />

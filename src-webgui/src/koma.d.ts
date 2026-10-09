@@ -1,8 +1,10 @@
 declare global {
+  interface Window { __komaFolderReply?: (reply: { requestId: string; path: string | null }) => void }
   interface Window { __komaUiScaleReply?: (reply: import('./lib/uiScale').UiScaleReply) => void;  __komaComputerPalette?: Record<string, string>; __komaComputerInitial?: import('./types/computer').ComputerStatus | null }
   // JS -> Rust request payloads, tagged { t: 'req', ...GuiReq } by
   // useKoma().req() (see src/store/koma.ts).
   type GuiReq =
+    | { r: 'PickSettingsFolder'; requestId: string }
     | { r: 'SetUiScale'; scale: import('./lib/uiScale').UiScale; requestId: string }
     | { r: 'Computer'; action: 'enable' | 'windows' | 'select' | 'pause' | 'resume' | 'stop' | 'take_over'; window?: string }
     | { r: 'GitWorkbench'; request: import('./lib/gitWorkbench').GitRequest }

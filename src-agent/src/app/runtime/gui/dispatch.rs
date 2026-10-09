@@ -42,6 +42,25 @@ pub(super) struct GuiReqCtx {
 /// routing the old inline `match req { GuiReq::* }` used — pure code motion.
 pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     match req {
+        GuiReq::PickSettingsFolder { request_id } => {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let _ = ctx
+                .loop_proxy
+                .send_event(super::proto::UserEvent::PickSettingsFolder { request_id });
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                let proxy = ctx.loop_proxy.clone();
+                std::thread::spawn(move || {
+                    let path = rfd::FileDialog::new()
+                        .set_title("Choose a folder")
+                        .pick_folder();
+                    let _ = proxy.send_event(super::proto::UserEvent::SettingsFolderPicked {
+                        request_id,
+                        path,
+                    });
+                });
+            }
+        }
         GuiReq::SetUiScale { scale, request_id } => {
             let _ = ctx
                 .loop_proxy

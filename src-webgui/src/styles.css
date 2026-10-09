@@ -889,14 +889,14 @@ svg.animate-spin {
 /* Editable fields keep full contrast; only disabled fields are dimmed. */
 .settings-content :is(input, textarea, select) {
   color: var(--color-koma-fg);
-  background-color: var(--color-koma-panel);
+  background-color: var(--color-koma-bg);
   border-color: var(--color-koma-grip);
   opacity: 1;
   transition: border-color 150ms, box-shadow 150ms;
 }
 .settings-content :is(input, textarea)::placeholder {
-  color: var(--color-koma-fg);
-  opacity: 0.6;
+  color: var(--color-koma-dim);
+  opacity: 1;
 }
 .settings-content :is(input, textarea, select):enabled:hover {
   border-color: color-mix(in srgb, var(--color-koma-fg) 45%, var(--color-koma-bg));
@@ -909,7 +909,15 @@ svg.animate-spin {
 .settings-content :is(input, textarea, select):disabled {
   opacity: 0.45;
   cursor: not-allowed;
-  background-color: var(--color-koma-bg);
+  background-color: var(--color-koma-panel);
+}
+.settings-content button:enabled,
+.settings-nav button:enabled {
+  opacity: 1;
+}
+.settings-content button[aria-pressed="true"] {
+  background-color: var(--color-koma-head);
+  color: var(--color-koma-accent);
 }
 .settings-content button:focus-visible,
 .settings-content summary:focus-visible,
@@ -922,9 +930,6 @@ svg.animate-spin {
   .settings-nav { width: 100%; max-height: 100px; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--color-koma-border); }
   .settings-tab > div { min-height: 0; }
   .settings-content { padding-inline: 12px; }
-  .settings-row { flex-wrap: wrap; gap: 12px; }
-  .settings-row > :first-child { flex-basis: 100%; }
-  .settings-row > :last-child { max-width: 100%; }
   .settings-row :is(input, textarea) { max-width: 100%; }
 }
 

@@ -26,6 +26,7 @@ import { WebSearchSettings } from './WebSearchSettings'
 import { ComputerSettings } from './ComputerSettings'
 import { UI_SCALES, pagePoint, setUiScale, useUiScale, type UiScale } from '../lib/uiScale'
 import { BrailleSpinner } from './BrailleSpinner'
+import { SettingsFolderButton } from './SettingsFolderButton'
 
 // VSCode-style Settings page, rendered as a tab over the main content column
 // (see routes/index.tsx TabbedMain). A left nav rail scrolls the content pane to
@@ -236,7 +237,7 @@ function NavItem({
           : 'text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-90'
       }`}
     >
-      <span className={`flex-none ${active ? 'text-koma-accent' : 'opacity-70'}`}>{icon}</span>
+      <span className={`flex-none ${active ? 'text-koma-accent' : ''}`}>{icon}</span>
       <span className="truncate">{label}</span>
     </button>
   )
@@ -479,9 +480,9 @@ function ChatTurnsSetting() {
       desc="How many recent turns the chat shows. Scroll up to load more. This window only."
     >
       <input
-        type="number"
-        min={1}
-        max={200}
+        type="text"
+        inputMode="numeric"
+        aria-label="Turns on screen"
         value={text}
         onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
         onBlur={commit}
@@ -604,6 +605,7 @@ function SessionSettings() {
     <div className="flex flex-col">
       <SettingRow label="Name" desc="The session's display name, shown in the switcher.">
         <input
+          aria-label="Session name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={commitName}
@@ -621,17 +623,26 @@ function SessionSettings() {
       <SettingRow
         label="Working directories"
         desc="One folder per line. The first is your main workspace; the others let the agent work in additional folders."
-        align="start"
       >
-        <textarea
-          value={workdir}
-          onChange={(e) => setWorkdir(e.target.value)}
-          onBlur={commitWorkdir}
-          rows={3}
-          spellCheck={false}
-          placeholder="/path/to/project"
-          className="h-20 w-72 resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
-        />
+        <div className="flex w-72 flex-col items-start gap-2">
+          <textarea
+            aria-label="Working directories"
+            value={workdir}
+            onChange={(e) => setWorkdir(e.target.value)}
+            onBlur={commitWorkdir}
+            rows={3}
+            spellCheck={false}
+            placeholder="/path/to/project"
+            className="h-20 w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
+          />
+          <SettingsFolderButton label="Add workspace folder" onPick={(path) => {
+            const folders = workdir.split('\n').map((line) => line.trim()).filter(Boolean)
+            if (folders.includes(path)) return
+            folders.push(path)
+            setWorkdir(folders.join('\n'))
+            req({ r: 'SetPrefs', workdir: folders })
+          }} />
+        </div>
       </SettingRow>
 
       <SettingRow label="Short-send" desc="Reduce request size by sending recent context and a compact index of earlier messages.">
@@ -643,9 +654,9 @@ function SessionSettings() {
         desc="Maximum context size in tokens. Use 0 for automatic detection (128k fallback), or set a lower limit up to 300k."
       >
         <input
-          type="number"
-          min={0}
-          max={300000}
+          type="text"
+          inputMode="numeric"
+          aria-label="Context window limit"
           value={contextLimit}
           onChange={(e) => setContextLimit(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitContextLimit}
@@ -662,6 +673,7 @@ function SessionSettings() {
       >
         <input
           type="text"
+          aria-label="Context model alias"
           maxLength={200}
           value={contextAlias}
           onChange={(e) => setContextAlias(e.target.value)}
@@ -678,8 +690,9 @@ function SessionSettings() {
         desc="Maximum reply length in tokens. Use 0 for 128k. Model limits still apply; Codex manages this automatically."
       >
         <input
-          type="number"
-          min={0}
+          type="text"
+          inputMode="numeric"
+          aria-label="Reply token limit"
           value={maxOutTokens}
           onChange={(e) => setMaxOutTokens(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitMaxOutTokens}
@@ -713,8 +726,9 @@ function SessionSettings() {
 
       <SettingRow label="Subagent turn limit" desc="Maximum turns per subagent unless it has its own limit. Default: 500.">
         <input
-          type="number"
-          min={1}
+          type="text"
+          inputMode="numeric"
+          aria-label="Subagent turn limit"
           value={maxTurns}
           onChange={(e) => setMaxTurns(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitMaxTurns}
@@ -732,24 +746,20 @@ function SettingRow({
   label,
   desc,
   children,
-  align = 'center',
 }: {
   label: string
   desc?: string
   children: ReactNode
-  align?: 'start' | 'center'
 }) {
   return (
     <div
-      className={`settings-row flex justify-between gap-6 border-b border-koma-border py-3.5 ${
-        align === 'start' ? 'items-start' : 'items-center'
-      }`}
+      className="settings-row flex flex-col items-start gap-2.5 border-b border-koma-border py-3.5"
     >
       <div className="min-w-0 flex-1">
         <div className="text-[13px] text-koma-fg">{label}</div>
         {desc && <div className="mt-0.5 text-[11.5px] leading-relaxed text-koma-dim">{desc}</div>}
       </div>
-      <div className="flex-none">{children}</div>
+      <div className="max-w-full">{children}</div>
     </div>
   )
 }
@@ -800,15 +810,20 @@ function ExternalSkillRootsSettings() {
   return (
     <div className="space-y-2">
       {roots.map((root, index) => (
-        <div key={index} className="flex min-w-0 items-center gap-2">
+        <div key={index} className="space-y-1">
+          <label htmlFor={`settings-skill-root-${index}`} className="text-[12px] text-koma-fg">Skill folder {index + 1}</label>
+          <div className="flex min-w-0 items-center gap-2">
           <input
+            id={`settings-skill-root-${index}`}
             value={root}
             onChange={(event) => update(index, event.target.value)}
             aria-label={`External skill root ${index + 1}`}
             placeholder="/absolute/path/to/skills"
             className="h-8 min-w-0 flex-1 rounded border border-koma-border bg-koma-panel px-2 font-mono text-[11px] outline-none focus:border-koma-accent"
           />
-          <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => current.filter((_, i) => i !== index)) }} aria-label={`Remove External skill root ${index + 1}`} className="flex h-8 w-8 flex-none items-center justify-center rounded border border-koma-border text-red-300 opacity-70 hover:bg-koma-hover hover:opacity-100"><Trash2 size={13} /></button>
+          <SettingsFolderButton compact label={`Choose folder for External skill root ${index + 1}`} onPick={(path) => update(index, path)} />
+          <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => current.filter((_, i) => i !== index)) }} aria-label={`Remove External skill root ${index + 1}`} title="Remove location" className="flex h-8 w-8 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-error"><X size={13} /></button>
+          </div>
         </div>
       ))}
       {!roots.length && <p className="text-[11px] opacity-45">No additional External skill locations configured.</p>}
@@ -888,7 +903,7 @@ function ActivityBarRow({
   onToggle: (v: boolean) => void
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 border-b border-koma-border py-3">
+    <div className="flex flex-col items-start gap-2.5 border-b border-koma-border py-3">
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <Icon size={15} className="flex-none text-koma-fg opacity-60" />
         <span className="truncate text-[13px] text-koma-fg">{label}</span>

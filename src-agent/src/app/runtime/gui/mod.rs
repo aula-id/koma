@@ -657,6 +657,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         }
         *control_flow = wait_for(next_push_at, usage_ticker.deadline());
         match event {
+            Event::UserEvent(UserEvent::PickSettingsFolder { request_id }) => {
+                let path = dispatch::pick_session_folder(&window);
+                let reply = serde_json::json!({ "requestId": request_id, "path": path.map(|p| p.to_string_lossy().into_owned()) });
+                let _ = webview.evaluate_script(&format!("window.__komaFolderReply?.({reply});"));
+            }
+            Event::UserEvent(UserEvent::SettingsFolderPicked { request_id, path }) => {
+                let reply = serde_json::json!({ "requestId": request_id, "path": path.map(|p| p.to_string_lossy().into_owned()) });
+                let _ = webview.evaluate_script(&format!("window.__komaFolderReply?.({reply});"));
+            }
             Event::UserEvent(UserEvent::UiScale { scale, request_id }) => {
                 let error = if !proto::valid_ui_scale(scale) {
                     Some("Unsupported UI scale".to_string())
