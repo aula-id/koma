@@ -310,8 +310,10 @@ mod tests {
                 )
                 .unwrap();
             });
-            let mut c = WebSearchConfig::default();
-            c.provider = p;
+            let mut c = WebSearchConfig {
+                provider: p,
+                ..Default::default()
+            };
             c.firecrawl_key.0 = "test-key".into();
             c.tavily_key.0 = "test-key".into();
             c.exa_key.0 = "test-key".into();
@@ -326,8 +328,10 @@ mod tests {
             let (_s, _) = server.accept().unwrap();
             std::thread::sleep(Duration::from_millis(100));
         });
-        let mut c = WebSearchConfig::default();
-        c.provider = SearchProvider::Exa;
+        let mut c = WebSearchConfig {
+            provider: SearchProvider::Exa,
+            ..Default::default()
+        };
         c.exa_key.0 = "key".into();
         assert!(
             perform(c, "hello".into(), endpoint, Duration::from_millis(20))
