@@ -1,4 +1,5 @@
 import { helpContext } from '../../lib/helpContext'
+import { tutorialAssistantWire } from '../../lib/helpKnowledge'
 import { codingRefToken } from '../../lib/codingRef'
 import type { StoreGet, StoreSet } from '../api'
 import { useComputerPreview } from '../computerPreview'
@@ -166,9 +167,14 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       },
     }))
     // Rolling transcript for the host (user/assistant only).
+    // Assistant turns are re-serialized as Answer JSON so multi-turn stays
+    // schema-shaped — plain text history makes the free model drop JSON.
     const wire = get().tutorial.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ role: m.role, content: m.content }))
+      .map((m) => ({
+        role: m.role,
+        content: m.role === 'assistant' ? tutorialAssistantWire(m) : m.content,
+      }))
     get().req({ r: 'TutorialChat', id, messages: wire, context: helpContext() })
   },
   clearTutorialPendingTour: () => {

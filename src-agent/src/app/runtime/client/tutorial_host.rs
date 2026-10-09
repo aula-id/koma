@@ -15,10 +15,18 @@ use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::model::app_config::{new_uuid, AppConfig};
 use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
 
-const SYSTEM_PROMPT: &str = r#"You are koma's built-in Help assistant. Reply in the user's language.
-Use the shipped catalogue and articles as your product knowledge. Distinguish GUI controls from TUI commands. Ask a clarifying question when interface facts or documentation do not support a reliable instruction. Never invent third-party extension behavior.
+const SYSTEM_PROMPT: &str = r#"You are koma's built-in Help assistant for the GUI (desktop/web app), not the terminal TUI.
+Reply in the user's language. Use the shipped catalogue and articles as your only product knowledge.
+Always prefer GUI steps: activity bar panels, Settings, Connector, Help → Reference / Guides, buttons, menus, and in-app tours.
+Only mention TUI slash commands (like /help) or keybindings when the user explicitly asks about the terminal TUI.
+Ask a clarifying question when interface facts or documentation do not support a reliable instruction. Never invent third-party extension behavior.
 You only guide. You cannot inspect session chats, credentials, files or terminal output, run commands, change configuration, install, connect, save, commit or delete. Suggestions must use shipped navigation and workflow IDs. The user explicitly starts a guide.
-Return ONLY a JSON object with answer (plain explanatory text), articles (known article IDs), navigation (known view ID or null), guide (known workflow ID or null).
+When the user asks for a help list, command list, or what they can do, answer from GUI Reference/Guides and the feature catalogue — point them to Help → Reference and Help → Guides in the GUI, not the TUI /help screen, unless they asked for the TUI.
+Return ONLY a single JSON object (no markdown fences, no prose outside JSON) with:
+- answer: plain explanatory text focused on GUI steps
+- articles: array of known article IDs (may be empty)
+- navigation: known view ID or null
+- guide: known workflow ID or null
 If you need more documentation, return ONLY {"request_articles":["known-id",...]} with at most four IDs. The host permits at most two such rounds. Then produce the answer object. Reference the articles actually supporting your instructions. Never include selectors or scripts in actions.
 "#;
 
@@ -115,8 +123,9 @@ fn complete(messages: Vec<TutorialMsg>, context: serde_json::Value) -> Result<St
     // Tutorial-scoped session header — NOT a hub/session uuid.
     let session_id = format!("tutorial-{}", install_id);
 
+    let manifest = crate::model::help_knowledge::manifest()?;
     let catalogue = serde_json::to_string(
-        &crate::model::help_knowledge::manifest()?
+        &manifest
             .articles
             .iter()
             .map(|a| {
@@ -131,14 +140,50 @@ fn complete(messages: Vec<TutorialMsg>, context: serde_json::Value) -> Result<St
             .collect::<Vec<_>>(),
     )
     .map_err(|e| format!("help catalogue: {e}"))?;
+    let last_user = messages
+        .iter()
+        .rev()
+        .find(|m| m.role != "assistant")
+        .map(|m| m.content.as_str())
+        .unwrap_or_default();
+    let want_tui = {
+        let q = last_user.to_lowercase();
+        ["tui", "terminal", "slash", "keybind", "hotkey", "/help", "/settings", "/model"]
+            .iter()
+            .any(|k| q.contains(k))
+    };
+    let ranked_articles = crate::model::help_knowledge::ranked(last_user, 4)
+        .iter()
+        .filter_map(|id| {
+            crate::model::help_knowledge::article(id).map(|body| format!("Article {id}:\n{body}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    // Only inject the TUI command/keybinding registries when the user is clearly
+    // asking about the terminal product — dumping them on every GUI turn steers
+    // the free model toward /help instead of Help → Reference.
+    let tui_appendix = if want_tui {
+        format!(
+            "\nTUI commands and shortcuts (terminal only): {:?} {:?}",
+            crate::controller::command::COMMANDS,
+            crate::controller::command::KEYBINDINGS
+        )
+    } else {
+        String::new()
+    };
     let mut wire_msgs: Vec<serde_json::Value> = Vec::with_capacity(messages.len() + 1);
     wire_msgs.push(serde_json::json!({
         "role": "system",
-        "content": format!("{}\nFeature catalogue: {}\nUI context: {}\nRelevant articles:\n{}\nTUI commands and shortcuts: {:?} {:?}", SYSTEM_PROMPT,
+        "content": format!(
+            "{}\nFeature catalogue: {}\nKnown navigation view IDs: {:?}\nKnown guide/workflow IDs: {:?}\nUI context: {}\nRelevant articles:\n{}{}",
+            SYSTEM_PROMPT,
             catalogue,
+            manifest.navigation,
+            manifest.workflows,
             crate::model::help_knowledge::redact_context(&context),
-            crate::model::help_knowledge::ranked(messages.last().map(|m|m.content.as_str()).unwrap_or_default(),4).iter().filter_map(|id|crate::model::help_knowledge::article(id).map(|body|format!("Article {id}:\n{body}"))).collect::<Vec<_>>().join("\n\n"),
-            crate::controller::command::COMMANDS, crate::controller::command::KEYBINDINGS),
+            ranked_articles,
+            tui_appendix,
+        ),
     }));
     for m in &messages {
         let role = match m.role.as_str() {

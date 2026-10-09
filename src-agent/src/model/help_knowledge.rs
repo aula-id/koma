@@ -35,6 +35,12 @@ pub fn article(id: &str) -> Option<String> {
     Some(HELP.get_file(&a.file)?.contents_utf8()?.to_string())
 }
 pub fn ranked(query: &str, limit: usize) -> Vec<String> {
+    let q_lower = query.to_lowercase();
+    // GUI Help is the default surface; only pull TUI slash-command articles when
+    // the user is clearly asking about the terminal product.
+    let want_tui = ["tui", "terminal", "slash", "keybind", "hotkey", "/help", "/settings", "/model"]
+        .iter()
+        .any(|k| q_lower.contains(k));
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
@@ -50,7 +56,7 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
         .map(|(i, a)| {
             let title = format!("{} {}", a.title, a.aliases.join(" ")).to_lowercase();
             let body = article(&a.id).unwrap_or_default().to_lowercase();
-            let score = words
+            let mut score = words
                 .iter()
                 .map(|w| {
                     if title.contains(w) {
@@ -62,24 +68,92 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
                     }
                 })
                 .sum::<usize>();
+            let is_tui = a.id.starts_with("tui-");
+            if !want_tui && is_tui {
+                // Demote TUI-only articles for GUI-facing questions.
+                score = score / 4;
+            } else if !want_tui && !is_tui && score > 0 {
+                score += 2;
+            } else if want_tui && is_tui && score > 0 {
+                score += 4;
+            }
             (score, i, a.id.clone())
         })
         .collect();
     scores.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    scores.into_iter().take(limit).map(|s| s.2).collect()
+    // Prefer positive matches; fall back to top catalogue order only if nothing scored.
+    let positive: Vec<_> = scores.iter().filter(|s| s.0 > 0).cloned().collect();
+    let pick = if positive.is_empty() { scores } else { positive };
+    pick.into_iter().take(limit).map(|s| s.2).collect()
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Answer {
     pub answer: String,
+    #[serde(default)]
     pub articles: Vec<String>,
     #[serde(default)]
     pub navigation: Option<String>,
     #[serde(default)]
     pub guide: Option<String>,
 }
+/// Pull a JSON object out of model output that may include fences or prose.
+pub fn extract_json_object(raw: &str) -> Option<String> {
+    let mut t = raw.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        let rest = rest
+            .strip_prefix("json")
+            .or_else(|| rest.strip_prefix("JSON"))
+            .unwrap_or(rest)
+            .trim_start_matches(|c: char| c == '\r' || c == '\n' || c == ' ');
+        t = rest.split("```").next().unwrap_or(rest).trim();
+    }
+    if t.starts_with('{') {
+        // Trim trailing prose after a balanced top-level object when present.
+        if let Some(end) = find_top_level_object_end(t) {
+            return Some(t[..=end].trim().to_string());
+        }
+        return Some(t.to_string());
+    }
+    let start = t.find('{')?;
+    let slice = &t[start..];
+    let end = find_top_level_object_end(slice)?;
+    Some(slice[..=end].trim().to_string())
+}
+fn find_top_level_object_end(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    for (i, ch) in s.char_indices() {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_str = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 pub fn parse_answer(raw: &str) -> Result<Answer, String> {
-    let a: Answer = serde_json::from_str(raw.trim()).map_err(|_| {
+    let payload = extract_json_object(raw).ok_or_else(|| {
+        "Help returned malformed guidance. Retry, or use Reference and Guides offline.".to_string()
+    })?;
+    // Ignore unknown keys from weak free-tier models; keep only Answer fields.
+    let a: Answer = serde_json::from_str(&payload).map_err(|_| {
         "Help returned malformed guidance. Retry, or use Reference and Guides offline.".to_string()
     })?;
     let m = manifest()?;
@@ -88,7 +162,7 @@ pub fn parse_answer(raw: &str) -> Result<Answer, String> {
         || a.articles.len() > 8
         || a.articles
             .iter()
-            .any(|id| !m.articles.iter().any(|a| &a.id == id))
+            .any(|id| !m.articles.iter().any(|art| &art.id == id))
         || a.navigation
             .as_ref()
             .is_some_and(|id| !m.navigation.contains(id))
@@ -99,6 +173,15 @@ pub fn parse_answer(raw: &str) -> Result<Answer, String> {
         );
     }
     Ok(a)
+}
+/// Canonical JSON text for a validated answer (stable for multi-turn history).
+pub fn answer_json(answer: &Answer) -> String {
+    serde_json::to_string(answer).unwrap_or_else(|_| {
+        format!(
+            r#"{{"answer":{},"articles":[]}}"#,
+            serde_json::to_string(&answer.answer).unwrap_or_else(|_| "\"\"".into())
+        )
+    })
 }
 /// Discard every unrecognized field and constrain strings to shipped IDs.
 pub fn redact_context(input: &serde_json::Value) -> serde_json::Value {
@@ -166,7 +249,11 @@ pub fn grounded_reply(
 ) -> Result<String, String> {
     for round in 0..=2 {
         let raw = complete(messages)?;
-        let value: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        let payload = extract_json_object(&raw).ok_or_else(|| {
+            "Help returned malformed guidance. Retry, or use Reference and Guides offline."
+                .to_string()
+        })?;
+        let value: serde_json::Value = serde_json::from_str(&payload).map_err(|_| {
             "Help returned malformed guidance. Retry, or use Reference and Guides offline."
                 .to_string()
         })?;
@@ -174,8 +261,12 @@ pub fn grounded_reply(
             if round == 2 {
                 return Err("Help exceeded the article lookup limit. Retry with a more specific question or use Reference.".into());
             }
-            if value.as_object().map(|o| o.len()) != Some(1) {
-                return Err("Malformed Help article request".into());
+            // Allow extra keys alongside request_articles from sloppy models, but
+            // only honor the article request when that is the intent.
+            if value.get("answer").is_some() {
+                // Prefer final answer if both shapes appear.
+                let answer = parse_answer(&payload)?;
+                return Ok(answer_json(&answer));
             }
             let ids = ids
                 .as_array()
@@ -187,11 +278,11 @@ pub fn grounded_reply(
                 let body = article(id).ok_or("Unknown Help article ID")?;
                 content.push_str(&format!("Article {id}:\n{body}\n\n"));
             }
-            messages.push(serde_json::json!({"role":"assistant", "content":raw}));
+            messages.push(serde_json::json!({"role":"assistant", "content":payload}));
             messages.push(serde_json::json!({"role":"user", "content":content}));
         } else {
-            parse_answer(&raw)?;
-            return Ok(raw);
+            let answer = parse_answer(&payload)?;
+            return Ok(answer_json(&answer));
         }
     }
     Err("Help did not return an answer".into())
@@ -241,6 +332,25 @@ mod tests {
         .is_ok());
         assert!(parse_answer(r#"{"answer":"Try","articles":["unknown"]}"#).is_err());
         assert!(parse_answer("text TOUR: git").is_err());
+        // Fences / prose wrappers and unknown keys must still parse.
+        assert!(parse_answer(
+            "```json\n{\"answer\":\"Open Help → Reference.\",\"articles\":[\"help\"],\"extra\":true}\n```"
+        )
+        .is_ok());
+        assert!(parse_answer(
+            "Sure.\n{\"answer\":\"Use the activity bar.\",\"articles\":[\"help\"],\"navigation\":\"help\"}\n"
+        )
+        .is_ok());
+        // GUI questions should not lead with TUI slash-command articles.
+        let gui_hits = ranked("gimme help list in the GUI", 4);
+        assert!(
+            gui_hits.iter().any(|id| id == "help"),
+            "expected help article, got {gui_hits:?}"
+        );
+        assert!(
+            gui_hits.iter().all(|id| !id.starts_with("tui-")),
+            "TUI articles leaked into GUI ranking: {gui_hits:?}"
+        );
     }
     #[test]
     fn all_topics_and_targets_exist() {

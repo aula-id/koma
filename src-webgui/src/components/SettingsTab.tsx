@@ -8,6 +8,7 @@ import {
   Palette as PaletteIcon,
   PanelLeft,
   Plus,
+  Search,
   SlidersHorizontal,
   Code2,
   Trash2,
@@ -125,7 +126,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           active={active === 'session'}
           onClick={() => goto('session')}
         />
-        <NavItem icon={<SlidersHorizontal size={15} />} label="Web search" active={active === 'webSearch'} onClick={() => goto('webSearch')} />
+        <NavItem icon={<Search size={15} />} label="Web search" active={active === 'webSearch'} onClick={() => goto('webSearch')} />
         <NavItem icon={<Monitor size={15} />} label="Computer use" active={active === 'computer'} onClick={() => goto('computer')} />
         <NavItem
           icon={<PanelLeft size={15} />}

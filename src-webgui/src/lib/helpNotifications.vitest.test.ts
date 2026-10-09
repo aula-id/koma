@@ -34,6 +34,9 @@ describe('Bundled grounded Help', () => {
     expect(() => parseHelpAnswer('TOUR: git')).toThrow()
     expect(() => parseHelpAnswer(JSON.stringify({ answer: 'Hello', articles: ['unknown'] }))).toThrow()
     expect(() => parseHelpAnswer(JSON.stringify({ answer: 'Hello', articles: ['help'], navigation: 'script()' }))).toThrow()
+    // Fences / prose / extra keys are accepted when the Answer fields are valid.
+    expect(parseHelpAnswer('```json\n{"answer":"Open Help → Reference.","articles":["help"],"extra":1}\n```').answer).toContain('Reference')
+    expect(parseHelpAnswer('Sure.\n{"answer":"Use Guides.","articles":["help"],"navigation":"help"}\n').navigation).toBe('help')
   })
   it('retains transcript and routes legacy tutorial to singleton Help', () => {
     useKoma.getState().openTutorialTab(); useKoma.getState().openHelpTab()
@@ -46,6 +49,22 @@ describe('Bundled grounded Help', () => {
     expect(useKoma.getState().tutorial.messages).toHaveLength(2)
     useKoma.getState().push({ k: 'TutorialChatDone', id, text: 'stale', tour: null, error: null })
     expect(useKoma.getState().tutorial.messages).toHaveLength(2)
+  })
+  it('keeps multi-turn assistant wire as Answer JSON', () => {
+    useKoma.getState().sendTutorialChat('Explain notifications')
+    const id = useKoma.getState().tutorial.pendingId!
+    useKoma.getState().push({ k: 'TutorialChatDone', id, text: JSON.stringify({ answer: 'Open Notifications.', articles: ['notifications'], navigation: 'notifications' }), tour: null, error: null })
+    requests.mockClear()
+    useKoma.getState().sendTutorialChat('how about in GUI?')
+    const wire = requests.mock.calls.find(([r]) => r.r === 'TutorialChat')?.[0].messages
+    expect(wire).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', content: 'Explain notifications' }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: JSON.stringify({ answer: 'Open Notifications.', articles: ['notifications'], navigation: 'notifications', guide: null }),
+      }),
+      expect.objectContaining({ role: 'user', content: 'how about in GUI?' }),
+    ]))
   })
   it('redacts UI context by constructing an allowlist', () => {
     useKoma.setState(s => ({ session: { ...s.session, title: 'private-title', stream: 'secret output', messages: [{ role: 'user', content: 'private chat' } as any] }, config: { ...s.config, providers: [{ apiKey: 'secret-key' } as any] } }))

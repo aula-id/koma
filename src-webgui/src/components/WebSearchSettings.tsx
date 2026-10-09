@@ -1,6 +1,9 @@
-import { useEffect, useReducer } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
+import { showToast } from '../lib/toast'
 import { useKoma } from '../store/koma'
 import { SEARCH_PROVIDERS, activation, canEnable, initialSearchSettings, searchSettingsReducer, type SearchProvider } from '../types/web-search'
+
+const APP_TOAST = { session: null as string | null, source: 'app' }
 
 let nextRequest = 0
 export function WebSearchSettings() {
@@ -13,8 +16,20 @@ export function WebSearchSettings() {
     dispatch({ type: 'load', seq })
     req({ r: 'GetWebSearch', req_seq: seq })
   }, [req])
-  useEffect(() => { if (reply) dispatch({ type: 'reply', reply }) }, [reply])
-  const { status, drafts, pending, error } = state
+  useEffect(() => {
+    if (!reply) return
+    dispatch({ type: 'reply', reply })
+  }, [reply])
+  // Toast save outcome once the matching reply lands (reducer clears pending).
+  const prevPending = useRef(state.pending)
+  useEffect(() => {
+    const was = prevPending.current
+    prevPending.current = state.pending
+    if (!was || state.pending !== null) return
+    if (state.error) showToast(state.error, 'error', APP_TOAST)
+    else showToast('Web search settings saved', 'success', APP_TOAST)
+  }, [state.pending, state.error])
+  const { status, drafts, pending } = state
   if (!status) return <p className="text-xs opacity-60">Loading web search settings…</p>
   const toggle = (provider: SearchProvider) => {
     if (pending) return
@@ -22,6 +37,7 @@ export function WebSearchSettings() {
     if (!update) return
     const seq = ++nextRequest
     dispatch({ type: 'begin', seq, provider })
+    showToast('Saving web search settings…', 'info', APP_TOAST)
     req({ r: 'SetWebSearch', req_seq: seq, ...update })
   }
   return <div className="flex flex-col gap-3">
@@ -49,7 +65,5 @@ export function WebSearchSettings() {
         </div>}
       </div>
     })}
-    {pending !== null && <p role="status" className="text-xs opacity-60">Saving web search settings…</p>}
-    {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
   </div>
 }

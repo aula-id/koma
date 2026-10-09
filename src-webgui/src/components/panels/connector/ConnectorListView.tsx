@@ -72,6 +72,7 @@ function OAuthConnRow({
   }
   return (
     <div className="group flex min-h-[42px] items-center gap-2.5 px-3 py-1.5 hover:bg-koma-hover">
+      {/* Idle: name uses the full row. Hover expands the disconnect gutter. */}
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] text-koma-fg">{conn.name || conn.email || conn.provider}</div>
         <div className="truncate text-[11px] text-koma-fg opacity-45">
@@ -82,15 +83,19 @@ function OAuthConnRow({
       <span className="flex-none rounded bg-koma-head px-1 py-px text-[10px] uppercase tracking-wide text-koma-fg opacity-60">
         {conn.provider}
       </span>
-      <button
-        onClick={onArm}
-        aria-label="Disconnect"
-        title="Disconnect"
-        style={{ color: errorTint }}
-        className="flex h-5 w-5 flex-none items-center justify-center rounded opacity-0 transition group-hover:opacity-60 hover:!opacity-100"
-      >
-        <Trash2 size={13} />
-      </button>
+      {/* Idle: max-w-0 so the trash takes no flex width. opacity alone would
+          still reserve a permanent empty gutter on the right. */}
+      <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[20px] group-hover:opacity-100">
+        <button
+          onClick={onArm}
+          aria-label="Disconnect"
+          title="Disconnect"
+          style={{ color: errorTint }}
+          className="flex h-5 w-5 flex-none items-center justify-center rounded opacity-70 transition hover:!opacity-100"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
     </div>
   )
 }
