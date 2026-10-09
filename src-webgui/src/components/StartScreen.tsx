@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowRight, Clock, FolderPlus, Info, Server, Sparkles, Zap } from 'lucide-react'
+import { ArrowRight, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, FolderPlus, Info, Search, Server, Sparkles, X, Zap } from 'lucide-react'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
 import { SessionBulkBar } from './SessionBulkBar'
 import { useSessionMultiSelect } from './sessionListSelection'
 import { useKoma, isDying } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
+import { groupRecentByFolder } from '../lib/sessionFolderGroups'
 
 // Measures the component's own width with a ResizeObserver (a container query in
 // JS) so the start screen can flip stacked -> side-by-side against the ACTUAL
@@ -34,9 +35,9 @@ function Card({ children, className = '' }: { children: React.ReactNode; classNa
   )
 }
 
-function SectionLabel({ icon: Icon, children }: { icon: typeof Clock; children: string }) {
+function SectionLabel({ icon: Icon, children, className = '' }: { icon: typeof Clock; children: string; className?: string }) {
   return (
-    <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-45">
+    <div className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-45 ${className}`}>
       <Icon size={12} className="flex-none" />
       {children}
     </div>
@@ -54,6 +55,7 @@ function SectionLabel({ icon: Icon, children }: { icon: typeof Clock; children: 
 export function StartScreen() {
   const history = useKoma((s) => s.hub.history)
   const cooking = useKoma((s) => s.hub.cooking)
+  const hubReady = useKoma((s) => s.hub.state) !== null
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
   const requestRemotePath = useKoma((s) => s.requestRemotePath)
@@ -66,6 +68,10 @@ export function StartScreen() {
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
   const [armed, setArmed] = useState<ArmedRow>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [searching, setSearching] = useState(false)
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
   const multi = useSessionMultiSelect()
 
   // The host only discovers live sessions on demand — nudge a fresh Hub on
@@ -80,13 +86,21 @@ export function StartScreen() {
     return () => window.clearInterval(id)
   }, [req, switchingTo])
 
-  // Escape: clear multi-select first, then cancel an armed row.
+  // Escape: search → multi-select → armed row.
   const multiHas = multi.hasSelection
   const multiClear = multi.clear
   useEffect(() => {
-    if (!armed && !multiHas) return
+    if (!armed && !multiHas && !searching) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (query) {
+        setQuery('')
+        return
+      }
+      if (searching) {
+        setSearching(false)
+        return
+      }
       if (multiHas) {
         multiClear()
         // Avoid leaving a browser focus ring on the last-clicked row.
@@ -97,16 +111,74 @@ export function StartScreen() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [armed, multiHas, multiClear])
+  }, [armed, multiHas, multiClear, searching, query])
 
-  // Live (cooking) sessions first, then past history — the same source rows the
-  // ResumePalette lists, minus the synthetic `kind: 'new'` placeholder.
+  useEffect(() => {
+    multiClear()
+  }, [query, multiClear])
+
+  // Live (cooking) sessions first, then past history — grouped client-side by
+  // folder basename (`dirLabel`). No daemon/IPC change; empty dirLabel is Other.
   const liveSessions = useMemo(
     () => cooking.filter((c) => c.kind === 'session' && c.id),
     [cooking],
   )
-  const liveIds = useMemo(() => liveSessions.map((c) => c.id as string), [liveSessions])
-  const historyIds = useMemo(() => history.map((h) => h.id), [history])
+  const folderGroups = useMemo(
+    () => groupRecentByFolder(liveSessions, history),
+    [liveSessions, history],
+  )
+  const q = query.trim().toLowerCase()
+  const matches = (name: string, id: string, dirLabel?: string | null) =>
+    q === '' ||
+    name.toLowerCase().includes(q) ||
+    id.toLowerCase().includes(q) ||
+    (dirLabel ?? '').toLowerCase().includes(q)
+  const visibleGroups = useMemo(() => {
+    if (!q) return folderGroups
+    return folderGroups
+      .map((group) => ({
+        ...group,
+        live: group.live.filter((row) => matches(row.name, row.id ?? '', row.dirLabel)),
+        history: group.history.filter((row) => matches(row.name, row.id, row.dirLabel)),
+      }))
+      .filter((group) => group.live.length + group.history.length > 0 || group.label.toLowerCase().includes(q))
+  }, [folderGroups, q])
+  const nestFolders = folderGroups.length > 1
+  const searchingActive = q.length > 0
+  const liveIds = useMemo(() => {
+    const ids: string[] = []
+    for (const group of visibleGroups) {
+      const open = !nestFolders || searchingActive || expanded.has(group.key)
+      if (!open) continue
+      for (const row of group.live) if (row.id) ids.push(row.id)
+    }
+    return ids
+  }, [visibleGroups, nestFolders, searchingActive, expanded])
+  const historyIds = useMemo(() => {
+    const ids: string[] = []
+    for (const group of visibleGroups) {
+      const open = !nestFolders || searchingActive || expanded.has(group.key)
+      if (!open) continue
+      for (const row of group.history) ids.push(row.id)
+    }
+    return ids
+  }, [visibleGroups, nestFolders, searchingActive, expanded])
+  const toggleFolder = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  const openSearch = () => {
+    setSearching(true)
+    requestAnimationFrame(() => searchRef.current?.focus())
+  }
+  const closeSearch = () => {
+    setSearching(false)
+    setQuery('')
+  }
 
   const openSession = (id: string, name: string) => {
     // Optimistic swap overlay (no host "swap started" push; attach can block for
@@ -214,144 +286,204 @@ export function StartScreen() {
               className="mb-2"
             />
           ) : (
-            <SectionLabel icon={Clock}>Recent</SectionLabel>
+            <div className="mb-2 flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <SectionLabel icon={Clock}>Recent</SectionLabel>
+              </div>
+              {hasRecent && !searching && (
+                <button
+                  type="button"
+                  onClick={openSearch}
+                  aria-label="Search sessions"
+                  title="Search sessions"
+                  className="flex h-7 w-7 flex-none items-center justify-center rounded border border-koma-border text-koma-dim transition-colors hover:bg-koma-hover hover:text-koma-fg"
+                >
+                  <Search size={13} />
+                </button>
+              )}
+            </div>
+          )}
+          {searching && !multi.hasSelection && (
+            <label className="relative mb-2 block">
+              <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-koma-dim" aria-hidden />
+              <input
+                ref={searchRef}
+                aria-label="Search sessions"
+                placeholder="Search sessions"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="h-7 w-full rounded border border-koma-border bg-koma-bg py-0 pr-7 pl-7 text-[12px] text-koma-fg outline-none placeholder:text-koma-dim focus:border-koma-accent"
+              />
+              <button
+                type="button"
+                onClick={closeSearch}
+                aria-label="Close search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+              >
+                <X size={12} />
+              </button>
+            </label>
           )}
         </div>
-        {!hasRecent ? (
+        {!hubReady ? (
+          <div className="flex items-center gap-2 px-5 pb-4 pt-2 text-[12px] text-koma-dim">
+            <BrailleSpinner size={14} />
+            Loading sessions…
+          </div>
+        ) : !hasRecent ? (
           <div className="px-5 pb-4 pt-2 text-[12px] text-koma-fg opacity-35">No sessions yet — start a new one.</div>
         ) : (
           <div className="max-h-[40vh] overflow-y-auto px-3 pb-3">
-            {liveSessions.map((c) => {
-              const id = c.id as string
-              const dying = isDying(dyingSessions, id, 'session')
-              const rowArmed = armed?.id === id && armed.kind === 'session'
-              const sel = multi.isSelected('session', id)
+            {visibleGroups.map((group) => {
+              const open = !nestFolders || searchingActive || expanded.has(group.key)
+              const count = group.live.length + group.history.length
               return (
-                <div
-                  key={id}
-                  role="button"
-                  tabIndex={dying || rowArmed ? -1 : 0}
-                  aria-selected={sel}
-                  onClick={(e) => {
-                    if (dying) return
-                    if (rowArmed) return
-                    onRowMouse(e, 'session', id, liveIds)
-                  }}
-                  onDoubleClick={(e) => {
-                    if (dying || rowArmed) return
-                    e.preventDefault()
-                    openSession(id, c.name)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' && e.key !== ' ') return
-                    if (e.key === ' ') e.preventDefault()
-                    if (!dying && !armed) openSession(id, c.name)
-                  }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
-                    rowArmed ? '' : 'gap-2 px-3 py-2'
-                  } ${dying ? 'pointer-events-none opacity-60' : ''} ${
-                    rowArmed
-                      ? ''
-                      : sel
-                        ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
-                        : 'hover:bg-koma-hover'
-                  }`}
-                >
-                  {rowArmed ? (
-                    <SessionRowConfirmStrip
-                      id={id}
-                      kind="session"
-                      foreground={c.foreground}
-                      onCancel={() => setArmed(null)}
-                      className="rounded-lg px-3 py-2"
-                    />
-                  ) : (
-                    <>
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{c.name}</span>
-                        {c.foreground && (
-                          <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide text-koma-fg opacity-50">
-                            current
-                          </span>
-                        )}
-                        {c.dirLabel && (
-                          <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
-                            {c.dirLabel}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex w-7 flex-none items-center justify-center">
-                        <SessionRowActions id={id} kind="session" armed={armed} onArm={armRow} />
-                      </div>
-                    </>
+                <div key={group.key || 'other'}>
+                  {nestFolders && (
+                    <button
+                      type="button"
+                      onClick={() => toggleFolder(group.key)}
+                      aria-expanded={open}
+                      className="flex h-7 w-full items-center gap-1 rounded px-1 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                    >
+                      {open ? <ChevronDown size={13} className="flex-none text-koma-dim" /> : <ChevronRight size={13} className="flex-none text-koma-dim" />}
+                      {open ? (
+                        <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
+                      ) : (
+                        <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                      <span className="flex-none text-[10px] text-koma-dim">{count}</span>
+                    </button>
                   )}
-                </div>
-              )
-            })}
-            {history.map((h) => {
-              const dying = isDying(dyingSessions, h.id, 'history')
-              const rowArmed = armed?.id === h.id && armed.kind === 'history'
-              const sel = multi.isSelected('history', h.id)
-              return (
-                <div
-                  key={h.id}
-                  role="button"
-                  tabIndex={dying || rowArmed ? -1 : 0}
-                  aria-selected={sel}
-                  onClick={(e) => {
-                    if (dying) return
-                    if (rowArmed) return
-                    onRowMouse(e, 'history', h.id, historyIds)
-                  }}
-                  onDoubleClick={(e) => {
-                    if (dying || rowArmed) return
-                    e.preventDefault()
-                    openSession(h.id, h.name)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' && e.key !== ' ') return
-                    if (e.key === ' ') e.preventDefault()
-                    if (!dying && !armed) openSession(h.id, h.name)
-                  }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
-                    rowArmed ? '' : 'gap-2 px-3 py-2'
-                  } ${dying ? 'pointer-events-none opacity-60' : ''} ${
-                    rowArmed
-                      ? ''
-                      : sel
-                        ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
-                        : 'hover:bg-koma-hover'
-                  }`}
-                >
-                  {rowArmed ? (
-                    <SessionRowConfirmStrip
-                      id={h.id}
-                      kind="history"
-                      onCancel={() => setArmed(null)}
-                      className="rounded-lg px-3 py-2"
-                    />
-                  ) : (
-                    <>
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{h.name}</span>
-                        {h.dirLabel && (
-                          <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
-                            {h.dirLabel}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex w-7 flex-none items-center justify-center">
-                        <SessionRowActions id={h.id} kind="history" armed={armed} onArm={armRow} />
-                      </div>
-                    </>
+                  {open && (
+                    <div className={nestFolders ? 'pl-3' : undefined}>
+                      {group.live.map((c) => {
+                        const id = c.id as string
+                        const dying = isDying(dyingSessions, id, 'session')
+                        const rowArmed = armed?.id === id && armed.kind === 'session'
+                        const sel = multi.isSelected('session', id)
+                        return (
+                          <div
+                            key={id}
+                            role="button"
+                            tabIndex={dying || rowArmed ? -1 : 0}
+                            aria-selected={sel}
+                            onClick={(e) => {
+                              if (dying || rowArmed) return
+                              onRowMouse(e, 'session', id, liveIds)
+                            }}
+                            onDoubleClick={(e) => {
+                              if (dying || rowArmed) return
+                              e.preventDefault()
+                              openSession(id, c.name)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter' && e.key !== ' ') return
+                              if (e.key === ' ') e.preventDefault()
+                              if (!dying && !armed) openSession(id, c.name)
+                            }}
+                            className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
+                              rowArmed ? '' : 'gap-2 px-3 py-2'
+                            } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                              rowArmed ? '' : sel ? 'bg-koma-accent/15 hover:bg-koma-accent/20' : 'hover:bg-koma-hover'
+                            }`}
+                          >
+                            {rowArmed ? (
+                              <SessionRowConfirmStrip
+                                id={id}
+                                kind="session"
+                                foreground={c.foreground}
+                                onCancel={() => setArmed(null)}
+                                className="rounded-lg px-3 py-2"
+                              />
+                            ) : (
+                              <>
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
+                                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{c.name}</span>
+                                  {c.foreground && (
+                                    <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide text-koma-fg opacity-50">
+                                      current
+                                    </span>
+                                  )}
+                                  {!nestFolders && c.dirLabel && (
+                                    <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
+                                      {c.dirLabel}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex w-7 flex-none items-center justify-center">
+                                  <SessionRowActions id={id} kind="session" armed={armed} onArm={armRow} />
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {group.history.map((h) => {
+                        const dying = isDying(dyingSessions, h.id, 'history')
+                        const rowArmed = armed?.id === h.id && armed.kind === 'history'
+                        const sel = multi.isSelected('history', h.id)
+                        return (
+                          <div
+                            key={h.id}
+                            role="button"
+                            tabIndex={dying || rowArmed ? -1 : 0}
+                            aria-selected={sel}
+                            onClick={(e) => {
+                              if (dying || rowArmed) return
+                              onRowMouse(e, 'history', h.id, historyIds)
+                            }}
+                            onDoubleClick={(e) => {
+                              if (dying || rowArmed) return
+                              e.preventDefault()
+                              openSession(h.id, h.name)
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter' && e.key !== ' ') return
+                              if (e.key === ' ') e.preventDefault()
+                              if (!dying && !armed) openSession(h.id, h.name)
+                            }}
+                            className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
+                              rowArmed ? '' : 'gap-2 px-3 py-2'
+                            } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                              rowArmed ? '' : sel ? 'bg-koma-accent/15 hover:bg-koma-accent/20' : 'hover:bg-koma-hover'
+                            }`}
+                          >
+                            {rowArmed ? (
+                              <SessionRowConfirmStrip
+                                id={h.id}
+                                kind="history"
+                                onCancel={() => setArmed(null)}
+                                className="rounded-lg px-3 py-2"
+                              />
+                            ) : (
+                              <>
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{h.name}</span>
+                                  {!nestFolders && h.dirLabel && (
+                                    <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
+                                      {h.dirLabel}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex w-7 flex-none items-center justify-center">
+                                  <SessionRowActions id={h.id} kind="history" armed={armed} onArm={armRow} />
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   )}
                 </div>
               )
             })}
           </div>
         )}
-        {hasRecent && (
+        {hubReady && hasRecent && (
           <div className="border-t border-koma-border px-4 py-1.5 text-[10px] text-koma-fg opacity-35">
             Click to select · Ctrl/⌘ click toggle · Shift range · Double-click or Enter to open
           </div>
@@ -362,7 +494,7 @@ export function StartScreen() {
 
   const about = (
     <Card className={wide ? 'w-[300px] flex-none' : ''}>
-      <SectionLabel icon={Info}>About koma</SectionLabel>
+      <SectionLabel icon={Info} className="mb-2">About koma</SectionLabel>
       <p className="text-[12.5px] leading-relaxed text-koma-fg opacity-80">
         A personal, terminal-first AI coding environment — agent + daemon at the core,
         driving your tools directly. This desktop shell renders your sessions natively
