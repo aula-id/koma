@@ -619,6 +619,8 @@ build_system_prompt(memory, agents) =
   [+ "\n\n# Project Instructions\n" + agents]   ← AGENT.md / AGENTS.md in workdir
   [+ "\n\n# Memory\n" + memory]                 ← memory/MEMORY.md
   [+ "\n\n" + system_tools()]                   ← src-misc/system-tools.txt
+                                                 (thin routing + invariants;
+                                                  call shape is JSON schemas)
 ```
 
 All files are embedded via `include_dir!` at compile time (the `src-misc/`
@@ -641,8 +643,11 @@ calls `plan_ready`, and waits; archived approvals and quoted tool results cannot
 release that gate. The runtime checks permission again before executing tools,
 so a conversation summary or an in-flight response cannot supply authorization.
 
-The multi-workspace `[N]` convention (how the model should prefix tool paths when
-multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
+The multi-workspace path convention (bare relative → primary root; listed
+absolute paths under other roots used as given) is documented in
+`src-misc/system-tools.txt`. Call shape for individual tools lives in the
+JSON schemas / `Tool::description` strings — the always-on tools section is
+routing + hard behaviour only, not a per-tool encyclopedia.
 
 ---
 
@@ -696,7 +701,7 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 | Resources | `src-agent/src/resources.rs` | Compile-time embed of `src-misc/`; `build_system_prompt`, `wanderer_word` |
 | Misc | `src-misc/system-prompt.txt` | Base system instructions (embedded) |
 | Misc | `src-misc/system-personality.txt` | Tone/style addendum (embedded) |
-| Misc | `src-misc/system-tools.txt` | Tool-usage guidance + multi-workspace `[N]` convention (embedded) |
+| Misc | `src-misc/system-tools.txt` | Thin tool routing + hard behaviour (schemas carry call shape) |
 | Misc | `src-misc/classifier-prompt.txt` | PC policy prompt (embedded) |
 | Misc | `src-misc/classifier-toolcall.txt` | TAC policy prompt (embedded) |
 | Misc | `src-misc/wanderer.json` | Whimsical plan lead-in word corpus (embedded) |

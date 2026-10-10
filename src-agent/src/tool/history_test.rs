@@ -357,12 +357,21 @@ fn project_load_resolves_registered_sibling_and_rejects_other_buckets() {
 }
 
 #[test]
-fn tool_registration_and_prompt_examples_describe_the_same_contract() {
+fn tool_registration_and_history_routing_stay_aligned() {
     let names = crate::tool::main_tool_names();
     assert!(names.iter().any(|name| name == "message_load"));
+    assert!(names.iter().any(|name| name == "message_find"));
     assert!(crate::tool::tool_allowed_in_plan("message_load"));
     assert!(crate::tool::DEFERRED_TOOLS.contains(&"message_load"));
-    let instructions = include_str!("../../../src-misc/system-tools.txt");
+
+    // Call shape lives on the tool schemas (not the thin always-on tools essay).
+    use super::Tool;
+    let find = super::MessageFind;
+    let load = super::MessageLoad;
+    assert!(find.name() == "message_find" && load.name() == "message_load");
+    let _ = find.parameters();
+    let _ = load.parameters();
+
     let dir = TempDir::new();
     for i in 1..=42 {
         let body = if i == 42 {
@@ -372,26 +381,31 @@ fn tool_registration_and_prompt_examples_describe_the_same_contract() {
         };
         dir.append(Role::User, &body, i);
     }
-    let mut find_examples = 0;
-    let mut load_examples = 0;
-    for line in instructions.lines().map(str::trim) {
-        if let Some(example) = line
-            .strip_prefix("Example: message_find(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args: Value = serde_json::from_str(example).unwrap();
-            Options::parse(&args).unwrap();
-            find_examples += 1;
-        }
-        if let Some(example) = line
-            .strip_prefix("Example: message_load(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args: Value = serde_json::from_str(example).unwrap();
-            page::load(dir.path(), &args).unwrap();
-            load_examples += 1;
-        }
+    // Representative valid calls (same contracts the old prompt examples used).
+    let find_cases = [
+        r#"{"query":"context cap"}"#,
+        r#"{"query":"context cap","skip":10,"limit":10}"#,
+        r#"{"role":"user","after":"2026-09-20T09:00:00+09:00","before":"2026-09-20T11:00:00+09:00"}"#,
+        r#"{"query":"build failure","scope":"project"}"#,
+    ];
+    for raw in find_cases {
+        let args: Value = serde_json::from_str(raw).unwrap();
+        Options::parse(&args).unwrap();
     }
-    assert!(find_examples > 0 && load_examples > 0);
-    assert!(include_str!("../../../src-misc/system-prompt.txt").contains("message_load"));
+    let load_cases = [r#"{"message_id":42}"#, r#"{"message_id":42,"offset":3000,"max_chars":1500}"#];
+    for raw in load_cases {
+        let args: Value = serde_json::from_str(raw).unwrap();
+        page::load(dir.path(), &args).unwrap();
+    }
+
+    let tools = include_str!("../../../src-misc/system-tools.txt");
+    let prompt = include_str!("../../../src-misc/system-prompt.txt");
+    assert!(
+        tools.contains("message_find") && tools.contains("message_load"),
+        "thin tools routing must still name history tools"
+    );
+    assert!(
+        prompt.contains("message_load"),
+        "operator contract must still point at message_load for past context"
+    );
 }
