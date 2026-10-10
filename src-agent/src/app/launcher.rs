@@ -7,6 +7,7 @@
 //! the Dock use `AppIcon.icns`.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -47,14 +48,21 @@ pub fn install() -> Result<Installed> {
 
 /// Refresh the app-list entry while a GUI is opening.
 ///
-/// On macOS, a bundle that already holds a real binary is refreshed from that
-/// path. The launch checkout is not stat'd, so a tree under Documents, Desktop,
-/// or Downloads does not raise a folder-access dialog on later opens.
+/// On macOS, prefer `~/.local/bin/koma` (the curl installer / `koma update`
+/// target) so the app bundle picks up a new CLI binary. That path is not under
+/// Documents / Desktop / Downloads, so stating it does not raise a folder
+/// dialog. Copy is skipped while this process is the bundle image. A tree
+/// under a protected folder is never used as the source.
 #[cfg(feature = "gui")]
 pub fn install_for_launch() -> Result<Installed> {
     let home = dirs::home_dir().context("HOME is not set")?;
     #[cfg(target_os = "macos")]
     {
+        if let Some(cli) = installed_release_exe() {
+            if !in_protected_folder(&cli) {
+                return install_macos(&home, &cli, true, true);
+            }
+        }
         let bundled = home.join("Applications/Koma.app/Contents/MacOS/koma");
         if let Ok(meta) = fs::metadata(&bundled) {
             if meta.is_file() && meta.len() > 4096 {
@@ -123,6 +131,16 @@ fn install_at(home: &Path, exe: &Path, register: bool, replace_binary: bool) -> 
 }
 
 fn installed_exe() -> Option<PathBuf> {
+    installed_release_exe().or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .filter(|path| path.is_file())
+            .map(|path| linux_launch_exe(&path))
+    })
+}
+
+/// The curl / `koma update` install location, not a checkout or the app bundle.
+fn installed_release_exe() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(dir) = std::env::var_os("KOMA_INSTALL_DIR") {
         candidates.push(PathBuf::from(dir).join("koma"));
@@ -131,12 +149,9 @@ fn installed_exe() -> Option<PathBuf> {
         candidates.push(home.join(".local/bin/koma"));
         candidates.push(home.join(".local/bin/koma.bin"));
     }
-    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
-        return Some(linux_launch_exe(&path));
-    }
-    std::env::current_exe()
-        .ok()
-        .filter(|path| path.is_file())
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
         .map(|path| linux_launch_exe(&path))
 }
 
@@ -314,7 +329,7 @@ fn place_bundle_executable(dest: &Path, exe: &Path, replace: bool) -> Result<boo
             return Ok(false);
         }
     }
-    if bundle_exe_current(exe, dest) {
+    if files_have_same_bytes(exe, dest) {
         return Ok(false);
     }
     if dest.exists() {
@@ -360,16 +375,42 @@ fn in_protected_folder(path: &Path) -> bool {
     })
 }
 
-fn bundle_exe_current(src: &Path, dest: &Path) -> bool {
+/// True when `dest` already holds the same bytes as `src`.
+///
+/// Length alone is not identity: consecutive koma releases are often the same
+/// size, and treating that as "already copied" left `Koma.app` on the old
+/// binary after `koma update`.
+fn files_have_same_bytes(src: &Path, dest: &Path) -> bool {
     let (Ok(src_meta), Ok(dest_meta)) = (fs::metadata(src), fs::metadata(dest)) else {
         return false;
     };
     if !dest_meta.is_file() || src_meta.len() != dest_meta.len() || src_meta.len() == 0 {
         return false;
     }
-    // Same length is not proof, but a shell trampoline is a few dozen bytes
-    // and the koma binary is not. A matching length means we already copied.
-    dest_meta.len() > 4096
+    let Ok(mut fa) = fs::File::open(src) else {
+        return false;
+    };
+    let Ok(mut fb) = fs::File::open(dest) else {
+        return false;
+    };
+    let mut ba = [0u8; 65536];
+    let mut bb = [0u8; 65536];
+    loop {
+        let na = match fa.read(&mut ba) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match fb.read(&mut bb) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb || ba[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -674,6 +715,15 @@ mod tests {
         assert_eq!(
             fs::read(home.join("Applications/Koma.app/Contents/MacOS/koma")).unwrap(),
             vec![0u8; 8192]
+        );
+        // Same length as the installed binary, different bytes: replace=true
+        // must copy. Length-only identity left Koma.app stale after koma update.
+        let newer = root.join("newer");
+        fs::write(&newer, vec![3u8; 8192]).unwrap();
+        install_macos(&home, &newer, false, true).unwrap();
+        assert_eq!(
+            fs::read(home.join("Applications/Koma.app/Contents/MacOS/koma")).unwrap(),
+            vec![3u8; 8192]
         );
         let _ = fs::remove_dir_all(&root);
     }

@@ -93,13 +93,6 @@ pub fn run_update() -> Result<()> {
     // while the daemon is still running from its in-memory image.
     let _ = super::run_daemon_subcommand(DaemonSub::Kill, None);
 
-    // Place the app-list entry from this binary before the installer swaps it.
-    // install.sh then runs `koma launcher-install` on the binary it just wrote,
-    // which refreshes the same entry if that binary is newer.
-    if let Err(e) = super::launcher::install() {
-        eprintln!("koma update: could not add the app list entry: {e:#}");
-    }
-
     // 2. Fetch + run the installer.
     println!("koma update: fetching latest installer…");
 
@@ -125,6 +118,14 @@ pub fn run_update() -> Result<()> {
             "installer exited with status {}",
             status.code().unwrap_or(-1)
         ));
+    }
+
+    // Refresh ~/Applications/Koma.app (and the Linux desktop entry) from the
+    // binary the installer just wrote. Doing this *before* the swap used to copy
+    // the old image into the bundle; same-size releases then looked "already
+    // current" and Launchpad kept serving the previous binary.
+    if let Err(e) = super::launcher::install() {
+        eprintln!("koma update: could not refresh the app list entry: {e:#}");
     }
 
     // 3. Reap any surviving daemons — covers a pre-0.2.0 global daemon that was running

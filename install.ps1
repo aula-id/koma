@@ -64,10 +64,23 @@ try {
         Write-Host "Installing koma..."
     }
     # 3010: success, reboot requested (a file was in use and Windows will finish the replace).
-    $proc = Start-Process msiexec.exe -ArgumentList @('/i', $msiPath) -Wait -NoNewWindow -PassThru
+    # /passive: progress bar + UAC, no Welcome / InstallDir / PATH wizard.
+    # PATH is written by the WiX Environment component; the wizard never needed
+    # to opt into it.
+    $proc = Start-Process msiexec.exe -ArgumentList @('/i', $msiPath, '/passive', '/norestart') -Wait -NoNewWindow -PassThru
     if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
         Write-Error "MSI installer exited with code $($proc.ExitCode)"
         exit 1
+    }
+
+    # MSI updates HKCU/HKLM PATH; this PowerShell still has the old value.
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $parts = @()
+    if ($userPath) { $parts += $userPath }
+    if ($machinePath) { $parts += $machinePath }
+    if ($parts.Count -gt 0) {
+        $env:Path = $parts -join ';'
     }
 
     Write-Host ""
