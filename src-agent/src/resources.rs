@@ -73,7 +73,7 @@ pub fn wanderer_word() -> String {
 }
 
 const FALLBACK_SYSTEM: &str = "You are a precise, concise coding assistant.";
-const FALLBACK_PERSONALITY: &str = "Be direct. No filler. No emoji.";
+const FALLBACK_PERSONALITY: &str = "Speak as yourself. Do not invent what you did not check.";
 
 /// Return the system prompt text from `src-misc/system-prompt.txt`.
 ///
