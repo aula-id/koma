@@ -24,6 +24,13 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use wry::http::{Request, Response, StatusCode};
 
+/// OS file drops navigate the document to `file://…` and replace the GUI with a
+/// white or transparent page. App pages stay on `koma://` (Windows WebView2
+/// shows those as `http://koma.`). Every other scheme is left alone.
+pub(crate) fn allow_webview_navigation(url: &str) -> bool {
+    !url.trim().to_ascii_lowercase().starts_with("file:")
+}
+
 /// Dock icon from the bundle written by [`crate::app::launcher::install_for_launch`].
 /// Missing on the first open, until that install finishes.
 #[cfg(target_os = "macos")]
@@ -502,6 +509,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // hint the React chrome reads at boot is injected here.
         .with_initialization_script(format!("window.__komaOS='{}';", std::env::consts::OS))
         .with_url("koma://localhost/index.html")
+        .with_navigation_handler(|url| allow_webview_navigation(&url))
         .with_transparent(true)
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
@@ -940,3 +948,22 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
 #[cfg(test)]
 #[path = "mod_koma_request_tests.rs"]
 mod koma_request_tests;
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::allow_webview_navigation;
+
+    #[test]
+    fn file_drops_cannot_replace_the_gui() {
+        assert!(!allow_webview_navigation("file:///tmp/notes.md"));
+        assert!(!allow_webview_navigation("FILE:///Users/a/page.html"));
+        assert!(!allow_webview_navigation("  file://C:/code/app.js"));
+        assert!(allow_webview_navigation("koma://localhost/index.html"));
+        assert!(allow_webview_navigation(
+            "koma://localhost/index.html#computer-preview"
+        ));
+        assert!(allow_webview_navigation("http://koma.localhost/index.html"));
+        assert!(allow_webview_navigation("http://koma.extension/panel/index.html"));
+        assert!(allow_webview_navigation("about:blank"));
+    }
+}

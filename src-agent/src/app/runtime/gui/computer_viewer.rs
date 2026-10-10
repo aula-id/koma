@@ -79,6 +79,7 @@ impl Viewer {
         let initial = serde_json::to_string(&status)?;
         let builder = wry::WebViewBuilder::new()
             .with_url("koma://localhost/index.html#computer-preview")
+            .with_navigation_handler(|url| super::allow_webview_navigation(&url))
             .with_initialization_script(format!(
                 "window.__komaComputerInitial={initial};window.__komaComputerPalette={palette};"
             ))

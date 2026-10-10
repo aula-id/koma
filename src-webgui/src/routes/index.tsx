@@ -1,3 +1,4 @@
+import { isExternalFileDrag } from '../lib/externalFileDrag'
 import { pagePoint } from '../lib/uiScale'
 import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
@@ -741,7 +742,22 @@ function TabbedMain() {
       endDragSession()
     }
 
+    // OS file drops navigate the webview to file:// unless dragover is cancelled.
+    // That replaces the GUI (white or transparent window) for html, md, js, and
+    // any other non-image. preventDefault only — the composer still receives the
+    // event and attaches images.
+    const keepFileDropInPage = (e: DragEvent) => {
+      if (!isExternalFileDrag(e.dataTransfer)) return
+      e.preventDefault()
+      try {
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      } catch {
+        /* Some webviews lock dropEffect outside dragover. */
+      }
+    }
+
     const onDragOver = (e: DragEvent) => {
+      keepFileDropInPage(e)
       if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) return
       const hit = hitTestPane(e.clientX, e.clientY)
       if (!hit) {
@@ -766,6 +782,7 @@ function TabbedMain() {
     }
 
     const onDrop = (e: DragEvent) => {
+      keepFileDropInPage(e)
       if (!sessionRef.current || !isEditorBodyDrag(e.dataTransfer)) {
         stop()
         return
@@ -824,6 +841,7 @@ function TabbedMain() {
 
     window.addEventListener('dragstart', arm)
     window.addEventListener('dragend', stop)
+    window.addEventListener('dragenter', keepFileDropInPage, true)
     window.addEventListener('dragover', onDragOver, true)
     window.addEventListener('drop', onDrop, true)
     window.addEventListener('blur', stop)
@@ -831,6 +849,7 @@ function TabbedMain() {
     return () => {
       window.removeEventListener('dragstart', arm)
       window.removeEventListener('dragend', stop)
+      window.removeEventListener('dragenter', keepFileDropInPage, true)
       window.removeEventListener('dragover', onDragOver, true)
       window.removeEventListener('drop', onDrop, true)
       window.removeEventListener('blur', stop)
