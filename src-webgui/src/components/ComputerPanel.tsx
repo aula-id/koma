@@ -1,10 +1,11 @@
 import { pagePoint } from '../lib/uiScale'
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { GripHorizontal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useComputerPreview } from '../store/computerPreview'
 import { ComputerPreview } from './ComputerPreview'
-import { fitComputerPreview, type PreviewBounds as Bounds } from '../lib/computerPreviewLayout'
+import { COMPUTER_PREVIEW_MIN_HEIGHT, COMPUTER_PREVIEW_MIN_WIDTH, fitComputerPreview, type PreviewBounds as Bounds } from '../lib/computerPreviewLayout'
 
 const preference = 'koma.computer.preview'
 function bounded(value: Partial<Bounds>): Bounds {
@@ -19,24 +20,25 @@ export function ComputerPanel() {
   const remote = useKoma(s => s.remoteState.state)
   const status = useKoma(s => s.computer)
   const req = useKoma(s => s.req)
-  const previewSession = useComputerPreview(s => s.session)
   const dismissed = useComputerPreview(s => s.dismissedSession)
   const dismiss = useComputerPreview(s => s.dismiss)
-  const requestedSession = useComputerPreview(s => s.requestedSession)
   const open = !!session && !!status?.enabled && status.session === session && dismissed !== session
   const [bounds, setBounds] = useState(initialBounds)
   const resizing = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  const listed = useRef<string | null>(null)
   const current = status?.session === session ? status : null
   const local = remote !== 'ready' && remote !== 'connected' && remote !== 'connecting'
   const control = (action: 'enable' | 'windows' | 'select' | 'pause' | 'resume' | 'stop' | 'take_over', window?: string) => req({ r: 'Computer', action, window })
 
   useEffect(() => {
-    if (!session) return
-    if ((previewSession && previewSession !== session) || (requestedSession && requestedSession !== session)) {
-      useComputerPreview.getState().hide()
-    }
-  }, [session, previewSession, requestedSession])
+    if (!open || !current?.enabled || current.busy || current.paused || current.observation?.window.id) return
+    if (!current.capabilities.windows) return
+    const key = `${current.session}:${current.generation}`
+    if (listed.current === key) return
+    listed.current = key
+    req({ r: 'Computer', action: 'windows' })
+  }, [open, current, req])
   useEffect(() => {
     const resize = () => setBounds(v => bounded(v))
     window.addEventListener('resize', resize)
@@ -55,9 +57,11 @@ export function ComputerPanel() {
     if (start) setBounds(v => bounded({ ...v, x: start.left + pagePoint(event.clientX - start.x), y: start.top + pagePoint(event.clientY - start.y) }))
   }
   if (!session || !local || !open) return null
-  return <section role="dialog" aria-label="Shared computer preview"
-    className="computer-preview-panel fixed z-40 rounded-xl bg-koma-panel shadow-2xl ring-1 ring-koma-border"
-    style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, overflow: 'hidden' }}>
+  // Body portal so #app's overflow cannot clip it, and above palettes, toasts,
+  // and confirm dialogs (those top out at z-[100]).
+  return createPortal(<section role="dialog" aria-label="Shared computer preview"
+    className="computer-preview-panel fixed z-[110] rounded-xl bg-koma-panel shadow-2xl ring-1 ring-koma-border"
+    style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, minWidth: COMPUTER_PREVIEW_MIN_WIDTH, minHeight: COMPUTER_PREVIEW_MIN_HEIGHT, overflow: 'hidden' }}>
     <ComputerPreview status={current} control={control} chrome={<>
       <span role="img" aria-label="Drag preview" title="Drag preview" className="cursor-move touch-none rounded-md p-1.5 text-koma-dim hover:bg-koma-hover"
         onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}><GripHorizontal size={15} /></span>
@@ -84,5 +88,5 @@ export function ComputerPanel() {
           height: v.height + (vertical ? delta : 0),
         }))
       }}><svg viewBox="0 0 20 20" className="h-full w-full" aria-hidden="true"><path d="M9 16 16 9M13 16l3-3" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg></button>
-  </section>
+  </section>, document.body)
 }
