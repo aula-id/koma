@@ -25,8 +25,9 @@ pub const CODEX_MODELS: &[&str] = &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5
 /// back to the hardcoded [`CODEX_MODELS`] allowlist shape when the overlay is
 /// still empty (offline first boot before OA refresh).
 pub fn codex_static_catalogue() -> Vec<ModelInfo> {
-    let from_overlay =
-        crate::service::catalogue_overlay::models_for_provider(crate::model::app_config::OAuthProvider::Codex);
+    let from_overlay = crate::service::catalogue_overlay::models_for_provider(
+        crate::model::app_config::OAuthProvider::Codex,
+    );
     if !from_overlay.is_empty() {
         return from_overlay;
     }

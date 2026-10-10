@@ -10,9 +10,7 @@
 /// commands) or the host-relay client-thread (state pushes).
 pub(super) enum UserEvent {
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
-    PickSettingsFolder {
-        request_id: String,
-    },
+    PickSettingsFolder { request_id: String },
     #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
     SettingsFolderPicked {
         request_id: String,
@@ -1613,7 +1611,9 @@ mod skill_wire_tests {
 /// Fine steps from 0.9× to 1.5× (default 1×) — no harsher zooms.
 pub(super) fn valid_ui_scale(scale: f64) -> bool {
     const ALLOWED: [f64; 7] = [0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
-    ALLOWED.iter().any(|&allowed| (allowed - scale).abs() < 1e-9)
+    ALLOWED
+        .iter()
+        .any(|&allowed| (allowed - scale).abs() < 1e-9)
 }
 
 #[cfg(test)]

@@ -148,9 +148,18 @@ fn complete(messages: Vec<TutorialMsg>, context: serde_json::Value) -> Result<St
         .unwrap_or_default();
     let want_tui = {
         let q = last_user.to_lowercase();
-        ["tui", "terminal", "slash", "keybind", "hotkey", "/help", "/settings", "/model"]
-            .iter()
-            .any(|k| q.contains(k))
+        [
+            "tui",
+            "terminal",
+            "slash",
+            "keybind",
+            "hotkey",
+            "/help",
+            "/settings",
+            "/model",
+        ]
+        .iter()
+        .any(|k| q.contains(k))
     };
     let ranked_articles = crate::model::help_knowledge::ranked(last_user, 4)
         .iter()

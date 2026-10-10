@@ -959,13 +959,15 @@ fn plan_to_auto_projects_session_todos_and_no_sdlc_leak() {
 
     // Locked Plan rails must not appear in Auto even if the runtime mirror
     // still holds them (set_agent_mode drops the file; this is the projection backstop).
-    state.rest.sessions[0].plan_todos.push(crate::app::mode::todo::TodoItem {
-        content: "serve plan to user".to_string(),
-        status: crate::app::mode::todo::TodoStatus::Pending,
-        priority: crate::app::mode::todo::TodoPriority::Low,
-        locked: true,
-        node_id: None,
-    });
+    state.rest.sessions[0]
+        .plan_todos
+        .push(crate::app::mode::todo::TodoItem {
+            content: "serve plan to user".to_string(),
+            status: crate::app::mode::todo::TodoStatus::Pending,
+            priority: crate::app::mode::todo::TodoPriority::Low,
+            locked: true,
+            node_id: None,
+        });
     let snap3 = crate::ipc::snapshot::projection::build_snapshot(&state);
     assert_eq!(snap3.sessions[0].plan_todos.len(), 1);
     assert_eq!(snap3.sessions[0].plan_todos[0].content, "step 1");

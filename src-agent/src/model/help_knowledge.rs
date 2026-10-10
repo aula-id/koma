@@ -3,8 +3,10 @@ use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 static HELP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-misc/help");
-const MANIFEST_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src-misc/help/manifest.json"));
+const MANIFEST_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../src-misc/help/manifest.json"
+));
 #[derive(Debug, Clone, Deserialize)]
 pub struct Article {
     pub id: String,
@@ -38,9 +40,18 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
     let q_lower = query.to_lowercase();
     // GUI Help is the default surface; only pull TUI slash-command articles when
     // the user is clearly asking about the terminal product.
-    let want_tui = ["tui", "terminal", "slash", "keybind", "hotkey", "/help", "/settings", "/model"]
-        .iter()
-        .any(|k| q_lower.contains(k));
+    let want_tui = [
+        "tui",
+        "terminal",
+        "slash",
+        "keybind",
+        "hotkey",
+        "/help",
+        "/settings",
+        "/model",
+    ]
+    .iter()
+    .any(|k| q_lower.contains(k));
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
@@ -83,7 +94,11 @@ pub fn ranked(query: &str, limit: usize) -> Vec<String> {
     scores.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     // Prefer positive matches; fall back to top catalogue order only if nothing scored.
     let positive: Vec<_> = scores.iter().filter(|s| s.0 > 0).cloned().collect();
-    let pick = if positive.is_empty() { scores } else { positive };
+    let pick = if positive.is_empty() {
+        scores
+    } else {
+        positive
+    };
     pick.into_iter().take(limit).map(|s| s.2).collect()
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,7 +202,10 @@ pub fn answer_json(answer: &Answer) -> String {
 pub fn redact_context(input: &serde_json::Value) -> serde_json::Value {
     let m = manifest().ok();
     let empty: Vec<String> = Vec::new();
-    let navigation = m.as_ref().map(|m| m.navigation.as_slice()).unwrap_or(&empty);
+    let navigation = m
+        .as_ref()
+        .map(|m| m.navigation.as_slice())
+        .unwrap_or(&empty);
     let workflows = m.as_ref().map(|m| m.workflows.as_slice()).unwrap_or(&empty);
     let mut out = serde_json::Map::new();
     for key in [
@@ -355,7 +373,11 @@ mod tests {
     #[test]
     fn all_topics_and_targets_exist() {
         let m = manifest();
-        assert!(m.is_ok(), "{}", m.as_ref().err().cloned().unwrap_or_default());
+        assert!(
+            m.is_ok(),
+            "{}",
+            m.as_ref().err().cloned().unwrap_or_default()
+        );
         if let Ok(m) = m {
             for a in &m.articles {
                 assert!(article(&a.id).is_some());

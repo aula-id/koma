@@ -611,7 +611,10 @@ impl DaemonHub {
         };
         let abs = session.path.join(&att.rel_path);
         if !abs.is_file() {
-            self.send_to(idx, DaemonEvent::Error("attachment file missing on disk".into()));
+            self.send_to(
+                idx,
+                DaemonEvent::Error("attachment file missing on disk".into()),
+            );
             return;
         }
         self.send_to(

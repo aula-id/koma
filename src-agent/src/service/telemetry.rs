@@ -179,9 +179,9 @@ impl WireEvent {
 fn valid_model(model: &str) -> bool {
     let n = model.len();
     (1..=128).contains(&n)
-        && model
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/' | b':' | b'+' | b'-'))
+        && model.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/' | b':' | b'+' | b'-')
+        })
 }
 
 enum PostResult {
@@ -205,10 +205,7 @@ fn post(
     {
         Ok(r) => r,
         Err(e) => {
-            crate::model::store::append_global_error_log(
-                "telemetry",
-                &format!("post error: {e}"),
-            );
+            crate::model::store::append_global_error_log("telemetry", &format!("post error: {e}"));
             return PostResult::Fail;
         }
     };
