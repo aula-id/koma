@@ -15,7 +15,7 @@ export function ComputerSettings() {
   const show = useComputerPreview(s => s.show)
   const requestShow = useComputerPreview(s => s.requestShow)
   const enabling = useComputerPreview(s => !!session && s.requestedSession === session)
-  const hide = useComputerPreview(s => s.hide)
+  const dismiss = useComputerPreview(s => s.dismiss)
   const status = computer?.session === session ? computer : null
   const local = !['ready', 'connected', 'connecting'].includes(remote)
   const available = !!session && local
@@ -50,7 +50,7 @@ export function ComputerSettings() {
       <p className="mt-1 text-xs leading-relaxed text-koma-dim">Resize the preview for a closer look. Hover over it to choose a screen.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className={button} disabled={!available || !enabled} onClick={() => { if (session) show(session) }}><PictureInPicture2 size={14} />Open preview</button>
-        {status?.capabilities.floating && <button type="button" className={button} disabled={!enabled || status.busy} onClick={() => { hide(); window.ipc?.postMessage(JSON.stringify({ t: 'win', a: 'computer-viewer' })) }}><ExternalLink size={14} />Detach preview</button>}
+        {status?.capabilities.floating && <button type="button" className={button} disabled={!enabled || status.busy} onClick={() => { if (session) dismiss(session); window.ipc?.postMessage(JSON.stringify({ t: 'win', a: 'computer-viewer' })) }}><ExternalLink size={14} />Detach preview</button>}
       </div>
       <p className="mt-2 text-xs text-koma-dim">A detached preview steps aside during actions. Closing it leaves sharing on.</p>
       {observation && <div className="mt-3 rounded-md border border-koma-border px-3 py-2 text-xs"><p className="truncate">{observation.window.title || observation.window.application}</p><p className="mt-1 text-koma-dim">{observation.transform.width} × {observation.transform.height} · Last shared {new Date(observation.captured_ms).toLocaleTimeString()}</p></div>}

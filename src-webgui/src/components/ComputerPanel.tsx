@@ -20,9 +20,10 @@ export function ComputerPanel() {
   const status = useKoma(s => s.computer)
   const req = useKoma(s => s.req)
   const previewSession = useComputerPreview(s => s.session)
-  const hide = useComputerPreview(s => s.hide)
+  const dismissed = useComputerPreview(s => s.dismissedSession)
+  const dismiss = useComputerPreview(s => s.dismiss)
   const requestedSession = useComputerPreview(s => s.requestedSession)
-  const open = !!session && previewSession === session && !!status?.enabled && status.session === session
+  const open = !!session && !!status?.enabled && status.session === session && dismissed !== session
   const [bounds, setBounds] = useState(initialBounds)
   const resizing = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
@@ -31,8 +32,11 @@ export function ComputerPanel() {
   const control = (action: 'enable' | 'windows' | 'select' | 'pause' | 'resume' | 'stop' | 'take_over', window?: string) => req({ r: 'Computer', action, window })
 
   useEffect(() => {
-    if ((previewSession && previewSession !== session) || (requestedSession && requestedSession !== session)) hide()
-  }, [session, previewSession, requestedSession, hide])
+    if (!session) return
+    if ((previewSession && previewSession !== session) || (requestedSession && requestedSession !== session)) {
+      useComputerPreview.getState().hide()
+    }
+  }, [session, previewSession, requestedSession])
   useEffect(() => {
     const resize = () => setBounds(v => bounded(v))
     window.addEventListener('resize', resize)
@@ -57,7 +61,7 @@ export function ComputerPanel() {
     <ComputerPreview status={current} control={control} chrome={<>
       <span role="img" aria-label="Drag preview" title="Drag preview" className="cursor-move touch-none rounded-md p-1.5 text-koma-dim hover:bg-koma-hover"
         onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}><GripHorizontal size={15} /></span>
-      <button type="button" aria-label="Hide preview" title="Hide preview (control stays enabled)" onClick={hide} className="rounded-md p-1.5 text-koma-dim hover:bg-koma-hover"><X size={14} /></button>
+      <button type="button" aria-label="Hide preview" title="Hide preview (control stays enabled)" onClick={() => dismiss(session)} className="rounded-md p-1.5 text-koma-dim hover:bg-koma-hover"><X size={14} /></button>
     </>} />
     <button type="button" aria-label="Resize preview" title="Resize preview; arrow keys also resize" className="absolute bottom-0 right-0 h-5 w-5 cursor-nwse-resize touch-none text-koma-dim focus-visible:outline focus-visible:outline-koma-accent"
       onPointerDown={event => { if (event.button !== 0) return; resizing.current = { x: event.clientX, y: event.clientY, width: bounds.width, height: bounds.height }; event.currentTarget.setPointerCapture(event.pointerId) }}

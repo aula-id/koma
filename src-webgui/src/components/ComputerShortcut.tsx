@@ -33,7 +33,7 @@ export function ComputerShortcut() {
   </button>
   {enabled && <>
     <button type="button" className={controlClass} aria-label={paused ? assist ? 'Resume assist' : 'Give control' : assist ? 'Pause assist' : 'Take back control'} title={assist ? 'Pause or resume view-only assistance' : paused ? 'Give control to the agent' : 'Take back control; sharing stays live'} onClick={() => req({ r: 'Computer', action: paused ? 'resume' : 'take_over' })}>{paused ? <Play size={12} /> : <Hand size={12} />}</button>
-    <button type="button" className={controlClass} aria-label="Stop sharing" title="Stop sharing" onClick={() => { useComputerPreview.getState().hide(); req({ r: 'Computer', action: 'stop' }) }}><Square size={11} /></button>
+    <button type="button" className={controlClass} aria-label="Stop sharing" title="Stop sharing" onClick={() => { useComputerPreview.getState().dismiss(session); req({ r: 'Computer', action: 'stop' }) }}><Square size={11} /></button>
   </>}
   </div>
 }
