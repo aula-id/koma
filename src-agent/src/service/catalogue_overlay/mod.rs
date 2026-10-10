@@ -1,24 +1,18 @@
-//! Curated model-metadata overlay for non-OpenRouter providers.
+//! Model-metadata overlay for non-OpenRouter providers + OAuth catalogues.
 //!
-//! OAuth providers (codex/claude/xai) and direct APIs (e.g. deepseek) don't
-//! expose an OpenRouter-style `GET /models` endpoint carrying `reasoning` and
-//! `pricing` metadata — there's simply no wire call that returns it. This
-//! module fills that gap with a hand-curated table, keyed by the resolved
-//! endpoint string (see `service::oauth::registry`'s `meta().chat_endpoint`
-//! for how those strings are produced), so a future consumer can feed
-//! `effort_caps`/pricing lookups for these providers the same way it already
-//! does for OpenRouter models.
+//! OAuth providers (codex/claude/xai/…) historically lacked an OpenRouter-style
+//! `GET /models` with `reasoning`/`pricing`. This module fills that gap:
 //!
-//! Loading order: bundled default (compiled into the binary via
-//! `include_str!`) -> on-disk cache (`~/.koma/models.json`, if present and
-//! valid) -> background-refreshed from a GitHub release asset. See `fetch.rs`
-//! for the refresh policy (TTL + ETag).
+//! Loading order: bundled `models.json` (direct-API fallback) → on-disk cache →
+//! GitHub release asset (`fetch.rs`) → **koma-landing OA catalogues**
+//! (`oa.rs`: `GET /api/v1/oa/providers/{wire_id}`), merged by chat endpoint key.
 //!
-//! NOT WIRED INTO ANY CONSUMER YET — this is infra + a lookup API only. No
-//! effort-menu UI, no usage/cost code reads from here.
+//! Consumers: `models_for` / `models_for_provider`, `effort_caps` input,
+//! `overlay_cost`, KomaRun `is_premium_model`.
 
 mod fetch;
 mod model;
+mod oa;
 
 // dead_code: infra-only for now — no consumer wired yet (W2/W3 will read this).
 #[allow(unused_imports)]
@@ -45,7 +39,8 @@ const BUNDLED_DEFAULT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "
 /// Call ONCE at startup (mirrors `model::store::migrate_legacy_dir`): loads
 /// the overlay table (a fresh on-disk cache if present and valid, else the
 /// bundled default compiled into the binary), then kicks off a non-blocking
-/// background refresh against the GitHub release asset.
+/// background refresh against the GitHub release asset **and** koma-landing
+/// `/api/v1/oa/providers/{id}` catalogues (OAuth thinking + membership).
 ///
 /// Never panics: a malformed cache or bundled file degrades to an empty table
 /// rather than aborting startup.
@@ -53,6 +48,7 @@ pub fn init() {
     let table = load_initial();
     let _ = OVERLAY.set(RwLock::new(table));
     fetch::spawn_refresh();
+    oa::spawn_refresh();
 }
 
 /// Load the starting table: on-disk cache if it parses, else the bundled
@@ -89,6 +85,23 @@ pub(super) fn set_overlay(table: OverlayTable) {
         if let Ok(mut guard) = lock.write() {
             *guard = table;
         }
+    }
+}
+
+/// Merge endpoint keys from `patch` into the live overlay (OA refresh path).
+/// Existing keys not in `patch` are preserved (e.g. DeepSeek direct entries).
+pub(super) fn merge_overlay_patch(patch: OverlayTable) {
+    if patch.is_empty() {
+        return;
+    }
+    let Some(lock) = OVERLAY.get() else {
+        return;
+    };
+    let Ok(mut guard) = lock.write() else {
+        return;
+    };
+    for (endpoint, models) in patch {
+        guard.insert(endpoint, models);
     }
 }
 
