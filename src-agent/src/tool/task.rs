@@ -45,7 +45,7 @@ impl Tool for Task {
                 },
                 "node_id": {
                     "type": "string",
-                    "description": "SDLC graph leaf id to claim (required in SDLC execute/integrate)."
+                    "description": "Optional. Omit this field unless the system message has an SDLC section whose current phase is execute or integrate. Then pass that phase's claimed leaf id. It is not required in any other mode."
                 },
                 "run_in_background": {
                     "type": "boolean",

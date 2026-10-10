@@ -77,9 +77,18 @@ fn always_on_prompt_does_not_order_plan_enter_or_mission_clear() {
             !text.contains("mission_clear"),
             "mission_clear standing order leaked into the always-on prompt"
         );
+        for name in ["plan_ready", "mission_ready", "mission_verify"] {
+            assert!(
+                !text.contains(name),
+                "{name} is mode-only and leaked into the always-on prompt"
+            );
+        }
     }
-    assert!(
-        prompt.contains("call plan_ready and wait for the runtime approval step"),
-        "Plan-mode plan_ready sentence missing from system-prompt.txt"
-    );
+    let checklist = include_str!("checklist.txt");
+    for name in ["mission_ready", "mission_verify"] {
+        assert!(
+            !checklist.contains(name),
+            "{name} leaked into the checklist tool description"
+        );
+    }
 }

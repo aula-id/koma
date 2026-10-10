@@ -246,14 +246,12 @@ pub fn build_system_prompt(
         if !sa.is_empty() {
             s.push_str("\n\n# Sub-agents\n");
             s.push_str(
-                "Default to delegating via the `task` tool — do NOT explore the codebase \
-                 yourself when you can delegate it. Specifically: any broad codebase \
-                 exploration, searching, mapping, or research (understanding how something \
-                 works, finding where things live across multiple files, surveying a module) \
-                 MUST go to the explore sub-agent. Scoped, self-contained implementation or \
-                 mechanical work goes to the general sub-agent. Only use your own \
-                 read/grep/glob for small, targeted confirmations on a specific known file or \
-                 line — never for open-ended exploration. The `task` tool runs the agent to \
+                "Use the `task` tool for broad codebase exploration, searching, mapping, or \
+                 research that spans multiple files — hand that survey to the explore \
+                 sub-agent. Read a specific known file, function, or line yourself; a direct \
+                 read is the fact, and a sub-agent report is only a summary. Scoped, \
+                 self-contained implementation or mechanical work goes to the general \
+                 sub-agent. The `task` tool runs the agent to \
                  completion and returns its full report for you to read and react to. You may \
                  delegate SEVERAL tasks in one turn by calling the task tool multiple times — \
                  up to 5 sub-agents run concurrently, in parallel, and each returns its own \

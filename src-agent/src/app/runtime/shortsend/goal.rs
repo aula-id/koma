@@ -173,7 +173,7 @@ pub fn seed_charter_if_empty(settings: &mut Settings, last_user: &str) -> bool {
         return false;
     }
     let raw = last_user.trim();
-    if raw.is_empty() || looks_like_slash_only(raw) {
+    if raw.is_empty() || looks_like_slash_only(raw) || looks_like_greeting(raw) {
         return false;
     }
     let c = clip_goal(raw);
@@ -221,8 +221,9 @@ pub fn resolve_effective_goal(settings: &Settings, mission: Option<&MissionSnap>
         }
     }
 
-    // 3. Charter as objective.
-    if !charter.is_empty() {
+    // 3. Charter as objective. A greeting is not a task; injecting it as
+    // doctrine makes the model treat small talk as the current goal.
+    if !charter.is_empty() && !looks_like_greeting(&charter) {
         return EffectiveGoal {
             source: GoalSource::Charter,
             objective: charter.clone(),
@@ -306,6 +307,26 @@ fn strip_goal_prefix<'a>(lower: &str, raw: &'a str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn looks_like_greeting(s: &str) -> bool {
+    let t = s.trim().trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace());
+    matches!(
+        t.to_ascii_lowercase().as_str(),
+        "hi"
+            | "hello"
+            | "hey"
+            | "yo"
+            | "sup"
+            | "thanks"
+            | "thank you"
+            | "ok"
+            | "okay"
+            | "howdy"
+            | "good morning"
+            | "good afternoon"
+            | "good evening"
+    )
 }
 
 fn looks_like_slash_only(s: &str) -> bool {
@@ -480,6 +501,26 @@ mod tests {
         let mut s = Settings::default();
         assert!(!seed_charter_if_empty(&mut s, "/help"));
         assert!(s.session_charter.is_empty());
+    }
+
+    #[test]
+    fn charter_seed_skips_greeting() {
+        let mut s = Settings::default();
+        assert!(!seed_charter_if_empty(&mut s, "hello?"));
+        assert!(s.session_charter.is_empty());
+        assert!(seed_charter_if_empty(&mut s, "Fix the preview overlay"));
+        assert_eq!(s.session_charter, "Fix the preview overlay");
+    }
+
+    #[test]
+    fn greeting_charter_is_not_injected_as_the_objective() {
+        let s = Settings {
+            session_charter: "hello?".into(),
+            ..Settings::default()
+        };
+        let eg = resolve_effective_goal(&s, None);
+        assert_eq!(eg.source, GoalSource::None);
+        assert!(eg.objective.is_empty());
     }
 
     #[test]
