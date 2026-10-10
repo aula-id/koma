@@ -9,6 +9,15 @@
 /// Events delivered to the main `tao` event loop from the ipc handler (window
 /// commands) or the host-relay client-thread (state pushes).
 pub(super) enum UserEvent {
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    PickSettingsFolder { request_id: String },
+    #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+    SettingsFolderPicked {
+        request_id: String,
+        path: Option<std::path::PathBuf>,
+    },
+    /// Local GUI zoom, applied only to the main WebView on its window thread.
+    UiScale { scale: f64, request_id: String },
     /// A custom-titlebar window command posted from the webview.
     Win(WinCmd),
     /// A ready-to-inject JSON envelope from the host-relay client-thread. The GUI
@@ -100,6 +109,29 @@ pub(super) struct TutorialChatMsg {
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
+    PickSettingsFolder {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    SetUiScale {
+        scale: f64,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    Notifications {
+        request: crate::model::notifications::Request,
+        #[serde(default)]
+        local: bool,
+    },
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer {
         action: String,
         window: Option<String>,
@@ -686,6 +718,10 @@ pub(super) enum GuiReq {
     /// Compacting without an attached session is meaningless, so the un-attached case
     /// is a silent no-op (same pattern as `Interrupt`/`RewindTo`).
     Compact,
+    /// The titlebar Clear action: wipe the live chat transcript. Forwarded as
+    /// [`ClientRequest::Clear`] (koma's `/clear` equivalent). Attached-only; silent
+    /// no-op when detached (same pattern as `Compact`).
+    Clear,
     /// The plan-approval card's controls (paused `plan_ready` digest). `decision` is one
     /// of `"approve"`, `"compact"` (approve + compact history to the plan), or `"deny"`
     /// (keep discussing). Forwarded verbatim as [`ClientRequest::PlanDecision`], koma's
@@ -988,6 +1024,8 @@ pub(super) enum GuiReq {
     TutorialChat {
         id: String,
         messages: Vec<TutorialChatMsg>,
+        #[serde(default)]
+        context: serde_json::Value,
     },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────
@@ -1464,6 +1502,11 @@ pub(super) enum GuiReq {
     },
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    /// Discover installed shells on the active host without blocking the relay.
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     /// Create a new interactive terminal session (PTY) at the given working
     /// directory. The host manages the PTY lifecycle and streams output back
     /// as TerminalOutput/TerminalExit push envelopes. `id` is a client-minted
@@ -1473,6 +1516,8 @@ pub(super) enum GuiReq {
         id: String,
         #[serde(default, rename = "cwd")]
         cwd: Option<String>,
+        #[serde(default)]
+        shell_id: Option<String>,
     },
     /// Forward keystroke data from xterm.js to the PTY's stdin. `id` is the
     /// terminal session id from TerminalCreate.
@@ -1559,5 +1604,35 @@ mod skill_wire_tests {
         }))
         .expect("roots request");
         assert!(matches!(roots, GuiReq::SetExtraSkillRoots { .. }));
+    }
+}
+
+/// Only the advertised multipliers are accepted, including for raw IPC.
+/// Fine steps from 0.9× to 1.5× (default 1×) — no harsher zooms.
+pub(super) fn valid_ui_scale(scale: f64) -> bool {
+    const ALLOWED: [f64; 7] = [0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
+    ALLOWED
+        .iter()
+        .any(|&allowed| (allowed - scale).abs() < 1e-9)
+}
+
+#[cfg(test)]
+mod ui_scale_tests {
+    #[test]
+    fn allowed_scales_only() {
+        for scale in [0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5] {
+            assert!(super::valid_ui_scale(scale));
+        }
+        for scale in [0.0, -1.0, 1.25, 2.0, 2.5, 3.0, f64::NAN, f64::INFINITY] {
+            assert!(!super::valid_ui_scale(scale));
+        }
+        let request = serde_json::from_str::<super::ClientMsg>(
+            r#"{"t":"req","r":"SetUiScale","scale":1.2,"requestId":"zoom-1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request,
+            super::ClientMsg::Req(super::GuiReq::SetUiScale { scale: 1.2, .. })
+        ));
     }
 }

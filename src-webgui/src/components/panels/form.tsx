@@ -1,3 +1,4 @@
+import { pageRect } from '../../lib/uiScale'
 import {
   useEffect,
   useRef,
@@ -136,7 +137,7 @@ export function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObje
       return
     }
     const update = () => {
-      if (ref.current) setRect(ref.current.getBoundingClientRect())
+      if (ref.current) setRect(pageRect(ref.current.getBoundingClientRect()))
     }
     update()
     window.addEventListener('scroll', update, true)

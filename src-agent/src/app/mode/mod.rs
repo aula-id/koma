@@ -19,6 +19,7 @@ mod key_input;
 mod loading;
 pub mod mcp;
 mod model_cmd;
+pub mod notifications;
 mod onboard;
 pub mod onboard_provider;
 mod picker;
@@ -241,6 +242,7 @@ pub enum Mode {
     /// reference-only); Esc closes back to Chat. Boxed to keep `Mode` small,
     /// consistent with the other list variants.
     Help(Box<HelpState>),
+    Notifications(Box<notifications::NotificationsState>),
     /// Reasoning/thinking-effort picker (`/effort`): a small overlay listing the
     /// effort options the current model supports. The inner [`EffortPickerState`]
     /// holds the option list, the cursor, and a one-line capability note. Boxed

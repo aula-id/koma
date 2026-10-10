@@ -1,14 +1,17 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { lottieAnimations } from './vite-plugin-lottie'
 import { playwright } from '@vitest/browser-playwright'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  server: { fs: { allow: [new URL('..', import.meta.url).pathname] } },
+  plugins: [react(), tailwindcss(), lottieAnimations()],
   optimizeDeps: { include: ['react/jsx-dev-runtime', 'react-dom'] },
   test: {
     projects: [
       {
+        extends: true,
         test: {
           name: 'logic',
           environment: 'jsdom',
@@ -16,6 +19,7 @@ export default defineConfig({
         },
       },
       {
+        extends: true,
         test: {
           name: 'chromium',
           include: ['src/**/*.browser.test.ts', 'src/**/*.browser.test.tsx'],

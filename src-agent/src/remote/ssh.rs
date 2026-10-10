@@ -143,6 +143,7 @@ pub(crate) fn interactive_shell_command(
     target: &RemoteTarget,
     auth: Option<&SshAuth>,
     cwd: Option<&str>,
+    shell: Option<&str>,
 ) -> Result<portable_pty::CommandBuilder> {
     let mut cmd = portable_pty::CommandBuilder::new("ssh");
     // Force a remote TTY even though ssh's stdin is already a local PTY slave —
@@ -174,15 +175,48 @@ pub(crate) fn interactive_shell_command(
     cmd.arg(format!("{}@{}", target.user, target.host));
     // Single remote argv — ssh runs it under the login shell. Quote cwd so a
     // hostile path can't break out of the cd.
-    let remote = match cwd.map(str::trim).filter(|c| !c.is_empty()) {
-        Some(dir) => {
-            let q = shell_quote(dir);
-            format!("cd {q} 2>/dev/null || true; exec \"${{SHELL:-/bin/bash}}\" -l")
+    let remote = terminal_remote_command(cwd, shell);
+    cmd.arg(remote);
+    Ok(cmd)
+}
+
+pub(crate) fn terminal_remote_command(cwd: Option<&str>, shell: Option<&str>) -> String {
+    let launch = match shell {
+        Some(path) => {
+            let q = shell_quote(path);
+            let args = crate::app::runtime::client::terminal_shell_args(path);
+            let args = args
+                .iter()
+                .map(|a| shell_quote(a))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("[ -f {q} ] && [ -x {q} ] || {{ printf '%s\\n' 'Selected shell is no longer available'; exit 127; }}; exec {q} {args}")
         }
         None => "exec \"${SHELL:-/bin/bash}\" -l".to_string(),
     };
-    cmd.arg(remote);
-    Ok(cmd)
+    match cwd.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(dir) => format!("cd {} || exit; {launch}", shell_quote(dir)),
+        None => launch,
+    }
+}
+
+pub(crate) fn shell_discovery(
+    target: &RemoteTarget,
+    auth: Option<&SshAuth>,
+    script: &str,
+) -> Result<String> {
+    let mut cmd = StdCommand::new("ssh");
+    apply_std_ssh_base(&mut cmd, target, auth);
+    let output = cmd
+        .arg(format!("{}@{}", target.user, target.host))
+        .arg(script)
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Shell discovery failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8(output.stdout)?)
 }
 
 /// Apply shared host-key / timeout / mux / port / key / auth options to a std `ssh`.
@@ -404,3 +438,32 @@ pub(crate) fn exec_remote(
 #[cfg(test)]
 #[path = "ssh_test.rs"]
 mod tests;
+
+#[cfg(test)]
+mod terminal_shell_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_remote_quoting_and_missing_shell() {
+        let path = "/missing/shell'; echo injected; #";
+        let cwd = "/tmp/work dir'; echo injected; #";
+        let command = terminal_remote_command(Some(cwd), Some(path));
+        assert!(command.starts_with(&format!("cd {} || exit;", shell_quote(cwd))));
+        assert!(command.contains(&format!("exec {}", shell_quote(path))));
+        let command = terminal_remote_command(None, Some(path));
+        let output = StdCommand::new("/bin/sh")
+            .args(["-c", &command])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(127));
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("Selected shell is no longer available"));
+        assert!(!text.contains("injected"));
+        assert!(terminal_remote_command(None, None).contains("${SHELL:-/bin/bash}"));
+        assert!(terminal_remote_command(None, Some("/bin/bash")).ends_with("'-l' '-i'"));
+        assert!(
+            terminal_remote_command(None, Some("/opt/nu")).ends_with("'--login' '--interactive'")
+        );
+    }
+}

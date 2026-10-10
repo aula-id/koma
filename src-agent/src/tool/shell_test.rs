@@ -2,6 +2,23 @@
 use super::*;
 
 #[test]
+fn git_bash_usr_bin_follows_shim_and_real_layout() {
+    let shim = PathBuf::from("Git").join("bin").join("bash.exe");
+    assert_eq!(
+        git_bash_usr_bin(&shim),
+        PathBuf::from("Git").join("usr").join("bin")
+    );
+    let real = PathBuf::from("shell")
+        .join("usr")
+        .join("bin")
+        .join("bash.exe");
+    assert_eq!(
+        git_bash_usr_bin(&real),
+        PathBuf::from("shell").join("usr").join("bin")
+    );
+}
+
+#[test]
 fn slug_takes_first_two_words_and_joins_with_dash() {
     assert_eq!(command_slug("cargo build --release"), "cargo-build");
     assert_eq!(command_slug("git log --oneline"), "git-log");

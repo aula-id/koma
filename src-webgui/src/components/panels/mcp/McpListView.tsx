@@ -84,7 +84,7 @@ export function McpListView({
                 <button onClick={() => onEdit(s)} className="min-w-0 flex-1 text-left">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`truncate text-[13px] text-koma-fg ${s.enabled ? '' : 'opacity-50'}`}
+                      className={`min-w-0 truncate text-[13px] text-koma-fg ${s.enabled ? '' : 'opacity-50'}`}
                     >
                       {s.name || '(unnamed)'}
                     </span>
@@ -98,20 +98,24 @@ export function McpListView({
                     </div>
                   )}
                 </button>
-                <button
-                  onClick={() => onEdit(s)}
-                  aria-label="Edit"
-                  className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!opacity-100"
-                >
-                  <Pencil size={13} />
-                </button>
-                <button
-                  onClick={() => onArm(s.id)}
-                  aria-label="Delete"
-                  className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!text-red-500 hover:!opacity-100"
-                >
-                  <Trash2 size={13} />
-                </button>
+                {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
+                    Hover: expand and show. opacity alone would still reserve space. */}
+                <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[44px] group-hover:opacity-100">
+                  <button
+                    onClick={() => onEdit(s)}
+                    aria-label="Edit"
+                    className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 transition hover:!opacity-100"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={() => onArm(s.id)}
+                    aria-label="Delete"
+                    className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 transition hover:!text-red-500 hover:!opacity-100"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </>
             )}
           </div>

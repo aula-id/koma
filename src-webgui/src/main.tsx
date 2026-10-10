@@ -1,4 +1,5 @@
 import React from 'react'
+import { restoreUiScale } from './lib/uiScale'
 import { ComputerViewer } from './components/ComputerViewer'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from '@tanstack/react-router'
@@ -62,4 +63,4 @@ if (typeof document !== 'undefined' && document.fonts) {
     .catch(() => undefined)
 }
 
-renderApp()
+void restoreUiScale().then(renderApp)

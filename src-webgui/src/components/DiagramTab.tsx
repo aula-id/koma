@@ -1,3 +1,4 @@
+import { canvasPoint, pagePoint } from '../lib/uiScale'
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Circle, Diamond, HandGrab, MousePointer2, PanelRightClose, PanelRightOpen, RotateCw, Shapes, Spline, Square, Type } from 'lucide-react'
 import { useKoma, type Tab } from '../store/koma'
@@ -251,7 +252,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
     const docPoint = (clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect()
       if (!rect) return null
-      return { x: clientX - rect.left - panRef.current.x, y: clientY - rect.top - panRef.current.y }
+      return { x: canvasPoint(clientX - rect.left) - panRef.current.x, y: canvasPoint(clientY - rect.top) - panRef.current.y }
     }
     const apply = (drag: Drag, next: DiagramDoc, current: DiagramDoc) => {
       if (serializeDiagram(current) === serializeDiagram(next)) return
@@ -265,7 +266,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       const drag = dragRef.current
       if (!drag) return
       if (drag.kind === 'pan') {
-        setPan({ x: drag.px + (e.clientX - drag.sx), y: drag.py + (e.clientY - drag.sy) })
+        setPan({ x: drag.px + canvasPoint(e.clientX - drag.sx), y: drag.py + canvasPoint(e.clientY - drag.sy) })
         return
       }
       if (drag.kind === 'marquee') {
@@ -288,8 +289,8 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       if (!current) return
       const doc = current.doc
       if (drag.kind === 'move') {
-        const dx = e.clientX - drag.sx
-        const dy = e.clientY - drag.sy
+        const dx = canvasPoint(e.clientX - drag.sx)
+        const dy = canvasPoint(e.clientY - drag.sy)
         if (!drag.moved) {
           if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return
           drag.moved = true
@@ -305,8 +306,8 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
         return
       }
       if (drag.kind === 'resize') {
-        const dx = e.clientX - drag.sx
-        const dy = e.clientY - drag.sy
+        const dx = canvasPoint(e.clientX - drag.sx)
+        const dy = canvasPoint(e.clientY - drag.sy)
         const resized = resizeNode(drag.node, drag.handle, dx, dy, doc.grid, doc.snap)
         apply(drag, { ...doc, nodes: doc.nodes.map((node) => (node.id === drag.id ? resized : node)) }, doc)
         return
@@ -543,7 +544,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
   const toDoc = (e: { clientX: number; clientY: number }) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return null
-    return { x: e.clientX - rect.left - panRef.current.x, y: e.clientY - rect.top - panRef.current.y }
+    return { x: canvasPoint(e.clientX - rect.left) - panRef.current.x, y: canvasPoint(e.clientY - rect.top) - panRef.current.y }
   }
 
   const addAt = (kind: DiagramKind, x: number, y: number) => {
@@ -781,7 +782,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       <div className="flex min-h-0 min-w-0 flex-1">
       <div
         ref={canvasRef}
-        className={`relative min-h-0 min-w-0 flex-1 overflow-hidden ${dragCursor ? '' : tool === 'pan' || spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
+        className={`koma-authored-canvas relative min-h-0 min-w-0 flex-1 overflow-hidden ${dragCursor ? '' : tool === 'pan' || spaceDown ? 'cursor-grab' : 'cursor-crosshair'}`}
         style={{
           ...(doc.snap
             ? {
@@ -1171,7 +1172,7 @@ export function DiagramTab({ tab }: { tab: Extract<Tab, { kind: 'diagram' }> }) 
       {chatMenu ? (
         <div
           className="fixed z-[80] min-w-[160px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"
-          style={{ left: chatMenu.x, top: chatMenu.y }}
+          style={{ left: pagePoint(chatMenu.x), top: pagePoint(chatMenu.y) }}
           data-diagram-ui=""
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

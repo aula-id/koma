@@ -695,6 +695,8 @@ pub struct CascadePurge {
 /// or when the file is absent entirely.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub web_search: super::web_search::WebSearchConfig,
     /// Active theme palette name (see view::theme::PALETTES). Replaces `theme`+`accent`.
     #[serde(default = "default_palette")]
     pub palette: String,
@@ -755,6 +757,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            web_search: Default::default(),
             palette: default_palette(),
             theme: ThemeMode::default(),
             accent: default_accent(),

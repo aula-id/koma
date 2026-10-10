@@ -1,8 +1,11 @@
 declare global {
-  interface Window { __komaComputerPalette?: Record<string, string>; __komaComputerInitial?: import('./types/computer').ComputerStatus | null }
+  interface Window { __komaFolderReply?: (reply: { requestId: string; path: string | null }) => void }
+  interface Window { __komaUiScaleReply?: (reply: import('./lib/uiScale').UiScaleReply) => void;  __komaComputerPalette?: Record<string, string>; __komaComputerInitial?: import('./types/computer').ComputerStatus | null }
   // JS -> Rust request payloads, tagged { t: 'req', ...GuiReq } by
   // useKoma().req() (see src/store/koma.ts).
   type GuiReq =
+    | { r: 'PickSettingsFolder'; requestId: string }
+    | { r: 'SetUiScale'; scale: import('./lib/uiScale').UiScale; requestId: string }
     | { r: 'Computer'; action: 'enable' | 'windows' | 'select' | 'pause' | 'resume' | 'stop' | 'take_over'; window?: string }
     | { r: 'GitWorkbench'; request: import('./lib/gitWorkbench').GitRequest }
     | { r: 'Ready' }
@@ -193,6 +196,9 @@ declare global {
     // Trigger conversation compaction on demand (the UsageFooter's compact
     // button) — same effect as the TUI's /compact. No id: foreground session.
     | { r: 'Compact' }
+    // Wipe the live chat transcript (titlebar clear) — same effect as the
+    // TUI's /clear. Keeps system prompt + archive. No id: foreground session.
+    | { r: 'Clear' }
     // Fetch the original/modified contents of a File-changed path for a Monaco
     // diff tab. `path` is exactly as the fileChanges record carries it. Reply
     // lands as the FileDiff push envelope (guaranteed for every request).
@@ -225,6 +231,8 @@ declare global {
     // internet mode) + the active palette. Sent when the tab opens or re-activates.
     // Reply lands as the SettingsValues push envelope (guaranteed for every request,
     // even detached — the host answers from global config with defaults).
+    | { r: 'GetWebSearch'; req_seq: number }
+    | { r: 'SetWebSearch'; req_seq: number; provider: import('./types/web-search').SearchProvider; key: string | null }
     | { r: 'GetSettings' }
     // Commit a PARTIAL settings update from the Settings tab's Session section. Only
     // the present fields are sent; the host applies each through the same per-field
@@ -415,8 +423,10 @@ declare global {
     | { r: 'OpenExternal'; url: string }
     // GUI Tutorial tab: one chat turn via host-proxied koma-free (no daemon).
     // Reply lands as TutorialChatDone (id echoed).
-    | {
+    | { r: 'Notifications'; local?: boolean; request: import('./lib/notifications').NotificationRequest }
+  | {
         r: 'TutorialChat'
+        context?: Record<string, unknown>
         id: string
         messages: { role: string; content: string }[]
       }
@@ -742,7 +752,8 @@ declare global {
   | { r: 'ImportGraphReindex'; requestId?: string | null }
 
   // ─── GUI terminal view ──────────────────────────────────────────────────
-  | { r: 'TerminalCreate'; id: string; cwd?: string }
+  | { r: 'TerminalShells'; request_id: string; context: string }
+  | { r: 'TerminalCreate'; id: string; cwd?: string; shell_id?: string }
   | { r: 'TerminalInput'; id: string; data: string }
   | { r: 'TerminalResize'; id: string; cols: number; rows: number }
   | { r: 'TerminalKill'; id: string }

@@ -77,7 +77,7 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
     setTimeout(fire, 80)
     setTimeout(fire, 300)
   },
-  openTerminalTab: (terminalId, title) => {
+  openTerminalTab: (terminalId, title, shellId) => {
     const id = `term:${terminalId}`
     set((s) => {
       const exists = s.ui.tabs.some((t) => t.id === id)
@@ -93,7 +93,7 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
       created.add(terminalId)
       ;(globalThis as any).__terminalsCreated = created
       const cwd = get().settingsValues?.workdir?.[0] ?? undefined
-      get().req({ r: 'TerminalCreate', id: terminalId, cwd })
+      get().req({ r: 'TerminalCreate', id: terminalId, cwd, shell_id: shellId })
     }
   },
   setActiveCodingRoot: (root, opts) => {

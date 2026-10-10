@@ -23,6 +23,9 @@ use super::push_proto::{
 /// `push_loop`, which owns the loop-local `current_config`) and does NOT call
 /// `apply_frame` (the caller does that right after, unchanged).
 pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &dyn Fn(String)) {
+    if let DaemonEvent::Notifications { reply } = &frame.event {
+        push(serde_json::json!({"t":"push","k":"Notifications","reply":reply}).to_string());
+    }
     // Omnisearch reply: intercept the one-shot `FileSearchResults` and re-push it to JS as
     // a `SearchResults` envelope BEFORE folding (the fold treats it as a non-visual no-op,
     // keeping the seq gap-free).
@@ -31,9 +34,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             marker_n: *marker_n,
             text: text.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::AttachmentLocated {
         marker_n,
@@ -48,18 +49,14 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             rel_path: rel_path.clone(),
             name: name.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
         let env = PushEnvelope::SearchResults {
             query: query.clone(),
             items: items.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Live model-id catalogue reply (Connector model picker): re-push it as a `ModelList`
     // envelope BEFORE folding (the fold treats it as a non-visual no-op, keeping the seq
@@ -69,9 +66,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             provider: provider.clone(),
             models: models.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Live provider-route reply (Connector ModelForm route picker): re-push it as a
     // `RouteList` envelope BEFORE folding (a non-visual fold no-op), flattening each wire
@@ -96,13 +91,24 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
                 })
                 .collect(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // GUI Settings-tab reply (GetSettings / post-SetSessionPrefs re-push): re-push it as a
     // `SettingsValues` envelope BEFORE folding (a non-visual fold no-op, keeping the seq
     // gap-free), same as the ModelList/RouteList intercepts above.
+    if let DaemonEvent::WebSearchValues {
+        req_seq,
+        status,
+        error,
+    } = &frame.event
+    {
+        let env = PushEnvelope::WebSearchValues {
+            req_seq: *req_seq,
+            status: status.clone(),
+            error: error.clone(),
+        };
+        super::render::emit(push, &env);
+    }
     if let DaemonEvent::SettingsValues {
         name,
         workdir,
@@ -140,9 +146,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             context_model_alias: context_model_alias.clone(),
             extra_skill_roots: extra_skill_roots.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::SkillValues {
         request_id,
@@ -220,9 +224,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             catalogue_providers: catalogue_providers.clone(),
             available_tools: available_tools.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Daemon agent-mutation result (SetAgent/DeleteAgent from requests_agents.rs):
     // re-push as an `AgentOp` envelope BEFORE folding (a non-visual fold no-op,
@@ -235,9 +237,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             error: error.clone(),
             req_seq: *req_seq,
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Composer EFFORT-picker reply (GetEffortOptions): re-push it as an `EffortOptions`
     // envelope BEFORE folding (a non-visual fold no-op, keeping the seq gap-free), same as
@@ -255,9 +255,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             note: note.clone(),
             state: state.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Streaming GUI OAuth reply (GetOAuthState / StartOAuth progress / SubmitOAuthPaste /
     // CancelOAuth / DeleteOAuthConn): re-push it as an `OAuthState` envelope BEFORE folding
@@ -282,9 +280,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             conns: conns.clone(),
             providers: providers.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // GUI extension-STORE replies (StoreBrowse / StoreDetail / ListInstalledExtensions /
     // Install / Uninstall): re-push each as its own envelope BEFORE folding (a non-visual
@@ -296,26 +292,20 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             items: items.clone(),
             error: error.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::StoreItemDetail { detail, error } = &frame.event {
         let env = PushEnvelope::StoreItemDetail {
             detail: detail.as_ref().clone(),
             error: error.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::InstalledExtensions { items } = &frame.event {
         let env = PushEnvelope::InstalledExtensions {
             items: items.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::ExtensionOpResult { id, ok, error } = &frame.event {
         let env = PushEnvelope::ExtensionOpResult {
@@ -323,9 +313,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             ok: *ok,
             error: error.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // W8 panel bridge: re-push the panel.msg reply + the unsolicited daemon→panel push as their
     // own envelopes BEFORE folding (each a non-visual fold no-op, keeping the seq gap-free), same
@@ -349,9 +337,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             payload: payload.clone(),
             error: error.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     if let DaemonEvent::ExtPanelPush {
         ext_id,
@@ -364,9 +350,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             panel_id: panel_id.clone(),
             payload: payload.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Generic daemon-to-GUI error: re-push as an AgentOp envelope so the
     // GUI surfaces it as an error toast and clears any pending saving state.
@@ -379,9 +363,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             error: Some(msg.clone()),
             req_seq: 0,
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // One-shot MCP status reply: re-push as a `McpStatus` envelope BEFORE folding
     // (a non-visual fold no-op, keeping the seq gap-free).
@@ -404,9 +386,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
                 .collect(),
             global_error: global_error.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Daemon-bridged Usage panel reply: re-push as `UsagePreview` BEFORE folding
     // (non-visual fold no-op). Field mapping mirrors host-side `push_usage_preview`.
@@ -446,9 +426,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             scope: scope.clone(),
             session_id: session_id.clone(),
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
     // Daemon-bridged Analytics reply: re-push as `Analytics` BEFORE folding
     // (non-visual fold no-op). Field mapping mirrors host-side `push_analytics`.
@@ -512,8 +490,6 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             sub_cost: *sub_cost,
             sub_calls: (*sub_calls).max(0) as u64,
         };
-        if let Ok(json) = serde_json::to_string(&env) {
-            push(json);
-        }
+        super::render::emit(push, &env);
     }
 }

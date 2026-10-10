@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useKoma, fileKey, type CodingFileState } from '../store/koma'
@@ -16,6 +17,7 @@ export function showCodingRefactor(context: RefactorContext) {
   window.dispatchEvent(new CustomEvent('koma-coding-refactor', { detail: context }))
 }
 export function CodingRefactor() {
+  const notificationSession = useKoma(state => state.session.id)
   const [context, setContext] = useState<RefactorContext | null>(null)
   const [command, setCommand] = useState<{ command: string; arguments?: unknown[] } | null>(null)
   const contextRef = useRef<RefactorContext | null>(null)
@@ -130,7 +132,7 @@ export function CodingRefactor() {
       close(true)
       if (command) {
         try { await codingRequest(context.workspace, { op: 'lspCommand', path: context.path, params: command }) }
-        catch (error) { useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error) } } } }) }
+        catch (error) { showToast(String(error), 'error', { session: notificationSession, source: 'coding' }) }
       }
     }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }

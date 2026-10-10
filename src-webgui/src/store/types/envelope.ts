@@ -10,7 +10,10 @@ import type { AttachmentEntry, BashJobEntry, FileChangeEntry, HubCookingEntry, H
 import type { ImportGraphEdge, ImportGraphNode, ImportGraphRootInfo } from './slices'
 import type { McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
 
-export type PushEnvelope =
+export type PushEnvelope = PushEvent & { eventId?: string }
+export type PushEvent =
+  | { k: 'Notifications'; reply: import('../../lib/notifications').NotificationReply }
+  | ({ k: 'WebSearchValues' } & import('../../types/web-search').SearchReply)
   | { k: 'Computer'; status: import('../../types/computer').ComputerStatus }
   | { k: 'ComputerPreview'; frame: import('../../types/computer').ComputerPreviewFrame }
   | { k: 'ComputerError'; message: string }
@@ -31,9 +34,8 @@ export type PushEnvelope =
       // Cumulative file-change log (#24). Optional-tolerant: a host build that
       // doesn't project it yet omits it, and the panel shows "No changes".
       fileChanges?: FileChangeEntry[]
-      // Plan-mode todo checklist (Explore "PLAN" section). Optional-tolerant:
-      // a host build that doesn't project it yet leaves the panel's PLAN
-      // section empty (as if no plan were in progress).
+      // Session checklist (Explore). Optional-tolerant: a host build that
+      // doesn't project it yet leaves the section empty.
       planTodos?: PlanTodoEntry[]
       attachments: AttachmentEntry[]
       // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from
@@ -105,6 +107,8 @@ export type PushEnvelope =
       k: 'Status'
       session: string
       working: boolean
+      toastSession?: string | null
+      toastEventId?: string
       toast: string | null
       toastKind?: string
       tokensIn?: number
@@ -787,6 +791,7 @@ export type PushEnvelope =
       dirs?: string[]
       error?: string | null
     }
+  | ({ k: 'TerminalShells' } & import('../../lib/terminalShells').TerminalShellReply)
   // ─── GUI terminal view ──────────────────────────────────────────────
   | {
       k: 'TerminalOutput'

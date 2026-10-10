@@ -41,9 +41,10 @@ impl OpenRouterClient {
         text_format: Option<serde_json::Value>,
     ) -> Result<String> {
         let _ = account_id; // reserved for codex-parity signature
-        let url = format!("{}/v1/messages?beta=true", conn.endpoint);
+        let claude_oauth = super::is_claude_oauth_host(conn.endpoint);
+        let url = super::messages_url(conn.endpoint);
 
-        let (system, msgs) = build_messages(messages, None);
+        let (system, msgs) = build_messages(messages, None, claude_oauth);
 
         // Structured output → force a single `respond` tool carrying the schema;
         // the model's tool input IS the structured payload we return.
@@ -79,7 +80,7 @@ impl OpenRouterClient {
 
         let resp: reqwest::Response = 'retry: {
             for attempt in 1u32..=MAX_ATTEMPTS {
-                let send = anthropic_headers(self.http.post(&url), bearer, false)
+                let send = anthropic_headers(self.http.post(&url), bearer, false, claude_oauth)
                     .json(&body)
                     .send()
                     .await;

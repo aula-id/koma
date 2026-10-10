@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import {
   useEffect,
   useMemo,
@@ -46,7 +47,6 @@ import {
   PASTE_SOFT_MAX_BYTES,
   pasteByteLength,
   pasteMarker,
-  shouldCollapsePaste,
   splitPasteMessage,
   type PastedBlock,
 } from '../lib/pasteText'
@@ -65,7 +65,7 @@ import {
   hasComposerAttachmentDrag,
   writeComposerAttachmentDrag,
 } from '../lib/composerIpc'
-import { looksLikeComposerMarkdown } from '../lib/composerMarkdownPaste'
+import { composerTextPasteAction } from '../lib/composerMarkdownPaste'
 import { parseFileRefWire } from '../lib/composerChipOpen'
 import { ComposerPasteEditOverlay } from './ComposerPasteEditOverlay'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
@@ -435,12 +435,7 @@ export function Composer() {
       .getState()
       .session.messages.filter((m) => m.role === 'user' && !m.kind && m.content.trim() !== '')
 
-  const toastError = (text: string) => {
-    const id = useKoma.getState().ui.toastSeq + 1
-    useKoma.setState((s) => ({
-      ui: { ...s.ui, toastSeq: id, toast: { id, text, kind: 'error' } },
-    }))
-  }
+  const toastError = (text: string) => showToast(text, 'error')
 
   const submit = () => {
     if (submitLock.current) return
@@ -765,8 +760,7 @@ export function Composer() {
       toastError('Paste is larger than 2 MB')
       return true
     }
-    if (looksLikeComposerMarkdown(text)) return false
-    if (!shouldCollapsePaste(text)) return false
+    if (composerTextPasteAction(text) !== 'collapse') return false
     e.preventDefault()
     const id = mintDiagramChipId()
     markerInsertQueue.current.push({ id, kind: 'pasted_text', markerN: null, cancelled: false })

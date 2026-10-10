@@ -97,8 +97,11 @@ pub(crate) fn os_shell_command(command: &str) -> Command {
         // exactly (no profile/rc sourcing), so behavior stays as close to unix as
         // this platform allows.
         Some(bash) => {
-            let mut c = Command::new(bash);
+            let mut c = Command::new(&bash);
             c.arg("-c").arg(command);
+            for (key, value) in git_bash_env(&bash) {
+                c.env(key, value);
+            }
             c
         }
         None => {
@@ -131,6 +134,8 @@ static GIT_BASH: OnceLock<Option<PathBuf>> = OnceLock::new();
 /// 3. Known install locations: `C:\Program Files\Git\bin\bash.exe`,
 ///    `C:\Program Files (x86)\Git\bin\bash.exe`,
 ///    `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`.
+/// 4. The MSI fallback next to this executable: `<exe_dir>\shell\usr\bin\bash.exe`
+///    (then `<exe_dir>\shell\bin\bash.exe`). System Git wins when it is installed.
 ///
 /// Deliberately NEVER resolves a bare `bash` off `%PATH%` — on stock Windows
 /// `C:\Windows\System32\bash.exe` is the WSL launcher, not a real shell (it
@@ -139,12 +144,13 @@ static GIT_BASH: OnceLock<Option<PathBuf>> = OnceLock::new();
 /// be actively wrong. Every candidate above is resolved to a real Git-for-Windows
 /// bash.exe by construction, so that trap is avoided entirely.
 #[cfg(windows)]
-fn find_git_bash() -> Option<PathBuf> {
+pub(crate) fn find_git_bash() -> Option<PathBuf> {
     GIT_BASH
         .get_or_init(|| {
             find_git_bash_via_exec_path()
                 .or_else(find_git_bash_via_registry)
                 .or_else(find_git_bash_via_known_paths)
+                .or_else(find_git_bash_via_install_dir)
         })
         .clone()
 }
@@ -224,6 +230,58 @@ fn find_git_bash_via_known_paths() -> Option<PathBuf> {
         candidates.push(Path::new(&local_app_data).join(r"Programs\Git\bin\bash.exe"));
     }
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Strategy 4: shell runtime shipped beside `koma.exe` (`INSTALLDIR\shell`).
+#[cfg(windows)]
+fn find_git_bash_via_install_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+    bash_candidates(&parent.join("shell"))
+}
+
+/// `usr\bin` that holds `grep` / `ls` / `sed` for this `bash.exe`.
+///
+/// `<root>\usr\bin\bash.exe` returns that directory. `<root>\bin\bash.exe` (the
+/// Git for Windows shim) returns `<root>\usr\bin`.
+#[cfg(any(windows, test))]
+pub(crate) fn git_bash_usr_bin(bash: &Path) -> PathBuf {
+    if let Some(parent) = bash.parent() {
+        if file_name_eq(parent, "bin") {
+            if let Some(grand) = parent.parent() {
+                if file_name_eq(grand, "usr") {
+                    return parent.to_path_buf();
+                }
+                return grand.join("usr").join("bin");
+            }
+        }
+        return parent.to_path_buf();
+    }
+    PathBuf::from("usr").join("bin")
+}
+
+#[cfg(any(windows, test))]
+fn file_name_eq(path: &Path, expect: &str) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case(expect))
+        .unwrap_or(false)
+}
+
+/// Env for a Git Bash child: MSYS tools on `PATH`, without a login shell.
+#[cfg(windows)]
+pub(crate) fn git_bash_env(bash: &Path) -> Vec<(String, String)> {
+    let mut vars = Vec::with_capacity(2);
+    let usr_bin = git_bash_usr_bin(bash);
+    if usr_bin.is_dir() {
+        let old = crate::coding::environment::host_path();
+        if let Ok(joined) =
+            std::env::join_paths(std::iter::once(usr_bin).chain(std::env::split_paths(&old)))
+        {
+            vars.push(("PATH".into(), joined.to_string_lossy().into_owned()));
+        }
+    }
+    vars.push(("MSYSTEM".into(), "MINGW64".into()));
+    vars
 }
 
 /// Spawn `command` via `sh -c` in `cwd`, capture stdout+stderr, strip ANSI, and

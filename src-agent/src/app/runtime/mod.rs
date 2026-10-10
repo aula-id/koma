@@ -17,6 +17,13 @@
 //! bookkeeping.
 
 mod actions;
+pub(crate) fn save_web_search_config(
+    config: &crate::model::app_config::AppConfig,
+) -> anyhow::Result<()> {
+    config.save()?;
+    std::thread::spawn(manage::broadcast_reload_web_search);
+    Ok(())
+}
 pub(crate) mod client;
 mod client_shadow;
 pub(crate) mod computer;

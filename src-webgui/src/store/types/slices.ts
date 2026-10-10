@@ -27,8 +27,8 @@ export type SessionSlice = {
   subagents: SubAgentEntry[]
   bash: BashJobEntry[]
   fileChanges: FileChangeEntry[]
-  // Plan-mode todo checklist (Explore "PLAN" section). REPLACED wholesale on
-  // each Snapshot; empty outside Plan mode or before a plan exists.
+  // Session checklist (Explore). REPLACED wholesale on each Snapshot.
+  // Plan → plan_todos.md, SDLC → L2 graph, otherwise memory/TODO.md.
   planTodos: PlanTodoEntry[]
   attachments: AttachmentEntry[]
   searchResults: SearchResultEntry[]
@@ -130,6 +130,8 @@ export type TutorialMsg = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  articles?: string[]
+  navigation?: string | null
   tour?: string | null
 }
 export type TutorialSlice = {

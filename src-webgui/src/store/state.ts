@@ -15,6 +15,7 @@ import type { ActivityBarLayout, ActivitySlice, AnalyticsSlice, ConfigSlice, Gra
 import type { ModelListEntry, RouteEntry } from '../types/config'
 
 export type KomaState = {
+  webSearchValues: import('../types/web-search').SearchReply | null
   computer: import('../types/computer').ComputerStatus | null
   computerError: string | null
   session: SessionSlice
@@ -392,6 +393,7 @@ export type KomaState = {
   openSettingsTab: () => void
   // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
   // it. No wire request — the Help tab is static content, unlike Settings.
+  openNotificationsTab: () => void
   openHelpTab: () => void
   // Open (or focus) the singleton Tutorial tab (id 'tutorial').
   openTutorialTab: () => void
@@ -577,7 +579,7 @@ export type KomaState = {
   // terminalId already exists, just focus it; otherwise create a new tab and
   // send TerminalCreate to the host. `title` defaults to "Terminal" for the
   // first, "Terminal N" for subsequent ones.
-  openTerminalTab: (terminalId: string, title: string) => void
+  openTerminalTab: (terminalId: string, title: string, shellId?: string) => void
   // Stream-view chokepoint: derive {subagent, bash} from the CURRENTLY-ACTIVE tab (a
   // stream tab → its target; anything else → both null) and send SetStreamView, so
   // exactly ONE stream view is ever active (the active stream tab, else none). Called

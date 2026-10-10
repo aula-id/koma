@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
@@ -110,7 +111,6 @@ function RootLayout() {
   const openTutorialTab = useKoma((s) => s.openTutorialTab)
   const openTerminalTab = useKoma((s) => s.openTerminalTab)
   // Counter for generating unique terminal IDs.
-  const terminalCountRef = useRef(0)
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
   // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
@@ -124,22 +124,11 @@ function RootLayout() {
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
   // Host opens a remote shell (ssh -t) when remote hub/session is live; local otherwise.
-  const handleTerminal = () => {
-    terminalCountRef.current += 1
-    const n = terminalCountRef.current
+  const handleTerminal = (shell: { id?: string; label: string }) => {
     const rs = useKoma.getState().remoteState
     const remoteLive = rs.state === 'ready' || rs.state === 'connected'
-    const hostLabel =
-      remoteLive && rs.user && rs.host ? `${rs.user}@${rs.host}` : null
-    const title = hostLabel
-      ? n === 1
-        ? hostLabel
-        : `${hostLabel} ${n}`
-      : n === 1
-        ? 'Terminal'
-        : `Terminal ${n}`
-    const id = `t${Date.now()}`
-    openTerminalTab(id, title)
+    const host = remoteLive && rs.host ? `${rs.user}@${rs.host}` : null
+    openTerminalTab(crypto.randomUUID(), host ? `${shell.label} · ${host}` : shell.label, shell.id)
   }
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
@@ -381,7 +370,7 @@ function RootLayout() {
     const startX = e.clientX
     const startW = sidebarWidth
     const onMove = (ev: MouseEvent) => {
-      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX))
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + pagePoint(ev.clientX - startX)))
       setSidebarWidth(next)
     }
     const onUp = () => {
@@ -432,7 +421,7 @@ function RootLayout() {
           onSelect={selectView}
           onSettings={openSettingsTab}
           onHelp={openHelpTab}
-          onTutorial={openTutorialTab}
+          onTutorial={useKoma.getState().openNotificationsTab}
         />
         {sidebarOpen && (
           <>
@@ -510,6 +499,7 @@ const DiffTab = lazy(() => import('../components/DiffTab'))
 const SettingsTab = lazy(() => import('../components/SettingsTab'))
 
 // Help page — lazy so its chunk only loads when the (?) button is first clicked.
+const NotificationsTab = lazy(() => import('../components/NotificationsTab'))
 const HelpTab = lazy(() => import('../components/HelpTab'))
 
 // Tutorial coach — lazy so driver.js + chat UI only load when first opened.
@@ -561,7 +551,7 @@ function DiffFallback() {
   )
 }
 
-function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
+function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visible: boolean }) {
   return (
     <Suspense fallback={<DiffFallback />}>
       {tab.kind === 'gitTool' ? (
@@ -569,11 +559,13 @@ function TabBody({ tab }: { tab: Exclude<Tab, { kind: 'chat' }> }) {
       ) : tab.kind === 'diff' ? (
         <DiffTab tab={tab} />
       ) : tab.kind === 'settings' ? (
-        <SettingsTab />
+        <SettingsTab visible={visible} />
+      ) : tab.kind === 'notifications' ? (
+        <NotificationsTab />
       ) : tab.kind === 'help' ? (
         <HelpTab />
       ) : tab.kind === 'tutorial' ? (
-        <TutorialTab />
+        <HelpTab />
       ) : tab.kind === 'agent' ? (
         <AgentTab tab={tab} />
       ) : tab.kind === 'skill' ? (
@@ -894,7 +886,7 @@ function TabbedMain() {
     }
     const move = (ev: MouseEvent) => {
       const next = dir === 'row' ? ev.clientX : ev.clientY
-      pending = (pending ?? 0) + (next - prev)
+      pending = (pending ?? 0) + pagePoint(next - prev)
       prev = next
       if (!raf) raf = requestAnimationFrame(flush)
     }
@@ -956,7 +948,7 @@ function TabbedMain() {
               }}
             >
               <div className="absolute inset-0">
-                <TabBody tab={tab} />
+                <TabBody tab={tab} visible={isTabVisible(ui, tab.id)} />
               </div>
             </div>
           )

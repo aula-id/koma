@@ -32,10 +32,8 @@ export function dirName(path: string): string {
   return parts.join('/')
 }
 
-// A subtle row-hover action button (stage/unstage/discard) — invisible until
-// the row is hovered/focused, mirroring VSCode's Source Control row actions.
-// Always stops propagation so clicking it never also fires the row's own
-// onClick (which opens the diff tab).
+// Row action button. Parent FileRow/RefRow wraps these in a collapsing
+// max-w-0 gutter so idle layout does not reserve empty icon width.
 export function RowAction({
   title,
   onClick,
@@ -54,7 +52,7 @@ export function RowAction({
         e.stopPropagation()
         onClick()
       }}
-      className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition-opacity hover:bg-koma-hover group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100"
+      className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 transition hover:bg-koma-hover hover:!opacity-100"
     >
       {children}
     </button>
@@ -152,6 +150,7 @@ export function FileRow({
 }) {
   const tone = STATUS_TONE[entry.status] ?? 'text-koma-dim'
   const dir = dirName(entry.path)
+  const actionCount = (onDiscard ? 1 : 0) + (onStage ? 1 : 0) + (onUnstage ? 1 : 0)
   return (
     <div
       title={entry.origPath ? `${entry.origPath} -> ${entry.path}` : entry.path}
@@ -173,20 +172,32 @@ export function FileRow({
           </>
         )}
       </span>
-      {onDiscard && (
-        <RowAction title="Discard changes" onClick={onDiscard}>
-          <Undo2 size={13} />
-        </RowAction>
-      )}
-      {onStage && (
-        <RowAction title="Stage changes" onClick={onStage}>
-          <Plus size={13} />
-        </RowAction>
-      )}
-      {onUnstage && (
-        <RowAction title="Unstage changes" onClick={onUnstage}>
-          <Minus size={13} />
-        </RowAction>
+      {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
+          Hover/focus: expand and show. opacity alone would still reserve space. */}
+      {actionCount > 0 && (
+        <div
+          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+            actionCount >= 2
+              ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]'
+              : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+          }`}
+        >
+          {onDiscard && (
+            <RowAction title="Discard changes" onClick={onDiscard}>
+              <Undo2 size={13} />
+            </RowAction>
+          )}
+          {onStage && (
+            <RowAction title="Stage changes" onClick={onStage}>
+              <Plus size={13} />
+            </RowAction>
+          )}
+          {onUnstage && (
+            <RowAction title="Unstage changes" onClick={onUnstage}>
+              <Minus size={13} />
+            </RowAction>
+          )}
+        </div>
       )}
       <span className={`flex-none font-mono text-[11px] font-semibold ${tone}`}>{entry.status}</span>
     </div>

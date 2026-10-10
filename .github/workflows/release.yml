@@ -163,12 +163,20 @@ jobs:
         shell: pwsh
         run: ./scripts/prepare_windows_ocr.ps1
 
+      - name: Prepare bundled Windows shell
+        shell: pwsh
+        run: ./scripts/prepare_windows_shell.ps1
+
       - name: Package msi (wix)
         run: cargo packager --release --formats wix --verbose
 
       - name: Verify packaged Windows OCR
         shell: pwsh
         run: ./scripts/check_windows_ocr.ps1
+
+      - name: Verify packaged Windows shell
+        shell: pwsh
+        run: ./scripts/check_windows_shell.ps1
 
       # cargo-packager emits e.g. koma_0.2.27_x64_en-US.msi directly into
       # target/release/; map it to the stable versionless homepage name.

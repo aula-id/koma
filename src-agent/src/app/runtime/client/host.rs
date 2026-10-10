@@ -913,7 +913,18 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     let (hub_tx, hub_rx) = std::sync::mpsc::channel::<crate::app::mode::SessionHub>();
     let mut hub_inflight = false;
 
+    let mut notification_pending: Vec<
+        std::sync::mpsc::Receiver<crate::model::notifications::Reply>,
+    > = Vec::new();
     loop {
+        notification_pending.retain(|rx| match rx.try_recv() {
+            Ok(reply) => {
+                push(serde_json::json!({"t":"push","k":"Notifications","reply":reply}).to_string());
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
         while let Ok(hub) = hub_rx.try_recv() {
             hub_inflight = false;
             push_state.reset();
@@ -1453,8 +1464,15 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::StoreBrowse { query, category }) => {
                 store_host::spawn_store_browse(P::clone(push), query, category);
             }
-            Ok(HostCtl::TutorialChat { id, messages }) => {
-                tutorial_host::spawn_tutorial_chat(P::clone(push), id, messages);
+            Ok(HostCtl::Notifications { request }) => {
+                notification_pending.push(crate::model::notifications::request(request));
+            }
+            Ok(HostCtl::TutorialChat {
+                id,
+                messages,
+                context,
+            }) => {
+                tutorial_host::spawn_tutorial_chat(P::clone(push), id, messages, context);
             }
             Ok(HostCtl::StoreDetail { id }) => {
                 store_host::spawn_store_detail(P::clone(push), id);
@@ -1519,6 +1537,38 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // foreground session, so answer from the GLOBAL config — the active palette +
             // `Settings` DEFAULTS (empty name/workdir). ALWAYS a reply so the tab's loading
             // state clears. Cheap, synchronous (a config load), so it runs inline.
+            Ok(HostCtl::GetWebSearch { req_seq }) => {
+                let result = crate::model::web_search::read_global_config();
+                let error = result.as_ref().err().cloned();
+                let cfg = result.ok().flatten().unwrap_or_default();
+                super::render::emit(
+                    push,
+                    &super::push_proto::PushEnvelope::WebSearchValues {
+                        req_seq,
+                        status: cfg.web_search.status(),
+                        error,
+                    },
+                );
+            }
+            Ok(HostCtl::SetWebSearch {
+                req_seq,
+                provider,
+                key,
+            }) => {
+                let mut cfg = crate::model::web_search::read_global_config()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let error = crate::model::web_search::save_selection(&mut cfg, provider, key).err();
+                super::render::emit(
+                    push,
+                    &super::push_proto::PushEnvelope::WebSearchValues {
+                        req_seq,
+                        status: cfg.web_search.status(),
+                        error,
+                    },
+                );
+            }
             Ok(HostCtl::GetSettings) => {
                 let cfg = crate::model::app_config::AppConfig::load();
                 let d = crate::model::settings::Settings::default();
@@ -2013,9 +2063,23 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // Terminal sessions are managed host-side via the shared
             // TerminalManager. These routes delegate to it; the reader
             // threads spawned by `create` push output/exit envelopes.
-            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+            Ok(HostCtl::TerminalShells {
+                request_id,
+                context,
+            }) => {
+                if context == "local" {
+                    super::terminal_host::discover_async(
+                        terminal_manager.clone(),
+                        request_id,
+                        context,
+                        None,
+                    );
+                }
+            }
+            Ok(HostCtl::TerminalCreate { id, cwd, shell_id }) => {
                 if let Ok(mut mgr) = terminal_manager.lock() {
-                    if let Err(e) = mgr.create(id, cwd) {
+                    if let Err(e) = mgr.create(id.clone(), cwd, shell_id.as_deref()) {
+                        mgr.report_error(&id, &e.to_string());
                         crate::model::store::append_global_error_log(
                             "terminal",
                             &format!("terminal create failed: {e}"),
@@ -2459,13 +2523,32 @@ fn host_remote_hub<P: Fn(String) + Clone + Send + 'static>(
                 // Mutations intentionally deferred — hub stays on current host.
                 push_remote_hosts_list(push, Some(&ctx.host_id));
             }
-            Ok(HostCtl::TerminalCreate { id, cwd }) => {
+            Ok(HostCtl::TerminalShells {
+                request_id,
+                context,
+            }) => {
+                if context == ctx.host_id.as_str() {
+                    super::terminal_host::discover_async(
+                        terminal_manager.clone(),
+                        request_id,
+                        context,
+                        Some((ctx.target.clone(), ctx.password().map(str::to_owned))),
+                    );
+                }
+            }
+            Ok(HostCtl::TerminalCreate { id, cwd, shell_id }) => {
                 // Remote hub: always open a shell on the live remote host, never
                 // the local machine the GUI is running on.
                 if let Ok(mut mgr) = terminal_manager.lock() {
-                    if let Err(e) =
-                        mgr.create_remote(id, &ctx.target, ctx.password(), cwd.as_deref())
-                    {
+                    if let Err(e) = mgr.create_remote(
+                        id.clone(),
+                        &ctx.target,
+                        &ctx.host_id,
+                        ctx.password(),
+                        cwd.as_deref(),
+                        shell_id.as_deref(),
+                    ) {
+                        mgr.report_error(&id, &e.to_string());
                         crate::model::store::append_global_error_log(
                             "terminal",
                             &format!("terminal create failed: {e}"),

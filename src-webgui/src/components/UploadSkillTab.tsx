@@ -1,3 +1,4 @@
+import { notificationOrigin } from '../lib/notificationOrigins'
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Upload } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -95,10 +96,10 @@ export default function UploadSkillTab() {
 
   const error = localError ?? backendError
   useEffect(() => {
-    if (success) showToast('Skill installed successfully.', 'success')
+    if (success) showToast('Skill installed successfully.', 'success', notificationOrigin(requestId ?? undefined))
   }, [success, requestId])
   useEffect(() => {
-    if (error) showToast(error, 'error')
+    if (error) showToast(error, 'error', notificationOrigin(requestId ?? undefined))
   }, [error])
   return (
     <div className="flex h-full min-w-0 flex-col bg-koma-bg text-koma-fg">

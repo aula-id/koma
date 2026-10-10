@@ -623,7 +623,10 @@ pub(crate) fn git_push(
         let dst = format!("HEAD:refs/heads/{}", target.remote_branch);
         let out = match selected {
             GitPushMode::Automatic => {
-                return op_err(OP, "push mode was not resolved; refresh status and try again");
+                return op_err(
+                    OP,
+                    "push mode was not resolved; refresh status and try again",
+                );
             }
             GitPushMode::Plain => git(&root, &["push", &target.remote, &dst], extra),
             GitPushMode::SetUpstream => {

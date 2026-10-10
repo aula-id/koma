@@ -85,6 +85,7 @@ import {
   type ComposerChipPayload,
 } from '../../lib/composerIpc'
 import {
+  composerTextPasteAction,
   loneHttpUrl,
   looksLikeComposerMarkdown,
   markdownFromClipboardHtml,
@@ -370,9 +371,78 @@ function $removeAttachMarkerChips(kind: 'image' | 'paste', markerN: number): boo
 }
 
 function $caretRangeFromPoint(clientX: number, clientY: number): Range | null {
-  return typeof document.caretRangeFromPoint === 'function'
-    ? document.caretRangeFromPoint(clientX, clientY)
-    : null
+  if (typeof document.caretRangeFromPoint === 'function') {
+    const range = document.caretRangeFromPoint(clientX, clientY)
+    if (range) return range
+  }
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+  }
+  const pos = doc.caretPositionFromPoint?.(clientX, clientY)
+  if (!pos) return null
+  const range = document.createRange()
+  try {
+    range.setStart(pos.offsetNode, pos.offset)
+    range.collapse(true)
+    return range
+  } catch {
+    return null
+  }
+}
+
+function $nearestLexicalFromPoint(clientX: number, clientY: number): {
+  node: LexicalNode
+  offset: number
+  fromText: boolean
+} | null {
+  const range = $caretRangeFromPoint(clientX, clientY)
+  const hit = document.elementFromPoint(clientX, clientY)
+  const start = range?.startContainer ?? hit
+  if (!start) return null
+  const offset = range?.startOffset ?? 0
+  if (start.nodeType === Node.TEXT_NODE) {
+    const parent = start.parentElement
+    const nearest = parent ? $getNearestNodeFromDOMNode(parent) : null
+    if (nearest) return { node: nearest, offset, fromText: $isTextNode(nearest) }
+  }
+  const el = start instanceof Element ? start : start.parentElement
+  if (!el) return null
+  const nearest = $getNearestNodeFromDOMNode(el)
+  if (!nearest) return null
+  return { node: nearest, offset, fromText: $isTextNode(nearest) }
+}
+
+/** Place the caret at the pointer. Returns false only when the point missed the editor. */
+function $selectAtClientPoint(clientX: number, clientY: number): boolean {
+  const hit = $nearestLexicalFromPoint(clientX, clientY)
+  if (!hit) return false
+  const { node, offset } = hit
+  if ($isTextNode(node)) {
+    const size = node.getTextContentSize()
+    const at = Math.max(0, Math.min(offset, size))
+    node.select(at, at)
+    return true
+  }
+  if ($isComposerChipNode(node)) {
+    const el = document.elementFromPoint(clientX, clientY)
+    const rect = el?.getBoundingClientRect()
+    if (rect && clientX < rect.left + rect.width / 2) node.selectPrevious()
+    else node.selectNext()
+    return true
+  }
+  if ($isElementNode(node)) {
+    const size = node.getChildrenSize()
+    if (size === 0) {
+      node.select(0, 0)
+      return true
+    }
+    const childAt = Math.max(0, Math.min(offset, size))
+    if (childAt >= size) node.selectEnd()
+    else node.select(childAt, childAt)
+    return true
+  }
+  node.selectNext()
+  return true
 }
 
 function $insertChipAtClientPoint(
@@ -381,27 +451,17 @@ function $insertChipAtClientPoint(
   clientY: number,
   trailingSpace: boolean,
 ): void {
-  const range = $caretRangeFromPoint(clientX, clientY)
   const created = $createComposerChipNode(payload)
-  const dom = range?.startContainer
-  const el = dom instanceof Element ? dom : dom?.parentElement ?? null
-  const nearest = el ? $getNearestNodeFromDOMNode(el) : null
-  if ($isTextNode(nearest) && range) {
-    const offset = Math.min(range.startOffset, nearest.getTextContentSize())
-    nearest.select(offset, offset)
+  if (!$selectAtClientPoint(clientX, clientY)) {
     const selection = $getSelection()
-    if ($isRangeSelection(selection)) selection.insertNodes([created])
-    else nearest.insertAfter(created)
-  } else if ($isComposerChipNode(nearest)) {
-    nearest.insertAfter(created)
-  } else {
-    $prepareInsert(true)
-    const selection = $getSelection()
-    if ($isRangeSelection(selection)) selection.insertNodes([created])
+    if (!$isRangeSelection(selection)) $prepareInsert(false)
   }
+  const selection = $getSelection()
+  if ($isRangeSelection(selection)) selection.insertNodes([created])
+  else $getRoot().selectEnd()
   if (trailingSpace) {
-    const selection = $getSelection()
-    if ($isRangeSelection(selection)) selection.insertNodes([$createTextNode(' ')])
+    const next = $getSelection()
+    if ($isRangeSelection(next)) next.insertNodes([$createTextNode(' ')])
   }
 }
 
@@ -849,6 +909,9 @@ function EditorPlugins({
         if (profile === 'composer' && event instanceof ClipboardEvent) {
           const data = event.clipboardData
           const plain = data?.getData('text/plain') ?? ''
+          if (composerTextPasteAction(plain) === 'collapse') {
+            return onPasteRef.current?.(event) ?? false
+          }
           const html = data?.getData('text/html') ?? ''
           const fromHtml = html ? markdownFromClipboardHtml(html) : null
           const candidate =
@@ -874,6 +937,12 @@ function EditorPlugins({
         if (!types.includes(COMPOSER_CHIP_MIME) && !fromStrip) return false
         event.preventDefault()
         if (event.dataTransfer) event.dataTransfer.dropEffect = fromStrip ? 'copy' : 'move'
+        editor.update(
+          () => {
+            $selectAtClientPoint(event.clientX, event.clientY)
+          },
+          { tag: 'historic' },
+        )
         return true
       },
       COMMAND_PRIORITY_HIGH,
@@ -935,7 +1004,7 @@ function EditorPlugins({
           <ContentEditable
             ref={editorElementRef}
             aria-label={undefined}
-            className="outline-none"
+            className="koma-rich-editor outline-none text-koma-fg caret-koma-fg"
             onKeyDown={(event) => {
               onKeyDown?.(event)
             }}
@@ -1016,12 +1085,13 @@ export function LexicalMarkdownEditor({
         nodes,
         theme: {
           paragraph: 'm-0 min-h-[1.2em]',
-          heading: { h1: 'my-1 text-[15px] font-semibold', h2: 'my-1 text-[13px] font-semibold', h3: 'my-1 text-[12px] font-semibold' },
+          heading: { h1: 'my-1 text-[15px] font-semibold text-koma-accent', h2: 'my-1 text-[13px] font-semibold text-koma-accent', h3: 'my-1 text-[12px] font-semibold' },
           quote: 'my-1 border-l-2 border-koma-dim pl-2 text-koma-dim',
           list: {
-            ul: 'my-1 list-disc pl-4',
-            ol: 'my-1 list-decimal pl-4',
+            ul: 'my-1 list-disc pl-5',
+            ol: 'my-1 list-decimal pl-8',
             listitem: 'my-0.5',
+            nested: { listitem: 'list-none' },
             listitemChecked: 'koma-checklist-item koma-checklist-checked',
             listitemUnchecked: 'koma-checklist-item koma-checklist-unchecked',
           },
@@ -1029,7 +1099,7 @@ export function LexicalMarkdownEditor({
             bold: 'font-semibold',
             italic: 'italic',
             strikethrough: 'line-through',
-            code: 'rounded bg-koma-panel2 px-0.5 font-mono text-[0.92em]',
+            code: 'rounded bg-koma-panel2 px-0.5 font-mono text-[0.92em] text-koma-accent',
           },
           link: 'text-koma-accent underline',
           code: 'my-1 block overflow-x-auto rounded bg-koma-bg px-2 py-1 font-mono text-[11px]',
@@ -1090,5 +1160,5 @@ function Placeholder({ text }: { text: string }) {
     })
   }, [editor])
   if (!empty) return null
-  return <div className="pointer-events-none absolute left-0 top-0 text-koma-fg/40">{text}</div>
+  return <div className="pointer-events-none absolute left-0 top-0 text-koma-dim">{text}</div>
 }

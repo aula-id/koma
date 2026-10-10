@@ -18,6 +18,12 @@ pub const CHAT_PROVIDER_V1: &str = "provider_v1";
 /// Remembered chat transport: NDJSON `POST /alpha/generate`.
 pub const CHAT_NDJSON: &str = "ndjson";
 
+/// Command Code Claude ids are bare `claude-*` (not OpenRouter `anthropic/claude-*`).
+/// Used at resolve time to pick Anthropic `/messages` vs OpenAI `/chat/completions`.
+pub fn is_claude_model(model_id: &str) -> bool {
+    model_id.trim().to_ascii_lowercase().starts_with("claude")
+}
+
 fn chat_pref_cache() -> &'static RwLock<HashMap<String, String>> {
     static CACHE: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))

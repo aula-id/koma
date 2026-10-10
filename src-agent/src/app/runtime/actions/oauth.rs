@@ -283,7 +283,7 @@ pub(super) fn handle_oauth_delete(
             state
                 .rest
                 .fg_mut()
-                .set_toast_info(crate::app::cascade::cascade_status_line("oauth", &report));
+                .set_toast_info_app(crate::app::cascade::cascade_status_line("oauth", &report));
         }
     }
     let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);

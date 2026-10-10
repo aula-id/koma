@@ -8,6 +8,8 @@ import { useKoma } from '../koma'
 import type { ChatMessage } from '../types/chat'
 import type { PushEnvelope } from '../types/envelope'
 
+const seenRuntimeToasts = new Set<string>()
+
 export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): boolean {
   switch (env.k) {
       case 'Snapshot': {
@@ -70,8 +72,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting fileChanges[] on the Snapshot envelope yet.
               fileChanges: env.fileChanges ?? [],
-              // planTodos is adopted below (mode-gated to prevent stale Plan
-              // rows from bleeding into non-plan modes).
+              // planTodos is adopted below from the snapshot in every mode (Plan file,
+              // SDLC graph, or Auto memory/TODO.md).
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],
@@ -96,11 +98,10 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               sdlcBranch: env.mode === 'sdlc' ? (env.sdlcBranch ?? null) : null,
               sdlcOpen: env.mode === 'sdlc' ? (env.sdlcOpen ?? null) : null,
               sdlcSealed: env.mode === 'sdlc' ? (env.sdlcSealed ?? null) : null,
-              // Plan/SDLC checklist rows: plan mode = plan_todos.md; sdlc = L2 graph projection.
-              // Clear stale rows outside those modes (never leak Auto/Normal).
-              planTodos: (env.mode === 'plan' || env.mode === 'sdlc')
-                ? (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false }))
-                : [],
+              // Plan/SDLC/Auto checklist rows: plan = plan_todos.md, sdlc = L2 graph,
+              // otherwise memory/TODO.md. Locked Plan rails are dropped host-side
+              // outside Plan/SDLC; adopt whatever the snapshot still carries.
+              planTodos: (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false })),
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
@@ -120,8 +121,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                 ? {
                     ...(switched && previousSessionId !== null && !preserveEditorTabs
                       ? {
-                          tabs: [makeChatTab()],
-                          activeTabId: 'chat',
+                          tabs: [makeChatTab(), ...s.ui.tabs.filter(t => ['help', 'notifications', 'settings'].includes(t.kind))],
+                          activeTabId: ['help', 'notifications', 'settings'].includes(s.ui.activeTabId) ? s.ui.activeTabId : 'chat',
                         }
                       : {}),
                     // Keep a real host Loading envelope; never synthesize pending.
@@ -362,7 +363,8 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
           // dismiss timer from being reset on each tick. A cleared toast
           // (env.toast null) never wipes an active card; the auto-dismiss owns
           // that so a working=false status can't cut a toast short.
-          const raise = !!env.toast && env.toast !== s.ui.toast?.text
+          const raise = !!env.toast && (env.toastEventId ? !seenRuntimeToasts.has(env.toastEventId) : env.toast !== s.ui.toast?.text)
+          if (raise && env.toastEventId) { seenRuntimeToasts.add(env.toastEventId); if (seenRuntimeToasts.size > 2000) seenRuntimeToasts.delete(seenRuntimeToasts.values().next().value!) }
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           const newMode = env.mode ?? s.session.mode
           const modeChanged = newMode !== s.session.mode
@@ -403,6 +405,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
                   toastSeq: seq,
                   toast: {
                     id: seq,
+                    eventId: env.toastEventId,
+                    session: env.toastSession === undefined ? env.session : env.toastSession,
+                    source: 'runtime',
                     text: env.toast as string,
                     // Pass a recognised severity straight through (future-proofs
                     // "warn"/"success" if the host ever emits them); anything else

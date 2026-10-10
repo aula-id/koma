@@ -1,3 +1,5 @@
+import { pageRect } from '../lib/uiScale'
+import { showToast } from '../lib/toast'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Link2 } from 'lucide-react'
@@ -15,7 +17,7 @@ function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | 
       return
     }
     const update = () => {
-      if (ref.current) setRect(ref.current.getBoundingClientRect())
+      if (ref.current) setRect(pageRect(ref.current.getBoundingClientRect()))
     }
     update()
     window.addEventListener('scroll', update, true)
@@ -97,27 +99,11 @@ export function NewSessionMenu({ afterPick, className = '' }: NewSessionMenuProp
       // Already connecting — let the user know why nothing happened.
       // `ready` is allowed: host is live on the remote hub (Phase 1 may still
       // block switching hosts from the menu; Disconnect first).
-      const s = useKoma.getState()
-      const seq = s.ui.toastSeq + 1
-      useKoma.setState((prev) => ({
-        ui: { ...prev.ui, toastSeq: seq, toast: { id: seq, text: `Already ${remoteState.state.replace('_', ' ')}`, kind: 'error' } },
-      }))
+      showToast(`Already ${remoteState.state.replace('_', ' ')}`, 'error', { session: null, source: 'remote' })
       return
     }
     if (remoteState.state === 'ready') {
-      const s = useKoma.getState()
-      const seq = s.ui.toastSeq + 1
-      useKoma.setState((prev) => ({
-        ui: {
-          ...prev.ui,
-          toastSeq: seq,
-          toast: {
-            id: seq,
-            text: 'Already on a remote host — disconnect first',
-            kind: 'error',
-          },
-        },
-      }))
+      showToast('Already on a remote host — disconnect first', 'error', { session: null, source: 'remote' })
       return
     }
     startSwitching(`remote ${name}`)

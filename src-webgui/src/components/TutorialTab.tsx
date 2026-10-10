@@ -1,3 +1,4 @@
+import { HELP_MANIFEST } from '../lib/helpKnowledge'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { GraduationCap, Play, Send, Sparkles } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -8,12 +9,13 @@ import {
   startTour,
   tourMeta,
   type TourId,
+  openHelpView,
 } from '../lib/tutorialTours'
 
 // In-app Tutorial tab: NLP coach over host-proxied koma-free + driver.js tours.
 // Theme-aware end-to-end (koma-* tokens only). No daemon session required.
 
-export default function TutorialTab() {
+export default function TutorialTab({ onArticle }: { onArticle?: (id: string) => void }) {
   const messages = useKoma((s) => s.tutorial.messages)
   const busy = useKoma((s) => s.tutorial.busy)
   const error = useKoma((s) => s.tutorial.error)
@@ -77,9 +79,9 @@ export default function TutorialTab() {
       <header className="flex flex-none items-center gap-2 border-b border-koma-border bg-koma-panel2 px-4 py-2.5">
         <GraduationCap size={16} className="text-koma-accent opacity-90" />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">Tutorial</div>
+          <div className="text-[13px] font-semibold">Assistant</div>
           <div className="text-[11px] text-koma-fg opacity-45">
-            Ask how to do something, or pick a guided tour. Powered by koma free (no session).
+            Ask how to do something, or start a guide. Powered by koma free (no session).
           </div>
         </div>
         <button
@@ -127,7 +129,7 @@ export default function TutorialTab() {
               <div className="mx-auto flex max-w-xl flex-col items-start gap-3 pt-6">
                 <div className="flex items-center gap-2 text-koma-accent">
                   <Sparkles size={16} />
-                  <span className="text-[13px] font-semibold">Ask the coach</span>
+                  <span className="text-[13px] font-semibold">Ask the assistant</span>
                 </div>
                 <p className="text-[12.5px] leading-relaxed text-koma-fg opacity-60">
                   Try natural language — any language works. Examples:
@@ -170,6 +172,8 @@ export default function TutorialTab() {
                     ) : (
                       <div className="whitespace-pre-wrap">{m.content}</div>
                     )}
+                    {m.articles?.map(id => <button key={id} className="mr-2 mt-2 text-xs text-koma-accent" onClick={() => onArticle?.(id)}>{HELP_MANIFEST.articles.find(a => a.id === id)?.title ?? id}</button>)}
+                    {m.navigation && <button className="mr-2 mt-2 text-xs text-koma-accent" onClick={() => openHelpView(m.navigation!)}>Open view</button>}
                     {m.tour && (
                       <button
                         type="button"
@@ -177,7 +181,7 @@ export default function TutorialTab() {
                         className="mt-2 inline-flex items-center gap-1 rounded-md border border-koma-accent/40 bg-koma-accent/10 px-2 py-1 text-[11px] font-medium text-koma-accent transition hover:bg-koma-accent/20"
                       >
                         <Play size={11} />
-                        Start tour: {tourMeta(m.tour)?.title ?? m.tour}
+                        Start guide: {tourMeta(m.tour)?.title ?? m.tour}
                       </button>
                     )}
                   </div>
@@ -195,8 +199,9 @@ export default function TutorialTab() {
               {error && (
                 <div className="rounded-md border border-koma-error/40 bg-koma-error/10 px-3 py-2 text-[12px] text-koma-error">
                   {error}
+                  <button className="ml-3 underline" disabled={busy} onClick={() => { const question = [...messages].reverse().find(m => m.role === 'user'); if (question) submit(question.content) }}>Retry</button>
                   <div className="mt-1 text-[11px] opacity-80">
-                    Use Topics on the left for offline guided tours.
+                    Reference and Guides remain available offline.
                   </div>
                 </div>
               )}
@@ -204,7 +209,7 @@ export default function TutorialTab() {
               {pendingTour && pendingMeta && !busy && (
                 <div className="flex items-center gap-2 rounded-md border border-koma-accent/35 bg-koma-accent/10 px-3 py-2">
                   <span className="min-w-0 flex-1 text-[12px] text-koma-fg">
-                    Suggested tour: <strong className="text-koma-accent">{pendingMeta.title}</strong>
+                    Suggested guide: <strong className="text-koma-accent">{pendingMeta.title}</strong>
                     <span className="opacity-55"> — {pendingMeta.blurb}</span>
                   </span>
                   <button

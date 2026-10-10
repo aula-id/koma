@@ -343,9 +343,16 @@ pub fn diff(
     // delta in this stage's vocabulary; it is purely cosmetic (the client's own TTL
     // would dismiss it anyway), so a clear is intentionally NOT forced to a full
     // resync — favouring cheap per-tick deltas over a snapshot for a fading toast.
-    if prev.global.toast != next.global.toast {
+    if prev.global.toast != next.global.toast
+        || prev.global.toast_event_id != next.global.toast_event_id
+    {
         if let Some((kind, text)) = next.global.toast.clone() {
-            deltas.push(StateDelta::Toast { kind, text });
+            deltas.push(StateDelta::Toast {
+                session: next.global.toast_session.clone(),
+                id: next.global.toast_event_id.clone(),
+                kind,
+                text,
+            });
         }
     }
 

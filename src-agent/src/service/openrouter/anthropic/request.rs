@@ -36,8 +36,11 @@ use super::CLAUDE_CODE_SYSTEM;
 #[derive(Debug, Serialize)]
 pub(super) struct MessagesRequest {
     pub model: String,
-    /// Identity/behaviour blocks. Block 0 is always [`CLAUDE_CODE_SYSTEM`]
-    /// (Anthropic rejects OAuth requests whose system prompt isn't Claude Code).
+    /// Identity/behaviour blocks. For Claude.ai OAuth, block 0 is always
+    /// [`CLAUDE_CODE_SYSTEM`] (Anthropic rejects OAuth requests whose system
+    /// prompt isn't Claude Code). Gateway dialect omits that identity; an empty
+    /// vec is dropped on the wire.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub system: Vec<SystemBlock>,
     pub messages: Vec<Message>,
     /// Omitted entirely (skip `None`) when the caller advertises no tools.
@@ -147,7 +150,10 @@ fn strip_marks(content: &str) -> String {
 
 /// Map a conversation history into the Anthropic `(system[], messages[])` pair.
 ///
-/// - System → appended to the `system` array (after the fixed Claude Code head);
+/// `claude_identity = true` (Claude.ai OAuth) prepends [`CLAUDE_CODE_SYSTEM`].
+/// `false` (Command Code `/messages` gateway) does not.
+///
+/// - System → appended to the `system` array (after the optional Claude Code head);
 ///   the internal `CACHE_SPLIT_MARK` boundary is stripped (never rides the wire).
 /// - User → a `user` message: one text block (marks stripped) + one `image`
 ///   block per surviving attachment (gated on `image_ctx.model_takes_images`).
@@ -163,11 +169,15 @@ fn strip_marks(content: &str) -> String {
 pub(super) fn build_messages(
     messages: Vec<ChatMessage>,
     image_ctx: Option<&ImageWireCtx>,
+    claude_identity: bool,
 ) -> (Vec<SystemBlock>, Vec<Message>) {
-    let mut system: Vec<SystemBlock> = vec![SystemBlock {
-        kind: "text",
-        text: CLAUDE_CODE_SYSTEM.to_string(),
-    }];
+    let mut system: Vec<SystemBlock> = Vec::new();
+    if claude_identity {
+        system.push(SystemBlock {
+            kind: "text",
+            text: CLAUDE_CODE_SYSTEM.to_string(),
+        });
+    }
     let mut out: Vec<Message> = Vec::new();
 
     for m in messages {

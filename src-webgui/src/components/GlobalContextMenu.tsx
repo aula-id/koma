@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Bug, Clipboard, ClipboardPaste, RotateCcw } from 'lucide-react'
@@ -42,8 +43,8 @@ function useClampedPos(raw: Pos, ref: React.RefObject<HTMLDivElement | null>) {
     const w = el?.offsetWidth ?? 160
     const h = el?.offsetHeight ?? 100
     setPos({
-      left: Math.max(4, Math.min(raw.left, window.innerWidth - w - 4)),
-      top: Math.max(4, Math.min(raw.top, window.innerHeight - h - 4)),
+      left: Math.max(4, Math.min(pagePoint(raw.left), pagePoint(window.innerWidth) - w - 4)),
+      top: Math.max(4, Math.min(pagePoint(raw.top), pagePoint(window.innerHeight) - h - 4)),
     })
   }, [raw])
   return pos

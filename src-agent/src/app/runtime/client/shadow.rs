@@ -200,6 +200,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::AttachmentLocated { .. }
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
+        | DaemonEvent::WebSearchValues { .. }
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
         | DaemonEvent::SkillValues { .. }
@@ -214,7 +215,9 @@ pub(super) fn apply_frame(
         | DaemonEvent::ExtensionOpResult { .. } => FrameEffect::none(),
         DaemonEvent::McpStatus { .. } => FrameEffect::none(),
         // GUI-only usage/analytics daemon replies (re-pushed by push_intercept).
-        DaemonEvent::UsagePreview { .. } | DaemonEvent::Analytics { .. } => FrameEffect::none(),
+        DaemonEvent::Notifications { .. }
+        | DaemonEvent::UsagePreview { .. }
+        | DaemonEvent::Analytics { .. } => FrameEffect::none(),
         // W8 panel bridge: the GUI host intercepts `ExtPanelReply`/`ExtPanelPush` in `push_loop`
         // (re-pushing its own envelope); the TUI client never opens an extension panel, so both
         // fold as non-visual no-ops here (like the store replies / `AttachSession`).
@@ -276,6 +279,8 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         // shadow manages its own offset independently. New content arrives via
         // TokenAppended deltas and the client's renderer handles follow logic.
         fg.status = global.status;
+        fg.toast_event_id = global.toast_event_id;
+        fg.toast_session = global.toast_session;
         fg.toast = global
             .toast
             .map(|(kind, text)| (text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
@@ -451,6 +456,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Bash(b) => Mode::Bash(Box::new(shadow_bash(*b))),
         ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Attachments(a) => Mode::Attachments(Box::new(shadow_attachments(*a))),
+        ModeSnapshot::Notifications(n) => Mode::Notifications(n),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Skill(s) => Mode::Skill(Box::new(shadow_skill_cmd(*s))),
         ModeSnapshot::Remote(s) => Mode::Remote(Box::new(shadow_remote(*s))),
@@ -567,7 +573,14 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> FrameEffe
             }
             FrameEffect::none()
         }
-        StateDelta::Toast { kind, text } => {
+        StateDelta::Toast {
+            session,
+            id,
+            kind,
+            text,
+        } => {
+            shadow.rest.fg_mut().toast_session = session;
+            shadow.rest.fg_mut().toast_event_id = id;
             shadow.rest.fg_mut().toast =
                 Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
             FrameEffect::light()

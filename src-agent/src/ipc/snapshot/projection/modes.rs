@@ -88,6 +88,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // the query + entry list (each entry's kind as a wire token) + filtered subset
         // + cursor, so a thin client rebuilds and renders the searchable help screen
         // instead of a blank Chat screen.
+        Mode::Notifications(n) => ModeSnapshot::Notifications(n.clone()),
         Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
         Mode::Skill(s) => ModeSnapshot::Skill(Box::new(skill_cmd_snapshot(s))),
         Mode::Remote(m) => ModeSnapshot::Remote(Box::new(remote_snapshot(m))),
@@ -215,6 +216,8 @@ pub fn history_entry_snapshot(e: &HistoryEntry) -> HistoryEntrySnapshot {
 
 pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
     SettingsSnapshot {
+        web_search: st.web_search.clone(),
+        search_editor: st.search_editor.as_ref().map(|e| e.masked()),
         page: settings_page_token(st.page).to_string(),
         field: st.field,
         editing: st.editing,

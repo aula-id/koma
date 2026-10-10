@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { openGitTool } from './gitWorkbenchShared'
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
@@ -64,8 +65,8 @@ function useClampedPos(x: number, y: number, ref: RefObject<HTMLDivElement | nul
     const w = el?.offsetWidth ?? MENU_WIDTH
     const h = el?.offsetHeight ?? 140
     setPos({
-      left: Math.max(4, Math.min(x, window.innerWidth - w - 4)),
-      top: Math.max(4, Math.min(y, window.innerHeight - h - 4)),
+      left: Math.max(4, Math.min(pagePoint(x), pagePoint(window.innerWidth) - w - 4)),
+      top: Math.max(4, Math.min(pagePoint(y), pagePoint(window.innerHeight) - h - 4)),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [x, y, ref, ...deps])

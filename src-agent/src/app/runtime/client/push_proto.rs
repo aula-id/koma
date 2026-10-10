@@ -48,6 +48,11 @@ pub struct ImportGraphImpactResult {
 #[derive(serde::Serialize)]
 #[serde(tag = "k")]
 pub(super) enum PushEnvelope {
+    WebSearchValues {
+        req_seq: u64,
+        status: crate::model::web_search::SearchStatus,
+        error: Option<String>,
+    },
     /// Structural / commit tick (the catch-all): the full committed transcript +
     /// title + palette for `session`. `state` is always `"attached"`.
     Snapshot {
@@ -72,9 +77,9 @@ pub(super) enum PushEnvelope {
         /// array — React REPLACES on each Snapshot. Empty when nothing was touched.
         #[serde(rename = "fileChanges")]
         file_changes: Vec<PushFileChange>,
-        /// Foreground session's Plan-mode todo checklist (Explore "PLAN" section).
-        /// Authoritative full array — React REPLACES on each Snapshot; empty when
-        /// not in Plan mode or no plan is in progress (the section hides/dims).
+        /// Foreground session checklist for Explore (Plan file, SDLC graph, or
+        /// Auto `memory/TODO.md`). Authoritative full array — React REPLACES on
+        /// each Snapshot; empty when there are no current todos.
         #[serde(rename = "planTodos")]
         plan_todos: Vec<PushPlanTodo>,
         /// Foreground session's STAGED composer attachments (chips). Authoritative full
@@ -202,6 +207,10 @@ pub(super) enum PushEnvelope {
         session: String,
         working: bool,
         toast: Option<String>,
+        #[serde(rename = "toastSession")]
+        toast_session: Option<String>,
+        #[serde(rename = "toastEventId")]
+        toast_event_id: Option<String>,
         #[serde(rename = "toastKind")]
         toast_kind: Option<&'static str>,
         /// Foreground session's cumulative token/cost counters (mirrors the daemon's
@@ -969,6 +978,13 @@ pub(super) enum PushEnvelope {
     },
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    #[serde(rename_all = "camelCase")]
+    TerminalShells {
+        request_id: String,
+        context: String,
+        shells: Vec<serde_json::Value>,
+        error: Option<String>,
+    },
     /// Streaming PTY output for a terminal session. `id` is the terminal
     /// session id from TerminalCreate; `data` is raw PTY output bytes
     /// (UTF-8 decoded) to be written to xterm.js.

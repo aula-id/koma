@@ -139,6 +139,8 @@ pub struct SessionRuntime {
     /// `kind` selects the box style (red "error" vs neutral "info"). Expiry is swept
     /// PER-SESSION (each session ticks its own toast). `None` when no toast is showing.
     pub toast: Option<(String, std::time::Instant, ToastKind)>,
+    pub toast_event_id: Option<String>,
+    pub toast_session: Option<String>,
     pub input: String,
     /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
     /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
@@ -560,18 +562,15 @@ pub struct SessionRuntime {
     /// "File changed" panel. Read-only for the TUI (it has no such panel). Never
     /// a git-status snapshot — it is what this session itself changed.
     pub file_changes: Vec<crate::model::msglog::FileChange>,
-    /// THIS session's Plan-mode todo checklist, mirroring `plan_todos.md` on disk
-    /// (empty outside Plan mode / when no plan is in progress). Refreshed
-    /// in-memory at every mutation site — `set_agent_mode`'s enter/leave-Plan rail
-    /// seed/clear, the `checklist` interception, and `plan_ready`'s rail-completion
-    /// write — and on session load (mirrors `file_changes`'s refresh pattern).
-    /// INCLUDES the two locked workflow rails ("serve plan to user"/"save plan to
-    /// file & prompt approval") — they are filtered out at the snapshot projection
-    /// boundary (`ipc::snapshot::projection::core`), not here, since they are
-    /// internal bookkeeping rather than user-facing plan content (mirrors the
-    /// `plan_ready` digest's own `!it.locked` filter). Projected into the GUI
-    /// Explore "PLAN" section; the TUI's `/todo` overlay reads `plan_todos.md`
-    /// directly and ignores this mirror.
+    /// THIS session's Explore checklist mirror.
+    /// Plan → `plan_todos.md` (plus locked workflow rails); SDLC → L2 graph;
+    /// otherwise → `memory/TODO.md`. Refreshed in-memory at every mutation site —
+    /// `set_agent_mode`'s enter/leave rails, the `checklist` interception,
+    /// `plan_ready`'s rail-completion write, `finish_tool_round`, and session load.
+    /// Locked Plan rails are filtered out of Auto/Normal/Yolo at the snapshot
+    /// projection boundary (`ipc::snapshot::projection::core`). Projected into the
+    /// GUI Explore section; the TUI's `/todo` overlay reads the mode-appropriate
+    /// file/graph directly.
     pub plan_todos: Vec<crate::app::mode::todo::TodoItem>,
     /// LIVE working-directory override for this session, set by the `cd` tool /
     /// the user `/cd` command (Phase 8). `None` means "use the session's
@@ -714,6 +713,8 @@ impl SessionRuntime {
             status: "ready".into(),
             // Per-session toast (C6): none on a fresh session.
             toast: None,
+            toast_event_id: None,
+            toast_session: None,
             input: String::new(),
             cursor: 0,
             pending_attachments: Vec::new(),
@@ -954,6 +955,10 @@ impl SessionRuntime {
 
     /// Show an error toast (red box) for ~6 seconds on THIS session.
     pub fn set_toast(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "error", "runtime");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = self.session.as_ref().map(|s| s.id.clone());
+        crate::model::notifications::record(self.session.as_ref().map(|s| s.id.clone()), entry);
         self.toast = Some((
             msg,
             std::time::Instant::now() + std::time::Duration::from_secs(6),
@@ -965,6 +970,23 @@ impl SessionRuntime {
     /// Used for non-failure notices like the post-compaction summary, which is
     /// multi-line and shouldn't read as an error.
     pub fn set_toast_info(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "info", "runtime");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = self.session.as_ref().map(|s| s.id.clone());
+        crate::model::notifications::record(self.session.as_ref().map(|s| s.id.clone()), entry);
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(8),
+            ToastKind::Info,
+        ));
+    }
+
+    /// Installation feedback uses App history; clients mirror remote App events locally.
+    pub fn set_toast_info_app(&mut self, msg: String) {
+        let entry = crate::model::notifications::Entry::new(msg.clone(), "info", "app");
+        self.toast_event_id = Some(entry.id.clone());
+        self.toast_session = None;
+        crate::model::notifications::record(None, entry);
         self.toast = Some((
             msg,
             std::time::Instant::now() + std::time::Duration::from_secs(8),

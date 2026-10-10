@@ -34,6 +34,10 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
     // local — freeing `state.rest` — then put it back with its in-place edits.
     let mut mode = state.take_mode();
     match &mut mode {
+        Mode::Notifications(n) => {
+            paste_single_line(text, |c| n.query.push(c));
+            n.cursor = 0;
+        }
         Mode::Chat => {
             // Image-path paste: if the WHOLE pasted text is a path to an existing
             // image file, route it through the ingest core — copy it into the
@@ -86,7 +90,12 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             // Deepest-modal priority, mirroring `handle_settings`:
             //   role picker (no text field) > model modal > provider modal >
             //   FS path picker > plain text field.
-            if s.mm_role_picker_open() {
+            if let Some(editor) = s.search_editor.as_mut() {
+                if editor.provider != crate::model::web_search::SearchProvider::BuiltIn {
+                    paste_single_line(text, |c| editor.key.0.push(c));
+                    editor.error = None;
+                }
+            } else if s.mm_role_picker_open() {
                 // Checkbox overlay — no text entry; swallow the paste.
             } else if s.model_modal.is_some() {
                 // `mm_push_char` already routes to the active model-modal field:

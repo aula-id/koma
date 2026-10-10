@@ -165,7 +165,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const bulkHistory = multi.selectedIds('history')
 
   return (
-    <div className="absolute inset-0 z-50" onMouseDown={onClose}>
+    <div data-tour="session-hub" className="absolute inset-0 z-50" onMouseDown={onClose}>
       <div
         className={`mx-auto mt-[5px] ${CMD_SEARCH_WIDTH}`}
         onMouseDown={(e) => e.stopPropagation()}

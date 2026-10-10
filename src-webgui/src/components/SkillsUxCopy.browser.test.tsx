@@ -88,6 +88,136 @@ beforeEach(() => {
 })
 
 describe.sequential('Skills UX copy and disclosures', () => {
+  it('stacks full-width inputs, keeps button controls inline and allows empty numeric drafts', async () => {
+    const screen = await render(<div data-testid="settings-width" style={{ width: 1100 }}><SettingsTab /></div>)
+    const width = document.querySelector<HTMLElement>('[data-testid="settings-width"]')!
+    for (const size of [1100, 360]) {
+      width.style.width = `${size}px`
+      for (const row of document.querySelectorAll<HTMLElement>('.settings-row')) {
+        const caption = row.firstElementChild!.getBoundingClientRect()
+        const control = row.lastElementChild!.getBoundingClientRect()
+        if (row.classList.contains('settings-input-row')) {
+          expect(control.top).toBeGreaterThanOrEqual(caption.bottom)
+          const field = row.querySelector('input, textarea')!.getBoundingClientRect()
+          expect(Math.abs(field.width - row.getBoundingClientRect().width)).toBeLessThan(2)
+        } else {
+          expect(control.left).toBeGreaterThanOrEqual(caption.right)
+          expect(control.top).toBeLessThan(caption.bottom)
+        }
+      }
+    }
+    expect(document.querySelector('.settings-content input[type="number"]')).toBeNull()
+    for (const [label, key] of [
+      ['Context window limit', 'contextWindowLimit'],
+      ['Reply token limit', 'maxOutputTokens'],
+      ['Subagent turn limit', 'subagentMaxTurns'],
+    ] as const) {
+      const field = screen.getByRole('textbox', { name: label, exact: true })
+      const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+      expect(input.inputMode).toBe('numeric')
+      await userEvent.fill(field, '0')
+      req.mockClear()
+      await userEvent.keyboard('{Backspace}')
+      expect(input.value).toBe('')
+      expect(req).not.toHaveBeenCalled()
+      await userEvent.fill(field, '42')
+      await userEvent.keyboard('{Enter}')
+      expect(req.mock.calls.some(([request]) => request.r === 'SetPrefs' && request[key] === 42)).toBe(true)
+      expect(input.value).toBe('42')
+    }
+    const context = screen.getByRole('textbox', { name: 'Context window limit', exact: true })
+    await userEvent.fill(context, '400000')
+    await userEvent.keyboard('{Enter}')
+    expect(req.mock.calls.some(([request]) => request.contextWindowLimit === 300000)).toBe(true)
+    const reply = screen.getByRole('textbox', { name: 'Reply token limit', exact: true })
+    await userEvent.fill(reply, '')
+    await userEvent.keyboard('{Enter}')
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Reply token limit"]')!.value).toBe('0')
+    const turns = screen.getByRole('textbox', { name: 'Turns on screen', exact: true })
+    await userEvent.fill(turns, '')
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Turns on screen"]')!.value).toBe('')
+    await userEvent.fill(turns, '25')
+    await userEvent.keyboard('{Enter}')
+    expect(useKoma.getState().ui.chatTurns).toBe(25)
+  })
+
+  it('picks skill and workspace folders only for local sessions and ignores cancelled or stale replies', async () => {
+    const originalIpc = window.ipc
+    const originalRemote = useKoma.getState().remoteState
+    const postMessage = vi.fn()
+    window.ipc = { postMessage }
+    useKoma.setState((state) => ({
+      settingsValues: settingsValues(['/skills']),
+      session: { ...state.session, id: 'local-session' },
+      remoteState: { ...state.remoteState, hostId: null, state: 'disconnected' },
+    }))
+    try {
+      const screen = await render(<SettingsTab />)
+      const reply = (path: string | null) => {
+        const request = postMessage.mock.calls.map(([json]) => JSON.parse(json)).filter((request) => request.r === 'PickSettingsFolder').at(-1)
+        expect(request).toBeTruthy()
+        window.__komaFolderReply?.({ requestId: request.requestId, path })
+      }
+      await screen.getByRole('button', { name: 'Choose folder for External skill root 1' }).click()
+      reply('/picked/skills')
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="External skill root 1"]')!
+      await expect.poll(() => input.value).toBe('/picked/skills')
+      await screen.getByRole('button', { name: 'Save', exact: true }).click()
+      expect(req.mock.calls.some(([request]) => request.r === 'SetExtraSkillRoots' && request.roots[0] === '/picked/skills')).toBe(true)
+
+      await screen.getByRole('button', { name: 'Add workspace folder' }).click()
+      reply('/picked/project')
+      const workdir = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Working directories"]')!
+      await expect.poll(() => workdir.value).toBe('/project\n/picked/project')
+      expect(req.mock.calls.some(([request]) => request.r === 'SetPrefs' && request.workdir?.join('\n') === '/project\n/picked/project')).toBe(true)
+      req.mockClear()
+      await screen.getByRole('button', { name: 'Add workspace folder' }).click()
+      reply(null)
+      await expect.poll(() => document.querySelector<HTMLButtonElement>('button[aria-label="Add workspace folder"]')?.disabled).toBe(false)
+      expect(req).not.toHaveBeenCalled()
+
+      await screen.getByRole('button', { name: 'Add workspace folder' }).click()
+      useKoma.setState((state) => ({ remoteState: { ...state.remoteState, hostId: 'ssh-host', state: 'connected' } }))
+      reply('/local/path')
+      await expect.poll(() => document.querySelector('button[aria-label="Add workspace folder"]')).toBeNull()
+      expect(document.querySelector('button[aria-label="Choose folder for External skill root 1"]')).toBeNull()
+      expect(workdir.value).toBe('/project\n/picked/project')
+      expect(req.mock.calls.some(([request]) => request.r === 'SetPrefs')).toBe(false)
+      expect(document.querySelector('input[aria-label="External skill root 1"]')).toBeTruthy()
+    } finally {
+      window.ipc = originalIpc
+      useKoma.setState({ remoteState: originalRemote })
+    }
+  })
+
+  it('keeps enabled Settings controls opaque in dark and light palettes', async () => {
+    await render(<SettingsTab />)
+    const input = await waitForSelector<HTMLInputElement>('.settings-content input[inputmode="numeric"]')
+    const options = [...document.querySelectorAll<HTMLButtonElement>('.settings-content button[aria-pressed]')]
+    expect(options.length).toBeGreaterThan(0)
+    const save = [...document.querySelectorAll<HTMLButtonElement>('.settings-content button')].find((button) => button.textContent?.trim() === 'Save')!
+    expect(save.disabled).toBe(true)
+    for (const theme of [DARK, { bg: '#fafafa', fg: '#202020', dim: '#555555', accent: '#2555aa' }]) {
+      setTheme(theme)
+      const probe = document.createElement('span')
+      document.body.append(probe)
+      probe.style.color = theme.fg
+      expect(getComputedStyle(input).color).toBe(getComputedStyle(probe).color)
+      probe.style.color = theme.bg
+      expect(getComputedStyle(input).backgroundColor).toBe(getComputedStyle(probe).color)
+      expect(getComputedStyle(input).opacity).toBe('1')
+      expect(getComputedStyle(input, '::placeholder').opacity).toBe('1')
+      for (const button of document.querySelectorAll<HTMLButtonElement>('.settings-content button:enabled, .settings-nav button:enabled')) {
+        expect(getComputedStyle(button).opacity).toBe('1')
+      }
+      expect(Number(getComputedStyle(save).opacity)).toBeLessThan(1)
+      const selected = options.find((button) => button.getAttribute('aria-pressed') === 'true')!
+      const unselected = options.find((button) => button.getAttribute('aria-pressed') === 'false')!
+      expect(getComputedStyle(selected).backgroundColor).not.toBe(getComputedStyle(unselected).backgroundColor)
+      probe.remove()
+    }
+  })
+
   it('keeps ZIP guidance concise while exposing every enforced package requirement', async () => {
     useKoma.setState((state) => ({ session: { ...state.session, id: null } }))
     const screen = await render(<UploadSkillTab />)

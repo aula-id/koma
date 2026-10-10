@@ -22,6 +22,46 @@ pub(crate) fn draw_general(
     dark: bool,
     area: Rect,
 ) {
+    if let Some(editor) = &st.search_editor {
+        use crate::model::web_search::SearchProvider;
+        let mut lines = vec![
+            Line::from("Web search — global"),
+            Line::from("↑↓ choose provider · type API key · Enter save · Esc cancel"),
+            Line::from(""),
+        ];
+        for provider in SearchProvider::ALL {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{} {}",
+                    if editor.provider == provider {
+                        "›"
+                    } else {
+                        " "
+                    },
+                    provider.label()
+                ),
+                Style::default().fg(if editor.provider == provider {
+                    palette.accent
+                } else {
+                    palette.fg
+                }),
+            )));
+        }
+        if editor.provider != SearchProvider::BuiltIn {
+            let key =
+                if editor.key.0.is_empty() && st.web_search.saved_keys.contains(&editor.provider) {
+                    "Key saved".to_string()
+                } else {
+                    "•".repeat(editor.key.0.chars().count())
+                };
+            lines.push(Line::from(format!("API key: {key}")));
+        }
+        if let Some(error) = &editor.error {
+            lines.push(Line::from(error.clone()));
+        }
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
     let cat_fields = GENERAL_FIELDS;
     let detail_w = area.width as usize;
     let value_w = detail_w.saturating_sub(16);
@@ -37,7 +77,11 @@ pub(crate) fn draw_general(
         );
 
         // Label: left-padded to 14 cols.
-        let label_text = format!("{:<14}", f.label());
+        let label_text = if f == SettingField::WebSearch {
+            format!("{}  ", f.label())
+        } else {
+            format!("{:<14}", f.label())
+        };
         let label_color = if is_selected {
             palette.accent
         } else {
@@ -93,6 +137,10 @@ pub(crate) fn draw_general(
 
         // Value span(s).
         let value_spans: Vec<Span> = match f {
+            SettingField::WebSearch => vec![Span::styled(
+                st.web_search.provider.label(),
+                Style::default().fg(palette.fg),
+            )],
             SettingField::Accent => {
                 let tint = resolve_accent(&st.accent, dark);
                 vec![Span::styled(st.accent.as_str(), Style::default().fg(tint))]

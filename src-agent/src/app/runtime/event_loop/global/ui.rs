@@ -248,6 +248,9 @@ pub(super) fn force_dirty_while_live(state: &AppState, shimmer_active: bool) -> 
 pub(super) fn tick_toasts(state: &mut AppState) -> bool {
     let mut dirty = false;
     for rt in state.rest.sessions.iter_mut() {
+        if let crate::app::mode::Mode::Notifications(n) = &mut rt.mode {
+            dirty |= n.poll();
+        }
         if rt.tick_toast() {
             dirty = true;
         }

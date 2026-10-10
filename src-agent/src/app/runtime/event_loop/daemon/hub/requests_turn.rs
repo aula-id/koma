@@ -14,6 +14,7 @@ use crate::ipc::proto::{DaemonEvent, KeyWire};
 use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::actions::apply_action;
+use crate::app::runtime::commands::clear::handle_clear;
 use crate::app::runtime::commands::compact::handle_compact;
 
 use super::core::DaemonHub;
@@ -382,6 +383,14 @@ impl DaemonHub {
         handle: &tokio::runtime::Handle,
     ) {
         let result = handle_compact(state, client, handle, None);
+        self.ack_or_error(idx, result);
+    }
+
+    // GUI titlebar Clear action: wipe the live chat via the SAME `handle_clear`
+    // entry point the TUI's `/clear` command calls. No-session is reported via
+    // the status line; any real error surfaces as `DaemonEvent::Error`.
+    pub(super) fn clear(&mut self, idx: usize, state: &mut AppState) {
+        let result = handle_clear(state);
         self.ack_or_error(idx, result);
     }
 }

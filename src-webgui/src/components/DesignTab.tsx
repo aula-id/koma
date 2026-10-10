@@ -1,3 +1,4 @@
+import { canvasPoint } from '../lib/uiScale'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { ChevronRight, Frame, Hand, Minus, MousePointer2, PenTool, Plus, Type, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
 import { KomaSelect } from './KomaSelect'
@@ -488,8 +489,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!rect) return null
     const current = viewRef.current
     return {
-      x: (clientX - rect.left - current.panX) / current.zoom,
-      y: (clientY - rect.top - current.panY) / current.zoom,
+      x: (canvasPoint(clientX - rect.left) - current.panX) / current.zoom,
+      y: (canvasPoint(clientY - rect.top) - current.panY) / current.zoom,
     }
   }
 
@@ -512,8 +513,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
     if (!rect) return
     const current = viewRef.current
     const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextZoom))
-    const cx = clientX - rect.left
-    const cy = clientY - rect.top
+    const cx = canvasPoint(clientX - rect.left)
+    const cy = canvasPoint(clientY - rect.top)
     const docX = (cx - current.panX) / current.zoom
     const docY = (cy - current.panY) / current.zoom
     applyView({ zoom, panX: cx - docX * zoom, panY: cy - docY * zoom })
@@ -581,8 +582,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       }
       if (!drag) return
       if (drag.kind === 'pan') {
-        const dx = event.clientX - drag.lastX
-        const dy = event.clientY - drag.lastY
+        const dx = canvasPoint(event.clientX - drag.lastX)
+        const dy = canvasPoint(event.clientY - drag.lastY)
         drag.lastX = event.clientX
         drag.lastY = event.clientY
         const current = viewRef.current
@@ -686,8 +687,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         const focus = focusRef.current
         const doc = editingDoc(stored, focus)
         const zoom = viewRef.current.zoom || 1
-        const screenDx = (event.clientX - drag.startX) / zoom
-        const screenDy = (event.clientY - drag.startY) / zoom
+        const screenDx = canvasPoint(event.clientX - drag.startX) / zoom
+        const screenDy = canvasPoint(event.clientY - drag.startY) / zoom
         const located = locateDesign(doc, drag.id)
         if (!located) return
         const delta = canvasDeltaToSpace(doc, located.parentId, screenDx, screenDy)
@@ -710,8 +711,8 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
       const focus = focusRef.current
       const doc = editingDoc(stored, focus)
       const zoom = viewRef.current.zoom || 1
-      const screenDx = (event.clientX - drag.startX) / zoom
-      const screenDy = (event.clientY - drag.startY) / zoom
+      const screenDx = canvasPoint(event.clientX - drag.startX) / zoom
+      const screenDy = canvasPoint(event.clientY - drag.startY) / zoom
       if (drag.kind === 'radius') {
         const located = locateDesign(doc, drag.id)
         if (!located) return
@@ -1965,7 +1966,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
         <div className="flex min-h-0 flex-1">
         <div
           ref={canvasRef}
-          className={`relative min-h-0 min-w-0 flex-1 overflow-hidden select-none ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
+          className={`koma-authored-canvas relative min-h-0 min-w-0 flex-1 overflow-hidden select-none ${spaceDown || tool === 'pan' ? 'cursor-grab' : ''}`}
           onPointerDown={onCanvasPointerDown}
           onContextMenu={(event) => {
             event.preventDefault()
@@ -2197,7 +2198,7 @@ export function DesignTab({ tab }: { tab: Extract<Tab, { kind: 'design' }> }) {
                     event.stopPropagation()
                     const start = { x: event.clientX, y: event.clientY }
                     const onMove = (move: PointerEvent) => {
-                      const nextAngle = Math.atan2(move.clientY - start.y + hy - cy, move.clientX - start.x + hx - cx) * 180 / Math.PI
+                      const nextAngle = Math.atan2(canvasPoint(move.clientY - start.y) + hy - cy, canvasPoint(move.clientX - start.x) + hx - cx) * 180 / Math.PI
                       patchSelected((node) => {
                         const paints = nodePaints(node, 'fill')
                         const at = paints.findIndex((item) => item.type === 'gradient')

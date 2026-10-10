@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import {
   BarChart3,
   Blocks,
@@ -10,7 +11,7 @@ import {
   Eye,
   FileDiff,
   GitGraph,
-  GraduationCap,
+  GraduationCap, Bell,
   Library,
   Image as ImageIcon,
   MessageSquare,
@@ -94,8 +95,10 @@ function tabVisual(
       return { Icon: Settings, label: 'Settings', title: 'Settings' }
     case 'help':
       return { Icon: CircleHelp, label: 'Help', title: 'Help' }
+    case 'notifications':
+      return { Icon: Bell, label: 'Notifications', title: 'Notifications' }
     case 'tutorial':
-      return { Icon: GraduationCap, label: 'Tutorial', title: 'Tutorial' }
+      return { Icon: CircleHelp, label: 'Help', title: 'Help' }
     case 'graph':
       return { Icon: GitGraph, label: 'Graph', title: 'Commit Graph' }
     case 'importGraph':
@@ -227,8 +230,8 @@ function TabContextMenu({
     const el = ref.current
     if (el) {
       setPos({
-        left: Math.max(4, Math.min(state.x, window.innerWidth - el.offsetWidth - 4)),
-        top: Math.max(4, Math.min(state.y, window.innerHeight - el.offsetHeight - 4)),
+        left: Math.max(4, Math.min(pagePoint(state.x), pagePoint(window.innerWidth) - el.offsetWidth - 4)),
+        top: Math.max(4, Math.min(pagePoint(state.y), pagePoint(window.innerHeight) - el.offsetHeight - 4)),
       })
     }
     const outside = (e: MouseEvent) => {

@@ -90,6 +90,7 @@ mod store_host;
 mod swapper;
 mod swapper_keys;
 mod terminal_host;
+pub(crate) use terminal_host::shell_args as terminal_shell_args;
 pub(crate) mod tutorial_host;
 
 #[cfg(test)]
@@ -289,6 +290,18 @@ pub(in crate::app::runtime) struct StreamView {
 /// session-lifecycle intents the client-thread owns.
 #[derive(Clone)]
 pub(crate) enum HostCtl {
+    Notifications {
+        request: crate::model::notifications::Request,
+    },
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer {
         action: String,
         window: Option<String>,
@@ -684,6 +697,7 @@ pub(crate) enum HostCtl {
     TutorialChat {
         id: String,
         messages: Vec<tutorial_host::TutorialMsg>,
+        context: serde_json::Value,
     },
     /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
     /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless
@@ -999,9 +1013,14 @@ pub(crate) enum HostCtl {
     CancelRemoteConnect,
 
     // ─── GUI terminal view ──────────────────────────────────────────────
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     TerminalCreate {
         id: String,
         cwd: Option<String>,
+        shell_id: Option<String>,
     },
     TerminalInput {
         id: String,

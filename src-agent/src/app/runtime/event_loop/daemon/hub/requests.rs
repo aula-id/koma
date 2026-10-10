@@ -34,6 +34,21 @@ impl DaemonHub {
         client: &mut Option<Arc<OpenRouterClient>>,
         handle: &tokio::runtime::Handle,
     ) {
+        let mut ready = Vec::new();
+        self.notification_pending
+            .retain(|(id, rx)| match rx.try_recv() {
+                Ok(reply) => {
+                    ready.push((*id, reply));
+                    false
+                }
+                Err(TryRecvError::Empty) => true,
+                Err(_) => false,
+            });
+        for (id, reply) in ready {
+            if let Some(idx) = self.clients.iter().position(|c| c.id == id) {
+                self.send_to(idx, DaemonEvent::Notifications { reply });
+            }
+        }
         loop {
             match self.msg_rx.try_recv() {
                 Ok(msg) => self.handle_inbound(msg, state, client, handle),
@@ -201,6 +216,12 @@ impl DaemonHub {
                 self.file_search(idx, state, query, limit);
             }
 
+            ClientRequest::Notifications { request } => {
+                self.notification_pending.push((
+                    self.clients[idx].id,
+                    crate::model::notifications::request(request),
+                ));
+            }
             ClientRequest::UsagePreview { session, scope } => {
                 self.usage_preview(idx, session, scope);
             }
@@ -242,6 +263,41 @@ impl DaemonHub {
                 self.quit_daemon_observer_rejected(idx);
             }
 
+            ClientRequest::GetWebSearch { req_seq } => {
+                let error = match crate::model::web_search::read_global_config() {
+                    Ok(Some(config)) => {
+                        state.rest.config.web_search = config.web_search;
+                        None
+                    }
+                    Ok(None) => None,
+                    Err(error) => Some(error),
+                };
+                self.send_to(
+                    idx,
+                    DaemonEvent::WebSearchValues {
+                        req_seq,
+                        status: state.rest.config.web_search.status(),
+                        error,
+                    },
+                );
+            }
+            ClientRequest::SetWebSearch {
+                req_seq,
+                provider,
+                key,
+            } => {
+                let error =
+                    crate::model::web_search::save_selection(&mut state.rest.config, provider, key)
+                        .err();
+                self.send_to(
+                    idx,
+                    DaemonEvent::WebSearchValues {
+                        req_seq,
+                        status: state.rest.config.web_search.status(),
+                        error,
+                    },
+                );
+            }
             ClientRequest::GetSettings => {
                 self.get_settings(idx, state);
             }
@@ -322,6 +378,19 @@ impl DaemonHub {
                 session,
             } => {
                 self.set_stream_view(idx, subagent, bash, session);
+            }
+            ClientRequest::ReloadWebSearch => {
+                if let Ok(Some(config)) = crate::model::web_search::read_global_config() {
+                    state.rest.config.web_search = config.web_search;
+                    // Refresh saved-key indicators without replacing any editor drafts.
+                    let status = state.rest.config.web_search.status();
+                    for session in &mut state.rest.sessions {
+                        if let crate::app::mode::Mode::Settings(settings) = &mut session.mode {
+                            settings.web_search = status.clone();
+                        }
+                    }
+                }
+                self.send_to(idx, DaemonEvent::Ack);
             }
             ClientRequest::ReloadGlobalCatalogue => {
                 crate::app::runtime::actions::apply_global_catalogue_reload(state);
@@ -842,6 +911,11 @@ impl DaemonHub {
                 self.compact(idx, state, client, handle);
             }
 
+            // GUI titlebar Clear action: wipe live chat via `/clear`'s handler.
+            ClientRequest::Clear => {
+                self.clear(idx, state);
+            }
+
 
             // LIFECYCLE ERROR REPORT: the thin client's remote connect failed.
             // The C2 LOAD bracket already resolved the foreground cursor to this
@@ -871,10 +945,13 @@ impl DaemonHub {
             | ClientRequest::SetSessionExtensions { .. }
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
+            | ClientRequest::Notifications { .. }
             | ClientRequest::UsagePreview { .. }
             | ClientRequest::Analytics { .. }
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
+            | ClientRequest::GetWebSearch { .. }
+            | ClientRequest::SetWebSearch { .. }
             | ClientRequest::GetSettings
             | ClientRequest::ListSkills { .. }
             | ClientRequest::GetSkillDetail { .. }
@@ -892,6 +969,7 @@ impl DaemonHub {
             | ClientRequest::GetEffortOptions
             | ClientRequest::SetStreamView { .. }
             // Handled in dispatch_request before the fallthrough; here for exhaustiveness.
+            | ClientRequest::ReloadWebSearch
             | ClientRequest::ReloadGlobalCatalogue => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
@@ -900,7 +978,8 @@ impl DaemonHub {
             // These arrive via the daemon socket for protocol completeness but are
             // handled entirely host-side (the host process owns the PTY lifecycle).
             // The daemon Ack's them and the host ignores the request.
-            ClientRequest::TerminalCreate { .. }
+            ClientRequest::TerminalShells { .. }
+            | ClientRequest::TerminalCreate { .. }
             | ClientRequest::TerminalInput { .. }
             | ClientRequest::TerminalResize { .. }
             | ClientRequest::TerminalKill { .. } => {

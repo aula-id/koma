@@ -5,7 +5,7 @@ import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
 import { DesignLayers } from '../DesignLayers'
 import { Empty, IconBtn } from './helpers'
-import { Select } from './form'
+import { Select, Segmented } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, mintRequestId, type FileTreeEntry } from '../../store/coding'
 import {
@@ -387,23 +387,15 @@ export function DesignPanel() {
           />
         </div>
       </div>
-      <div className="mx-2 mb-1 flex h-7 flex-none rounded-md bg-koma-bg p-0.5">
-        <button
-          type="button"
-          aria-pressed={panel === 'file'}
-          onClick={() => setPanel('file')}
-          className={`flex-1 rounded text-[12px] ${panel === 'file' ? 'bg-koma-panel text-koma-fg shadow-sm' : 'text-koma-dim hover:text-koma-fg'}`}
-        >
-          File
-        </button>
-        <button
-          type="button"
-          aria-pressed={panel === 'assets'}
-          onClick={() => setPanel('assets')}
-          className={`flex-1 rounded text-[12px] ${panel === 'assets' ? 'bg-koma-panel text-koma-fg shadow-sm' : 'text-koma-dim hover:text-koma-fg'}`}
-        >
-          Assets
-        </button>
+      <div className="flex-none px-2 pb-1.5">
+        <Segmented
+          value={panel}
+          options={[
+            { value: 'file', label: 'File' },
+            { value: 'assets', label: 'Assets' },
+          ]}
+          onChange={setPanel}
+        />
       </div>
       {panel === 'file' ? (
         <div className="flex min-h-0 flex-1 flex-col">

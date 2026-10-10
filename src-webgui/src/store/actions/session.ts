@@ -1,3 +1,5 @@
+import { helpContext } from '../../lib/helpContext'
+import { tutorialAssistantWire } from '../../lib/helpKnowledge'
 import { codingRefToken } from '../../lib/codingRef'
 import type { StoreGet, StoreSet } from '../api'
 import { useComputerPreview } from '../computerPreview'
@@ -15,7 +17,7 @@ function mintAgentTabId(): string {
   return `agent-${agentTabSeq}`
 }
 
-export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'setChatTurns' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
+export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openExternal' | 'openOmniSearch' | 'closeOmniSearch' | 'insertToComposer' | 'putCodingPathInChat' | 'askCodingSelectionInChat' | 'addDiagramToChat' | 'consumeDiagramChatQueue' | 'stageComposerAttachmentInsert' | 'consumePendingComposerAttachmentInserts' | 'addDesignToChat' | 'consumeDesignChatQueue' | 'consumePasteBody' | 'consumeComposerInsert' | 'refillComposer' | 'consumeComposerRefill' | 'stageRewind' | 'clearRewind' | 'requestHistoryPage' | 'requestScrollBottom' | 'startSwitching' | 'cancelSwitching' | 'skipBootstrapRemaining' | 'dismissLoading' | 'dismissToast' | 'openSettingsTab' | 'openNotificationsTab' | 'openHelpTab' | 'openTutorialTab' | 'sendTutorialChat' | 'clearTutorialPendingTour' | 'clearTutorialError' | 'setActivityBarOrder' | 'setActivityBarHidden' | 'openAgentTab' | 'renameAgentTab' | 'openStreamTab' | 'syncStreamView' | 'focusPlanSection' | 'setUsageScope' | 'setChatTurns' | 'refreshUsagePreview' | 'refreshMcpStatus' | 'markDying' | 'detachSession' | 'setAgentSaving' | 'clearAgentSaving'> {
   return {
   openExternal: (url) => {
     get().req({ r: 'OpenExternal', url })
@@ -135,6 +137,9 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     })
     get().req({ r: 'GetSettings' })
   },
+  openNotificationsTab: () => {
+    set(s => ({ ui: { ...s.ui, tabs: s.ui.tabs.some(t => t.id === 'notifications') ? s.ui.tabs : [...s.ui.tabs, { id: 'notifications', kind: 'notifications' }], activeTabId: 'notifications' } }))
+  },
   openHelpTab: () => {
     set((s) => {
       const exists = s.ui.tabs.some((t) => t.id === 'help')
@@ -142,14 +147,7 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       return { ui: { ...s.ui, tabs, activeTabId: 'help' } }
     })
   },
-  openTutorialTab: () => {
-    set((s) => {
-      const exists = s.ui.tabs.some((t) => t.id === 'tutorial')
-      const tabs: Tab[] =
-        exists ? s.ui.tabs : [...s.ui.tabs, { id: 'tutorial', kind: 'tutorial' }]
-      return { ui: { ...s.ui, tabs, activeTabId: 'tutorial' } }
-    })
-  },
+  openTutorialTab: () => { get().openHelpTab() },
   sendTutorialChat: (text) => {
     const content = text.trim()
     if (!content) return
@@ -169,10 +167,15 @@ export function sessionActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       },
     }))
     // Rolling transcript for the host (user/assistant only).
+    // Assistant turns are re-serialized as Answer JSON so multi-turn stays
+    // schema-shaped — plain text history makes the free model drop JSON.
     const wire = get().tutorial.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ role: m.role, content: m.content }))
-    get().req({ r: 'TutorialChat', id, messages: wire })
+      .map((m) => ({
+        role: m.role,
+        content: m.role === 'assistant' ? tutorialAssistantWire(m) : m.content,
+      }))
+    get().req({ r: 'TutorialChat', id, messages: wire, context: helpContext() })
   },
   clearTutorialPendingTour: () => {
     set((s) => ({ tutorial: { ...s.tutorial, pendingTour: null } }))

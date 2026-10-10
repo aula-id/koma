@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import { showCodingTransactions } from './CodingTransactions'
 import { showCodingTests } from './CodingTests'
 import { showCodingDebug } from './CodingDebug'
@@ -57,6 +58,7 @@ export function showCodingPalette(mode: 'files' | 'commands' = 'files') {
 
 /** Uses the existing compact Koma overlay language; leaves the workspace picker intact. */
 export function CodingPalette() {
+  const notificationSession = useKoma(state => state.session.id)
   const [mode, setMode] = useState<'files' | 'commands' | null>(null)
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState('')
@@ -148,12 +150,12 @@ export function CodingPalette() {
         const workspace = { hostId, root }
         void codingRequest(workspace, { op: 'configEnsure' }).then(() => {
           if ((useKoma.getState().remoteState.hostId ?? 'local') === hostId) useKoma.getState().openCodingFile(root, '.koma/coding.json')
-        }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
+        }).catch(error => showToast(String(error.message ?? error), 'error', { session: notificationSession, source: 'coding' }))
       }
     }
     else if (command.id === 'restartLsp') {
       const root = scope && scope !== '*' ? scope : activeRoot
-      if (root) void codingRequest({ hostId, root }, { op: 'lspRestartWorkspace' }).catch(error => useKoma.setState(s => { const id = s.ui.toastSeq + 1; return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text: String(error.message ?? error) } } } }))
+      if (root) void codingRequest({ hostId, root }, { op: 'lspRestartWorkspace' }).catch(error => showToast(String(error.message ?? error), 'error', { session: notificationSession, source: 'coding' }))
     }
     else if (command.id === 'saveAll') { for (const tab of store.ui.tabs) if (tab.kind === 'codingFile' && !tab.preview) store.saveCodingFile(tab.root, tab.path) }
     else if (command.id === 'transactions') showCodingTransactions()

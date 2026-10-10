@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { GitPullRequestArrow } from 'lucide-react'
@@ -34,8 +35,8 @@ export function RebaseDropConfirm({ x, y, branch, targetLabel, onConfirm, onCanc
     const w = el?.offsetWidth ?? WIDTH
     const h = el?.offsetHeight ?? 90
     setPos({
-      left: Math.max(4, Math.min(x, window.innerWidth - w - 4)),
-      top: Math.max(4, Math.min(y, window.innerHeight - h - 4)),
+      left: Math.max(4, Math.min(pagePoint(x), pagePoint(window.innerWidth) - w - 4)),
+      top: Math.max(4, Math.min(pagePoint(y), pagePoint(window.innerHeight) - h - 4)),
     })
   }, [x, y])
 

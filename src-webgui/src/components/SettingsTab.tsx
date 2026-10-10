@@ -8,6 +8,7 @@ import {
   Palette as PaletteIcon,
   PanelLeft,
   Plus,
+  Search,
   SlidersHorizontal,
   Code2,
   Trash2,
@@ -22,8 +23,11 @@ import { CHAT_TURNS_DEFAULT, clampChatTurns } from '../lib/chatWindow'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
+import { WebSearchSettings } from './WebSearchSettings'
 import { ComputerSettings } from './ComputerSettings'
+import { UI_SCALES, pagePoint, setUiScale, useUiScale, type UiScale } from '../lib/uiScale'
 import { BrailleSpinner } from './BrailleSpinner'
+import { SettingsFolderButton } from './SettingsFolderButton'
 
 // VSCode-style Settings page, rendered as a tab over the main content column
 // (see routes/index.tsx TabbedMain). A left nav rail scrolls the content pane to
@@ -33,7 +37,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'skills' | 'lsp' | 'sshKeys' | 'computer'
+type SectionId = 'webSearch' | 'account' | 'appearance' | 'session' | 'activityBar' | 'skills' | 'lsp' | 'sshKeys' | 'computer'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
@@ -43,6 +47,7 @@ const SECTION_ORDER: SectionId[] = [
   'account',
   'appearance',
   'session',
+  'webSearch',
   'computer',
   'activityBar',
   'skills',
@@ -50,7 +55,7 @@ const SECTION_ORDER: SectionId[] = [
   'sshKeys',
 ]
 
-export default function SettingsTab() {
+export default function SettingsTab({ visible = true }: { visible?: boolean }) {
   const req = useKoma((s) => s.req)
   const activeTheme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
@@ -60,6 +65,7 @@ export default function SettingsTab() {
   const accountRef = useRef<HTMLDivElement>(null)
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
+  const webSearchRef = useRef<HTMLDivElement>(null)
   const computerRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
   const skillsRef = useRef<HTMLDivElement>(null)
@@ -69,7 +75,7 @@ export default function SettingsTab() {
 
   const sectionRef = (id: SectionId) => ({
     account: accountRef, appearance: appearanceRef, session: sessionRef,
-    computer: computerRef, activityBar: activityBarRef, skills: skillsRef, lsp: lspRef, sshKeys: sshKeysRef,
+    webSearch: webSearchRef, computer: computerRef, activityBar: activityBarRef, skills: skillsRef, lsp: lspRef, sshKeys: sshKeysRef,
   })[id]
 
   // Nav click → smooth-scroll the pane to the section header.
@@ -90,15 +96,15 @@ export default function SettingsTab() {
     for (const id of SECTION_ORDER) {
       const el = sectionRef(id).current
       if (!el) continue
-      const delta = el.getBoundingClientRect().top - paneTop
+      const delta = pagePoint(el.getBoundingClientRect().top - paneTop)
       if (delta < 80) current = id
     }
     setActive(current)
   }
 
   return (
-    <div className="flex h-full w-full min-w-0 bg-koma-bg text-koma-fg">
-      <nav className="flex w-40 flex-none flex-col gap-0.5 border-r border-koma-border bg-koma-panel2 p-2">
+    <div className="h-full min-w-0 [container-type:inline-size]"><div className="settings-tab flex h-full w-full min-w-0 bg-koma-bg text-koma-fg">
+      <nav className="settings-nav flex w-40 flex-none flex-col overflow-y-auto gap-0.5 border-r border-koma-border bg-koma-panel2 p-2">
         <div className="px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
           Settings
         </div>
@@ -120,6 +126,7 @@ export default function SettingsTab() {
           active={active === 'session'}
           onClick={() => goto('session')}
         />
+        <NavItem icon={<Search size={15} />} label="Web search" active={active === 'webSearch'} onClick={() => goto('webSearch')} />
         <NavItem icon={<Monitor size={15} />} label="Computer use" active={active === 'computer'} onClick={() => goto('computer')} />
         <NavItem
           icon={<PanelLeft size={15} />}
@@ -143,7 +150,7 @@ export default function SettingsTab() {
       </nav>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-8 py-6">
+        <div className="settings-content mx-auto max-w-3xl px-8 py-6">
           <section ref={accountRef}>
             <SectionHeader title="Account" desc="Sign in with koma.run — unlocks the extension store." />
             <AccountSettings />
@@ -151,6 +158,7 @@ export default function SettingsTab() {
 
           <section ref={appearanceRef} className="mt-12">
             <SectionHeader title="Appearance" desc="Pick a colour theme — it applies instantly across the whole app." />
+            <UiScaleSetting />
             <PaletteGrid
               palettes={palettes}
               themes={themes}
@@ -165,6 +173,11 @@ export default function SettingsTab() {
             <SessionSettings />
           </section>
 
+          <section data-tour="web-search-settings" ref={webSearchRef} className="mt-12">
+            <SectionHeader title="Web search" desc="Choose a search provider for all sessions." />
+            {visible && <WebSearchSettings />}
+          </section>
+
           <section ref={computerRef} className="mt-12">
             <SectionHeader title="Computer use" desc="Share a screen with the model." />
             <ComputerSettings />
@@ -173,20 +186,20 @@ export default function SettingsTab() {
           <section ref={activityBarRef} className="mt-12">
             <SectionHeader
               title="Sidebar"
-              desc="Show or hide activity-bar icons. Hidden icons move into the “…” overflow menu instead of disappearing — drag an icon on the activity bar itself to reorder it."
+              desc="Choose which icons appear in the sidebar. Drag sidebar icons to reorder them; hidden icons stay in the “…” menu."
             />
             <ActivityBarSettings />
           </section>
 
           <section ref={skillsRef} className="mt-12">
-            <SectionHeader title="Skills" desc="Add optional read-only External skill locations." />
+            <SectionHeader title="Skills" desc="Load skills from additional folders." />
             <ExternalSkillRootsSettings />
           </section>
 
           <section ref={lspRef} className="mt-12">
             <SectionHeader
               title="Language servers"
-              desc="Optional language servers for the coding panel. koma-managed installs land under ~/.koma/lsp/ and never touch system packages. PATH copies are detected automatically."
+              desc="Add code completion and diagnostics for your languages. Installed servers are detected automatically."
             />
             <LspSettings />
           </section>
@@ -194,13 +207,13 @@ export default function SettingsTab() {
           <section ref={sshKeysRef} className="mt-12">
             <SectionHeader
               title="SSH Keys"
-              desc="A local key vault for git remotes — generate or import keys and manage them here. Separate from the agent's own credentials."
+              desc="Manage your local SSH keys for Git connections."
             />
             <SshKeysSettings />
           </section>
         </div>
       </div>
-    </div>
+    </div></div>
   )
 }
 
@@ -225,7 +238,7 @@ function NavItem({
           : 'text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-90'
       }`}
     >
-      <span className={`flex-none ${active ? 'text-koma-accent' : 'opacity-70'}`}>{icon}</span>
+      <span className={`flex-none ${active ? 'text-koma-accent' : ''}`}>{icon}</span>
       <span className="truncate">{label}</span>
     </button>
   )
@@ -235,7 +248,7 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   return (
     <div className="mb-4 border-b border-koma-border pb-2">
       <h2 className="text-[15px] font-semibold text-koma-fg">{title}</h2>
-      <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">{desc}</p>
+      <p className="mt-0.5 text-[12px] leading-relaxed text-koma-dim">{desc}</p>
     </div>
   )
 }
@@ -464,13 +477,14 @@ function ChatTurnsSetting() {
 
   return (
     <SettingRow
+      input
       label="Turns on screen"
       desc="How many recent turns the chat shows. Scroll up to load more. This window only."
     >
       <input
-        type="number"
-        min={1}
-        max={200}
+        type="text"
+        inputMode="numeric"
+        aria-label="Turns on screen"
         value={text}
         onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ''))}
         onBlur={commit}
@@ -591,8 +605,9 @@ function SessionSettings() {
 
   return (
     <div className="flex flex-col">
-      <SettingRow label="Name" desc="The session's display name, shown in the switcher.">
+      <SettingRow input label="Name" desc="The session's display name, shown in the switcher.">
         <input
+          aria-label="Session name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={commitName}
@@ -608,33 +623,44 @@ function SessionSettings() {
       </SettingRow>
 
       <SettingRow
+        input
         label="Working directories"
-        desc="One directory per line. The first is the primary workspace root; the rest widen the harness allow-set."
-        align="start"
+        desc="One folder per line. The first is your main workspace; the others let the agent work in additional folders."
+        action={<SettingsFolderButton label="Add workspace folder" onPick={(path) => {
+          const folders = workdir.split('\n').map((line) => line.trim()).filter(Boolean)
+          if (folders.includes(path)) return
+          folders.push(path)
+          setWorkdir(folders.join('\n'))
+          req({ r: 'SetPrefs', workdir: folders })
+        }} />}
       >
-        <textarea
-          value={workdir}
-          onChange={(e) => setWorkdir(e.target.value)}
-          onBlur={commitWorkdir}
-          rows={3}
-          spellCheck={false}
-          placeholder="/path/to/project"
-          className="h-20 w-72 resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
-        />
+        <div className="flex w-full flex-col items-start gap-2">
+          <textarea
+            aria-label="Working directories"
+            value={workdir}
+            onChange={(e) => setWorkdir(e.target.value)}
+            onBlur={commitWorkdir}
+            rows={3}
+            spellCheck={false}
+            placeholder="/path/to/project"
+            className="h-20 w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
+          />
+        </div>
       </SettingRow>
 
-      <SettingRow label="Short-send" desc="Use a deterministic archive index and recent context for outgoing requests. Normally 60–75%; oversized sessions recover using spare context within the 300k maximum window.">
+      <SettingRow label="Short-send" desc="Reduce request size by sending recent context and a compact index of earlier messages.">
         <Toggle on={shortSend} onChange={setShort} />
       </SettingRow>
 
       <SettingRow
+        input
         label="Context window limit"
-        desc="0 = automatic OpenRouter estimate, falling back to 128k when unknown. A custom limit can lower the detected window. Maximum: 300k."
+        desc="Maximum context size in tokens. Use 0 for automatic detection (128k fallback), or set a lower limit up to 300k."
       >
         <input
-          type="number"
-          min={0}
-          max={300000}
+          type="text"
+          inputMode="numeric"
+          aria-label="Context window limit"
           value={contextLimit}
           onChange={(e) => setContextLimit(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitContextLimit}
@@ -646,11 +672,13 @@ function SessionSettings() {
       </SettingRow>
 
       <SettingRow
+        input
         label="Context model alias"
-        desc="Optional OpenRouter model ID for context detection, such as anthropic/claude-sonnet-4. Leaves the selected chat model unchanged."
+        desc="Optional OpenRouter model ID used to detect context size. Your chat model stays the same."
       >
         <input
           type="text"
+          aria-label="Context model alias"
           maxLength={200}
           value={contextAlias}
           onChange={(e) => setContextAlias(e.target.value)}
@@ -663,12 +691,14 @@ function SessionSettings() {
       </SettingRow>
 
       <SettingRow
-        label="Max out tokens"
-        desc="Requested reply tokens. A positive custom value takes priority; 0 = 128k. Limited by remaining context and provider output limits. Codex OAuth controls its own output limit."
+        input
+        label="Reply token limit"
+        desc="Maximum reply length in tokens. Use 0 for 128k. Model limits still apply; Codex manages this automatically."
       >
         <input
-          type="number"
-          min={0}
+          type="text"
+          inputMode="numeric"
+          aria-label="Reply token limit"
           value={maxOutTokens}
           onChange={(e) => setMaxOutTokens(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitMaxOutTokens}
@@ -679,15 +709,15 @@ function SessionSettings() {
         />
       </SettingRow>
 
-      <SettingRow label="Bash shorts" desc="Filter and tee bash / git output to disk to preserve command logs.">
+      <SettingRow label="Save command output" desc="Keep command logs on disk and show condensed output in chat.">
         <Toggle on={bashSaving} onChange={setBash} />
       </SettingRow>
 
-      <SettingRow label="Coding autosave" desc="Debounced auto-save for Coding panel editor tabs (750ms after edits stop).">
+      <SettingRow label="Coding autosave" desc="Save files automatically after you stop typing.">
         <Toggle on={codingAutosave} onChange={setCodingAuto} />
       </SettingRow>
 
-      <SettingRow label="Internet mode" desc="Full upgrades web_fetch to the browser backend (renders JS, higher token use).">
+      <SettingRow label="Internet mode" desc="Full mode loads JavaScript websites and may use more tokens.">
         <div className="w-40">
           <Segmented
             value={internet}
@@ -700,10 +730,11 @@ function SessionSettings() {
         </div>
       </SettingRow>
 
-      <SettingRow label="Max turns" desc="Max agentic turns per sub-agent (when agent has no step cap). Default: 500.">
+      <SettingRow input label="Subagent turn limit" desc="Maximum turns per subagent unless it has its own limit. Default: 500.">
         <input
-          type="number"
-          min={1}
+          type="text"
+          inputMode="numeric"
+          aria-label="Subagent turn limit"
           value={maxTurns}
           onChange={(e) => setMaxTurns(e.target.value.replace(/[^0-9]/g, ''))}
           onBlur={commitMaxTurns}
@@ -721,24 +752,27 @@ function SettingRow({
   label,
   desc,
   children,
-  align = 'center',
+  input = false,
+  action,
 }: {
   label: string
   desc?: string
   children: ReactNode
-  align?: 'start' | 'center'
+  input?: boolean
+  action?: ReactNode
 }) {
   return (
     <div
-      className={`flex justify-between gap-6 border-b border-koma-border py-3.5 ${
-        align === 'start' ? 'items-start' : 'items-center'
-      }`}
+      className={`settings-row flex border-b border-koma-border py-3.5 ${input ? 'settings-input-row flex-col items-stretch gap-2.5' : 'items-center justify-between gap-4'}`}
     >
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] text-koma-fg">{label}</div>
-        {desc && <div className="mt-0.5 text-[11.5px] leading-snug text-koma-fg opacity-45">{desc}</div>}
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[13px] text-koma-fg">{label}</div>
+          {action}
+        </div>
+        {desc && <div className="mt-0.5 text-[11.5px] leading-relaxed text-koma-dim">{desc}</div>}
       </div>
-      <div className="flex-none">{children}</div>
+      <div className={input ? 'w-full min-w-0' : 'max-w-full flex-none'}>{children}</div>
     </div>
   )
 }
@@ -789,15 +823,22 @@ function ExternalSkillRootsSettings() {
   return (
     <div className="space-y-2">
       {roots.map((root, index) => (
-        <div key={index} className="flex min-w-0 items-center gap-2">
+        <div key={index} className="space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <label htmlFor={`settings-skill-root-${index}`} className="text-[12px] text-koma-fg">Skill folder {index + 1}</label>
+            <div className="flex items-center gap-2">
+              <SettingsFolderButton compact label={`Choose folder for External skill root ${index + 1}`} onPick={(path) => update(index, path)} />
+              <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => current.filter((_, i) => i !== index)) }} aria-label={`Remove External skill root ${index + 1}`} title="Remove location" className="flex h-8 w-8 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-error"><X size={13} /></button>
+            </div>
+          </div>
           <input
+            id={`settings-skill-root-${index}`}
             value={root}
             onChange={(event) => update(index, event.target.value)}
             aria-label={`External skill root ${index + 1}`}
             placeholder="/absolute/path/to/skills"
-            className="h-8 min-w-0 flex-1 rounded border border-koma-border bg-koma-panel px-2 font-mono text-[11px] outline-none focus:border-koma-accent"
+            className="h-8 w-full min-w-0 rounded border border-koma-border bg-koma-panel px-2 font-mono text-[11px] outline-none focus:border-koma-accent"
           />
-          <button type="button" onClick={() => { setDirty(true); setRequestId(null); setRoots((current) => current.filter((_, i) => i !== index)) }} aria-label={`Remove External skill root ${index + 1}`} className="flex h-8 w-8 flex-none items-center justify-center rounded border border-koma-border text-red-300 opacity-70 hover:bg-koma-hover hover:opacity-100"><Trash2 size={13} /></button>
         </div>
       ))}
       {!roots.length && <p className="text-[11px] opacity-45">No additional External skill locations configured.</p>}
@@ -877,7 +918,7 @@ function ActivityBarRow({
   onToggle: (v: boolean) => void
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 border-b border-koma-border py-3">
+    <div className="flex items-center justify-between gap-4 border-b border-koma-border py-3">
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <Icon size={15} className="flex-none text-koma-fg opacity-60" />
         <span className="truncate text-[13px] text-koma-fg">{label}</span>
@@ -1363,6 +1404,131 @@ function LspSettings() {
             )
           })}
         </div>
+      )}
+    </div>
+  )
+}
+
+export function UiScaleSetting() {
+  const { scale, pending, error } = useUiScale()
+  // Draft selection — Apply commits so dragging never jump-scares the UI.
+  const [draft, setDraft] = useState<UiScale>(scale)
+  useEffect(() => {
+    setDraft(scale)
+  }, [scale])
+  const dirty = draft !== scale
+  const draftIdx = Math.max(0, UI_SCALES.indexOf(draft))
+  const defaultIdx = UI_SCALES.indexOf(1)
+  // Counter the live page zoom so the sample shows absolute draft size.
+  const previewZoom = draft / scale
+  return (
+    <div className="mb-6" role="group" aria-label="UI scale">
+      <div className="mb-2 text-[12px] font-medium">UI scale</div>
+      <p className="mb-3 text-[11px] text-koma-dim">
+        Scale the entire interface. 1× is the default. Drag to preview a value, then Apply.
+      </p>
+      <div className="w-full">
+        <div className="flex items-center gap-3">
+          <span aria-hidden className="select-none text-[11px] font-medium leading-none text-koma-dim">
+            a
+          </span>
+          <div className="relative min-w-0 flex-1 pt-1 pb-5">
+            {/* Snap circles on the track (aligned with range thumb centers). */}
+            <div
+              className="pointer-events-none absolute inset-x-0 top-[11px] z-0 flex items-center justify-between"
+              aria-hidden
+            >
+              {UI_SCALES.map((s) => {
+                const active = s === draft
+                const isDefault = s === 1
+                return (
+                  <span
+                    key={s}
+                    className={[
+                      'ui-scale-snap block shrink-0 rounded-full',
+                      active
+                        ? 'bg-koma-fg'
+                        : isDefault
+                          ? 'bg-koma-fg/45'
+                          : 'bg-koma-fg/25',
+                    ].join(' ')}
+                    title={`${s}×`}
+                  />
+                )
+              })}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={UI_SCALES.length - 1}
+              step={1}
+              value={draftIdx}
+              disabled={pending}
+              aria-label="UI scale"
+              aria-valuetext={`${draft}×${draft === 1 ? ' (default)' : ''}`}
+              onChange={(e) => {
+                const next = UI_SCALES[Number(e.target.value)]
+                if (next !== undefined) setDraft(next)
+              }}
+              className="ui-scale-slider relative z-[1] w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            {/* Default label under the 1× snap */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4" aria-hidden>
+              <span
+                className="absolute top-0 -translate-x-1/2 text-[10px] leading-none text-koma-dim"
+                style={{ left: `${(defaultIdx / (UI_SCALES.length - 1)) * 100}%` }}
+              >
+                Default
+              </span>
+            </div>
+          </div>
+          <span aria-hidden className="select-none text-[18px] font-medium leading-none text-koma-fg/70">
+            A
+          </span>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="font-mono text-[12px] text-koma-fg tabular-nums">
+            {draft}×{draft === 1 ? ' · default' : ''}
+            {dirty ? ' · pending' : ''}
+          </span>
+          <button
+            type="button"
+            disabled={pending || !dirty}
+            onClick={() => {
+              void setUiScale(draft)
+            }}
+            className="rounded bg-koma-accent px-3 py-1 text-[12px] font-semibold text-koma-bg disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            {pending ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+        {/* Live type preview at the draft scale (does not commit until Apply). */}
+        <div
+          className="mt-4 overflow-hidden rounded border border-koma-border bg-koma-panel/40 px-3 py-2.5"
+          aria-live="polite"
+        >
+          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-koma-dim">
+            Preview · {draft}×
+          </div>
+          <p
+            data-testid="ui-scale-preview"
+            className="m-0 leading-relaxed text-koma-fg"
+            style={{
+              // Counter live page zoom so the sample reflects the draft absolute size
+              // (12px body at 1×). Transform would not grow the box height.
+              fontSize: `${12 * previewZoom}px`,
+            }}
+          >
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor
+            incididunt ut labore et dolore magna aliqua — the quick brown fox jumps over the lazy
+            dog.
+          </p>
+        </div>
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 text-[11px] text-koma-error">
+          {error}
+        </p>
       )}
     </div>
   )

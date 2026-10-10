@@ -1,0 +1,9 @@
+[
+  { "question": "OAuth login connected account but model missing", "topics": ["providers"], "surface": "GUI" },
+  { "question": "web search internet provider key", "topics": ["web-search", "tui-internet"], "surface": "GUI/TUI" },
+  { "question": "notification history toast expired", "topics": ["notifications"], "surface": "GUI/TUI" },
+  { "question": "coding editor save dirty file", "topics": ["coding"], "surface": "GUI" },
+  { "question": "terminal selection shell copy", "topics": ["terminals"], "surface": "GUI/TUI" },
+  { "question": "remote SSH host disconnected", "topics": ["remote", "tui-remote"], "surface": "GUI/TUI" },
+  { "question": "skill load reload saved instructions", "topics": ["skills", "tui-skill"], "surface": "GUI/TUI" }
+]

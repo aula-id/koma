@@ -59,6 +59,20 @@ pub struct FileSearchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ClientRequest {
+    Notifications {
+        request: crate::model::notifications::Request,
+    },
+    /// Refresh only search preferences, preserving open settings drafts.
+    ReloadWebSearch,
+    GetWebSearch {
+        req_seq: u64,
+    },
+    SetWebSearch {
+        req_seq: u64,
+        provider: crate::model::web_search::SearchProvider,
+        key: Option<crate::model::web_search::SearchKey>,
+    },
+
     Computer(crate::app::runtime::computer::Control),
     Attach {
         foreground_id: Option<String>,
@@ -437,6 +451,12 @@ pub enum ClientRequest {
     /// back via the session's `status` line, exactly like `/compact`. gui-gated: the
     /// TUI drives compaction via the `/compact` slash command.
     Compact,
+    /// Clear the foreground session's live chat transcript (GUI titlebar Clear) —
+    /// the non-key equivalent of the TUI's `/clear`. Reuses
+    /// [`crate::app::runtime::commands::clear::handle_clear`] daemon-side. Keeps the
+    /// system prompt + archive; drops user/assistant/tool turns. gui-gated: the TUI
+    /// drives clear via the `/clear` slash command.
+    Clear,
     /// Fetch the foreground session's GUI-editable prefs (name / workdir / short-send /
     /// sliding-cache / bash-saving / internet-mode) + the global palette, for the GUI
     /// Settings tab. Read-only: the daemon replies with a one-shot
@@ -823,10 +843,16 @@ pub enum ClientRequest {
     },
 
     // ─── GUI terminal view (host-local, never crosses daemon socket) ────
+    TerminalShells {
+        request_id: String,
+        context: String,
+    },
     /// Forwarded from GuiReq::TerminalCreate — PTY creation is host-local.
     TerminalCreate {
         id: String,
         cwd: Option<String>,
+        #[serde(default)]
+        shell_id: Option<String>,
     },
     TerminalInput {
         id: String,
@@ -856,6 +882,14 @@ pub struct DaemonFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum DaemonEvent {
+    Notifications {
+        reply: crate::model::notifications::Reply,
+    },
+    WebSearchValues {
+        req_seq: u64,
+        status: crate::model::web_search::SearchStatus,
+        error: Option<String>,
+    },
     ComputerStatus(crate::app::runtime::computer::Status),
     ComputerOperation(crate::app::runtime::computer::Request),
     /// Build-skew handshake (task #142): sent VERY FIRST on attach.
@@ -1304,6 +1338,7 @@ pub enum ModeSnapshot {
     Todo(Box<TodoSnapshot>),
     Attachments(Box<AttachmentsSnapshot>),
     Help(Box<HelpSnapshot>),
+    Notifications(Box<crate::app::mode::notifications::NotificationsState>),
     Skill(Box<SkillCmdSnapshot>),
     Effort(EffortSnapshot),
     Model(Box<ModelCmdSnapshot>),
@@ -1353,6 +1388,10 @@ pub enum StateDelta {
     },
     SessionAdded(Box<SessionSnapshot>),
     Toast {
+        #[serde(default)]
+        session: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
         kind: String,
         text: String,
     },

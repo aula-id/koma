@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -96,7 +97,7 @@ export function BottomPanel() {
         event.currentTarget.setPointerCapture(event.pointerId)
         setResizing(true)
       }}
-      onPointerMove={event => { if (drag.current) setHeight(clamp(drag.current.height + drag.current.y - event.clientY)) }}
+      onPointerMove={event => { if (drag.current) setHeight(clamp(drag.current.height + pagePoint(drag.current.y - event.clientY))) }}
       onPointerUp={event => {
         drag.current = null; setResizing(false)
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)

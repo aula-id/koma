@@ -348,6 +348,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    persist config.json in one write. Best-effort: a write failure
         //    surfaces to the status line but does not abort the rest of the
         //    save.
+        if let Some(config) =
+            crate::model::web_search::read_global_config().map_err(anyhow::Error::msg)?
+        {
+            state.rest.config.web_search = config.web_search;
+        }
         state.rest.config.theme = theme;
         state.rest.config.accent = accent;
         state.rest.config.palette = palette;
@@ -367,7 +372,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 state
                     .rest
                     .fg_mut()
-                    .set_toast_info(crate::app::cascade::cascade_status_line(
+                    .set_toast_info_app(crate::app::cascade::cascade_status_line(
                         "provider/model",
                         &report,
                     ));

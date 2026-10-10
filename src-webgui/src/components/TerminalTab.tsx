@@ -89,6 +89,9 @@ export function TerminalTab({ tab }: TerminalTabProps) {
       term.write(data)
     }
 
+    const pending = (globalThis as any).__terminalPending
+    if (pending?.[terminalId]) { term.write(pending[terminalId]); delete pending[terminalId] }
+
     // Register exit handler.
     if (!(globalThis as any).__terminalExitHandlers) {
       ;(globalThis as any).__terminalExitHandlers = {}
@@ -98,11 +101,13 @@ export function TerminalTab({ tab }: TerminalTabProps) {
     }
 
     // Forward keystrokes from xterm to the host PTY.
+    const selectionDisposable = term.onSelectionChange(() => document.dispatchEvent(new CustomEvent('koma-terminal-selection', { detail: { selected: term.hasSelection() } })))
     const disposable = term.onData((data) => {
       req({ r: 'TerminalInput', id: terminalId, data: normalizeTerminalInput(data) })
     })
 
     return () => {
+      selectionDisposable.dispose()
       disposable.dispose()
       delete (globalThis as any).__terminalWriters?.[terminalId]
       delete (globalThis as any).__terminalExitHandlers?.[terminalId]
@@ -129,13 +134,19 @@ export function TerminalTab({ tab }: TerminalTabProps) {
     const fit = fitRef.current
     if (!container || !term || !fit) return
 
-    const observer = new ResizeObserver(() => {
+    const resize = () => {
+      const scroll = term.buffer.active.viewportY
+      const atBottom = scroll === term.buffer.active.baseY
       fit.fit()
       const dims = fit.proposeDimensions()
       if (dims) {
         req({ r: 'TerminalResize', id: terminalId, cols: dims.cols, rows: dims.rows })
       }
-    })
+      if (atBottom) term.scrollToBottom()
+      else term.scrollToLine(scroll)
+    }
+    const observer = new ResizeObserver(resize)
+    window.addEventListener('koma-ui-scale', resize)
     observer.observe(container)
 
     // Initial fit + resize.
@@ -145,7 +156,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
       req({ r: 'TerminalResize', id: terminalId, cols: dims.cols, rows: dims.rows })
     }
 
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); window.removeEventListener('koma-ui-scale', resize) }
   }, [terminalId, req])
 
   // display:none inactive panes: refit when this terminal becomes visible again.
@@ -165,6 +176,7 @@ export function TerminalTab({ tab }: TerminalTabProps) {
 
   return (
     <div
+      data-tour="terminal-content"
       ref={containerRef}
       className="h-full w-full overflow-hidden bg-koma-bg"
       style={{ padding: '4px 0 0 4px' }}

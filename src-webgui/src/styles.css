@@ -69,6 +69,27 @@ html[data-computer-preparing="true"] .computer-preview-panel { visibility: hidde
   line-height: 1.55;
 }
 
+/* Keep rich-text selections on the active palette, including formatted text. */
+.koma-rich-editor li::marker {
+  color: var(--color-koma-fg);
+}
+/* Composer/note editors are overflow-y-auto with no extra padding. Outside
+   markers hang in the list's padding — 1rem clips a 14px-mono "1." to ".".
+   Unlayered so this wins over Tailwind preflight `list-style: none`. */
+.koma-rich-editor ol {
+  list-style: decimal outside;
+  padding-left: 2rem;
+}
+.koma-rich-editor ul:not(:has(> .koma-checklist-item)) {
+  list-style: disc outside;
+  padding-left: 1.25rem;
+}
+.koma-rich-editor::selection,
+.koma-rich-editor *::selection {
+  color: var(--color-koma-fg);
+  background-color: color-mix(in srgb, var(--color-koma-accent) 30%, var(--color-koma-bg));
+}
+
 /* Lexical checklist items (composer + notes): role=checkbox on <li>, no native bullet. */
 [data-composer-editor] li.koma-checklist-item,
 .koma-md li.koma-checklist-item {
@@ -872,4 +893,120 @@ svg.animate-spin {
 #workspace-bottom-panel select option {
   background-color: var(--color-koma-panel);
   color: var(--color-koma-fg);
+}
+
+/* Keep Settings navigation and scale controls reachable in a zoomed viewport. */
+.settings-tab { min-height: 0; }
+.settings-input-row :is(input, textarea) { width: 100%; }
+/* Editable fields keep full contrast; only disabled fields are dimmed. */
+.settings-content :is(input, textarea, select) {
+  color: var(--color-koma-fg);
+  background-color: var(--color-koma-bg);
+  border-color: var(--color-koma-grip);
+  opacity: 1;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.settings-content :is(input, textarea)::placeholder {
+  color: var(--color-koma-dim);
+  opacity: 1;
+}
+.settings-content :is(input, textarea, select):enabled:hover {
+  border-color: color-mix(in srgb, var(--color-koma-fg) 45%, var(--color-koma-bg));
+}
+.settings-content :is(input, textarea, select):focus-visible {
+  outline: none;
+  border-color: var(--color-koma-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-koma-accent) 20%, transparent);
+}
+.settings-content :is(input, textarea, select):disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background-color: var(--color-koma-panel);
+}
+.settings-content button:enabled,
+.settings-nav button:enabled {
+  opacity: 1;
+}
+.settings-content button[aria-pressed="true"] {
+  background-color: var(--color-koma-head);
+  color: var(--color-koma-accent);
+}
+.settings-content button:focus-visible,
+.settings-content summary:focus-visible,
+.settings-nav button:focus-visible {
+  outline: 2px solid var(--color-koma-accent);
+  outline-offset: 2px;
+}
+@container (max-width: 520px) {
+  .settings-tab { flex-direction: column; }
+  .settings-nav { width: 100%; max-height: 100px; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--color-koma-border); }
+  .settings-tab > div { min-height: 0; }
+  .settings-content { padding-inline: 12px; }
+  .settings-row :is(input, textarea) { max-width: 100%; }
+}
+
+/* Driver uses raw viewport rectangles for its SVG cutout and popover placement.
+   Undo CSS page zoom on these portal roots, then scale the popover itself; its
+   measured rectangle includes that scale, so Driver can still clamp it. */
+html .driver-overlay, html .driver-popover { zoom: calc(1 / var(--koma-browser-zoom, 1)); }
+html .driver-popover { scale: var(--koma-browser-zoom, 1); transform-origin: top left; }
+
+html [role="menu"] {
+  max-width: calc(100vw / var(--koma-browser-zoom, 1) - 16px);
+  max-height: calc(100dvh / var(--koma-browser-zoom, 1) - 16px);
+  overflow-y: auto;
+}
+html .driver-popover {
+  min-width: 0;
+  max-width: calc(100vw / var(--koma-browser-zoom, 1) - 20px);
+  max-height: calc(100dvh / var(--koma-browser-zoom, 1) - 20px);
+  overflow-y: auto;
+}
+
+/* Authored design/diagram content keeps its own visual scale. Toolbars and
+   properties panels remain part of the scaled interface. */
+.koma-authored-canvas { zoom: calc(1 / var(--koma-ui-scale, 1)); }
+
+/* UI scale slider (Settings → Appearance): track + thumb themed like the
+   type-size control (small a … large A), discrete steps via JS. */
+.ui-scale-slider {
+  height: 22px;
+}
+.ui-scale-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-koma-fg) 18%, transparent);
+}
+.ui-scale-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-koma-fg) 18%, transparent);
+}
+.ui-scale-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 2px solid var(--color-koma-bg, #111);
+  background: var(--color-koma-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-koma-fg) 25%, transparent);
+  cursor: pointer;
+}
+.ui-scale-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid var(--color-koma-bg, #111);
+  background: var(--color-koma-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-koma-fg) 25%, transparent);
+  cursor: pointer;
+}
+/* Snap dots on the track — sized to sit inside the 4px track as hollow-ish
+   circles; the active draft is filled darker via utility classes. */
+.ui-scale-snap {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 1.5px var(--color-koma-bg, #111);
 }

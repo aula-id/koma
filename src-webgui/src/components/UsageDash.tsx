@@ -1,3 +1,4 @@
+import { pagePoint } from '../lib/uiScale'
 import type { RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useKoma } from '../store/koma'
@@ -159,8 +160,8 @@ export function UsageDash({ rect, menuRef }: { rect: DOMRect; menuRef: RefObject
       aria-label="Koma usage"
       style={{
         position: 'fixed',
-        right: Math.max(8, window.innerWidth - rect.right),
-        bottom: window.innerHeight - rect.top + 6,
+        right: Math.max(8, pagePoint(window.innerWidth) - rect.right),
+        bottom: pagePoint(window.innerHeight) - rect.top + 6,
         width: 300,
         maxHeight: Math.max(160, rect.top - 12),
         zIndex: 80,

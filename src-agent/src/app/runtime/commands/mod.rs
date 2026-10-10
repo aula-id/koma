@@ -10,7 +10,9 @@ use crate::service::openrouter::OpenRouterClient;
 
 mod bash;
 mod cd;
-mod clear;
+// `pub(crate)` so the GUI Clear action can call `handle_clear` — the same
+// entry point `/clear` uses.
+pub(crate) mod clear;
 mod todo;
 // `pub(crate)` so the plan-approval compaction rail (deferred/idle drain) can call
 // `handle_compact` once the post-approval turn settles — the same entry point
@@ -111,6 +113,12 @@ pub(super) fn apply_slash(
             }
         },
         Command::Select => misc::handle_select(state)?,
+        Command::Notification => {
+            let id = state.rest.fg().session.as_ref().map(|s| s.id.clone());
+            state.set_mode(crate::app::mode::Mode::Notifications(Box::new(
+                crate::app::mode::notifications::NotificationsState::new(id),
+            )));
+        }
         Command::Help => misc::handle_help(state)?,
         Command::Usage => misc::handle_usage(state)?,
         Command::Quit => misc::handle_quit(state)?,

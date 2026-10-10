@@ -21,6 +21,10 @@ pub struct PathPickerSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SettingsSnapshot {
+    #[serde(default)]
+    pub web_search: crate::model::web_search::SearchStatus,
+    #[serde(default)]
+    pub search_editor: Option<crate::model::web_search::SearchEditor>,
     /// Wire token for [`SettingsPage`]: "menu" / "appearance" / "general" /
     /// "providers" / "provider_form" / "oauth" / "models" / "model_form".
     #[serde(default)]

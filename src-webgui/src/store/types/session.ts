@@ -98,7 +98,7 @@ export type FileChangeEntry = {
 // The two locked workflow rails ("serve plan to user"/"save plan to file &
 // prompt approval") ride this too now, flagged via `locked` (TUI parity: the
 // rails show right after `plan_enter`, before the model's first `checklist`).
-// Empty array = not in Plan mode, or no plan yet.
+// Empty array = no current checklist items.
 export type PlanTodoEntry = {
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -171,6 +171,9 @@ export type PendingCall = {
 // "success" are accepted here so the client is ready without a Rust change.
 // Safeguard blocks (harness flagged / classifier unavailable) arrive here.
 export type ToastEntry = {
+  eventId?: string
+  session?: string | null
+  source?: string
   id: number
   text: string
   kind: 'error' | 'warn' | 'success' | 'info'

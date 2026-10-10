@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict'
 import { CHECK_LIST, UNORDERED_LIST } from '@lexical/markdown'
-import { loneHttpUrl, looksLikeComposerMarkdown, splitTaskListMarker } from './composerMarkdownPaste.ts'
+import { composerTextPasteAction, loneHttpUrl, looksLikeComposerMarkdown, splitTaskListMarker } from './composerMarkdownPaste.ts'
 
 assert.equal(looksLikeComposerMarkdown('plain hello'), false)
 assert.equal(looksLikeComposerMarkdown('**bold**'), true)
 assert.equal(looksLikeComposerMarkdown('- [ ] todo\n- [x] done'), true)
 assert.equal(looksLikeComposerMarkdown('| a | b |\n|---|---|'), true)
+
+assert.equal(composerTextPasteAction('hello'), 'inline')
+assert.equal(composerTextPasteAction('**bold**'), 'markdown')
+assert.equal(composerTextPasteAction('1. short item'), 'markdown')
+assert.equal(composerTextPasteAction('1. a\n2. b'), 'collapse')
+assert.equal(composerTextPasteAction('`code`\nand another line'), 'collapse')
+assert.equal(composerTextPasteAction(`${'x'.repeat(150)}`), 'collapse')
+assert.equal(composerTextPasteAction(`1. ${'error log with `backticks` '.repeat(8)}`), 'collapse')
 assert.equal(loneHttpUrl('https://example.com/a'), 'https://example.com/a')
 assert.equal(loneHttpUrl('not a url'), null)
 

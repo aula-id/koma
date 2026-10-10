@@ -1,3 +1,4 @@
+import { showToast } from './toast'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { getCodingConfig, editorPreferences } from './coding-config'
 import { workspaceKey, type WorkspaceRef } from './coding-service'
@@ -22,12 +23,8 @@ export function configureCodingEditor(editor: monaco.editor.IStandaloneCodeEdito
   let stopped = false
   let sequence = 0
   let bindings: monaco.IDisposable[] = []
-  const report = (error: unknown) => useKoma.setState(s => {
-    const text = `Coding settings: ${error instanceof Error ? error.message : String(error)}`
-    if (s.ui.toast?.text === text) return s
-    const id = s.ui.toastSeq + 1
-    return { ui: { ...s.ui, toastSeq: id, toast: { id, kind: 'error', text } } }
-  })
+  const notificationSession = useKoma.getState().session.id
+  const report = (error: unknown) => showToast(`Coding settings: ${error instanceof Error ? error.message : String(error)}`, 'error', { session: notificationSession, source: 'coding' })
   const reload = async () => {
     const request = ++sequence
     let next: monaco.IDisposable[] = []

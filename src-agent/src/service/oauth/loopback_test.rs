@@ -34,14 +34,13 @@ fn favicon_request_has_no_params() {
 }
 
 #[test]
-fn decodes_percent_encoded_values() {
-    let line = "GET /auth/callback?code=a%20b%2Bc&state=hello%2Fworld HTTP/1.1";
-    let params = parse_query(line);
-    assert_eq!(
-        params,
-        vec![
-            ("code".to_string(), "a b+c".to_string()),
-            ("state".to_string(), "hello/world".to_string()),
-        ]
-    );
+fn callback_page_has_logo_and_return_button() {
+    let ok = callback_page(true);
+    assert!(ok.contains("data:image/png;base64,"));
+    assert!(ok.contains("You're signed in"));
+    assert!(ok.contains("Back to koma"));
+    assert!(ok.contains("goBack()"));
+    let bad = callback_page(false);
+    assert!(bad.contains("Sign-in didn't finish"));
+    assert!(bad.contains("data:image/png;base64,"));
 }

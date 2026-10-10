@@ -1059,3 +1059,88 @@ fn dedicated_legacy_awareness_precedes_inherited_main() {
     assert_eq!(route.model_id, "legacy-aware");
     assert_eq!(route.provider(), "upstream");
 }
+
+fn commandcode_oauth_config(model_id: &str, commandcode_chat: Option<&str>) -> AppConfig {
+    let conn = OAuthConn {
+        uuid: "cc-uuid".to_string(),
+        provider: OAuthProvider::CommandCode,
+        access_token: "cc-token".to_string(),
+        commandcode_chat: commandcode_chat.map(str::to_string),
+        ..Default::default()
+    };
+    let mut config = AppConfig::default();
+    config.oauth_conns.push(conn);
+    config.models.push(ModelEntry {
+        uuid: "model-uuid".to_string(),
+        name: "test".to_string(),
+        model_id: model_id.to_string(),
+        provider_uuid: "cc-uuid".to_string(),
+        route: None,
+        roles: vec![ModelRole::Main],
+        role: None,
+        source_uuid: None,
+    });
+    config
+}
+
+#[test]
+fn commandcode_claude_model_uses_anthropic_messages() {
+    let config = commandcode_oauth_config("claude-haiku-5-5", None);
+    let resolved = resolve_role(&config, &Settings::default(), ModelRole::Main).unwrap();
+    assert_eq!(resolved.api_type, ApiType::AnthropicCompatible);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::COMMANDCODE_API_BASE
+    );
+}
+
+#[test]
+fn commandcode_gpt_model_stays_openai() {
+    let config = commandcode_oauth_config("gpt-6-sol", None);
+    let resolved = resolve_role(&config, &Settings::default(), ModelRole::Main).unwrap();
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::COMMANDCODE_API_BASE
+    );
+}
+
+#[test]
+fn commandcode_ndjson_pref_wins_over_claude_model() {
+    let config = commandcode_oauth_config("claude-haiku-5-5", Some("ndjson"));
+    let resolved = resolve_role(&config, &Settings::default(), ModelRole::Main).unwrap();
+    assert_eq!(resolved.api_type, ApiType::CommandCode);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::COMMANDCODE_CHAT_BASE
+    );
+}
+
+#[test]
+fn kilocode_claude_model_stays_openai() {
+    let conn = OAuthConn {
+        uuid: "kilo-uuid".to_string(),
+        provider: OAuthProvider::Kilocode,
+        access_token: "kilo-token".to_string(),
+        org_id: "org-456".to_string(),
+        ..Default::default()
+    };
+    let mut config = AppConfig::default();
+    config.oauth_conns.push(conn);
+    config.models.push(ModelEntry {
+        uuid: "model-uuid".to_string(),
+        name: "test".to_string(),
+        model_id: "anthropic/claude-haiku-5-5".to_string(),
+        provider_uuid: "kilo-uuid".to_string(),
+        route: None,
+        roles: vec![ModelRole::Main],
+        role: None,
+        source_uuid: None,
+    });
+    let resolved = resolve_role(&config, &Settings::default(), ModelRole::Main).unwrap();
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::meta(OAuthProvider::Kilocode).chat_endpoint
+    );
+}

@@ -23,6 +23,10 @@ pub struct GlobalSnapshot {
     pub palette: String,
     pub mode: ModeSnapshot,
     pub toast: Option<(String, String)>,
+    #[serde(default)]
+    pub toast_event_id: Option<String>,
+    #[serde(default)]
+    pub toast_session: Option<String>,
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,
     pub models_cache_endpoint: Option<String>,
     pub models_cache_failed: Option<String>,

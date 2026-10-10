@@ -42,12 +42,20 @@ function RefRow({
       {/* Current-branch marker — a small filled dot, mirroring the accent
           tone BranchSwitcher/GraphRow already use for "this is HEAD". */}
       {b.isCurrent && <span className="h-1.5 w-1.5 flex-none rounded-full bg-koma-accent" />}
-      <RowAction title={`Manage ${b.kind === 'tag' ? 'tag' : 'branch'}`} onClick={() => openGitTool(b.kind === 'tag' ? 'tags' : 'branches', { target: b.kind === 'tag' ? b.name : `${b.kind}:${b.name}` })}><Settings2 size={12} /></RowAction>
-      {onCheckout && (
-        <RowAction title={`Checkout ${b.name}`} onClick={onCheckout}>
-          <ArrowRightLeft size={12} />
-        </RowAction>
-      )}
+      <div
+        className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+          onCheckout
+            ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]'
+            : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+        }`}
+      >
+        <RowAction title={`Manage ${b.kind === 'tag' ? 'tag' : 'branch'}`} onClick={() => openGitTool(b.kind === 'tag' ? 'tags' : 'branches', { target: b.kind === 'tag' ? b.name : `${b.kind}:${b.name}` })}><Settings2 size={12} /></RowAction>
+        {onCheckout && (
+          <RowAction title={`Checkout ${b.name}`} onClick={onCheckout}>
+            <ArrowRightLeft size={12} />
+          </RowAction>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { showToast } from '../lib/toast'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { Bold, Code, Heading2, ImagePlus, Italic, Link, List, ListOrdered, Quote, X } from 'lucide-react'
 import { LexicalMarkdownEditor, type LexicalEditorHandle } from './lexical/LexicalMarkdownEditor'
@@ -20,12 +21,7 @@ import { mimeForPath } from '../lib/viewerKind'
 
 const IMAGE_LIMIT = 8 * 1024 * 1024
 
-function toast(text: string) {
-  useKoma.setState((s) => {
-    const id = s.ui.toastSeq + 1
-    return { ui: { ...s.ui, toastSeq: id, toast: { id, text, kind: 'error' } } }
-  })
-}
+function toast(text: string) { showToast(text, 'error') }
 
 function formatInline(command: string, value?: string) {
   document.execCommand(command, false, value)

@@ -154,7 +154,7 @@ impl DaemonHub {
                 state
                     .rest
                     .fg_mut()
-                    .set_toast_info(crate::app::cascade::cascade_status_line(
+                    .set_toast_info_app(crate::app::cascade::cascade_status_line(
                         "provider", &report,
                     ));
             }
@@ -267,10 +267,9 @@ impl DaemonHub {
                     purge.main_reset,
                 );
                 if purge.main_reset || report.agents_cleared > 0 {
-                    state
-                        .rest
-                        .fg_mut()
-                        .set_toast_info(crate::app::cascade::cascade_status_line("model", &report));
+                    state.rest.fg_mut().set_toast_info_app(
+                        crate::app::cascade::cascade_status_line("model", &report),
+                    );
                 }
             }
             save

@@ -1,7 +1,7 @@
 //! The native-React client -> host request dispatcher: [`handle_gui_req`]
 //! applies one decoded [`GuiReq`] by forwarding it to the attached daemon (via
 //! the shared `live_req` slot) or to the host-relay control channel, exactly
-//! as the ipc handler's giant `match req { GuiReq::* }` used to do inline.
+//! as the ipc handler's giant request match used to do inline.
 //! Split out of [`super`] (the `gui` module) for file size — pure code
 //! motion, no behaviour change.
 //!
@@ -42,6 +42,44 @@ pub(super) struct GuiReqCtx {
 /// routing the old inline `match req { GuiReq::* }` used — pure code motion.
 pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     match req {
+        GuiReq::PickSettingsFolder { request_id } => {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let _ = ctx
+                .loop_proxy
+                .send_event(super::proto::UserEvent::PickSettingsFolder { request_id });
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                let proxy = ctx.loop_proxy.clone();
+                std::thread::spawn(move || {
+                    let path = rfd::FileDialog::new()
+                        .set_title("Choose a folder")
+                        .pick_folder();
+                    let _ = proxy.send_event(super::proto::UserEvent::SettingsFolderPicked {
+                        request_id,
+                        path,
+                    });
+                });
+            }
+        }
+        GuiReq::SetUiScale { scale, request_id } => {
+            let _ = ctx
+                .loop_proxy
+                .send_event(super::proto::UserEvent::UiScale { scale, request_id });
+        }
+        GuiReq::Notifications { request, local } => {
+            if request.session.is_some() && !local {
+                forward_or_host(
+                    &ctx.req,
+                    &ctx.ctl,
+                    ClientRequest::Notifications {
+                        request: request.clone(),
+                    },
+                    HostCtl::Notifications { request },
+                );
+            } else {
+                let _ = ctx.ctl.send(HostCtl::Notifications { request });
+            }
+        }
         GuiReq::ComputerPreview { request } => {
             let _ = ctx.ctl.send(HostCtl::ComputerPreview(request));
         }
@@ -496,6 +534,15 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        // Titlebar Clear action: wipe live chat on the attached daemon.
+        // No session attached → silent no-op (same pattern as Compact).
+        GuiReq::Clear => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::Clear);
+                }
+            }
+        }
         // Chat hover-edit pencil: rewind the conversation to a user message.
         GuiReq::RewindTo { index } => {
             if let Ok(g) = ctx.req.lock() {
@@ -603,6 +650,34 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // the attached daemon (or the un-attached swapper) answers with a
         // `SettingsValues` reply the host re-pushes, so the tab populates in both
         // host states.
+        GuiReq::GetWebSearch { req_seq } => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::GetWebSearch { req_seq },
+                HostCtl::GetWebSearch { req_seq },
+            );
+        }
+        GuiReq::SetWebSearch {
+            req_seq,
+            provider,
+            key,
+        } => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::SetWebSearch {
+                    req_seq,
+                    provider,
+                    key: key.clone(),
+                },
+                HostCtl::SetWebSearch {
+                    req_seq,
+                    provider,
+                    key,
+                },
+            );
+        }
         GuiReq::GetSettings => {
             forward_or_host(
                 &ctx.req,
@@ -1076,7 +1151,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // GUI Tutorial tab chat: HOST-LOCAL thin koma-free completion — ALWAYS
         // routed to the host-relay thread, never the daemon, regardless of attach
         // state (works from the hub with zero session). See `tutorial_host`.
-        GuiReq::TutorialChat { id, messages } => {
+        GuiReq::TutorialChat {
+            id,
+            messages,
+            context,
+        } => {
             let messages = messages
                 .into_iter()
                 .map(
@@ -1086,7 +1165,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     },
                 )
                 .collect();
-            let _ = ctx.ctl.send(HostCtl::TutorialChat { id, messages });
+            let _ = ctx.ctl.send(HostCtl::TutorialChat {
+                id,
+                messages,
+                context,
+            });
         }
         // Extension STORE browse/detail/installed-list: HOST-LOCAL — ALWAYS routed to the
         // host-relay thread, never the daemon, regardless of attach state, same reasoning
@@ -1597,8 +1680,17 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // owns the PTY lifecycle, streams output back as PushEnvelope
         // TerminalOutput/TerminalExit, and accepts input via TerminalInput.
         // These are always routed to the host-relay thread via HostCtl.
-        GuiReq::TerminalCreate { id, cwd } => {
-            let _ = ctx.ctl.send(HostCtl::TerminalCreate { id, cwd });
+        GuiReq::TerminalShells {
+            request_id,
+            context,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalShells {
+                request_id,
+                context,
+            });
+        }
+        GuiReq::TerminalCreate { id, cwd, shell_id } => {
+            let _ = ctx.ctl.send(HostCtl::TerminalCreate { id, cwd, shell_id });
         }
         GuiReq::TerminalInput { id, data } => {
             let _ = ctx.ctl.send(HostCtl::TerminalInput { id, data });

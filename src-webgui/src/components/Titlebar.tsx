@@ -1,7 +1,9 @@
 import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Terminal, PenLine, FoldVertical, SquareTerminal } from 'lucide-react'
+import { Terminal, PenLine, FoldVertical, MessagesSquare } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { TerminalPicker } from './TerminalPicker'
+import type { TerminalShell } from '../lib/terminalShells'
 import { ComputerShortcut } from './ComputerShortcut'
 
 export type Platform = 'macos' | 'linux' | 'windows'
@@ -29,7 +31,7 @@ function post(msg: unknown) {
 type TitlebarProps = {
   onSearch: () => void
   onRename: () => void
-  onTerminal: () => void
+  onTerminal: (shell: TerminalShell) => void
   overlayOpen: boolean
 }
 
@@ -85,18 +87,12 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
               #winctl when the window narrows. Side padding reserves chrome. */}
           <div className="pointer-events-none flex min-w-0 max-w-full items-center gap-1.5">
             <ComputerShortcut />
-            <button
-              onClick={onTerminal}
-              title="New Terminal"
-              aria-label="New Terminal"
-              className="pointer-events-auto flex h-[22px] flex-none items-center rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
-            >
-              <SquareTerminal size={13} className="flex-none" />
-            </button>
+            <TerminalPicker onSelect={onTerminal} />
             <motion.button
               layoutId="cmd-search"
               transition={CMD_SEARCH_SPRING}
               onClick={onSearch}
+              data-tour="change-session"
               title="Change session"
               aria-label="Change session"
               className={`pointer-events-auto flex h-[22px] min-w-0 ${CMD_SEARCH_WIDTH} items-center justify-start gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover`}
@@ -119,12 +115,9 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                   onClick={onRename}
                   title="Rename session"
                   aria-label="Rename session"
-                  className="pointer-events-auto flex h-[22px] flex-none items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover min-[1101px]:px-2.5"
+                  className="pointer-events-auto flex h-[22px] w-[22px] flex-none items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg transition-colors hover:bg-koma-hover"
                 >
-                  <motion.span layout="position" className="flex items-center gap-1.5">
-                    <PenLine size={13} className="flex-none" />
-                    <span className="max-[1100px]:hidden">rename</span>
-                  </motion.span>
+                  <PenLine size={13} className="flex-none" />
                 </motion.button>
                 <button
                   onClick={() => req({ r: 'Compact' })}
@@ -139,6 +132,20 @@ export function Titlebar({ onSearch, onRename, onTerminal, overlayOpen }: Titleb
                 >
                   <FoldVertical size={13} className="flex-none" />
                   <span className="max-[1100px]:hidden">compact</span>
+                </button>
+                <button
+                  onClick={() => req({ r: 'Clear' })}
+                  disabled={working}
+                  title="Clear chat"
+                  aria-label="Clear chat"
+                  className={`pointer-events-auto flex h-[22px] flex-none items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-1.5 text-[12px] transition-colors min-[1101px]:px-2.5 ${
+                    working
+                      ? 'text-koma-dim opacity-40'
+                      : 'text-koma-fg hover:bg-koma-hover'
+                  }`}
+                >
+                  <MessagesSquare size={13} className="flex-none" />
+                  <span className="max-[1100px]:hidden">clear</span>
                 </button>
               </>
             )}

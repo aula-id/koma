@@ -1,3 +1,4 @@
+import { notificationOrigin } from '../lib/notificationOrigins'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Code2, Copy, Download, Eye, RefreshCw, Trash2 } from 'lucide-react'
 import { useKoma, type Tab } from '../store/koma'
@@ -157,7 +158,7 @@ export default function SkillTab({ tab }: Props) {
   const noticeKind = operationNotice?.kind ?? null
   useEffect(() => {
     if (!noticeText || !noticeKind) return
-    showToast(noticeText, noticeKind)
+    showToast(noticeText, noticeKind, notificationOrigin(ownResult?.requestId ?? downloadResult?.requestId))
   }, [noticeText, noticeKind, ownResult?.requestId, downloadResult?.requestId])
 
   const companionKey = activeFile ? `${tab.id}:${activeFile}` : null

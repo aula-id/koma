@@ -104,6 +104,9 @@ pub(super) fn render_loop(
     // The shadow is a real AppState reconstructed purely from frames. It starts in
     // a neutral Chat with a single empty session; the first Snapshot replaces it.
     let mut shadow = AppState::new(Mode::Chat);
+    let mut seen_app_notification: Option<String> = None;
+    let mut local_app_notifications: Option<crate::app::mode::notifications::NotificationsState> =
+        None;
     // Until the first Snapshot lands the shadow is empty — show a clear status so
     // the screen isn't a blank "ready". Status is per-session (C6); the shadow has a
     // single placeholder session here, so write it on the foreground.
@@ -336,7 +339,42 @@ pub(super) fn render_loop(
                 ))));
             }
         }
-        terminal.draw(|f| view::draw(f, &shadow))?;
+        let fg = shadow.rest.fg();
+        if fg.toast_session.is_none() {
+            if let (Some(id), Some((message, _, kind))) =
+                (fg.toast_event_id.clone(), fg.toast.as_ref())
+            {
+                if fg.toast_event_id != seen_app_notification {
+                    let mut entry = crate::model::notifications::Entry::new(
+                        message.clone(),
+                        if matches!(kind, crate::app::state::ToastKind::Error) {
+                            "error"
+                        } else {
+                            "info"
+                        },
+                        "app",
+                    );
+                    entry.id = id;
+                    crate::model::notifications::record(None, entry);
+                    seen_app_notification = fg.toast_event_id.clone();
+                }
+            }
+        }
+        if let Some(history) = &mut local_app_notifications {
+            let origin = shadow.rest.fg().session.as_ref().map(|s| s.id.clone());
+            if !matches!(shadow.mode(), Mode::Notifications(_)) || history.session != origin {
+                local_app_notifications = None;
+            } else {
+                history.poll();
+            }
+        }
+        terminal.draw(|f| {
+            if let Some(history) = &local_app_notifications {
+                view::notifications::draw(f, history, &view::theme::palette(&shadow.rest.config));
+            } else {
+                view::draw(f, &shadow);
+            }
+        })?;
 
         // --- (c-ter) GUI-live palette sync: emit OSC 5380 on bg change ---
         // Runs AFTER `terminal.draw` returns (it flushes its own frame diff first),
@@ -411,6 +449,28 @@ pub(super) fn render_loop(
                     // whole key a second time both here and daemon-side). A `kind ==
                     // Press` filter is a no-op on unix (every event already is Press).
                     if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    // App history belongs to this terminal installation, even on a remote session.
+                    if let Some(history) = &mut local_app_notifications {
+                        if key.code == KeyCode::Tab {
+                            local_app_notifications = None;
+                            continue;
+                        }
+                        if key.code == KeyCode::Esc || crate::controller::input::is_ctrl(&key, 'c')
+                        {
+                            local_app_notifications = None;
+                            let _ = req_tx.send(ClientRequest::SendKey(KeyWire::from(key)));
+                            continue;
+                        }
+                        crate::controller::input::notifications::handle(history, key);
+                        continue;
+                    }
+                    if key.code == KeyCode::Tab && matches!(shadow.mode(), Mode::Notifications(_)) {
+                        let mut history =
+                            crate::app::mode::notifications::NotificationsState::new(None);
+                        history.session = shadow.rest.fg().session.as_ref().map(|s| s.id.clone());
+                        local_app_notifications = Some(history);
                         continue;
                     }
                     // The `/quit` overlay's choices are CLIENT-process decisions, so
@@ -539,6 +599,13 @@ pub(super) fn render_loop(
                 // a marker rather than literal text, so faking the raw text would
                 // flicker — the daemon's InputChanged/Snapshot reconciles within a frame.
                 Event::Paste(text) => {
+                    if let Some(history) = &mut local_app_notifications {
+                        history
+                            .query
+                            .extend(text.chars().filter(|c| *c != '\n' && *c != '\r'));
+                        history.cursor = 0;
+                        continue;
+                    }
                     let _ = req_tx.send(ClientRequest::Paste { text });
                 }
                 _ => {}
@@ -664,7 +731,8 @@ pub(super) fn client_select_dump(
 /// Serialise `env` and hand it to `push`, dropping it silently on the (never-
 /// expected) serialisation error rather than panicking mid-frame.
 pub(super) fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
-    if let Ok(json) = serde_json::to_string(env) {
-        push(json);
+    if let Ok(mut value) = serde_json::to_value(env) {
+        value["eventId"] = uuid::Uuid::new_v4().to_string().into();
+        push(value.to_string());
     }
 }

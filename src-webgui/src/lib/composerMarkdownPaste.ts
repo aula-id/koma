@@ -1,3 +1,5 @@
+import { shouldCollapsePaste } from './pasteText.ts'
+
 // Heuristics for pasting markdown / URLs into the composer Lexical field.
 
 const TABLE_ROW = /^\s*\|?.+\|.+\|?\s*$/
@@ -8,6 +10,17 @@ export function splitTaskListMarker(text: string): { checked: boolean; rest: str
   const match = text.match(/^\[(\s|x)\]\s+/i)
   if (!match) return null
   return { checked: /^x$/i.test(match[1] ?? ''), rest: text.slice(match[0].length) }
+}
+
+/** How the composer should handle pasted plain text. Long / multi-line bodies
+ *  collapse to a `[Pasted Text #N]` chip (TUI parity) even when they happen to
+ *  contain markdown-looking markers. Short markdown stays formatted in-place. */
+export function composerTextPasteAction(text: string): 'collapse' | 'markdown' | 'inline' {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (!normalized) return 'inline'
+  if (shouldCollapsePaste(normalized)) return 'collapse'
+  if (looksLikeComposerMarkdown(normalized)) return 'markdown'
+  return 'inline'
 }
 
 /** True when plain-text paste should be parsed as markdown blocks/inlines. */

@@ -90,7 +90,7 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
       case 'LspInstall':
         set((s) => {
           const text = env.error ? `lsp ${env.id || 'install'}: ${env.error}` : null
-          const raise = !!text && text !== s.ui.toast?.text
+          const raise = !!text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           const nextProgress = { ...s.lspProgress }
           if (env.id) {
@@ -581,12 +581,19 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         // nothing to do (no toast on cancel).
         break
       }
+      case 'TerminalShells':
+        window.dispatchEvent(new CustomEvent('koma-terminal-shells', { detail: env }))
+        break
       case 'TerminalOutput':
         // Route PTY output to the xterm.js instance via the global write callback.
         // The TerminalTab component registers its write function on mount.
         {
           const writer = (globalThis as any).__terminalWriters?.[env.id]
           if (writer) writer(env.data)
+          else {
+            const pending = ((globalThis as any).__terminalPending ??= {})
+            pending[env.id] = ((pending[env.id] ?? '') + env.data).slice(-65536)
+          }
         }
         break
       case 'TerminalExit':

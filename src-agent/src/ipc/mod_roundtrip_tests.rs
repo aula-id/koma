@@ -134,6 +134,8 @@ fn sample_global_snapshot() -> GlobalSnapshot {
             first_run: true,
             from_picker: false,
         }),
+        toast_session: Some("s".into()),
+        toast_event_id: Some("notification-id".into()),
         toast: Some(("info".to_string(), "saved".to_string())),
         models_cache: None,
         models_cache_endpoint: None,
@@ -425,6 +427,8 @@ fn state_delta_variants_roundtrip() {
         },
         StateDelta::SessionAdded(Box::new(sample_session_snapshot())),
         StateDelta::Toast {
+            session: Some("s".into()),
+            id: Some("notification-id".into()),
             kind: "error".to_string(),
             text: "nope".to_string(),
         },
@@ -932,21 +936,41 @@ fn sdlc_to_plan_clears_sdlc_and_preserves_plan() {
 }
 
 #[test]
-fn plan_to_auto_clears_plan_and_no_sdlc_leak() {
+fn plan_to_auto_projects_session_todos_and_no_sdlc_leak() {
     let mut state = build_two_session_state(AgentMode::Plan, None, AgentMode::Auto);
     // Session A in Plan mode — plan todos present, SDLC clear
     let snap = crate::ipc::snapshot::projection::build_snapshot(&state);
     assert_eq!(snap.sessions[0].plan_todos.len(), 1);
     assert!(snap.sessions[0].sdlc_phase.is_none());
 
-    // Switch session A to Auto — plan todos must clear too
+    // Switch session A to Auto — SDLC stays clear; session checklist still
+    // projects (locked Plan rails are filtered). `set_agent_mode` restores
+    // memory/TODO.md into the runtime mirror; this fixture keeps the
+    // unlocked row to assert Auto Explore can show session todos.
     state.rest.sessions[0].agent_mode = AgentMode::Auto;
     let snap2 = crate::ipc::snapshot::projection::build_snapshot(&state);
-    assert!(
-        snap2.sessions[0].plan_todos.is_empty(),
-        "Plan todos cleared when mode=auto"
+    assert_eq!(
+        snap2.sessions[0].plan_todos.len(),
+        1,
+        "session checklist still projects in Auto"
     );
+    assert_eq!(snap2.sessions[0].plan_todos[0].content, "step 1");
     assert!(snap2.sessions[0].sdlc_phase.is_none());
+
+    // Locked Plan rails must not appear in Auto even if the runtime mirror
+    // still holds them (set_agent_mode drops the file; this is the projection backstop).
+    state.rest.sessions[0]
+        .plan_todos
+        .push(crate::app::mode::todo::TodoItem {
+            content: "serve plan to user".to_string(),
+            status: crate::app::mode::todo::TodoStatus::Pending,
+            priority: crate::app::mode::todo::TodoPriority::Low,
+            locked: true,
+            node_id: None,
+        });
+    let snap3 = crate::ipc::snapshot::projection::build_snapshot(&state);
+    assert_eq!(snap3.sessions[0].plan_todos.len(), 1);
+    assert_eq!(snap3.sessions[0].plan_todos[0].content, "step 1");
 }
 
 #[test]
