@@ -13,15 +13,14 @@ impl Tool for Edit {
         "edit"
     }
     fn description(&self) -> &'static str {
-        "Replace an exact string in a file in place. Read the file first to get the exact text. Fails if the old string is missing or not unique. \
-         Before modifying, consider graph_query impact analysis to understand downstream effects."
+        "Replace an exact substring in place. Prefer this over write for a small change."
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." },
-                "old": { "type": "string", "description": "Exact substring to replace" },
+                "old": { "type": "string", "description": "Exact file text to find, including whitespace. A missing or non-unique match fails unless replace_all is true." },
                 "new": { "type": "string", "description": "Replacement text" },
                 "replace_all": {
                     "type": "boolean",

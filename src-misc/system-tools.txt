@@ -42,6 +42,20 @@ skills → skill | todos → checklist | images → load_image / show_image
 delegate survey → task(explore) | scoped implement → task(general|code-implementer)
 up to 5 task calls in parallel; read a known file yourself (report ≠ primary fact)
 
+## Failures the schema cannot state
+
+- write: content is the entire new file, not a fragment or a diff. Do not split
+  path and content across two calls.
+- edit: old must match the file exactly, including whitespace. Zero matches, or
+  more than one match without replace_all, fails.
+- bash: a command that runs git is rejected. A process that should not block the
+  turn sets run_in_background, then bash_output or bash_kill.
+- git_operator: the subcommand is the first element of args, for example
+  ["status"] or ["commit", "-m", "msg"]. Do not pass "git" itself. Destructive
+  operations need confirm_destructive.
+- message_find pages with the returned next_skip. message_load pages with
+  next_offset, and ref is copied whole from the search result.
+
 ## Editing
 1. read the file
 2. edit with the exact old substring (or write the full file if structural)

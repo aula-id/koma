@@ -592,15 +592,8 @@ impl Tool for Bash {
         "bash"
     }
     fn description(&self) -> &'static str {
-        "Run a shell command in the workspace. Use for cargo, build commands, and general shell tasks. \
-         Output is capped at 90k chars / 2000 lines — narrow the command or pipe through head/grep; do not dump huge logs. \
-         For git operations, use the git_operator tool instead — it handles SSH key injection and \
-         destructive-operation guards automatically. Output is captured (stdout+stderr). \
-         Output of known noisy commands (cargo, git, npm, pip, docker, make) is auto-compressed; a [filter: <name>, N -> M lines] marker shows when. \
-         If output was compressed, truncated, or the command failed, the complete output is saved under the session tmp/ folder (or a 'full-output: <path>' line) — read that file with offset/limit; do not dump it whole or re-run the command. \
-         Every bash runs as a job visible in /bash. For long-running or open-ended commands (dev servers, watches, multi-minute builds you want to continue past), \
-         set run_in_background=true — returns a job id immediately; poll with bash_output, stop with bash_kill. \
-         While a foreground bash is in flight, the user may press Ctrl+B to detach it into the background without killing it."
+        "Run a shell command in the workspace for builds, tests, and other non-git work. \
+         A command that itself runs git is rejected."
     }
     fn parameters(&self) -> Value {
         json!({

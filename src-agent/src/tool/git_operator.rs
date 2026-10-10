@@ -24,21 +24,7 @@ impl Tool for GitOperator {
     }
 
     fn description(&self) -> &'static str {
-        "Run a git command in the session workspace. Supports the full git surface: \
-         status, add, commit, push, pull, fetch, merge, rebase, branch, checkout, \
-         switch, log, diff, stash, tag, remote, reset, cherry-pick, revert, blame, \
-         show, restore, clone, init, and more. Uses the session's selected SSH key \
-         (set via git_cred) for SSH remotes — the key is injected into GIT_SSH_COMMAND \
-         so the correct identity is used without any interactive prompt. \
-         Destructive operations (force-push, hard reset, clean -f, branch -D, etc.) \
-         require confirm_destructive=true. This tool is NON-INTERACTIVE: git is exec'd \
-         directly (never via a shell) and will never prompt for credentials or \
-         passphrases — it fails fast instead. \
-         IMPORTANT: the FIRST element of 'args' MUST be the git subcommand (e.g. \
-         \"push\", \"commit\", \"status\"). Global options that precede the subcommand \
-         (e.g. -C, --git-dir) are NOT supported and will be rejected — they are \
-         unnecessary because git already runs in the session workspace. Put the \
-         subcommand first, e.g. [\"push\", \"origin\", \"main\"]."
+        "Run git in the workspace. Use this instead of bash for any git command."
     }
 
     fn parameters(&self) -> Value {
@@ -48,7 +34,7 @@ impl Tool for GitOperator {
                 "args": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "The git arguments as an array, e.g. [\"commit\", \"-m\", \"msg\"] or [\"push\", \"origin\", \"main\"]. Do NOT include \"git\" as the first element."
+                    "description": "Git arguments. The first element is the subcommand, for example [\"status\"] or [\"commit\", \"-m\", \"msg\"]. Do not pass \"git\" itself. Options that would precede the subcommand are rejected."
                 },
                 "confirm_destructive": {
                     "type": "boolean",

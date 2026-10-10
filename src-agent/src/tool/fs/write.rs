@@ -13,15 +13,14 @@ impl Tool for Write {
         "write"
     }
     fn description(&self) -> &'static str {
-        "Create or overwrite a workspace-relative file with the given content. \
-         Before modifying, consider graph_query impact analysis to understand downstream effects."
+        "Create or overwrite a file."
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." },
-                "content": { "type": "string", "description": "Full file content to write" }
+                "content": { "type": "string", "description": "The entire new file, not a fragment or a diff. Send it with path in this same call." }
             },
             "required": ["path", "content"]
         })

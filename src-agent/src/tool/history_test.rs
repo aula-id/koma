@@ -381,7 +381,6 @@ fn tool_registration_and_history_routing_stay_aligned() {
         };
         dir.append(Role::User, &body, i);
     }
-    // Representative valid calls (same contracts the old prompt examples used).
     let find_cases = [
         r#"{"query":"context cap"}"#,
         r#"{"query":"context cap","skip":10,"limit":10}"#,
@@ -403,6 +402,10 @@ fn tool_registration_and_history_routing_stay_aligned() {
     assert!(
         tools.contains("message_find") && tools.contains("message_load"),
         "thin tools routing must still name history tools"
+    );
+    assert!(
+        !tools.contains("Arguments:"),
+        "system-tools.txt reprinted a call shape"
     );
     assert!(
         prompt.contains("message_load"),

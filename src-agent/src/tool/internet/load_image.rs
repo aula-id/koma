@@ -21,18 +21,7 @@ impl super::Tool for LoadImage {
     }
 
     fn description(&self) -> &'static str {
-        "Load an existing image file from a configured workspace, this session's \
-         exact scratch directory, or this session's images/ attachment directory \
-         into the next model message for visual inspection. Use after message_load \
-         or compact when a past [Image #N] is no longer in live context. Optional crop \
-         inspects a saved region on every platform, without fresh capture or Python. \
-         Optional points samples exact RGB hex/RGBA colors; attach=false returns only \
-         numeric inspection metadata. Crop and point coordinates are integer pixels \
-         in the EXIF-oriented source image, before crop/resizing. Inspection images \
-         are bounded to 1920 pixels per edge and 2 megapixels; the result maps them \
-         back to the source. Crops are automatically attached: no second load needed. \
-         This does not refresh or authorize a computer observation. For screen color \
-         sampling, use its saved image_path or image_n and points instead of bash/PIL."
+        "Load an existing image into the next message when a past image is no longer in context."
     }
 
     fn parameters(&self) -> Value {
