@@ -37,6 +37,7 @@ fn system_role_becomes_claude_code_head_plus_content() {
             ChatMessage::new(Role::User, "hi"),
         ],
         None,
+        true,
     );
     // Head is always the Claude Code identity; the koma system content follows.
     assert_eq!(system[0].text, CLAUDE_CODE_SYSTEM);
@@ -61,6 +62,7 @@ fn cache_split_mark_is_stripped_from_system() {
             ChatMessage::new(Role::User, "hi"),
         ],
         None,
+        true,
     );
     // The boundary marker is removed; head + tail concatenate into one block.
     assert_eq!(system[1].text, "HEADTAIL");
@@ -79,6 +81,7 @@ fn assistant_text_precedes_tool_use_and_input_is_object() {
             asst,
         ],
         None,
+        true,
     );
     // msgs[0] = user "go", msgs[1] = assistant.
     assert_eq!(msgs[1].role, "assistant");
@@ -114,6 +117,7 @@ fn parallel_tool_results_coalesce_into_one_user_message() {
             ChatMessage::tool_result("c2".to_string(), "body two".to_string()),
         ],
         None,
+        true,
     );
     // user "go", assistant (2 tool_use), ONE user turn with 2 tool_result blocks.
     assert_eq!(msgs.len(), 3);
@@ -142,6 +146,7 @@ fn tool_result_then_user_text_merge_into_one_user_turn() {
             ChatMessage::new(Role::User, "and now this"),
         ],
         None,
+        true,
     );
     // user "go", assistant, then ONE user turn = [tool_result, text].
     assert_eq!(msgs.len(), 3);
@@ -158,7 +163,7 @@ fn tool_result_then_user_text_merge_into_one_user_turn() {
 
 #[test]
 fn empty_history_gets_user_placeholder() {
-    let (_system, msgs) = build_messages(vec![], None);
+    let (_system, msgs) = build_messages(vec![], None, true);
     assert_eq!(
         msgs,
         vec![Message {
@@ -173,7 +178,7 @@ fn empty_history_gets_user_placeholder() {
 #[test]
 fn user_marks_are_stripped() {
     let marked = format!("{}$ ls\nfile.txt", crate::dto::chat::SHELL_MARK);
-    let (_system, msgs) = build_messages(vec![ChatMessage::new(Role::User, marked)], None);
+    let (_system, msgs) = build_messages(vec![ChatMessage::new(Role::User, marked)], None, true);
     assert_eq!(
         msgs[0].content,
         vec![Block::Text {
@@ -344,7 +349,7 @@ fn assistant_blocks_replays_redacted_thinking_first() {
 
 #[test]
 fn gateway_omits_claude_code_identity() {
-    let (system, msgs) = build_messages_ex(
+    let (system, msgs) = build_messages(
         vec![
             ChatMessage::new(Role::System, "PROJECT RULES"),
             ChatMessage::new(Role::User, "hi"),
@@ -360,7 +365,7 @@ fn gateway_omits_claude_code_identity() {
 
 #[test]
 fn gateway_empty_system_when_no_system_role() {
-    let (system, _msgs) = build_messages_ex(vec![ChatMessage::new(Role::User, "hi")], None, false);
+    let (system, _msgs) = build_messages(vec![ChatMessage::new(Role::User, "hi")], None, false);
     assert!(system.is_empty());
 }
 

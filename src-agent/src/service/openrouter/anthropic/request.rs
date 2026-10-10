@@ -150,7 +150,10 @@ fn strip_marks(content: &str) -> String {
 
 /// Map a conversation history into the Anthropic `(system[], messages[])` pair.
 ///
-/// - System → appended to the `system` array (after the fixed Claude Code head);
+/// `claude_identity = true` (Claude.ai OAuth) prepends [`CLAUDE_CODE_SYSTEM`].
+/// `false` (Command Code `/messages` gateway) does not.
+///
+/// - System → appended to the `system` array (after the optional Claude Code head);
 ///   the internal `CACHE_SPLIT_MARK` boundary is stripped (never rides the wire).
 /// - User → a `user` message: one text block (marks stripped) + one `image`
 ///   block per surviving attachment (gated on `image_ctx.model_takes_images`).
@@ -164,17 +167,6 @@ fn strip_marks(content: &str) -> String {
 /// turn (Anthropic requires both); a degenerate history gets a `"..."`
 /// placeholder, mirroring codex's empty-input guard.
 pub(super) fn build_messages(
-    messages: Vec<ChatMessage>,
-    image_ctx: Option<&ImageWireCtx>,
-) -> (Vec<SystemBlock>, Vec<Message>) {
-    build_messages_ex(messages, image_ctx, true)
-}
-
-/// Same as [`build_messages`], with Claude Code identity optional.
-///
-/// `claude_identity = true` (Claude.ai OAuth) prepends [`CLAUDE_CODE_SYSTEM`].
-/// `false` (Command Code `/messages` gateway) does not.
-pub(super) fn build_messages_ex(
     messages: Vec<ChatMessage>,
     image_ctx: Option<&ImageWireCtx>,
     claude_identity: bool,

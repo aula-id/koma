@@ -10,7 +10,7 @@ use super::super::helpers::{
 };
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_messages_ex, thinking_params, AnthropicTool, MessagesRequest};
+use super::request::{build_messages, thinking_params, AnthropicTool, MessagesRequest};
 use super::sse::{parse_event, AnthropicEvent, BlockDelta};
 use super::{anthropic_headers, error_message, CLAUDE_MAX_OUTPUT_TOKENS};
 
@@ -44,7 +44,7 @@ impl OpenRouterClient {
         let claude_oauth = super::is_claude_oauth_host(conn.endpoint);
         let url = super::messages_url(conn.endpoint);
 
-        let (system, msgs) = build_messages_ex(messages, None, claude_oauth);
+        let (system, msgs) = build_messages(messages, None, claude_oauth);
 
         // Structured output → force a single `respond` tool carrying the schema;
         // the model's tool input IS the structured payload we return.
