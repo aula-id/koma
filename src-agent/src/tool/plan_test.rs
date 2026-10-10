@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
+use crate::tool::Tool;
 
 #[test]
 fn parse_plan_ready_accepts_highlights_and_plan() {
@@ -62,6 +63,18 @@ fn plan_path_is_session_dir_plus_plan_md() {
         sess.plan_path(),
         std::path::PathBuf::from("/tmp/koma-sessions/sid/plan.md")
     );
+}
+
+#[test]
+fn plan_enter_is_not_a_research_trigger() {
+    let description = PlanEnter.description();
+    assert!(description.contains("explicitly asks for a plan"));
+    for phrase in ["learn the codebase", "research how", "understand first"] {
+        assert!(
+            !description.contains(phrase),
+            "plan_enter still treats research as a plan: {phrase}"
+        );
+    }
 }
 
 #[test]
