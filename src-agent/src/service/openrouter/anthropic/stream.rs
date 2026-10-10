@@ -14,7 +14,7 @@ use super::super::helpers::{
 };
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_messages, flatten_tools, thinking_params, MessagesRequest};
+use super::request::{build_messages_ex, flatten_tools, thinking_params, MessagesRequest};
 use super::sse::{parse_event, AnthropicEvent, BlockDelta, ContentBlockStart};
 use super::{anthropic_headers, error_message};
 
@@ -113,9 +113,10 @@ impl OpenRouterClient {
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let _ = account_id; // reserved for codex-parity signature
-        let url = format!("{}/v1/messages?beta=true", conn.endpoint);
+        let claude_oauth = super::is_claude_oauth_host(conn.endpoint);
+        let url = super::messages_url(conn.endpoint);
 
-        let (system, msgs) = build_messages(messages, image_ctx.as_ref());
+        let (system, msgs) = build_messages_ex(messages, image_ctx.as_ref(), claude_oauth);
         // Empty tool set → omit `tools`/`tool_choice` entirely rather than send [].
         let tools = flatten_tools(advertise, mcp_tools);
         let (tools, tool_choice) = if tools.is_empty() {
@@ -144,10 +145,11 @@ impl OpenRouterClient {
         // ── 5xx / 429 retry with exponential backoff ─────────────────────
         let resp: reqwest::Response = 'retry: {
             for attempt in 1u32..=MAX_ATTEMPTS {
-                let send = anthropic_headers(self.http.post(&url), bearer, thinking_on)
-                    .json(&body)
-                    .send()
-                    .await;
+                let send =
+                    anthropic_headers(self.http.post(&url), bearer, thinking_on, claude_oauth)
+                        .json(&body)
+                        .send()
+                        .await;
                 let r = match send {
                     Ok(r) => r,
                     Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {

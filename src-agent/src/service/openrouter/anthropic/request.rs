@@ -36,8 +36,11 @@ use super::CLAUDE_CODE_SYSTEM;
 #[derive(Debug, Serialize)]
 pub(super) struct MessagesRequest {
     pub model: String,
-    /// Identity/behaviour blocks. Block 0 is always [`CLAUDE_CODE_SYSTEM`]
-    /// (Anthropic rejects OAuth requests whose system prompt isn't Claude Code).
+    /// Identity/behaviour blocks. For Claude.ai OAuth, block 0 is always
+    /// [`CLAUDE_CODE_SYSTEM`] (Anthropic rejects OAuth requests whose system
+    /// prompt isn't Claude Code). Gateway dialect omits that identity; an empty
+    /// vec is dropped on the wire.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub system: Vec<SystemBlock>,
     pub messages: Vec<Message>,
     /// Omitted entirely (skip `None`) when the caller advertises no tools.
@@ -164,10 +167,25 @@ pub(super) fn build_messages(
     messages: Vec<ChatMessage>,
     image_ctx: Option<&ImageWireCtx>,
 ) -> (Vec<SystemBlock>, Vec<Message>) {
-    let mut system: Vec<SystemBlock> = vec![SystemBlock {
-        kind: "text",
-        text: CLAUDE_CODE_SYSTEM.to_string(),
-    }];
+    build_messages_ex(messages, image_ctx, true)
+}
+
+/// Same as [`build_messages`], with Claude Code identity optional.
+///
+/// `claude_identity = true` (Claude.ai OAuth) prepends [`CLAUDE_CODE_SYSTEM`].
+/// `false` (Command Code `/messages` gateway) does not.
+pub(super) fn build_messages_ex(
+    messages: Vec<ChatMessage>,
+    image_ctx: Option<&ImageWireCtx>,
+    claude_identity: bool,
+) -> (Vec<SystemBlock>, Vec<Message>) {
+    let mut system: Vec<SystemBlock> = Vec::new();
+    if claude_identity {
+        system.push(SystemBlock {
+            kind: "text",
+            text: CLAUDE_CODE_SYSTEM.to_string(),
+        });
+    }
     let mut out: Vec<Message> = Vec::new();
 
     for m in messages {

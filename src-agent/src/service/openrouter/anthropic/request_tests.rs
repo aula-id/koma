@@ -341,3 +341,50 @@ fn assistant_blocks_replays_redacted_thinking_first() {
         }
     );
 }
+
+#[test]
+fn gateway_omits_claude_code_identity() {
+    let (system, msgs) = build_messages_ex(
+        vec![
+            ChatMessage::new(Role::System, "PROJECT RULES"),
+            ChatMessage::new(Role::User, "hi"),
+        ],
+        None,
+        false,
+    );
+    assert_eq!(system.len(), 1);
+    assert_eq!(system[0].text, "PROJECT RULES");
+    assert!(system.iter().all(|b| b.text != CLAUDE_CODE_SYSTEM));
+    assert_eq!(msgs.len(), 1);
+}
+
+#[test]
+fn gateway_empty_system_when_no_system_role() {
+    let (system, _msgs) = build_messages_ex(vec![ChatMessage::new(Role::User, "hi")], None, false);
+    assert!(system.is_empty());
+}
+
+#[test]
+fn messages_url_gateway_vs_claude_oauth() {
+    assert_eq!(
+        super::super::messages_url("https://api.commandcode.ai/provider/v1"),
+        "https://api.commandcode.ai/provider/v1/messages"
+    );
+    assert_eq!(
+        super::super::messages_url("https://api.anthropic.com"),
+        "https://api.anthropic.com/v1/messages?beta=true"
+    );
+    assert_eq!(
+        super::super::messages_url("https://api.anthropic.com/"),
+        "https://api.anthropic.com/v1/messages?beta=true"
+    );
+    assert!(super::super::is_claude_oauth_host(
+        "https://api.anthropic.com"
+    ));
+    assert!(super::super::is_claude_oauth_host(
+        "https://api.anthropic.com/"
+    ));
+    assert!(!super::super::is_claude_oauth_host(
+        "https://api.commandcode.ai/provider/v1"
+    ));
+}

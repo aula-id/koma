@@ -8,6 +8,10 @@
 //! `system` array, a separate top-level `system[]` (never a system *message*),
 //! and strict user/assistant alternation with coalesced tool results.
 //!
+//! Gateway hosts whose chat endpoint already ends in `/v1` (Command Code
+//! `…/provider/v1`) POST `{endpoint}/messages` instead, with Bearer +
+//! `anthropic-version` only — no Claude Code identity or oauth betas.
+//!
 //! This submodule keeps that protocol wholly self-contained and MIRRORS the codex
 //! layout: the openrouter `stream_complete` / oneshot dispatch branches hand off
 //! here when `conn.api_type == ApiType::AnthropicCompatible`, and everything
@@ -53,32 +57,61 @@ pub(super) const CLAUDE_BETAS: &str = "oauth-2025-04-20,claude-code-20250219";
 /// sent on the off / forced-tool_choice / oneshot paths (which carry no thinking).
 pub(super) const CLAUDE_THINKING_BETAS: &str = "interleaved-thinking-2025-05-14,effort-2025-11-24";
 
-/// Auth + client-identity headers for an Anthropic `/v1/messages` request.
+/// True when `endpoint` is Anthropic's first-party API (Claude.ai OAuth).
+/// Command Code's `…/provider/v1` is a Messages *gateway* — different URL and
+/// no Claude Code identity.
+pub(super) fn is_claude_oauth_host(endpoint: &str) -> bool {
+    endpoint.trim_end_matches('/') == "https://api.anthropic.com"
+}
+
+/// Messages POST URL for `endpoint`.
 ///
-/// `bearer` is the (possibly just-refreshed) `sk-ant-oat…` subscription token —
-/// NOT `conn.api_key`, and NEVER an `x-api-key` (OAuth only). The Claude Code
-/// betas + CLI User-Agent/`x-app` identify us to the backend the same way the
-/// official CLI does; a fresh `x-client-request-id` is minted per call. The
-/// X-Stainless / fingerprint headers are omitted for v1.
+/// Claude.ai OAuth: `{host}/v1/messages?beta=true`.
+/// Gateway whose base already ends in `/v1` (Command Code): `{base}/messages`.
+pub(super) fn messages_url(endpoint: &str) -> String {
+    let ep = endpoint.trim_end_matches('/');
+    if ep.ends_with("/v1") {
+        format!("{ep}/messages")
+    } else {
+        format!("{ep}/v1/messages?beta=true")
+    }
+}
+
+/// Auth + client-identity headers for an Anthropic `/messages` request.
 ///
-/// `thinking_on` appends the extended-thinking betas ([`CLAUDE_THINKING_BETAS`]);
-/// the caller sets it iff the request body carries a `thinking` param (the
-/// streaming path with thinking enabled), never on the off/forced/oneshot paths.
+/// Claude.ai OAuth (`claude_oauth`): `bearer` is the (possibly just-refreshed)
+/// `sk-ant-oat…` subscription token — NOT `conn.api_key`, and NEVER an
+/// `x-api-key`. The Claude Code betas + CLI User-Agent/`x-app` identify us to
+/// the backend the same way the official CLI does; a fresh
+/// `x-client-request-id` is minted per call. The X-Stainless / fingerprint
+/// headers are omitted for v1.
+///
+/// Gateway (Command Code): Bearer + `anthropic-version` only.
+///
+/// `thinking_on` appends the extended-thinking betas ([`CLAUDE_THINKING_BETAS`])
+/// on the Claude OAuth path; the caller sets it iff the request body carries a
+/// `thinking` param (the streaming path with thinking enabled), never on the
+/// off/forced/oneshot paths. Ignored for the gateway dialect.
 pub(super) fn anthropic_headers(
     rb: reqwest::RequestBuilder,
     bearer: &str,
     thinking_on: bool,
+    claude_oauth: bool,
 ) -> reqwest::RequestBuilder {
+    let rb = rb
+        .header("Authorization", format!("Bearer {bearer}"))
+        .header("anthropic-version", "2023-06-01")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json");
+    if !claude_oauth {
+        return rb;
+    }
     let betas = if thinking_on {
         format!("{CLAUDE_BETAS},{CLAUDE_THINKING_BETAS}")
     } else {
         CLAUDE_BETAS.to_string()
     };
-    rb.header("Authorization", format!("Bearer {bearer}"))
-        .header("anthropic-version", "2023-06-01")
-        .header("anthropic-beta", betas)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
+    rb.header("anthropic-beta", betas)
         .header("anthropic-dangerous-direct-browser-access", "true")
         .header("x-app", "cli")
         .header(

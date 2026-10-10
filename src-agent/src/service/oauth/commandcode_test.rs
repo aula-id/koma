@@ -45,3 +45,14 @@ fn detects_go_plan_403() {
         "rate limited"
     ));
 }
+
+#[test]
+fn is_claude_model_matches_bare_claude_ids_only() {
+    assert!(is_claude_model("claude-haiku-5-5"));
+    assert!(is_claude_model("Claude-Sonnet-4-6"));
+    assert!(is_claude_model(" claude-opus-5-5 "));
+    assert!(!is_claude_model("gpt-6-sol"));
+    assert!(!is_claude_model("anthropic/claude-haiku-5-5"));
+    assert!(!is_claude_model("xai/grok-4.7"));
+    assert!(!is_claude_model(""));
+}

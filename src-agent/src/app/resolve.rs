@@ -288,9 +288,10 @@ fn from_entry(
         // koma.run speaks a plain OpenAI-compatible chat endpoint (both the base and
         // premium — see the endpoint routing below — wire tiers).
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
-        // Command Code: API-first (provider/v1 OpenAI-compat). A remembered
+        // Command Code: API-first (provider/v1). A remembered
         // `commandcode_chat = "ndjson"` preference (Go plan) switches to the
-        // NDJSON `/alpha/generate` transport; unknown → try provider/v1 first.
+        // NDJSON `/alpha/generate` transport. Otherwise Claude ids speak
+        // Anthropic `/messages`; everything else is OpenAI `/chat/completions`.
         OAuthProvider::CommandCode => {
             let pref = conn
                 .commandcode_chat
@@ -298,6 +299,9 @@ fn from_entry(
                 .or_else(|| crate::service::oauth::commandcode::chat_pref(&conn.uuid));
             match pref.as_deref() {
                 Some(crate::service::oauth::commandcode::CHAT_NDJSON) => ApiType::CommandCode,
+                _ if crate::service::oauth::commandcode::is_claude_model(&entry.model_id) => {
+                    ApiType::AnthropicCompatible
+                }
                 _ => ApiType::OpenAiCompatible,
             }
         }
@@ -335,7 +339,7 @@ fn from_entry(
     //
     // Command Code: when the remembered transport is NDJSON, chat hits the
     // host root (`COMMANDCODE_CHAT_BASE` + `/alpha/generate`); otherwise the
-    // OpenAI-compat catalogue/API base (`COMMANDCODE_API_BASE` + `/chat/completions`).
+    // provider/v1 base (`COMMANDCODE_API_BASE` + `/chat/completions` or `/messages`).
     // `meta().chat_endpoint` stays the API base (API-first default).
     let endpoint = if conn.provider == OAuthProvider::KomaRun
         && crate::service::catalogue_overlay::is_premium_model(&entry.model_id)
