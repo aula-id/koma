@@ -65,31 +65,21 @@ fn plan_path_is_session_dir_plus_plan_md() {
 }
 
 #[test]
-fn plan_tools_are_documented_in_src_misc() {
+fn always_on_prompt_does_not_order_plan_enter_or_mission_clear() {
     let tools = include_str!("../../../src-misc/system-tools.txt");
-    assert!(
-        tools.contains("plan_enter —"),
-        "plan_enter missing from system-tools.txt"
-    );
-    assert!(
-        tools.contains("plan_ready —"),
-        "plan_ready missing from system-tools.txt"
-    );
     let prompt = include_str!("../../../src-misc/system-prompt.txt");
+    for text in [tools, prompt] {
+        assert!(
+            !text.contains("plan_enter"),
+            "plan_enter standing order leaked into the always-on prompt"
+        );
+        assert!(
+            !text.contains("mission_clear"),
+            "mission_clear standing order leaked into the always-on prompt"
+        );
+    }
     assert!(
-        prompt.contains("plan_enter"),
-        "plan_enter missing from system-prompt.txt"
-    );
-    assert!(
-        prompt.contains("plan_ready"),
-        "plan_ready missing from system-prompt.txt"
-    );
-    assert!(
-        tools.contains("mission_clear —"),
-        "mission_clear missing from system-tools.txt"
-    );
-    assert!(
-        prompt.contains("mission_clear"),
-        "mission_clear missing from system-prompt.txt"
+        prompt.contains("call plan_ready and wait for the runtime approval step"),
+        "Plan-mode plan_ready sentence missing from system-prompt.txt"
     );
 }

@@ -309,8 +309,8 @@ load_image — load an existing image into the next model message for visual
   Not available inside sub-agents (main runtime interceptor only).
 
 checklist — create and maintain a task/todo list for the current session. The user
-  can view the list in the Explore sidebar and via `/todo` (a read-only overlay)
-  and toggle item status with Enter. You manage the list via this tool.
+  can view the list via `/todo` (a read-only overlay) and toggle item status with
+  Enter. You manage the list via this tool.
   Arguments: { "todos": [{ "content": "...", "status": "pending|in_progress|completed|cancelled",
                             "priority": "high|medium|low" }, ...] }
   Example:   checklist({"todos": [
@@ -327,38 +327,6 @@ checklist — create and maintain a task/todo list for the current session. The 
     that means call this tool with the updated list.
   - Keep descriptions concise (under 80 chars).
   - Use high for critical-path items, medium for standard work, low for nice-to-haves.
-
-plan_enter — Enter plan mode: tools become read-only while you explore and design.
-  Use this when the user asks you to plan, learn, research, explore, or design
-  something before building (e.g. 'plan this', 'learn the codebase', 'research how
-  X works', 'design the architecture'). Do not enter plan mode for direct
-  implementation requests, and never for your own convenience — the trigger is
-  the user's intent to plan or understand first.
-  Arguments: none.
-  Example:   plan_enter()
-
-plan_ready — Present a finished plan for user approval. highlights = the key
-  things the user must know to approve (important changes, decisions, risks);
-  plan (full detail: files, exact edits, order, risks) is saved to
-  <session>/plan.md. Only call this from plan mode when the plan is complete,
-  and only after ALL work is finished — including background bash jobs and
-  sub-agents; collect their results first. After calling plan_ready, STOP —
-  do not also call write/edit/bash in the same turn; wait for the user
-  (approve / compact / discuss). To revise, stay in Plan, update checklist,
-  and call plan_ready again. Do not delete or rewrite plan.md yourself to
-  cancel; the user leaves Plan mode.
-  Arguments: { "highlights": "...", "plan": "..." }
-  Example:   plan_ready({"highlights":"Add Explore todo list in Auto","plan":"Project memory/TODO.md into Explore..."})
-
-mission_clear — SDLC-only. After a mission is done (or when abandoning it without
-  leaving SDLC), clear the execution stash so later turns are not biased toward
-  the finished mission. reset=true also wipes an unapproved assess draft on disk.
-  Does not hop to Auto. Not a Plan-mode tool — ordinary Plan ends when the user
-  approves plan_ready; do not delete plan.md yourself. Prefer after done, or
-  when starting a new mission while still in SDLC.
-  Arguments: { "reset"?: boolean }
-  Example:   mission_clear({})
-  Example:   mission_clear({"reset":true})
 
 The injected "# Memory" block lists every saved memory as a pointer
 (`- [hook](slug.md)`); it is the index only, not the full bodies. Call
