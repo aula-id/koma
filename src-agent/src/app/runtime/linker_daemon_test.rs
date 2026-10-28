@@ -79,6 +79,67 @@ fn has_client(state: &Arc<DaemonState>, session_id: &str) -> bool {
         .contains_key(session_id)
 }
 
+#[test]
+fn registration_rejects_broad_roots_and_keeps_project_roots() {
+    let state = test_state();
+    let home = dirs::home_dir().unwrap();
+    let home_text = home.to_string_lossy().into_owned();
+    let filesystem_root = home
+        .ancestors()
+        .last()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let project = home.join("koma-test-project-that-does-not-exist");
+    let project_text = project.to_string_lossy().into_owned();
+
+    let result = register(&state, "s1", &[&filesystem_root, &home_text, &project_text]);
+    assert!(
+        matches!(result, LinkerResponse::Error(message) if message.contains("Choose a project directory"))
+    );
+    assert_eq!(session_roots(&state, "s1"), [project].into_iter().collect());
+    assert_eq!(refcount(&state, &filesystem_root), 0);
+    assert_eq!(refcount(&state, &home_text), 0);
+}
+
+#[test]
+fn broad_root_replaces_previous_registration_without_indexing_it() {
+    let state = test_state();
+    register_with_rev(&state, "s1", &["/a"], 1);
+    let home = dirs::home_dir().unwrap().to_string_lossy().into_owned();
+    assert!(matches!(
+        register_with_rev(&state, "s1", &[&home], 2),
+        LinkerResponse::Error(_)
+    ));
+    assert!(session_roots(&state, "s1").is_empty());
+    assert_eq!(refcount(&state, "/a"), 0);
+    register_with_rev(&state, "s1", &["/a"], 1);
+    assert!(session_roots(&state, "s1").is_empty());
+}
+
+#[test]
+fn root_guard_resolves_home_ancestors_and_normalized_paths() {
+    let home = dirs::home_dir().unwrap();
+    assert!(is_unsafe_workspace_root(&home));
+    assert!(is_unsafe_workspace_root(home.parent().unwrap()));
+    assert!(is_unsafe_workspace_root(&home.join("missing").join("..")));
+    assert!(!is_unsafe_workspace_root(&home.join("project")));
+    #[cfg(unix)]
+    assert!(is_unsafe_workspace_root(std::path::Path::new("/")));
+}
+
+#[cfg(unix)]
+#[test]
+fn root_guard_resolves_symlinks_to_home() {
+    let dir = std::env::temp_dir().join(format!("koma-linker-root-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let link = dir.join("home");
+    std::os::unix::fs::symlink(dirs::home_dir().unwrap(), &link).unwrap();
+    assert!(is_unsafe_workspace_root(&link));
+    std::fs::remove_file(link).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
 // ── Idempotent repeat ──────────────────────────────────────────────
 
 #[test]
@@ -569,6 +630,7 @@ fn scan_status_returns_coordinator_state() {
             applied_revision,
             in_flight,
             generation,
+            ..
         } => {
             assert_eq!(desired_revision, 0);
             assert_eq!(applied_revision, 0);

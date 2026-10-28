@@ -61,6 +61,7 @@ struct ScanCoordinator {
     pending: Option<ScanRequest>,
     /// How many scan worker threads have been spawned (test observability).
     spawn_count: u64,
+    failure: Option<String>,
 }
 
 /// Shared daemon state: the import graph plus per-client root tracking, the
@@ -137,6 +138,7 @@ impl DaemonState {
                 cancel: Arc::new(AtomicBool::new(false)),
                 pending: None,
                 spawn_count: 0,
+                failure: None,
             }),
             session_revisions: RwLock::new(HashMap::new()),
             published_generation: AtomicU64::new(0),
@@ -319,7 +321,19 @@ fn handle_request(
                 revs.insert(session_id.clone(), rev);
             }
 
-            let new_set: HashSet<PathBuf> = roots.iter().map(PathBuf::from).collect();
+            let mut rejected_roots = Vec::new();
+            let new_set: HashSet<PathBuf> = roots
+                .iter()
+                .filter_map(|root| {
+                    let path = PathBuf::from(root);
+                    if is_unsafe_workspace_root(&path) {
+                        rejected_roots.push(root.clone());
+                        None
+                    } else {
+                        Some(path)
+                    }
+                })
+                .collect();
 
             // ── Reconcile this session's root set ──────────────────────────
             let mut roots_added = Vec::new();
@@ -419,9 +433,16 @@ fn handle_request(
                 .unwrap_or_else(|e| e.into_inner())
                 .generation;
 
-            LinkerResponse::Registered {
-                status,
-                generation: gen,
+            if rejected_roots.is_empty() {
+                LinkerResponse::Registered {
+                    status,
+                    generation: gen,
+                }
+            } else {
+                LinkerResponse::Error(format!(
+                    "Linker cannot index a filesystem root, home directory, or its parent: {}. Choose a project directory instead.",
+                    rejected_roots.join(", ")
+                ))
             }
         }
         LinkerRequest::Unregister { session_id } => {
@@ -563,6 +584,19 @@ fn handle_request(
     }
 }
 
+fn is_unsafe_workspace_root(root: &std::path::Path) -> bool {
+    fn normalized(path: &std::path::Path) -> PathBuf {
+        let canonical = crate::linker::client::canonical_root(path);
+        PathBuf::from(crate::linker::path::normalize_lexical(&canonical))
+    }
+
+    let root = normalized(root);
+    if root.parent().is_none() {
+        return true;
+    }
+    dirs::home_dir().is_some_and(|home| normalized(&home).starts_with(&root))
+}
+
 /// Collect all workspace roots across all registered clients.
 /// Returns a sorted, deduplicated list (deterministic ordering for scan/watcher).
 fn collect_all_roots(state: &Arc<DaemonState>) -> Vec<PathBuf> {
@@ -685,6 +719,9 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
             let cancelled = cancel.load(Ordering::SeqCst) || outcome.is_none();
 
             if still_current {
+                if outcome.is_none() && !cancel.load(Ordering::SeqCst) {
+                    coord.failure = Some("Linker indexing stopped at a resource limit. Choose a smaller workspace or exclude large files.".into());
+                }
                 if let Some((graph, pi)) = outcome {
                     if !cancelled {
                         let _pub = state
@@ -700,6 +737,7 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
                             *idx = pi;
                         }
                         coord.applied_revision = scan_rev;
+                        coord.failure = None;
                     }
                 }
                 // Either published or cancelled-while-still-current: clear
@@ -1062,6 +1100,7 @@ fn handle_query(
                 applied_revision: coord.applied_revision,
                 in_flight: coord.in_flight,
                 generation: gen,
+                failure: coord.failure.clone(),
             }
         }
         LinkerQuery::Visualization(req) => {

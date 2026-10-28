@@ -166,6 +166,8 @@ pub enum LinkerResponse {
         in_flight: Option<u64>,
         /// The current graph generation (set monotonically at publication).
         generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<String>,
     },
     /// Bounded subgraph view for GUI visualization.
     GraphView(GraphViewResult),

@@ -109,6 +109,9 @@ export const initialSession: SessionSlice = {
   memWindow: 0,
   memAgent: 0,
   memServices: 0,
+  memMcp: 0,
+  memOauth: 0,
+  memLinker: 0,
   memSystem: 0,
 }
 

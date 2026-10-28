@@ -129,6 +129,9 @@ export type PushEvent =
       memWindow?: number
       memAgent?: number
       memServices?: number
+      memMcp?: number
+      memOauth?: number
+      memLinker?: number
       memSystem?: number
     }
   | {

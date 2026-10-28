@@ -29,7 +29,7 @@ pub struct PackageJsonInfo {
 
 /// Parse a package.json file into PackageJsonInfo.
 pub fn parse_package_json_file(path: &Path, dir: &Path) -> Option<PackageJsonInfo> {
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
     let value: serde_json::Value = serde_json::from_str(&content).ok()?;
 
     let dir_s = normalize_lexical(&dir.to_string_lossy().replace('\\', "/"));

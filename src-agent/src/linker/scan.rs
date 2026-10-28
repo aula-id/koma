@@ -13,6 +13,37 @@ use super::reference::{ImportKind, ImportRef, Resolution, SourceRefs, Unresolved
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Read;
+
+pub const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_CONFIG_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_FILES: usize = 100_000;
+pub const MAX_DIRS: usize = 20_000;
+pub const MAX_EDGES: usize = 1_000_000;
+
+pub fn read_bounded(path: &Path, limit: u64) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "file exceeds linker size limit"));
+    }
+    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_read_rejects_files_over_limit() {
+        let path = std::env::temp_dir().join(format!("koma-linker-budget-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "12345").unwrap();
+        assert_eq!(read_bounded(&path, 5).unwrap(), "12345");
+        assert_eq!(read_bounded(&path, 4).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(path).unwrap();
+    }
+}
 
 /// Directory basenames pruned from the walk regardless of .gitignore.
 /// Mirrors the DirCache prune list for consistency.
@@ -262,8 +293,9 @@ pub fn scan_roots_cancellable(
         }
 
         // Read file content (best-effort).
-        let content = match std::fs::read_to_string(&sf.abs_path) {
+        let content = match read_bounded(Path::new(&sf.abs_path), MAX_SOURCE_BYTES) {
             Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return None,
             Err(_) => continue,
         };
 
@@ -530,6 +562,7 @@ pub fn scan_roots_cancellable(
         }
 
         // Install edges + SourceRefs atomically per source.
+        if graph.edge_count.saturating_add(edges.len()) > MAX_EDGES { return None; }
         graph.set_edges_and_refs(&sf.abs_path, lang, edges, refs);
     }
 
@@ -552,7 +585,7 @@ pub fn scan_file(
     path: &Path,
     project_index: &ProjectIndex,
 ) -> Option<(String, Lang, Vec<Edge>, SourceRefs)> {
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = read_bounded(path, MAX_SOURCE_BYTES).ok()?;
     let path_str = path.to_string_lossy().replace('\\', "/");
     let lang = detect_lang(&path_str);
     if lang == Lang::Unknown {
@@ -828,6 +861,8 @@ struct SourceFile {
 fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Option<Vec<SourceFile>> {
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     let mut files = Vec::new();
+    let mut total_entries = 0usize;
+    let mut total_dirs = 0usize;
 
     for root in roots {
         if cancelled() {
@@ -854,8 +889,16 @@ fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Optio
             .build();
 
         let mut n = 0usize;
+        let mut root_dirs = 0usize;
         for dent in walker.flatten() {
             n += 1;
+            total_entries += 1;
+            if n > MAX_FILES || total_entries > MAX_FILES * 2 { return None; }
+            if dent.file_type().is_some_and(|t| t.is_dir()) {
+                root_dirs += 1;
+                total_dirs += 1;
+                if root_dirs > MAX_DIRS || total_dirs > MAX_DIRS * 2 { return None; }
+            }
             if n.is_multiple_of(64) && cancelled() {
                 return None;
             }

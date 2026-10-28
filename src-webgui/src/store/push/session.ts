@@ -429,6 +429,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
             memWindow: env.memWindow ?? s.session.memWindow,
             memAgent: env.memAgent ?? s.session.memAgent,
             memServices: env.memServices ?? s.session.memServices,
+            memMcp: env.memMcp ?? s.session.memMcp,
+            memOauth: env.memOauth ?? s.session.memOauth,
+            memLinker: env.memLinker ?? s.session.memLinker,
             memSystem: env.memSystem ?? s.session.memSystem,
           },
         }))

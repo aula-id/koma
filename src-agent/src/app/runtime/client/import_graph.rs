@@ -780,6 +780,13 @@ fn reindex_and_fetch(
         }
         match crate::linker::client::fetch_scan_status() {
             Some(status) => {
+                if status.in_flight.is_none() {
+                    if let Some(message) = status.failure {
+                        let mut r = unavailable_with_ids(rid, sid);
+                        r.status = format!("unavailable: {message}");
+                        return r;
+                    }
+                }
                 if status.applied_revision >= requested_revision
                     && status.in_flight != Some(requested_revision)
                 {
