@@ -1,0 +1,85 @@
+name: gui-link
+
+# Links the real macOS GUI release executable for Apple Silicon and Intel.
+# cargo check and the headless test matrix cannot see missing GUI FFI archives
+# or frameworks, so this catches Darwin link breaks before a release tag does.
+# It is slow (two cold release builds), so it stays off the pull request path
+# and runs after merge when Rust or native build inputs change, or by hand.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src-agent/**"
+      - "src-extension/**"
+      - "src-webgui/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "scripts/prepare-terminal.py"
+      - ".github/workflows/gui-link.yml"
+
+concurrency:
+  group: gui-link-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos-gui-link:
+    name: GUI release link (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon is the primary Darwin build; retain native Intel coverage.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: macos-gui-link-v1
+          key: ${{ matrix.target }}
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
+
+      # cargo check and the headless test matrix cannot detect missing GUI FFI
+      # archives/frameworks. Link the real executable without opening a desktop.
+      - name: Link GUI release executable
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: cargo build --locked --release -p agent --bin koma --target ${{ matrix.target }}
+
+      # Only the failing Intel release compiler needs the stack workaround.
+      - name: Link Intel macOS GUI release executable
+        if: matrix.target == 'x86_64-apple-darwin'
+        env:
+          RUST_MIN_STACK: "33554432"
+        run: cargo build --locked --release -p agent --bin koma --target ${{ matrix.target }}
