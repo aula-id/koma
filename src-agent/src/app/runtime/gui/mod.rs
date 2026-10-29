@@ -181,6 +181,8 @@ mod computer_viewer;
 mod dispatch;
 mod dispatch_forward;
 mod dispatch_git;
+#[cfg(any(target_os = "linux", test))]
+mod linux_rendering;
 mod proto;
 mod screen_browser_window;
 mod usage_bar;
@@ -472,7 +474,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // it is what makes scroll layers repaint; View Transitions are disabled so
     // that same setting does not SIGSEGV on `document.startViewTransition()`.
     #[cfg(target_os = "linux")]
-    linux_software_egl_if_no_dri3();
+    {
+        linux_software_egl_if_no_dri3();
+        linux_rendering::configure();
+    }
 
     // --- 1. Event loop + window (frameless, transparent) -----------------------
     // The app-list entry is installed later, off this thread. Doing it here
