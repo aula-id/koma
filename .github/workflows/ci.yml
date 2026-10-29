@@ -88,12 +88,6 @@ jobs:
         with:
           bun-version: 1.4.3
 
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
-      - name: Validate payload preparation gates
-        run: python -m unittest discover -s scripts -p test_terminal_payload.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
@@ -103,6 +97,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0.0.4-cache-rust"
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
+
+      - name: Validate payload preparation gates
+        run: python -m unittest discover -s scripts -p test_terminal_payload.py
 
       - name: Filesystem recovery regressions (native Windows)
         if: runner.os == 'Windows'
@@ -206,9 +207,6 @@ jobs:
         with:
           bun-version: 1.4.3
 
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
@@ -225,6 +223,10 @@ jobs:
         with:
           prefix-key: macos-gui-link-v1
           key: ${{ matrix.target }}
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
 
       # cargo check and the headless test matrix cannot detect missing GUI FFI
       # archives/frameworks. Link the real executable without opening a desktop.
@@ -271,9 +273,6 @@ jobs:
         with:
           bun-version: 1.4.3
 
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
@@ -284,6 +283,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0.0.4-cache-rust-lint"
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
+
       # Formatting: non-gating until the tree is rustfmt-clean.
       - name: Formatting
         run: cargo fmt --all --check || true
