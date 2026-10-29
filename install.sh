@@ -4,6 +4,7 @@
 #   curl -fsSL https://koma.run/install.sh | sh
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --with-research
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --with-lsp
+#   curl -fsSL https://koma.run/install.sh | sh -s -- --gui-window=opaque
 #
 # Environment overrides:
 #   KOMA_RELEASE_BASE   override the base download URL
@@ -18,10 +19,16 @@ INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
 
 WITH_RESEARCH=0
 WITH_LSP=0
+GUI_WINDOW=""
 for arg in "$@"; do
     case "$arg" in
         --with-research) WITH_RESEARCH=1 ;;
         --with-lsp) WITH_LSP=1 ;;
+        --gui-window=transparent|--gui-window=opaque) GUI_WINDOW="${arg#--gui-window=}" ;;
+        --gui-window=*)
+            echo "ERROR: --gui-window takes transparent or opaque, not '${arg#--gui-window=}'." >&2
+            exit 1
+            ;;
     esac
 done
 
@@ -745,6 +752,58 @@ _install_linux_shared_libs() {
 }
 if [ "$os" = "linux" ]; then
     _install_linux_shared_libs || true
+fi
+
+# ---------------------------------------------------------------------------
+# Linux: choose the GUI window mode for every user of this machine.
+# WebKitGTK 2.54 on a compositing desktop paints a transparent window only
+# under the cursor (#242). Debian and Ubuntu keep the transparent window with
+# rounded corners; every other distro gets an opaque one. koma reads
+# /etc/koma/gui.conf at GUI start and treats a missing file as transparent.
+# --gui-window=transparent|opaque overrides the detection.
+# ---------------------------------------------------------------------------
+_gui_conf="/etc/koma/gui.conf"
+_detect_gui_window() {
+    _ids=""
+    _family=""
+    if [ -r /etc/os-release ]; then
+        _ids="$(sed -n 's/^ID=//p; s/^ID_LIKE=//p' /etc/os-release | tr -d "\"'" | tr '\n' ' ')"
+        _family="$(sed -n 's/^ID=//p' /etc/os-release | tr -d "\"'")"
+    fi
+    case " $_ids " in
+        *" debian "*|*" ubuntu "*) _gui_window="transparent" ;;
+        *) _gui_window="opaque" ;;
+    esac
+}
+_write_gui_window() {
+    if [ -n "$GUI_WINDOW" ]; then
+        _gui_window="$GUI_WINDOW"
+        _why="--gui-window"
+    else
+        _detect_gui_window
+        _why="${_family:-unknown distro}"
+    fi
+    _step "GUI window"
+    if [ -r "$_gui_conf" ] && grep -qx "window=$_gui_window" "$_gui_conf"; then
+        _ok "$_gui_window ($_why)  $_gui_conf"
+        return 0
+    fi
+    # No file already means transparent, so Debian needs no root for this.
+    if [ "$_gui_window" = "transparent" ] && [ -z "$GUI_WINDOW" ] && [ ! -e "$_gui_conf" ]; then
+        _ok "transparent ($_why)"
+        return 0
+    fi
+    _conf_body="# Written by install.sh. transparent | opaque
+window=$_gui_window"
+    if _as_root mkdir -p /etc/koma && printf '%s\n' "$_conf_body" | _as_root tee "$_gui_conf" >/dev/null; then
+        _ok "$_gui_window ($_why)  $_gui_conf"
+    else
+        echo "WARNING: could not write $_gui_conf; the GUI window stays transparent." >&2
+        echo "  sudo mkdir -p /etc/koma && printf 'window=$_gui_window\\n' | sudo tee $_gui_conf" >&2
+    fi
+}
+if [ "$os" = "linux" ]; then
+    _write_gui_window || true
 fi
 
 # ---------------------------------------------------------------------------
