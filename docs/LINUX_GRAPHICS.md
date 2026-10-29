@@ -8,6 +8,22 @@ The report does not yet establish whether the problem affects only Koma or
 the whole desktop; kernel and compositor logs are still needed to confirm
 its cause.
 
+### Target and verification status
+
+The reported target is **Arch Linux x86_64, Intel Core i3-3240 / Ivy Bridge
+(i915), and Hyprland on Wayland**. This is a GPU/session-specific proposal,
+not a general Wayland or Debian fix. The selection code checks Linux, the
+Wayland display environment, and the GPU PCI ID; it does not check the distro
+or CPU architecture. A Debian system exposing the same GPU and session would
+also match, even if it has no flicker. ARM64 systems without these Intel PCI
+devices do not match.
+
+The automated tests validate selection and override handling only. They do
+not confirm that shared-memory transport fixes the reported display problem.
+The development host is macOS ARM64; the manual command below has **not**
+been verified on the reported hardware. Confirm it there before treating the
+automatic fallback as ready to merge.
+
 Koma uses WebKitGTK for its Linux GUI. On Wayland sessions (`WAYLAND_DISPLAY`
 is nonempty), Koma now selects WebKit's shared-memory buffer transport when
 `/sys/class/drm/card*/device` identifies Intel Ivy Bridge (vendor `8086`,
@@ -34,6 +50,27 @@ To compare with the previous buffer selection:
 ```sh
 WEBKIT_DMABUF_RENDERER_FORCE_SHM=0 koma gui
 ```
+
+For a useful comparison, use the same Koma binary, monitor configuration,
+and workload in both runs. Unset `WEBKIT_DISABLE_DMABUF_RENDERER` first if it
+was configured: it can prevent the transport comparison from testing the
+intended path. Restart all Koma GUI windows between runs because WebKit
+caches the transport selection.
+
+Record the following results on the affected machine:
+
+| Check | FORCE_SHM=0 | FORCE_SHM=1 |
+| --- | --- | --- |
+| Scrolling and resizing | Pending | Pending |
+| Opening another Koma webview | Pending | Pending |
+| Switching Hyprland workspaces | Pending | Pending |
+| Koma-only or whole-monitor flicker | Pending | Pending |
+| i915 GPU hang/reset messages | Pending | Pending |
+
+Include the observation duration, Koma version, WebKitGTK version, and whether
+the original symptom reproduces with `0`. A run without the original symptom
+cannot establish that `1` fixes it. Where available, compare on an unaffected
+Debian system as well before enabling this default for the same GPU there.
 
 Explicit values of `WEBKIT_DMABUF_RENDERER_FORCE_SHM` or
 `WEBKIT_DISABLE_DMABUF_RENDERER` are always preserved, including `0` and an
