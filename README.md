@@ -118,6 +118,8 @@ python3 scripts/prepare-terminal.py
 cargo build --locked -p agent --features gui
 ```
 
+For Linux GUI flicker or black frames on Hyprland/Wayland with Intel Ivy Bridge graphics, see [Linux graphics troubleshooting](docs/LINUX_GRAPHICS.md).
+
 Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (e.g. `libwebkit2gtk-4.1-dev` on Debian/Ubuntu), plus GTK3 and libsoup3. macOS and Windows use the system-provided webview (WebKit / WebView2) — no extra deps. The default build enables the GUI; use `--no-default-features` for a terminal-only build. The complete terminal payload is included in both.
 
 More at **[koma.run](https://koma.run)**.

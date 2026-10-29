@@ -145,3 +145,8 @@ pub(super) type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub(crate) use actions::choose_model_provider;
+
+// Exercise Linux renderer selection in the headless CI test matrix too.
+#[cfg(all(test, not(feature = "gui")))]
+#[path = "gui/linux_rendering.rs"]
+mod linux_rendering_tests;
