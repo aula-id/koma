@@ -30,6 +30,9 @@ pub mod proc_win;
 pub mod procmem;
 pub mod screenshot_catalog;
 pub mod sdlc;
+/// Process and host memory readings for the linker scan budget.
+#[cfg(feature = "linker")]
+pub mod selfmem;
 pub mod session;
 pub mod session_lock;
 pub mod session_registry;

@@ -42,6 +42,23 @@ pub struct HandleEventsOutcome {
     pub new_dirs: Vec<PathBuf>,
 }
 
+/// Memory limits the daemon applies to a watcher batch.
+#[derive(Debug, Clone, Copy)]
+pub struct WatchLimits {
+    /// False once the daemon is over its scan budget: new files stay out of
+    /// the graph, while edits and deletes of indexed files still apply.
+    pub allow_new: bool,
+    /// Largest source file to read, see [`crate::linker::scan::Budget::file_cap`].
+    pub file_cap: u64,
+}
+
+impl WatchLimits {
+    pub const UNBOUNDED: Self = Self {
+        allow_new: true,
+        file_cap: u64::MAX / 2,
+    };
+}
+
 /// Create a debounced file watcher for the given roots.
 ///
 /// Watches are installed **NonRecursive** on each non-pruned directory under
@@ -256,8 +273,15 @@ pub fn handle_events(
     paths: &[PathBuf],
     graph: &mut ImportGraph,
     project_index: &mut ProjectIndex,
+    limits: WatchLimits,
 ) -> HandleEventsOutcome {
-    let batch = classify_batch(paths);
+    let mut batch = classify_batch(paths);
+    if !limits.allow_new {
+        batch.source_exists.retain(|path| {
+            let path_str = normalize_lexical(&path.to_string_lossy().replace('\\', "/"));
+            project_index.get_file(&path_str).is_some()
+        });
+    }
     let mut outcome = HandleEventsOutcome::default();
     let mut created = Vec::new();
 
@@ -307,7 +331,9 @@ pub fn handle_events(
 
     // Every directly modified/created source is scanned exactly once here.
     for path in &batch.source_exists {
-        if let Some((file_path, lang, edges, refs)) = scan_file(path, project_index) {
+        if let Some((file_path, lang, edges, refs)) =
+            scan_file(path, project_index, limits.file_cap)
+        {
             graph.set_edges_and_refs(&file_path, lang, edges, refs);
         }
     }
@@ -397,7 +423,9 @@ pub fn handle_events(
             if !path.exists() {
                 continue;
             }
-            if let Some((file_path, lang, edges, refs)) = scan_file(&path, project_index) {
+            if let Some((file_path, lang, edges, refs)) =
+                scan_file(&path, project_index, limits.file_cap)
+            {
                 graph.set_edges_and_refs(&file_path, lang, edges, refs);
             }
         }

@@ -101,7 +101,8 @@ struct PyprojectParsed {
 /// - `[tool.setuptools.packages.find]` include = ["..."]
 /// - `[tool.setuptools.packages]` include = ["..."]
 fn parse_pyproject_toml(path: &Path) -> Option<PyprojectParsed> {
-    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
+    let content =
+        crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
     let mut result = PyprojectParsed::default();
     let mut current_section = String::new();
     let mut in_array = false;
@@ -234,7 +235,8 @@ struct SetupCfgParsed {
 /// Parse a limited subset of setup.cfg for setuptools configuration.
 /// Handles `[options]` package_dir and packages.
 fn parse_setup_cfg(path: &Path) -> Option<SetupCfgParsed> {
-    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
+    let content =
+        crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
     let mut result = SetupCfgParsed::default();
     let mut current_section = String::new();
 

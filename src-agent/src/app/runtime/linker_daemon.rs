@@ -61,8 +61,14 @@ struct ScanCoordinator {
     pending: Option<ScanRequest>,
     /// How many scan worker threads have been spawned (test observability).
     spawn_count: u64,
-    failure: Option<String>,
+    /// How much of the workspace the last published full scan covered.
+    coverage: crate::linker::scan::Coverage,
+    /// Source-file read cap from the last scan budget, reused by the watcher.
+    file_cap: u64,
 }
+
+/// Receives `(session_id, message)` for the session's notification history.
+type NotifySink = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Shared daemon state: the import graph plus per-client root tracking, the
 /// file watcher, and the project index.
@@ -116,6 +122,13 @@ struct DaemonState {
     /// by the daemon.  Set at publication time (scan or watcher batch) so
     /// the published generation never moves backward.
     published_generation: std::sync::atomic::AtomicU64,
+
+    /// session_id → roots dropped as too broad, so a repeated registration
+    /// does not repeat its notification.
+    skipped_roots: Mutex<HashMap<String, Vec<String>>>,
+
+    /// Records an info entry in a session's notification history.
+    notify: NotifySink,
 }
 
 impl DaemonState {
@@ -138,12 +151,25 @@ impl DaemonState {
                 cancel: Arc::new(AtomicBool::new(false)),
                 pending: None,
                 spawn_count: 0,
-                failure: None,
+                coverage: crate::linker::scan::Coverage::Complete,
+                file_cap: crate::linker::watch::WatchLimits::UNBOUNDED.file_cap,
             }),
             session_revisions: RwLock::new(HashMap::new()),
             published_generation: AtomicU64::new(0),
+            skipped_roots: Mutex::new(HashMap::new()),
+            notify: Box::new(notify_session),
         }
     }
+}
+
+/// Quiet notice for a session's history: no toast, no error status.
+fn notify_session(session_id: &str, message: &str) {
+    use crate::model::notifications::{record, Entry};
+    let session = crate::model::session_registry::get(session_id)
+        .ok()
+        .flatten()
+        .map(|_| session_id.to_string());
+    record(session, Entry::new(message.to_string(), "info", "linker"));
 }
 
 /// Headless entry point: run the GLOBAL linker daemon event loop.
@@ -321,13 +347,13 @@ fn handle_request(
                 revs.insert(session_id.clone(), rev);
             }
 
-            let mut rejected_roots = Vec::new();
+            let mut skipped = Vec::new();
             let new_set: HashSet<PathBuf> = roots
                 .iter()
                 .filter_map(|root| {
                     let path = PathBuf::from(root);
                     if is_unsafe_workspace_root(&path) {
-                        rejected_roots.push(root.clone());
+                        skipped.push(root.clone());
                         None
                     } else {
                         Some(path)
@@ -433,16 +459,11 @@ fn handle_request(
                 .unwrap_or_else(|e| e.into_inner())
                 .generation;
 
-            if rejected_roots.is_empty() {
-                LinkerResponse::Registered {
-                    status,
-                    generation: gen,
-                }
-            } else {
-                LinkerResponse::Error(format!(
-                    "Linker cannot index a filesystem root, home directory, or its parent: {}. Choose a project directory instead.",
-                    rejected_roots.join(", ")
-                ))
+            note_skipped_roots(state, &session_id, skipped);
+
+            LinkerResponse::Registered {
+                status,
+                generation: gen,
             }
         }
         LinkerRequest::Unregister { session_id } => {
@@ -457,6 +478,11 @@ fn handle_request(
                 let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
                 removed_roots = clients.remove(&session_id);
             }
+            state
+                .skipped_roots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&session_id);
 
             if let Some(roots) = removed_roots {
                 let mut roots_to_drop = Vec::new();
@@ -510,6 +536,7 @@ fn handle_request(
                         *idx = crate::linker::project::ProjectIndex::new();
                     }
                     coord.applied_revision = empty_revision;
+                    coord.coverage = crate::linker::scan::Coverage::Complete;
                     state.scanning.store(false, Ordering::SeqCst);
                 } else if !roots_to_drop.is_empty() {
                     // Rescan remaining roots (dropped roots are gone from all_roots).
@@ -582,6 +609,83 @@ fn handle_request(
             handle_query(query, &graph, state)
         }
     }
+}
+
+/// Notify once per change in the roots a session had skipped.
+fn note_skipped_roots(state: &DaemonState, session_id: &str, mut skipped: Vec<String>) {
+    skipped.sort();
+    let changed = {
+        let mut seen = state
+            .skipped_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if skipped.is_empty() {
+            seen.remove(session_id);
+            false
+        } else if seen.get(session_id) == Some(&skipped) {
+            false
+        } else {
+            seen.insert(session_id.to_string(), skipped.clone());
+            true
+        }
+    };
+    if changed {
+        (state.notify)(
+            session_id,
+            &format!("Linker skipped {}: too broad to index.", skipped.join(", ")),
+        );
+    }
+}
+
+/// Notice for a partial scan, or `None` when it needs no mention.
+fn coverage_notice(
+    previous: &crate::linker::scan::Coverage,
+    current: &crate::linker::scan::Coverage,
+    budget_bytes: u64,
+) -> Option<String> {
+    use crate::linker::scan::Coverage;
+    let Coverage::Partial {
+        indexed,
+        found,
+        walk_truncated,
+        skipped_large,
+    } = current
+    else {
+        return None;
+    };
+    if matches!(previous, Coverage::Partial { found: before, .. } if before == found) {
+        return None;
+    }
+    let total = if *walk_truncated {
+        format!("at least {}", group_digits(*found))
+    } else {
+        group_digits(*found)
+    };
+    let gib = budget_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let mut text = format!(
+        "Linker indexed {} of {total} files (memory budget {gib:.1} GB)",
+        group_digits(*indexed)
+    );
+    if *skipped_large > 0 {
+        text.push_str(&format!(
+            ", {} large files skipped",
+            group_digits(*skipped_large)
+        ));
+    }
+    text.push('.');
+    Some(text)
+}
+
+fn group_digits(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn is_unsafe_workspace_root(root: &std::path::Path) -> bool {
@@ -706,9 +810,12 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
             (scan_rev, req.roots, cancel)
         };
 
-        let outcome = crate::linker::scan::scan_roots_cancellable(&roots, Some(&cancel));
+        let mut budget = crate::linker::scan::Budget::for_scan();
+        let outcome =
+            crate::linker::scan::scan_roots_cancellable(&roots, Some(&cancel), &mut budget);
+        let mut notice = None;
 
-        {
+        let finished = {
             let mut coord = state
                 .scan_coordinator
                 .lock()
@@ -719,10 +826,7 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
             let cancelled = cancel.load(Ordering::SeqCst) || outcome.is_none();
 
             if still_current {
-                if outcome.is_none() && !cancel.load(Ordering::SeqCst) {
-                    coord.failure = Some("Linker indexing stopped at a resource limit. Choose a smaller workspace or exclude large files.".into());
-                }
-                if let Some((graph, pi)) = outcome {
+                if let Some((graph, pi, coverage)) = outcome {
                     if !cancelled {
                         let _pub = state
                             .publication_lock
@@ -737,7 +841,9 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
                             *idx = pi;
                         }
                         coord.applied_revision = scan_rev;
-                        coord.failure = None;
+                        notice = coverage_notice(&coord.coverage, &coverage, budget.graph_bytes());
+                        coord.coverage = coverage;
+                        coord.file_cap = budget.file_cap();
                     }
                 }
                 // Either published or cancelled-while-still-current: clear
@@ -746,24 +852,47 @@ fn scan_worker_loop(state: Arc<DaemonState>) {
                 if coord.pending.is_none() {
                     coord.in_flight = None;
                     state.scanning.store(false, Ordering::SeqCst);
-                    return;
+                    true
+                } else {
+                    // Keep in_flight occupied while we drain pending.
+                    coord.in_flight = Some(coord.desired_revision);
+                    false
                 }
-                // Keep in_flight occupied while we drain pending.
-                coord.in_flight = Some(coord.desired_revision);
             } else if coord.in_flight == Some(scan_rev) {
                 // Superseded (e.g. empty unregister invalidated us).
                 if coord.pending.is_none() {
                     coord.in_flight = None;
                     state.scanning.store(false, Ordering::SeqCst);
-                    return;
+                    true
+                } else {
+                    coord.in_flight = Some(coord.desired_revision);
+                    false
                 }
-                coord.in_flight = Some(coord.desired_revision);
             } else if coord.pending.is_none() {
                 // Another path cleared in_flight (empty unregister). Exit.
                 state.scanning.store(false, Ordering::SeqCst);
-                return;
+                true
+            } else {
+                false
             }
             // else: pending set and/or newer in_flight — loop and drain.
+        };
+
+        // Sent outside the coordinator lock: recording touches the session registry.
+        if let Some(message) = notice {
+            let sessions: Vec<String> = state
+                .clients
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .keys()
+                .cloned()
+                .collect();
+            for session_id in &sessions {
+                (state.notify)(session_id, &message);
+            }
+        }
+        if finished {
+            return;
         }
     }
 }
@@ -897,19 +1026,24 @@ fn watcher_loop(state: Arc<DaemonState>) {
         // incremental graph worth preserving — cancelling + re-queue under a
         // sustained event stream restarts forever and the first scan never lands.
         // request_scan still coalesces when we do supersede.
-        let superseded = {
+        let (superseded, limits) = {
             let mut coord = state
                 .scan_coordinator
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            let limits = crate::linker::watch::WatchLimits {
+                allow_new: coord.coverage == crate::linker::scan::Coverage::Complete,
+                file_cap: coord.file_cap,
+            };
             let was_in_flight = coord.in_flight.is_some();
-            if was_in_flight && coord.applied_revision > 0 {
+            let superseded = if was_in_flight && coord.applied_revision > 0 {
                 coord.desired_revision = coord.desired_revision.saturating_add(1);
                 coord.cancel.store(true, Ordering::SeqCst);
                 true
             } else {
                 false
-            }
+            };
+            (superseded, limits)
         };
 
         // Hold publication_lock during the graph + project_index mutation
@@ -923,7 +1057,8 @@ fn watcher_loop(state: Arc<DaemonState>) {
                 .unwrap_or_else(|e| e.into_inner());
             if let (Ok(mut graph), Ok(mut pi)) = (state.graph.write(), state.project_index.write())
             {
-                let outcome = crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+                let outcome =
+                    crate::linker::watch::handle_events(&paths, &mut graph, &mut pi, limits);
                 full_rebuild_roots = outcome.full_rebuild_roots;
                 new_dirs = outcome.new_dirs;
             }
@@ -1100,7 +1235,6 @@ fn handle_query(
                 applied_revision: coord.applied_revision,
                 in_flight: coord.in_flight,
                 generation: gen,
-                failure: coord.failure.clone(),
             }
         }
         LinkerQuery::Visualization(req) => {

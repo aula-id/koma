@@ -423,7 +423,6 @@ pub struct ScanCoordinatorState {
     pub applied_revision: u64,
     pub in_flight: Option<u64>,
     pub generation: u64,
-    pub failure: Option<String>,
 }
 
 /// Fetch scan coordinator state (desired/applied/in-flight revisions).
@@ -436,13 +435,11 @@ pub fn fetch_scan_status() -> Option<ScanCoordinatorState> {
             applied_revision,
             in_flight,
             generation,
-            failure,
         } => Some(ScanCoordinatorState {
             desired_revision,
             applied_revision,
             in_flight,
             generation,
-            failure,
         }),
         _ => None,
     }

@@ -11,24 +11,119 @@ use super::path::normalize_lexical;
 use super::project::ProjectIndex;
 use super::reference::{ImportKind, ImportRef, Resolution, SourceRefs, UnresolvedReason};
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::io::Read;
 
-pub const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+/// Sanity cap for manifest and build-config reads (`package.json`,
+/// `compile_commands.json`, …). Source files use [`Budget::file_cap`].
 pub const MAX_CONFIG_BYTES: u64 = 32 * 1024 * 1024;
-pub const MAX_FILES: usize = 100_000;
-pub const MAX_DIRS: usize = 20_000;
-pub const MAX_EDGES: usize = 1_000_000;
+
+/// Smallest whole-daemon budget, so small machines still index a project.
+const MIN_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Budget checks run every this many walked entries or parsed files.
+const BUDGET_CHECKPOINT: usize = 64;
+
+/// Daemon memory limit for this host: 1/16 of physical memory, at most a
+/// quarter of what is available right now, never below [`MIN_LIMIT_BYTES`].
+pub fn limit_from(physical: Option<u64>, available: Option<u64>) -> u64 {
+    let limit = physical.map_or(MIN_LIMIT_BYTES * 4, |p| p / 16);
+    let limit = available.map_or(limit, |a| limit.min(a / 4));
+    limit.max(MIN_LIMIT_BYTES)
+}
+
+/// Memory a full scan may add to the daemon. Half of the host limit, because
+/// the published graph stays in memory while its replacement is built.
+pub struct Budget {
+    graph_bytes: u64,
+    baseline: Option<u64>,
+    reader: fn() -> Option<u64>,
+    estimate: u64,
+}
+
+impl Budget {
+    pub fn for_scan() -> Self {
+        let limit = limit_from(
+            crate::model::selfmem::physical(),
+            crate::model::selfmem::available(),
+        );
+        Self::fixed(limit / 2, crate::model::selfmem::resident)
+    }
+
+    /// `graph_bytes` of growth, measured by `reader`. When `reader` gives no
+    /// answer, growth is the running estimate passed to [`Budget::exhausted`].
+    pub fn fixed(graph_bytes: u64, reader: fn() -> Option<u64>) -> Self {
+        Self {
+            graph_bytes,
+            baseline: reader(),
+            reader,
+            estimate: 0,
+        }
+    }
+
+    pub fn unbounded() -> Self {
+        Self::fixed(u64::MAX / 2, || None)
+    }
+
+    pub fn graph_bytes(&self) -> u64 {
+        self.graph_bytes
+    }
+
+    /// Largest source file worth reading. Its text is dropped after parsing,
+    /// so this only bounds the momentary peak.
+    pub fn file_cap(&self) -> u64 {
+        self.graph_bytes / 32
+    }
+
+    /// Adds `added` to the estimate and reports whether growth passed the budget.
+    pub fn exhausted(&mut self, added: u64) -> bool {
+        self.estimate = self.estimate.saturating_add(added);
+        let growth = match (self.baseline, (self.reader)()) {
+            (Some(start), Some(now)) => now.saturating_sub(start),
+            _ => self.estimate,
+        };
+        growth > self.graph_bytes
+    }
+}
+
+/// How much of the workspace a scan indexed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Coverage {
+    #[default]
+    Complete,
+    /// Stopped at the memory budget. `found` is a lower bound when the walk
+    /// itself was cut short.
+    Partial {
+        indexed: usize,
+        found: usize,
+        walk_truncated: bool,
+        skipped_large: usize,
+    },
+}
 
 pub fn read_bounded(path: &Path, limit: u64) -> std::io::Result<String> {
     let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes)?;
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > limit {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "file exceeds linker size limit"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file exceeds linker size limit",
+        ));
     }
-    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    String::from_utf8(bytes).map_err(std::io::Error::other)
+}
+
+/// Minified or generated text: a long sample with almost no line breaks.
+fn looks_minified(content: &str) -> bool {
+    const SAMPLE: usize = 64 * 1024;
+    let sample = &content.as_bytes()[..content.len().min(SAMPLE)];
+    if sample.len() < 16 * 1024 {
+        return false;
+    }
+    let newlines = sample.iter().filter(|&&b| b == b'\n').count();
+    newlines * 1024 < sample.len()
 }
 
 #[cfg(test)]
@@ -37,11 +132,39 @@ mod budget_tests {
 
     #[test]
     fn bounded_read_rejects_files_over_limit() {
-        let path = std::env::temp_dir().join(format!("koma-linker-budget-{}", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("koma-linker-budget-{}", uuid::Uuid::new_v4()));
         std::fs::write(&path, "12345").unwrap();
         assert_eq!(read_bounded(&path, 5).unwrap(), "12345");
-        assert_eq!(read_bounded(&path, 4).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            read_bounded(&path, 4).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn limit_scales_with_host_memory() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(limit_from(Some(16 * GIB), None), GIB);
+        assert_eq!(limit_from(Some(16 * GIB), Some(2 * GIB)), GIB / 2);
+        assert_eq!(limit_from(Some(16 * GIB), Some(GIB / 2)), MIN_LIMIT_BYTES);
+        assert_eq!(limit_from(Some(GIB), None), MIN_LIMIT_BYTES);
+        assert_eq!(limit_from(None, None), MIN_LIMIT_BYTES * 4);
+    }
+
+    #[test]
+    fn budget_uses_estimate_without_reader() {
+        let mut budget = Budget::fixed(100, || None);
+        assert!(!budget.exhausted(60));
+        assert!(budget.exhausted(60));
+    }
+
+    #[test]
+    fn minified_text_is_detected() {
+        assert!(looks_minified(&"a".repeat(32 * 1024)));
+        assert!(!looks_minified(&"let a = 1;\n".repeat(4 * 1024)));
+        assert!(!looks_minified(&"a".repeat(1024)));
     }
 }
 
@@ -170,8 +293,8 @@ struct ModuleContext {
 /// Returns the graph and the `ProjectIndex` built during the scan.
 #[allow(dead_code)] // public API for tests/tools; daemon uses cancellable path
 pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
-    match scan_roots_cancellable(roots, None) {
-        Some(pair) => pair,
+    match scan_roots_cancellable(roots, None, &mut Budget::unbounded()) {
+        Some((graph, index, _)) => (graph, index),
         // Uncancellable path never returns None; keep a defined empty graph
         // rather than panicking under deny(clippy::expect_used).
         None => (ImportGraph::new(), ProjectIndex::new()),
@@ -181,11 +304,13 @@ pub fn scan_roots(roots: &[PathBuf]) -> (ImportGraph, ProjectIndex) {
 /// Like [`scan_roots`], but cooperatively cancels when `cancel` is set.
 ///
 /// Returns `None` if cancelled mid-scan. Callers must not publish a cancelled
-/// partial graph.
+/// partial graph. Reaching `budget` is not a cancel: the scan stops adding
+/// files, shallowest first, and reports [`Coverage::Partial`].
 pub fn scan_roots_cancellable(
     roots: &[PathBuf],
     cancel: Option<&AtomicBool>,
-) -> Option<(ImportGraph, ProjectIndex)> {
+    budget: &mut Budget,
+) -> Option<(ImportGraph, ProjectIndex, Coverage)> {
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     if cancelled() {
         return None;
@@ -207,7 +332,7 @@ pub fn scan_roots_cancellable(
     }
 
     // Collect all source files across all roots and register in ProjectIndex.
-    let source_files = collect_source_files(roots, cancel)?;
+    let (source_files, walk_truncated) = collect_source_files(roots, cancel, budget)?;
     if cancelled() {
         return None;
     }
@@ -283,19 +408,35 @@ pub fn scan_roots_cancellable(
 
     // Checkpoint every N files during the heavy extract/resolve loop.
     const CANCEL_CHECKPOINT: usize = 32;
+    let file_cap = budget.file_cap();
+    let mut indexed = source_files.len();
+    let mut skipped_large = 0usize;
+    let mut added = 0u64;
     for (i, sf) in source_files.iter().enumerate() {
         if i % CANCEL_CHECKPOINT == 0 && cancelled() {
             return None;
+        }
+        if i % BUDGET_CHECKPOINT == 0 && budget.exhausted(std::mem::take(&mut added)) {
+            indexed = i;
+            break;
         }
         let lang = detect_lang(&sf.rel_path);
         if lang == Lang::Unknown {
             continue;
         }
 
-        // Read file content (best-effort).
-        let content = match read_bounded(Path::new(&sf.abs_path), MAX_SOURCE_BYTES) {
+        // Read file content (best-effort). Oversized and minified files carry
+        // no useful import structure, so they are skipped, not fatal.
+        let content = match read_bounded(Path::new(&sf.abs_path), file_cap) {
+            Ok(c) if looks_minified(&c) => {
+                skipped_large += 1;
+                continue;
+            }
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return None,
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                skipped_large += 1;
+                continue;
+            }
             Err(_) => continue,
         };
 
@@ -562,7 +703,7 @@ pub fn scan_roots_cancellable(
         }
 
         // Install edges + SourceRefs atomically per source.
-        if graph.edge_count.saturating_add(edges.len()) > MAX_EDGES { return None; }
+        added += (sf.abs_path.len() + edges.len() * (std::mem::size_of::<Edge>() + 64)) as u64;
         graph.set_edges_and_refs(&sf.abs_path, lang, edges, refs);
     }
 
@@ -572,7 +713,17 @@ pub fn scan_roots_cancellable(
 
     graph.file_count = graph.nodes.len();
     graph.workspace_roots = index.roots().to_vec();
-    Some((graph, index))
+    let coverage = if walk_truncated || indexed < source_files.len() {
+        Coverage::Partial {
+            indexed,
+            found: source_files.len(),
+            walk_truncated,
+            skipped_large,
+        }
+    } else {
+        Coverage::Complete
+    };
+    Some((graph, index, coverage))
 }
 
 /// Scan a single file and return its path, language, outgoing edges, and
@@ -584,8 +735,11 @@ pub fn scan_roots_cancellable(
 pub fn scan_file(
     path: &Path,
     project_index: &ProjectIndex,
+    file_cap: u64,
 ) -> Option<(String, Lang, Vec<Edge>, SourceRefs)> {
-    let content = read_bounded(path, MAX_SOURCE_BYTES).ok()?;
+    let content = read_bounded(path, file_cap)
+        .ok()
+        .filter(|c| !looks_minified(c))?;
     let path_str = path.to_string_lossy().replace('\\', "/");
     let lang = detect_lang(&path_str);
     if lang == Lang::Unknown {
@@ -857,14 +1011,19 @@ struct SourceFile {
 
 /// Walk all roots and collect source files.
 ///
-/// Returns `None` if `cancel` is set mid-walk.
-fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Option<Vec<SourceFile>> {
+/// Returns `None` if `cancel` is set mid-walk. The flag is true when `budget`
+/// ran out before every root was walked. Files come back shallowest first.
+fn collect_source_files(
+    roots: &[PathBuf],
+    cancel: Option<&AtomicBool>,
+    budget: &mut Budget,
+) -> Option<(Vec<SourceFile>, bool)> {
     let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
     let mut files = Vec::new();
-    let mut total_entries = 0usize;
-    let mut total_dirs = 0usize;
+    let mut truncated = false;
+    let mut added = 0u64;
 
-    for root in roots {
+    'roots: for root in roots {
         if cancelled() {
             return None;
         }
@@ -889,18 +1048,16 @@ fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Optio
             .build();
 
         let mut n = 0usize;
-        let mut root_dirs = 0usize;
         for dent in walker.flatten() {
             n += 1;
-            total_entries += 1;
-            if n > MAX_FILES || total_entries > MAX_FILES * 2 { return None; }
-            if dent.file_type().is_some_and(|t| t.is_dir()) {
-                root_dirs += 1;
-                total_dirs += 1;
-                if root_dirs > MAX_DIRS || total_dirs > MAX_DIRS * 2 { return None; }
-            }
-            if n.is_multiple_of(64) && cancelled() {
-                return None;
+            if n.is_multiple_of(BUDGET_CHECKPOINT) {
+                if cancelled() {
+                    return None;
+                }
+                if budget.exhausted(std::mem::take(&mut added)) {
+                    truncated = true;
+                    break 'roots;
+                }
             }
             if !dent.file_type().is_some_and(|t| t.is_file()) {
                 continue;
@@ -912,6 +1069,7 @@ fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Optio
             };
 
             if is_source_file(&rel) {
+                added += (path.as_os_str().len() + rel.len() * 2) as u64;
                 files.push(SourceFile {
                     abs_path: path.to_string_lossy().replace('\\', "/"),
                     rel_path: rel,
@@ -921,7 +1079,13 @@ fn collect_source_files(roots: &[PathBuf], cancel: Option<&AtomicBool>) -> Optio
         }
     }
 
-    Some(files)
+    let depth = |f: &SourceFile| f.rel_path.matches('/').count();
+    files.sort_by(|a, b| {
+        depth(a)
+            .cmp(&depth(b))
+            .then_with(|| a.abs_path.cmp(&b.abs_path))
+    });
+    Some((files, truncated))
 }
 
 /// Collect directories that should receive inotify watches.

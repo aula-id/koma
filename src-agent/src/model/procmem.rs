@@ -316,7 +316,9 @@ pub fn assemble_sample(
         if *pid != 0 && counted.insert(*pid) {
             let value = rss(*pid);
             services = services.saturating_add(value);
-            if index < service_parts.len() { service_parts[index] = value; }
+            if index < service_parts.len() {
+                service_parts[index] = value;
+            }
         }
     }
 

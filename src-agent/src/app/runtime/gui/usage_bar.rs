@@ -248,7 +248,9 @@ fn helper_pids() -> Vec<u32> {
         return Vec::new();
     };
     ["mcp.pid", "oauth.pid", "linker.pid"]
-        .iter().map(|name| read_pid(&base.join(name)).unwrap_or(0)).collect()
+        .iter()
+        .map(|name| read_pid(&base.join(name)).unwrap_or(0))
+        .collect()
 }
 
 fn agent_pid(session_id: &str) -> Option<u32> {

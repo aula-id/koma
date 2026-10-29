@@ -2,8 +2,30 @@ use super::*;
 use crate::ipc::linker_proto::{LinkerRequest, LinkerResponse, ScanStatus};
 
 /// Build a minimal DaemonState for unit tests (no watcher, no tokio).
+/// Notifications are dropped so tests never write to the real history.
 fn test_state() -> Arc<DaemonState> {
-    Arc::new(DaemonState::new())
+    Arc::new(DaemonState {
+        notify: Box::new(|_, _| {}),
+        ..DaemonState::new()
+    })
+}
+
+/// `(session_id, message)` pairs sent to the notification sink.
+type Notes = Arc<Mutex<Vec<(String, String)>>>;
+
+/// Like [`test_state`], collecting notifications.
+fn recording_state() -> (Arc<DaemonState>, Notes) {
+    let notes = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&notes);
+    let state = Arc::new(DaemonState {
+        notify: Box::new(move |session, message| {
+            sink.lock()
+                .unwrap()
+                .push((session.to_string(), message.to_string()));
+        }),
+        ..DaemonState::new()
+    });
+    (state, notes)
 }
 
 /// Helper: send a RegisterWorkspaces request and return the response.
@@ -94,9 +116,7 @@ fn registration_rejects_broad_roots_and_keeps_project_roots() {
     let project_text = project.to_string_lossy().into_owned();
 
     let result = register(&state, "s1", &[&filesystem_root, &home_text, &project_text]);
-    assert!(
-        matches!(result, LinkerResponse::Error(message) if message.contains("Choose a project directory"))
-    );
+    assert!(matches!(result, LinkerResponse::Registered { .. }));
     assert_eq!(session_roots(&state, "s1"), [project].into_iter().collect());
     assert_eq!(refcount(&state, &filesystem_root), 0);
     assert_eq!(refcount(&state, &home_text), 0);
@@ -109,12 +129,52 @@ fn broad_root_replaces_previous_registration_without_indexing_it() {
     let home = dirs::home_dir().unwrap().to_string_lossy().into_owned();
     assert!(matches!(
         register_with_rev(&state, "s1", &[&home], 2),
-        LinkerResponse::Error(_)
+        LinkerResponse::Registered { .. }
     ));
     assert!(session_roots(&state, "s1").is_empty());
     assert_eq!(refcount(&state, "/a"), 0);
     register_with_rev(&state, "s1", &["/a"], 1);
     assert!(session_roots(&state, "s1").is_empty());
+}
+
+#[test]
+fn skipped_roots_notify_once_per_change() {
+    let (state, notes) = recording_state();
+    let home = dirs::home_dir().unwrap().to_string_lossy().into_owned();
+    register(&state, "s1", &[&home, "/a"]);
+    register(&state, "s1", &[&home, "/a"]);
+    assert_eq!(notes.lock().unwrap().len(), 1);
+    let (session, message) = notes.lock().unwrap()[0].clone();
+    assert_eq!(session, "s1");
+    assert!(message.contains(&home) && message.contains("too broad"));
+
+    register(&state, "s1", &["/a"]);
+    register(&state, "s1", &[&home, "/a"]);
+    assert_eq!(notes.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn coverage_notice_only_for_new_partial_scans() {
+    use crate::linker::scan::Coverage;
+    let partial = |found| Coverage::Partial {
+        indexed: 48_210,
+        found,
+        walk_truncated: false,
+        skipped_large: 3,
+    };
+    let gib = 1024 * 1024 * 1024;
+    assert_eq!(
+        coverage_notice(&Coverage::Complete, &partial(131_004), gib).as_deref(),
+        Some(
+            "Linker indexed 48,210 of 131,004 files (memory budget 1.0 GB), 3 large files skipped."
+        )
+    );
+    assert_eq!(
+        coverage_notice(&partial(131_004), &partial(131_004), gib),
+        None
+    );
+    assert!(coverage_notice(&partial(131_004), &partial(140_000), gib).is_some());
+    assert_eq!(coverage_notice(&partial(1), &Coverage::Complete, gib), None);
 }
 
 #[test]

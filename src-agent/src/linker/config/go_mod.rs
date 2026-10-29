@@ -145,7 +145,8 @@ fn walk_nested_gomods(root: &Path, config: &mut GoModuleConfig, depth: u32) {
 
 /// Parse a go.mod file for module path, require, and replace directives.
 fn parse_go_mod(path: &Path) -> Option<GoModConfig> {
-    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
+    let content =
+        crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
     let mut config = GoModConfig::default();
     let mut in_require_block = false;
     let mut in_replace_block = false;
@@ -238,7 +239,8 @@ fn parse_replace_directive(s: &str) -> Option<GoReplace> {
 
 /// Parse a go.work file for use and replace directives.
 fn parse_go_work(path: &Path) -> Option<GoWorkConfig> {
-    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
+    let content =
+        crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES).ok()?;
     let mut config = GoWorkConfig::default();
     let mut in_use_block = false;
     let mut in_replace_block = false;
