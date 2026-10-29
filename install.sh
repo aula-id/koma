@@ -499,25 +499,42 @@ if [ "$os" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# Debian/Ubuntu: install GUI shared libraries before anything execs koma.
+# Linux: install GUI shared libraries before anything execs koma.
 # The dynamic linker reports one missing .so at a time. On a clean server
 # that is libwebkit2gtk-4.1.so.0, then libgtk-3.so.0, then libsoup-3.0.so.0.
-# ldd lists all of them. libwebkit2gtk-4.1-0 depends on gtk, soup, and
-# JavaScriptCore. Debian 13 / Ubuntu 24.04 renamed libgtk-3-0 to
-# libgtk-3-0t64, so a hard-coded libgtk-3-0 makes apt abort the whole
-# transaction. Ask apt which name exists. libXtst is dlopen'd (not NEEDED).
-# Other distros still get a printed hint. A failed install does not abort.
+# ldd lists all of them, and each missing soname is turned into a package:
+#   apt     Debian 13 / Ubuntu 24.04 renamed libgtk-3-0 to libgtk-3-0t64, so a
+#           hard-coded name makes apt abort the whole transaction. Ask apt
+#           which name exists.
+#   dnf     RPM provides every library as `soname()(64bit)`, so dnf resolves
+#           the package itself and no names are needed.
+#   pacman  No soname lookup without a synced file database, so map each
+#           soname to its package. Never -Sy here: syncing without upgrading
+#           is a partial upgrade, which Arch does not support.
+# libXtst is dlopen'd (not NEEDED). Other package managers get a printed
+# hint. A failed install does not abort.
 # ---------------------------------------------------------------------------
-_apt_cache_refreshed=0
-_run_apt() {
+_pkg_mgr=""
+if command -v apt-get >/dev/null 2>&1; then
+    _pkg_mgr="apt"
+elif command -v dnf >/dev/null 2>&1; then
+    _pkg_mgr="dnf"
+elif command -v pacman >/dev/null 2>&1; then
+    _pkg_mgr="pacman"
+fi
+_as_root() {
     if [ "$(id -u)" = "0" ]; then
-        DEBIAN_FRONTEND=noninteractive apt-get "$@"
+        "$@"
     elif command -v sudo >/dev/null 2>&1; then
-        sudo DEBIAN_FRONTEND=noninteractive apt-get "$@"
+        sudo "$@"
     else
         echo "koma: need root or sudo to install shared libraries." >&2
         return 1
     fi
+}
+_apt_cache_refreshed=0
+_run_apt() {
+    _as_root env DEBIAN_FRONTEND=noninteractive apt-get "$@"
 }
 _apt_known() {
     apt-cache show "$1" 2>/dev/null | grep -q '^Package:'
@@ -549,14 +566,17 @@ _apt_pick() {
     fi
     return 1
 }
-_apt_add() {
-    _added=$(_apt_pick "$@") || return 0
-    case " $_apt_pkgs " in
-        *" $_added "*) ;;
-        *) _apt_pkgs="${_apt_pkgs:+$_apt_pkgs }$_added" ;;
+_pkg_add() {
+    case " $_pkgs " in
+        *" $1 "*) ;;
+        *) _pkgs="${_pkgs:+$_pkgs }$1" ;;
     esac
 }
-_soname_pkg() {
+_apt_add() {
+    _added=$(_apt_pick "$@") || return 0
+    _pkg_add "$_added"
+}
+_soname_apt() {
     case "$1" in
         libwebkit2gtk-4.1.so.*)
             _apt_add libwebkit2gtk-4.1-0 libwebkit2gtk-4.1-0t64 ;;
@@ -580,6 +600,59 @@ _soname_pkg() {
             _apt_add libxtst6 libxtst6t64 ;;
         *)
             return 1 ;;
+    esac
+}
+_soname_dnf() {
+    case "$1" in
+        *.so.*) _pkg_add "$1()(64bit)" ;;
+        *) return 1 ;;
+    esac
+}
+_soname_pacman() {
+    case "$1" in
+        libwebkit2gtk-4.1.so.*|libjavascriptcoregtk-4.1.so.*)
+            _pkg_add webkit2gtk-4.1 ;;
+        libgtk-3.so.*|libgdk-3.so.*)
+            _pkg_add gtk3 ;;
+        libsoup-3.0.so.*)
+            _pkg_add libsoup3 ;;
+        libwayland-client.so.*)
+            _pkg_add wayland ;;
+        libgdk_pixbuf-2.0.so.*)
+            _pkg_add gdk-pixbuf2 ;;
+        libcairo.so.*)
+            _pkg_add cairo ;;
+        libglib-2.0.so.*|libgobject-2.0.so.*|libgio-2.0.so.*)
+            _pkg_add glib2 ;;
+        libdbus-1.so.*)
+            _pkg_add dbus ;;
+        libXtst.so.*)
+            _pkg_add libxtst ;;
+        *)
+            return 1 ;;
+    esac
+}
+_soname_pkg() {
+    case "$_pkg_mgr" in
+        apt) _soname_apt "$1" ;;
+        dnf) _soname_dnf "$1" ;;
+        pacman) _soname_pacman "$1" ;;
+        *) return 1 ;;
+    esac
+}
+_pkg_install() {
+    case "$_pkg_mgr" in
+        apt) _run_apt install -y "$@" ;;
+        dnf) _as_root dnf install -y "$@" ;;
+        pacman) _as_root pacman -S --needed --noconfirm "$@" ;;
+    esac
+}
+# The command a user can run by hand, with the packages already resolved.
+_pkg_hint() {
+    case "$_pkg_mgr" in
+        apt) echo "  sudo apt-get update && sudo apt-get install -y $*" >&2 ;;
+        dnf) echo "  sudo dnf install $(printf "'%s' " "$@")" >&2 ;;
+        pacman) echo "  sudo pacman -Syu --needed $*" >&2 ;;
     esac
 }
 _install_linux_shared_libs() {
@@ -616,17 +689,17 @@ _install_linux_shared_libs() {
         _ok "ok"
         return 0
     fi
-    if ! command -v apt-get >/dev/null 2>&1; then
+    if [ -z "$_pkg_mgr" ]; then
         echo ""
         echo "WARNING: some shared libraries are missing — koma may not start." >&2
         if [ -n "$_missing" ]; then
             echo "$_missing" | sed 's/^/  /' >&2
         fi
-        echo "  Fedora: sudo dnf install webkit2gtk4.1 gtk3 libXtst" >&2
-        echo "  Arch:   sudo pacman -S webkit2gtk-4.1 gtk3 libxtst" >&2
+        echo "  Install WebKitGTK 4.1, GTK 3 and libXtst with your package manager." >&2
+        echo "  openSUSE: sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0 libXtst6" >&2
         return 0
     fi
-    _apt_pkgs=""
+    _pkgs=""
     if [ -z "$_ldd_check" ]; then
         # No ldd: install the GUI stack anyway so a clean server can load koma.
         _soname_pkg libwebkit2gtk-4.1.so.0 || true
@@ -642,10 +715,9 @@ _install_linux_shared_libs() {
     if [ "$_need_xtst" = "1" ]; then
         _soname_pkg libXtst.so.6 || true
     fi
-    if [ -z "$_apt_pkgs" ]; then
+    if [ -z "$_pkgs" ]; then
         echo ""
-        echo "WARNING: shared libraries are missing and apt has no matching packages." >&2
-        echo "  sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-0 libxtst6" >&2
+        echo "WARNING: shared libraries are missing and $_pkg_mgr has no matching packages." >&2
         if [ -n "$_missing" ]; then
             echo "$_missing" | sed 's/^/  /' >&2
         fi
@@ -653,9 +725,10 @@ _install_linux_shared_libs() {
     fi
     echo ""
     _step "Installing libraries"
-    _info "$_apt_pkgs"
-    if _run_apt install -y $_apt_pkgs; then
-        _ok "$_apt_pkgs"
+    _info "$_pkgs"
+    # shellcheck disable=SC2086 # one word per package
+    if _pkg_install $_pkgs; then
+        _ok "$_pkgs"
         if command -v ldd >/dev/null 2>&1; then
             _ldd_after="$(ldd "$_elf" 2>&1)" || true
             _still="$(echo "$_ldd_after" | grep 'not found' | awk '{print $1}' | sort -u || true)"
@@ -666,7 +739,8 @@ _install_linux_shared_libs() {
         fi
     else
         echo "WARNING: could not install shared libraries. koma will not start until they are installed." >&2
-        echo "  sudo apt-get install -y $_apt_pkgs" >&2
+        # shellcheck disable=SC2086
+        _pkg_hint $_pkgs
     fi
 }
 if [ "$os" = "linux" ]; then

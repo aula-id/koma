@@ -1,0 +1,64 @@
+name: distro
+
+# Runs install.sh on a clean container of each Linux family koma documents
+# (Debian/Ubuntu via apt, Fedora via dnf, Arch via pacman) and checks that the
+# installed binary finds every shared library and starts. The installer pulls
+# the latest release binary, so this checks the installer and the distro
+# packages, not the Rust in the pull request. The weekly run catches distro
+# package renames before users hit them.
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "packaging/linux/**"
+      - ".github/workflows/distro.yml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: distro-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install.sh (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:stable-slim
+            prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+          - image: ubuntu:22.04
+            prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+          - image: fedora:latest
+            prepare: "true"
+          # The image ships without synced package databases; a real system has them.
+          - image: archlinux:latest
+            prepare: pacman -Syu --noconfirm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare a minimal system
+        run: ${{ matrix.prepare }}
+
+      - name: Run the installer
+        run: sh install.sh
+
+      - name: Every shared library resolves
+        run: |
+          missing="$(ldd "$HOME/.local/bin/koma.bin" | grep 'not found' || true)"
+          if [ -n "$missing" ]; then
+            echo "$missing"
+            exit 1
+          fi
+
+      - name: koma starts
+        run: |
+          "$HOME/.local/bin/koma" --version
+          "$HOME/.local/bin/koma" doctor || true
