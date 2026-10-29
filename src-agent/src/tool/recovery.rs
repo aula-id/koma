@@ -2,13 +2,18 @@
 use super::{output::fingerprint, ToolCtx};
 use anyhow::Result;
 use serde_json::Value;
-use std::{collections::VecDeque, io, path::Path};
+use std::{
+    collections::VecDeque,
+    io,
+    path::{Path, PathBuf},
+};
 
 pub const MARKER: &str = "[filesystem recovery]";
 
 #[derive(Default)]
 pub(crate) struct Inspections {
-    failures: VecDeque<(String, String)>,
+    /// (state key, target, report) for each suppressed failure.
+    failures: VecDeque<(String, PathBuf, String)>,
 }
 
 impl super::CallTrack {
@@ -123,11 +128,17 @@ pub(crate) fn inspect(
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let key = state_key(ctx, name, args, target, &root);
-    if let Some((_, prior)) = track.failures.iter().find(|(k, _)| k == &key) {
+    if let Some((_, _, prior)) = track.failures.iter().find(|(k, _, _)| k == &key) {
         return Ok(format!("{MARKER} No new inspection ran: unchanged failed inspection suppressed.\n{prior}\nUse a different approach: glob/grep for discovery, dir_list for a verified directory, or ask the user for the intended path. Continue the turn."));
     }
     match run() {
-        Ok(output) => Ok(output),
+        // The target was there, so any earlier failure on it is stale. The
+        // state key alone can miss this: a file created and removed within one
+        // coarse mtime tick leaves its directory's mtime and size unchanged.
+        Ok(output) => {
+            track.failures.retain(|(_, t, _)| t != target);
+            Ok(output)
+        }
         Err(error) => {
             let Some(kind) = Failure::from_error(&error) else {
                 return Err(error);
@@ -137,7 +148,9 @@ pub(crate) fn inspect(
             if track.failures.len() == 128 {
                 track.failures.pop_front();
             }
-            track.failures.push_back((key, output.clone()));
+            track
+                .failures
+                .push_back((key, target.to_path_buf(), output.clone()));
             Ok(output)
         }
     }
