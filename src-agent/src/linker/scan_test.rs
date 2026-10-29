@@ -669,7 +669,8 @@ fn p2_full_vs_incremental_parity() {
         .cloned()
         .unwrap_or_default();
 
-    let (inc_path, _inc_lang, inc_edges, inc_refs) = scan_file(&src.join("lib.rs"), &pi).unwrap();
+    let (inc_path, _inc_lang, inc_edges, inc_refs) =
+        scan_file(&src.join("lib.rs"), &pi, u64::MAX / 2).unwrap();
     assert_eq!(inc_path, lib_path);
     assert_eq!(inc_edges.len(), full_edges.len());
     assert!(inc_edges
@@ -837,7 +838,12 @@ fn p2_batch_generation_exactly_once() {
     std::fs::write(src.join("a.rs"), "// a v2\n").unwrap();
     std::fs::write(src.join("b.rs"), "// b v2\n").unwrap();
     let paths = vec![src.join("a.rs"), src.join("b.rs")];
-    crate::linker::watch::handle_events(&paths, &mut graph, &mut pi);
+    crate::linker::watch::handle_events(
+        &paths,
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
     assert_eq!(graph.generation, 1, "batch increments generation once");
     graph.check_invariants().unwrap();
 }
@@ -869,7 +875,11 @@ fn p2_source_refs_installed_atomically() {
 #[test]
 fn scan_roots_cancellable_returns_none_when_precancelled() {
     let cancel = std::sync::atomic::AtomicBool::new(true);
-    let result = scan_roots_cancellable(&[std::path::PathBuf::from("/tmp")], Some(&cancel));
+    let result = scan_roots_cancellable(
+        &[std::path::PathBuf::from("/tmp")],
+        Some(&cancel),
+        &mut Budget::unbounded(),
+    );
     assert!(result.is_none(), "pre-cancelled scan must not publish");
 }
 
@@ -902,4 +912,84 @@ fn collect_watchable_dirs_excludes_target_and_node_modules() {
         !joined.iter().any(|d| d.contains("/node_modules")),
         "node_modules must be excluded: {joined:?}"
     );
+}
+
+fn has_node(graph: &ImportGraph, suffix: &str) -> bool {
+    graph.nodes.keys().any(|p| p.ends_with(suffix))
+}
+
+#[test]
+fn oversized_and_minified_files_are_skipped_not_fatal() {
+    let tmp = TempDir::new("scan-oversized");
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("small.js"), "import x from './big.js';\n").unwrap();
+    std::fs::write(
+        proj.join("big.js"),
+        format!("import y from './small.js';\n{}", "// pad\n".repeat(400)),
+    )
+    .unwrap();
+    std::fs::write(
+        proj.join("bundle.min.js"),
+        format!("import z from './small.js';{}", "x".repeat(32 * 1024)),
+    )
+    .unwrap();
+
+    // file_cap = 64 KiB / 32 = 2 KiB: big.js is over it, bundle.min.js is minified.
+    let mut budget = Budget::fixed(64 * 1024, || None);
+    let (graph, _, coverage) = scan_roots_cancellable(&[proj], None, &mut budget).unwrap();
+    assert_eq!(coverage, Coverage::Complete);
+    assert!(has_node(&graph, "small.js"));
+    assert!(!graph
+        .dependencies(&graph_key(&graph, "big.js"))
+        .iter()
+        .any(|d| d.ends_with("small.js")));
+    assert!(!graph
+        .dependencies(&graph_key(&graph, "bundle.min.js"))
+        .iter()
+        .any(|d| d.ends_with("small.js")));
+}
+
+fn graph_key(graph: &ImportGraph, suffix: &str) -> String {
+    graph
+        .nodes
+        .keys()
+        .find(|p| p.ends_with(suffix))
+        .cloned()
+        .unwrap_or_default()
+}
+
+static PARTIAL_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[test]
+fn budget_hit_publishes_shallow_files_first() {
+    let tmp = TempDir::new("scan-partial");
+    let proj = tmp.path().join("proj");
+    let deep = proj.join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    for i in 0..100 {
+        std::fs::write(proj.join(format!("a{i}.js")), "import x from './a0.js';\n").unwrap();
+    }
+    for i in 0..5 {
+        std::fs::write(deep.join(format!("d{i}.js")), "import x from '../a0.js';\n").unwrap();
+    }
+
+    // Reads: baseline, one walk check (107 entries), parse at file 0, then
+    // the parse check at file 64 sees the budget gone.
+    fn reader() -> Option<u64> {
+        let n = PARTIAL_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(if n < 3 { 0 } else { u64::MAX / 4 })
+    }
+    let mut budget = Budget::fixed(1024 * 1024, reader);
+    let (graph, _, coverage) = scan_roots_cancellable(&[proj], None, &mut budget).unwrap();
+    assert_eq!(
+        coverage,
+        Coverage::Partial {
+            indexed: 64,
+            found: 105,
+            walk_truncated: false,
+            skipped_large: 0,
+        }
+    );
+    assert!(!(0..5).any(|i| has_node(&graph, &format!("deep/d{i}.js"))));
 }

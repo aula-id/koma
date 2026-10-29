@@ -12,7 +12,7 @@ name: ci
 #   1. lint and nix, together, on ubuntu
 #   2. sdk, test, and terminal, after those pass
 #      (the test and terminal matrices take two runners at a time)
-#   3. macOS GUI release link, after the test and terminal matrices pass
+# The slow macOS GUI release link lives in gui-link.yml, off the PR path.
 # A clippy or flake failure skips the later stages. rustfmt stays non-gating.
 on:
   pull_request:
@@ -88,12 +88,6 @@ jobs:
         with:
           bun-version: 1.4.3
 
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
-      - name: Validate payload preparation gates
-        run: python -m unittest discover -s scripts -p test_terminal_payload.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
@@ -103,6 +97,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0.0.4-cache-rust"
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
+
+      - name: Validate payload preparation gates
+        run: python -m unittest discover -s scripts -p test_terminal_payload.py
 
       - name: Filesystem recovery regressions (native Windows)
         if: runner.os == 'Windows'
@@ -186,59 +187,6 @@ jobs:
         working-directory: src-term
         run: bun node_modules/typescript/bin/tsc --noEmit
 
-  macos-gui-link:
-    name: GUI release link (${{ matrix.target }})
-    needs: [test, term]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Apple Silicon is the primary Darwin build; retain native Intel coverage.
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: macos-26-intel
-            target: x86_64-apple-darwin
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.3
-
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: macos-gui-link-v1
-          key: ${{ matrix.target }}
-
-      # cargo check and the headless test matrix cannot detect missing GUI FFI
-      # archives/frameworks. Link the real executable without opening a desktop.
-      - name: Link GUI release executable
-        if: matrix.target != 'x86_64-apple-darwin'
-        run: cargo build --locked --release -p agent --bin koma --target ${{ matrix.target }}
-
-      # Only the failing Intel release compiler needs the stack workaround.
-      - name: Link Intel macOS GUI release executable
-        if: matrix.target == 'x86_64-apple-darwin'
-        env:
-          RUST_MIN_STACK: "33554432"
-        run: cargo build --locked --release -p agent --bin koma --target ${{ matrix.target }}
-
   nix:
     name: nix (eval, no build)
     runs-on: ubuntu-latest
@@ -271,9 +219,6 @@ jobs:
         with:
           bun-version: 1.4.3
 
-      - name: Prepare offline terminal
-        run: python scripts/prepare-terminal.py
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
@@ -284,6 +229,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0.0.4-cache-rust-lint"
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python scripts/prepare-terminal.py
+
       # Formatting: non-gating until the tree is rustfmt-clean.
       - name: Formatting
         run: cargo fmt --all --check || true

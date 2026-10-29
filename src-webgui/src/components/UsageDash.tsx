@@ -120,6 +120,9 @@ export function UsageDash({ rect, menuRef }: { rect: DOMRect; menuRef: RefObject
   const memWindow = useKoma((s) => s.session.memWindow)
   const memAgent = useKoma((s) => s.session.memAgent)
   const memServices = useKoma((s) => s.session.memServices)
+  const memMcp = useKoma((s) => s.session.memMcp)
+  const memOauth = useKoma((s) => s.session.memOauth)
+  const memLinker = useKoma((s) => s.session.memLinker)
   const memSystem = useKoma((s) => s.session.memSystem)
   const modelRoutes = useKoma((s) => s.session.modelRoutes)
   const providers = useKoma((s) => s.config.providers)
@@ -182,6 +185,9 @@ export function UsageDash({ rect, menuRef }: { rect: DOMRect; menuRef: RefObject
             {(!memKnown || memServices > 0) && (
               <LegendRow color={SERVICES} label="Services" value={memText(memServices)} />
             )}
+            {memMcp > 0 && <LegendRow label="MCP" value={memText(memMcp)} />}
+            {memOauth > 0 && <LegendRow label="OAuth" value={memText(memOauth)} />}
+            {memLinker > 0 && <LegendRow label="Linker" value={memText(memLinker)} />}
             <LegendRow label="Total" value={memText(memTotal)} />
             {memSystem > 0 && <div className="pl-4 text-[10px] text-koma-dim">of {fmtBytes(memSystem)}</div>}
           </div>

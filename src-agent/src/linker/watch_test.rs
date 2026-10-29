@@ -118,7 +118,12 @@ fn handle_events_removes_deleted_node() {
     // Simulate deletion of a.rs.
     let deleted = src.join("a.rs");
     let paths = vec![deleted];
-    handle_events(&paths, &mut graph, &mut pi);
+    handle_events(
+        &paths,
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
 
     assert!(
         !graph
@@ -150,7 +155,12 @@ fn handle_events_one_generation_per_batch() {
     // Modify a.rs.
     std::fs::write(src.join("a.rs"), "// a modified\n").unwrap();
     let paths = vec![src.join("a.rs")];
-    handle_events(&paths, &mut graph, &mut pi);
+    handle_events(
+        &paths,
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
 
     assert_eq!(
         graph.generation, 1,
@@ -166,7 +176,12 @@ fn handle_events_noop_batch_no_generation_bump() {
     let mut pi = ProjectIndex::new();
 
     let paths = vec![];
-    handle_events(&paths, &mut graph, &mut pi);
+    handle_events(
+        &paths,
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
     assert_eq!(graph.generation, 5, "no bump for empty batch");
 }
 
@@ -225,7 +240,12 @@ fn handle_events_create_delete_recreate_updates_existing_importer() {
     assert_eq!(graph.source_refs[&lib_path].unresolved_count(), 1);
 
     std::fs::write(&later, "// later\n").unwrap();
-    let outcome = handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
+    let outcome = handle_events(
+        std::slice::from_ref(&later),
+        &mut graph,
+        &mut index,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
     assert!(
         outcome.full_rebuild_roots.is_empty(),
         "create should stay incremental, not full rebuild"
@@ -234,13 +254,23 @@ fn handle_events_create_delete_recreate_updates_existing_importer() {
     assert!(graph.check_invariants().is_ok());
 
     std::fs::remove_file(&later).unwrap();
-    handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
+    handle_events(
+        std::slice::from_ref(&later),
+        &mut graph,
+        &mut index,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
     assert!(graph.dependencies(&lib_path).is_empty());
     assert_eq!(graph.source_refs[&lib_path].unresolved_count(), 1);
     assert!(graph.check_invariants().is_ok());
 
     std::fs::write(&later, "// later again\n").unwrap();
-    handle_events(std::slice::from_ref(&later), &mut graph, &mut index);
+    handle_events(
+        std::slice::from_ref(&later),
+        &mut graph,
+        &mut index,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
     assert_eq!(graph.dependencies(&lib_path), vec![later_path.as_str()]);
     // scan_roots no longer sets generation (daemon owns it); default is 0,
     // +3 for three handle_events batches = 3.
@@ -319,7 +349,12 @@ int main() { return 0; }
     .unwrap();
 
     let cc_path = root.join("compile_commands.json");
-    handle_events(std::slice::from_ref(&cc_path), &mut graph, &mut pi);
+    handle_events(
+        std::slice::from_ref(&cc_path),
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
 
     // Config should have been rebuilt for the owning root.
     let root_s = normalize_lexical(&root.to_string_lossy());
@@ -347,7 +382,12 @@ fn source_only_change_uses_existing_caches() {
     // Modify a source file (not config).
     std::fs::write(src.join("a.rs"), "// v2\n").unwrap();
     let a_path = src.join("a.rs");
-    handle_events(std::slice::from_ref(&a_path), &mut graph, &mut pi);
+    handle_events(
+        std::slice::from_ref(&a_path),
+        &mut graph,
+        &mut pi,
+        crate::linker::watch::WatchLimits::UNBOUNDED,
+    );
 
     // Generation should increment (due to source change), but config
     // cache should not have been rebuilt.
@@ -356,4 +396,33 @@ fn source_only_change_uses_existing_caches() {
         gen_before,
         "source-only change should NOT trigger config cache rebuild"
     );
+}
+
+#[test]
+fn handle_events_over_budget_skips_new_files_but_updates_indexed_ones() {
+    let tmp = TempDir::new("handle-budget");
+    let root = tmp.path().to_path_buf();
+    std::fs::write(root.join("a.js"), "import x from './b.js';\n").unwrap();
+    std::fs::write(root.join("b.js"), "export const b = 1;\n").unwrap();
+    let (mut graph, mut pi) = crate::linker::scan::scan_roots(std::slice::from_ref(&root));
+    let key = |name: &str| normalize_lexical(&root.join(name).to_string_lossy().replace('\\', "/"));
+
+    std::fs::write(root.join("a.js"), "import y from './c.js';\n").unwrap();
+    std::fs::write(root.join("c.js"), "import x from './b.js';\n").unwrap();
+    let limits = WatchLimits {
+        allow_new: false,
+        file_cap: WatchLimits::UNBOUNDED.file_cap,
+    };
+    handle_events(
+        &[root.join("a.js"), root.join("c.js")],
+        &mut graph,
+        &mut pi,
+        limits,
+    );
+
+    assert!(pi.get_file(&key("c.js")).is_none());
+    assert!(graph.dependencies(&key("c.js")).is_empty());
+    assert!(!graph
+        .dependencies(&key("a.js"))
+        .contains(&key("b.js").as_str()));
 }

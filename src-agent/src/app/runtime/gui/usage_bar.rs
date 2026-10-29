@@ -25,7 +25,7 @@ pub(super) struct UsageTicker {
     mem: MemSample,
     have_sample: bool,
     client_ready: bool,
-    last_key: Option<(u64, u64, u64, u64)>,
+    last_key: Option<(u64, u64, u64, u64, u64, u64, u64)>,
     next_at: Instant,
     /// Snapshot `modelRoutes`. Null until the first snapshot.
     routes: serde_json::Value,
@@ -247,13 +247,10 @@ fn helper_pids() -> Vec<u32> {
     let Ok(base) = crate::model::store::base_dir() else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for name in ["mcp.pid", "oauth.pid", "linker.pid"] {
-        if let Some(pid) = read_pid(&base.join(name)) {
-            out.push(pid);
-        }
-    }
-    out
+    ["mcp.pid", "oauth.pid", "linker.pid"]
+        .iter()
+        .map(|name| read_pid(&base.join(name)).unwrap_or(0))
+        .collect()
 }
 
 fn agent_pid(session_id: &str) -> Option<u32> {

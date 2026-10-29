@@ -17,6 +17,7 @@ pub struct MemSample {
     pub agent: u64,
     /// MCP, OAuth, and linker daemons, skipping duplicates of the two above.
     pub services: u64,
+    pub service_parts: [u64; 3],
     /// Physical memory. Zero when this OS has no reader.
     pub system: u64,
 }
@@ -126,13 +127,16 @@ pub fn status_session_id(value: &Value) -> Option<&str> {
 
 /// 1 MiB buckets. The GUI enqueues a web push only when one of these moves,
 /// so a single-page RSS flicker does not grow the push queue.
-pub fn mem_mib_key(mem: &MemSample) -> (u64, u64, u64, u64) {
+pub fn mem_mib_key(mem: &MemSample) -> (u64, u64, u64, u64, u64, u64, u64) {
     let mib = |bytes: u64| bytes / (1024 * 1024);
     (
         mib(mem.window),
         mib(mem.agent),
         mib(mem.services),
         mib(mem.system),
+        mib(mem.service_parts[0]),
+        mib(mem.service_parts[1]),
+        mib(mem.service_parts[2]),
     )
 }
 
@@ -231,6 +235,9 @@ pub fn usage_live_json(mem: &MemSample) -> String {
         "memWindow": mem.window,
         "memAgent": mem.agent,
         "memServices": mem.services,
+        "memMcp": mem.service_parts[0],
+        "memOauth": mem.service_parts[1],
+        "memLinker": mem.service_parts[2],
         "memSystem": mem.system,
     })
     .to_string()
@@ -299,14 +306,19 @@ pub fn assemble_sample(
     };
 
     let mut services = 0u64;
+    let mut service_parts = [0u64; 3];
     let mut counted = HashSet::new();
     counted.insert(self_pid);
     if let Some(pid) = agent_pid {
         counted.insert(pid);
     }
-    for pid in helper_pids {
+    for (index, pid) in helper_pids.iter().enumerate() {
         if *pid != 0 && counted.insert(*pid) {
-            services = services.saturating_add(rss(*pid));
+            let value = rss(*pid);
+            services = services.saturating_add(value);
+            if index < service_parts.len() {
+                service_parts[index] = value;
+            }
         }
     }
 
@@ -314,6 +326,7 @@ pub fn assemble_sample(
         window,
         agent,
         services,
+        service_parts,
         system,
     }
 }
@@ -489,11 +502,12 @@ MemAvailable:  8000000 kB\n";
             window: 10 * 1024 * 1024 + 4096,
             agent: 1024,
             services: 0,
+            service_parts: [0; 3],
             system: 1024 * 1024 * 1024,
         };
-        assert_eq!(mem_mib_key(&mem), (10, 0, 0, 1024));
+        assert_eq!(mem_mib_key(&mem), (10, 0, 0, 1024, 0, 0, 0));
         mem.window += 100;
-        assert_eq!(mem_mib_key(&mem), (10, 0, 0, 1024));
+        assert_eq!(mem_mib_key(&mem), (10, 0, 0, 1024, 0, 0, 0));
         let parsed: serde_json::Value = serde_json::from_str(&usage_live_json(&mem)).unwrap();
         assert_eq!(parsed["k"], "UsageLive");
         assert_eq!(parsed["memWindow"], mem.window);

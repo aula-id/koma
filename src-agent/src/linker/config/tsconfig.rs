@@ -209,7 +209,7 @@ pub fn find_tsconfig_for_file(
 }
 
 pub fn parse_tsconfig_file(path: &Path, dir: &Path) -> Result<TsConfig, String> {
-    let content = std::fs::read_to_string(path)
+    let content = crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let value = parse_jsonc(&content)?;
 

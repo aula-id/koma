@@ -159,8 +159,9 @@ pub struct CompileDB {
 impl CompileDB {
     /// Parse compile_commands.json from the given path.
     pub fn from_path(path: &Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let content =
+            crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         Self::parse_json(&content, path)
     }
 
@@ -231,10 +232,11 @@ impl CompileDB {
 
 /// Fallback: parse compile_flags.txt (one flag per line, `-I` paths relative to the file).
 pub fn parse_compile_flags(path: &Path) -> CompileFlags {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return CompileFlags::default(),
-    };
+    let content =
+        match crate::linker::scan::read_bounded(path, crate::linker::scan::MAX_CONFIG_BYTES) {
+            Ok(c) => c,
+            Err(_) => return CompileFlags::default(),
+        };
     let base = path
         .parent()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
