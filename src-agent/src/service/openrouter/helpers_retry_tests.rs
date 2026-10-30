@@ -135,14 +135,14 @@ fn effective_max_output_tokens_respects_custom_default_and_room() {
         8192
     );
     for metadata in [None, Some(0)] {
-        // Unknown metadata uses 128k for both budgets. The prompt and margin
-        // must fit too, so the actual request is smaller than 128k.
-        assert_eq!(effective_max_output_tokens(0, metadata, 10_000), 116_976);
-        assert_eq!(effective_max_output_tokens(0, metadata, 80_000), 46_976);
+        // Unknown metadata assumes a 1M window and a 128k reply budget; the
+        // provider rejects anything that does not fit.
+        assert_eq!(effective_max_output_tokens(0, metadata, 10_000), 128_000);
+        assert_eq!(effective_max_output_tokens(0, metadata, 80_000), 128_000);
         assert_eq!(effective_max_output_tokens(8192, metadata, 10_000), 8192);
         assert_eq!(
             effective_max_output_tokens(512_000, metadata, 80_000),
-            46_976
+            512_000
         );
     }
     let effective = effective_max_output_tokens(512_000, Some(131_072), 99_073);

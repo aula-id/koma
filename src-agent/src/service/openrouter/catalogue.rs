@@ -48,7 +48,7 @@ pub fn effort_caps(models: &[ModelInfo], model_id: &str) -> EffortCaps {
 
 /// Return the context-window size (tokens) for `model_id` from a `GET /models`
 /// listing. Returns `None` when the model is absent from the listing or its
-/// `context_length` fields are missing or zero. Callers use the shared 128k
+/// `context_length` fields are missing or zero. Callers use the shared 1M
 /// fallback when `None` is returned.
 ///
 /// Uses the smaller positive serving-provider / nominal limit, matching DRSS.
