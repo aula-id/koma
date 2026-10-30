@@ -17,6 +17,9 @@ pub mod attachment;
 pub mod conversation;
 pub mod ext_workspace;
 pub mod help_knowledge;
+/// `/etc/koma/gui.conf`, read by the GUI and by `koma doctor` on Linux.
+#[cfg(any(feature = "gui", target_os = "linux", test))]
+pub mod linux_window;
 pub mod memory;
 pub mod msglog;
 pub mod notifications;

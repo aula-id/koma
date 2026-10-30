@@ -384,7 +384,7 @@ pub(super) fn read_config(root: &Path) -> Result<Value> {
     }
     let actual = path.canonicalize()?;
     anyhow::ensure!(
-        actual.starts_with(root),
+        actual.starts_with(root.canonicalize()?),
         "Coding configuration is outside the workspace"
     );
     anyhow::ensure!(
@@ -602,5 +602,38 @@ mod tests {
     fn rejects_unknown_config_versions() {
         assert!(validate_config(&json!({"version":2})).is_err());
         assert!(validate_config(&json!({"version":1,"tasks":{}})).is_err());
+    }
+    fn config_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("koma-read-config-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".koma")).unwrap();
+        dir
+    }
+    #[test]
+    fn reads_config_through_a_non_canonical_root() {
+        // On Windows `canonicalize` returns a `\\?\` path, so the root as the
+        // editor passes it (plain `C:\...`) must still match the config inside it.
+        let dir = config_dir("plain");
+        std::fs::write(
+            dir.join(".koma/coding.json"),
+            r#"{"version":1,"editor":{}}"#,
+        )
+        .unwrap();
+        let config = read_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(config.unwrap()["version"], 1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rejects_config_symlinked_outside_the_workspace() {
+        let dir = config_dir("symlink");
+        let outside =
+            std::env::temp_dir().join(format!("koma-outside-{}.json", std::process::id()));
+        std::fs::write(&outside, r#"{"version":1}"#).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(".koma/coding.json")).unwrap();
+        let config = read_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_file(&outside).unwrap();
+        assert!(config.is_err());
     }
 }

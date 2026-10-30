@@ -34,6 +34,7 @@ import {
   type DesignVectorSegment,
   type DesignWeight,
 } from './types'
+import { booleanContains, isBooleanNode } from './boolean'
 import { clonePaint, firstVisiblePaint, nodePaints, paintAlias, scaleImageCrops, strokePaintWidth } from './paint'
 
 export function emptyDesign(): DesignDoc {
@@ -599,21 +600,61 @@ export function fontFamilyCss(node: DesignNode): string {
   return raw
 }
 
+export type DesignTextFont = { size: number; weight: DesignWeight; italic: boolean; family: string }
+/** Width in pixels of a stretch of text in one font, letter spacing excluded. */
+export type DesignTextMeasurer = (text: string, font: DesignTextFont) => number
+
+let textMeasurer: DesignTextMeasurer | null = null
+
 /**
- * Text box from a half-em estimate. Layout stays the same in the browser and in tests.
- * `width` hug uses this box. `height` hug wraps that width into the node's width.
+ * The browser installs real font measuring here (canvas `measureText`). Without one,
+ * as in tests, text is sized from a half-em estimate per character.
+ */
+export function setDesignTextMeasurer(measure: DesignTextMeasurer | null): void {
+  textMeasurer = measure
+}
+
+function casedText(text: string, textCase: DesignNode['textCase']): string {
+  if (textCase === 'upper') return text.toUpperCase()
+  if (textCase === 'lower') return text.toLowerCase()
+  if (textCase === 'title') return text.replace(/\b\p{L}/gu, (letter) => letter.toUpperCase())
+  return text
+}
+
+/**
+ * The text's natural box: the widest line and the line count. Styled runs are measured
+ * in their own font. `width` hug uses this box; `height` hug wraps it into the node width.
  */
 export function measureTextBox(node: DesignNode): { w: number; h: number } {
   const style = textStyle(node)
   const lineH = style.lineHeight > 0 ? style.lineHeight : Math.round(style.fontSize * 1.2)
-  const lines = style.text.split('\n')
-  const charW = style.fontSize * 0.5
-  let width = style.fontSize
-  for (const line of lines) {
-    const next = Math.ceil(line.length * charW + style.letterSpacing * Math.max(0, line.length - 1))
-    if (next > width) width = next
+  const widths: number[] = [0]
+  const glyphs: number[] = [0]
+  const text = casedText(style.text, node.textCase)
+  for (const part of splitTextByRuns(text, node.runs)) {
+    const font: DesignTextFont = {
+      size: part.run?.fontSize ?? style.fontSize,
+      weight: part.run?.weight ?? style.weight,
+      italic: part.run?.italic ?? node.italic ?? false,
+      family: part.run?.fontFamily ?? style.fontFamily,
+    }
+    part.text.split('\n').forEach((piece, index) => {
+      if (index > 0) {
+        widths.push(0)
+        glyphs.push(0)
+      }
+      const count = [...piece].length
+      widths[widths.length - 1] += textMeasurer ? textMeasurer(piece, font) : count * font.size * 0.5
+      glyphs[glyphs.length - 1] += count
+    })
   }
-  return { w: Math.max(1, width), h: Math.max(lineH, Math.max(1, lines.length) * lineH) }
+  // Letter spacing sits between characters, so a line of n characters has n - 1 gaps.
+  widths.forEach((width, line) => {
+    widths[line] = width + style.letterSpacing * Math.max(0, (glyphs[line] ?? 0) - 1)
+  })
+  // Rounded up with a pixel to spare, so a measured line never wraps on a fraction.
+  const widest = Math.max(style.fontSize, ...widths.map((width) => Math.ceil(width) + (textMeasurer ? 1 : 0)))
+  return { w: Math.max(1, widest), h: Math.max(lineH, widths.length * lineH) }
 }
 
 /** Resolved corner radii in pixels. An omitted corner uses `radius`. */
@@ -806,6 +847,19 @@ export function snapDesign(n: number, grid: number, enabled: boolean): number {
   return Math.round(n)
 }
 
+export type DesignResizeOptions = {
+  /** Grow both sides around the center. */
+  center?: boolean
+  /** Grid-snap the moving edge on this axis. Off when an object snap already placed it. */
+  gridX?: boolean
+  gridY?: boolean
+}
+
+/**
+ * Resize by a handle. dx/dy are in the node's own axes, after its rotation and flip.
+ * The opposite handle stays put in the parent, or the center with `center`.
+ * Dragging past the opposite edge flips the node.
+ */
 export function resizeDesignNode(
   node: DesignNode,
   handle: DesignHandle,
@@ -814,37 +868,60 @@ export function resizeDesignNode(
   grid: number,
   enabled: boolean,
   constrain = false,
+  options: DesignResizeOptions = {},
 ): DesignNode {
-  const right = node.x + node.w
-  const bottom = node.y + node.h
-  let x = node.x
-  let y = node.y
-  let w = node.w
-  let h = node.h
-  if (handle.includes('w')) {
-    x = snapDesign(node.x + dx, grid, enabled)
-    w = right - x
-  } else if (handle.includes('e')) {
-    w = snapDesign(right + dx, grid, enabled) - x
+  const center = !!options.center
+  const east = handle.includes('e')
+  const west = handle.includes('w')
+  const south = handle.includes('s')
+  const north = handle.includes('n')
+  const reach = center ? 0.5 : 1
+  let pinX: ResizePin = center ? 'mid' : west ? 'end' : 'start'
+  let pinY: ResizePin = center ? 'mid' : north ? 'end' : 'start'
+  let rawW = node.w
+  let rawH = node.h
+  if (east || west) {
+    rawW = node.w + (east ? dx : -dx) / reach
+    if (options.gridX !== false) rawW = snapResizeEdge(node, 'x', pinAt(pinX, node.w), rawW, east, reach, grid, enabled)
   }
-  if (handle.includes('n')) {
-    y = snapDesign(node.y + dy, grid, enabled)
-    h = bottom - y
-  } else if (handle.includes('s')) {
-    h = snapDesign(bottom + dy, grid, enabled) - y
+  if (south || north) {
+    rawH = node.h + (south ? dy : -dy) / reach
+    if (options.gridY !== false) rawH = snapResizeEdge(node, 'y', pinAt(pinY, node.h), rawH, south, reach, grid, enabled)
   }
   const minW = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_W
   const minH = node.kind === 'line' || node.kind === 'vector' ? 1 : DESIGN_MIN_H
-  w = Math.max(minW, limitSize(w, node.minW, node.maxW))
-  h = Math.max(minH, limitSize(h, node.minH, node.maxH))
-  if ((constrain || node.proportion) && node.w > 0 && node.h > 0 && handle.length === 2) {
-    const aspect = node.w / node.h
-    if (Math.abs(dx) >= Math.abs(dy)) h = Math.max(minH, w / aspect)
-    else w = Math.max(minW, h * aspect)
+  let w = Math.max(minW, limitSize(Math.abs(rawW), node.minW, node.maxW))
+  let h = Math.max(minH, limitSize(Math.abs(rawH), node.minH, node.maxH))
+  if ((constrain || node.proportion) && node.w > 0 && node.h > 0) {
+    if (handle.length === 2) {
+      const sx = w / node.w
+      const sy = h / node.h
+      const scale = Math.abs(sx - 1) >= Math.abs(sy - 1) ? sx : sy
+      w = Math.max(minW, node.w * scale)
+      h = Math.max(minH, node.h * scale)
+    } else if (east || west) {
+      h = Math.max(minH, node.h * (w / node.w))
+      pinY = 'mid'
+    } else {
+      w = Math.max(minW, node.w * (h / node.h))
+      pinX = 'mid'
+    }
   }
-  if (handle.includes('w')) x = right - w
-  if (handle.includes('n')) y = bottom - h
-  let next: DesignNode = { ...node, x, y, w, h }
+  const flipX = rawW < 0 ? !node.flipX : !!node.flipX
+  const flipY = rawH < 0 ? !node.flipY : !!node.flipY
+  const ax = pinAt(pinX, node.w)
+  const ay = pinAt(pinY, node.h)
+  const nextAx = pinAt(pinX, w)
+  const nextAy = pinAt(pinY, h)
+  const pinned = spinToParent(node, ax, ay)
+  let next: DesignNode = { ...node, w, h }
+  if (flipX) next.flipX = true
+  else delete next.flipX
+  if (flipY) next.flipY = true
+  else delete next.flipY
+  const moved = spinToParent({ ...next, x: 0, y: 0 }, nextAx, nextAy)
+  next.x = pinned.x - moved.x
+  next.y = pinned.y - moved.y
   if (node.kind === 'vector' && node.vector && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
     next.vector = scaleVector(node.vector, w / node.w, h / node.h)
   }
@@ -853,13 +930,31 @@ export function resizeDesignNode(
     next.children = applyConstraints(node, w, h)
   }
   if (node.kind === 'group' && node.children?.length && node.w > 0 && node.h > 0 && (w !== node.w || h !== node.h)) {
-    const sx = w / node.w
-    const sy = h / node.h
-    const ax = handle.includes('w') ? node.w : 0
-    const ay = handle.includes('n') ? node.h : 0
-    next.children = node.children.map((child) => scaleNodeBox(child, sx, sy, ax, ay, handle.includes('w') ? w : 0, handle.includes('n') ? h : 0))
+    next.children = node.children.map((child) => scaleNodeBox(child, w / node.w, h / node.h, ax, ay, nextAx, nextAy))
   }
   return next
+}
+
+type ResizePin = 'start' | 'mid' | 'end'
+
+function pinAt(pin: ResizePin, span: number): number {
+  return pin === 'mid' ? span / 2 : pin === 'end' ? span : 0
+}
+
+/**
+ * The resized extent once its moving edge lands on the grid, or on a whole pixel.
+ * Only an unrotated node has edges on the parent's grid, so a rotated one rounds the extent.
+ */
+function snapResizeEdge(node: DesignNode, axis: 'x' | 'y', anchor: number, raw: number, forward: boolean, reach: number, grid: number, enabled: boolean): number {
+  if (node.rotation) return Math.round(raw)
+  const span = axis === 'x' ? node.w : node.h
+  const flipped = axis === 'x' ? !!node.flipX : !!node.flipY
+  const origin = axis === 'x' ? node.x : node.y
+  const toParent = (local: number) => (flipped ? origin + span - local : origin + local)
+  const edge = forward ? anchor + raw * reach : anchor - raw * reach
+  const parent = toParent(edge)
+  const shift = (snapDesign(parent, grid, enabled) - parent) * (flipped ? -1 : 1)
+  return forward ? (edge + shift - anchor) / reach : (anchor - edge - shift) / reach
 }
 
 /** Scale a subtree about an anchor, then shift that anchor onto its new content point. */
@@ -925,6 +1020,38 @@ export function nodeBoxOrigin(doc: DesignDoc, id: string): { x: number; y: numbe
     y = spun.y
   }
   return { x, y }
+}
+
+/** Canvas position of a point in the node's own box, after its and its ancestors' rotation and flip. */
+export function nodeCanvasPoint(doc: DesignDoc, id: string, localX: number, localY: number): DesignVectorPoint | null {
+  const path = pathToNode(doc, id)
+  if (!path) return null
+  let point = { x: localX, y: localY }
+  for (let i = path.length - 1; i >= 0; i--) point = spinToParent(path[i], point.x, point.y)
+  return point
+}
+
+/** Canvas center of a node. Rotation turns around this point. */
+export function nodeCenter(doc: DesignDoc, id: string): DesignVectorPoint | null {
+  const node = findDesignNode(doc, id)
+  return node ? nodeCanvasPoint(doc, id, node.w / 2, node.h / 2) : null
+}
+
+/** True when neither the node nor an ancestor is rotated or flipped, so its axes are the canvas axes. */
+export function designAxisAligned(doc: DesignDoc, id: string): boolean {
+  const path = pathToNode(doc, id)
+  return !!path?.every((node) => !node.rotation && !node.flipX && !node.flipY)
+}
+
+/** -1 when an odd number of ancestors are flipped, so a canvas turn runs the other way in the node's parent. */
+export function designTurnSign(doc: DesignDoc, id: string): 1 | -1 {
+  const path = pathToNode(doc, id)
+  let sign: 1 | -1 = 1
+  for (const node of path?.slice(0, -1) ?? []) {
+    if (node.flipX) sign = sign === 1 ? -1 : 1
+    if (node.flipY) sign = sign === 1 ? -1 : 1
+  }
+  return sign
 }
 
 /** Ancestors, then the node. */
@@ -1006,15 +1133,81 @@ function outsideParent(doc: DesignDoc, located: { node: DesignNode; parentId: st
  */
 export function hitDesign(doc: DesignDoc, x: number, y: number, deep = false): DesignNode | null {
   for (let i = doc.screens.length - 1; i >= 0; i--) {
-    const found = hitIn(doc.screens[i], x, y, deep)
+    const found = hitIn(doc, doc.screens[i], x, y, deep)
     if (found) return found
   }
   return null
 }
 
+/** The innermost node under a canvas point, through groups too, for a Cmd or Ctrl click. A locked node or an instance stops the walk. */
+export function hitDesignDeepest(doc: DesignDoc, x: number, y: number): DesignNode | null {
+  for (let i = doc.screens.length - 1; i >= 0; i--) {
+    const found = deepestIn(doc, doc.screens[i], x, y)
+    if (found) return found
+  }
+  return null
+}
+
+function deepestIn(doc: DesignDoc, node: DesignNode, x: number, y: number): DesignNode | null {
+  if (node.visible === false) return null
+  const local = parentPointToContent(node, x, y)
+  const inside = insideNode(node, local, node.kind === 'line' ? 6 : 0)
+  if (isBooleanNode(node)) {
+    if (node.locked) return booleanContains(doc, node, local) ? node : null
+    if (inside) {
+      const children = node.children ?? []
+      for (let i = children.length - 1; i >= 0; i--) {
+        const found = deepestIn(doc, children[i], local.x, local.y)
+        if (found) return found
+      }
+    }
+    return booleanContains(doc, node, local) ? node : null
+  }
+  if (node.locked || node.kind === 'instance') return inside ? node : null
+  if (designClips(node) && !inside) return null
+  const children = node.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) {
+    const found = deepestIn(doc, children[i], local.x, local.y)
+    if (found) return found
+  }
+  return inside ? node : null
+}
+
+/**
+ * The sibling Tab moves to. A step of 1 goes down the layers list, toward the back, and wraps.
+ * Hidden siblings are skipped. A node with no visible sibling stays.
+ */
+export function stepDesignSibling(doc: DesignDoc, id: string, step: 1 | -1): string {
+  const located = locateDesign(doc, id)
+  if (!located) return id
+  const siblings = located.parentId == null ? doc.screens : findDesignNode(doc, located.parentId)?.children ?? []
+  const from = siblings.findIndex((item) => item.id === id)
+  for (let offset = 1; offset < siblings.length; offset++) {
+    const next = siblings[(from - step * offset + siblings.length * offset) % siblings.length]
+    if (next && next.visible !== false) return next.id
+  }
+  return id
+}
+
+/** Enter: the children of each selected container. A selection with no children stays. */
+export function designChildIds(doc: DesignDoc, ids: readonly string[]): string[] {
+  const children = ids.flatMap((id) => (findDesignNode(doc, id)?.children ?? []).filter((child) => child.visible !== false).map((child) => child.id))
+  return children.length ? children : [...ids]
+}
+
+/** Shift+Enter: the parents of the selection. Screens stay selected. */
+export function designParentIds(doc: DesignDoc, ids: readonly string[]): string[] {
+  const parents: string[] = []
+  for (const id of ids) {
+    const parentId = locateDesign(doc, id)?.parentId ?? id
+    if (!parents.includes(parentId)) parents.push(parentId)
+  }
+  return parents
+}
+
 /** True when the user has double-clicked into a group, frame, or instance for scoped editing. */
 export function canEnterDesignContainer(node: DesignNode | null | undefined): boolean {
-  return node?.kind === 'group' || node?.kind === 'frame' || node?.kind === 'instance'
+  return node?.kind === 'group' || node?.kind === 'frame' || node?.kind === 'instance' || isBooleanNode(node)
 }
 
 /** Hit test within an entered container. Coordinates are canvas space. */
@@ -1025,7 +1218,7 @@ export function hitDesignInScope(doc: DesignDoc, scopeId: string, x: number, y: 
   if (!local) return null
   const children = scope.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
-    const found = hitIn(children[i], local.x, local.y, deep)
+    const found = hitIn(doc, children[i], local.x, local.y, deep)
     if (found) return found
   }
   return null
@@ -1099,10 +1292,10 @@ export function resolveDesignSelectHit(
 export function hitGroupChild(doc: DesignDoc, groupId: string, x: number, y: number): DesignNode | null {
   const group = findDesignNode(doc, groupId)
   const local = canvasToContent(doc, groupId, x, y)
-  if (!group || (group.kind !== 'group' && group.kind !== 'instance') || !local) return null
+  if (!group || (group.kind !== 'group' && group.kind !== 'instance' && !isBooleanNode(group)) || !local) return null
   const children = group.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
-    const found = hitIn(children[i], local.x, local.y, false)
+    const found = hitIn(doc, children[i], local.x, local.y, false)
     if (found) return found
   }
   return null
@@ -1172,6 +1365,21 @@ export function frameAtPoint(doc: DesignDoc, x: number, y: number, ignoreId: str
   return null
 }
 
+/**
+ * True when two documents hold the same content. Shared parts compare by identity,
+ * so only the screens and fields an edit replaced are stringified.
+ */
+export function sameDesign(a: DesignDoc, b: DesignDoc): boolean {
+  if (a === b) return true
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof DesignDoc>
+  for (const key of keys) {
+    if (key === 'screens') continue
+    if (a[key] !== b[key] && JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false
+  }
+  if (a.screens.length !== b.screens.length) return false
+  return a.screens.every((screen, index) => screen === b.screens[index] || JSON.stringify(screen) === JSON.stringify(b.screens[index]))
+}
+
 export function updateDesignNode(doc: DesignDoc, id: string, fn: (node: DesignNode) => DesignNode): DesignDoc {
   let changed = false
   const screens = doc.screens.map((screen) => {
@@ -1228,8 +1436,7 @@ export function placeDesignNode(doc: DesignDoc, id: string, parentId: string | n
 export function layoutDesign(doc: DesignDoc, frozenId?: string): DesignDoc {
   let changed = false
   const screens = doc.screens.map((screen) => {
-    const laid = layoutNode(doc, screen, frozenId)
-    const next = bindInstanceTree(doc, laid, frozenId)
+    const next = layoutNode(doc, screen, frozenId)
     if (next !== screen) changed = true
     return next
   })
@@ -1312,10 +1519,8 @@ export function createComponentFromFrame(doc: DesignDoc, frameId: string, compon
     y: located.node.y,
     w: located.node.w,
     h: located.node.h,
-    wMode: 'fixed',
-    hMode: 'fixed',
-    maxW: Math.max(1, located.node.w),
-    maxH: Math.max(1, located.node.h),
+    wMode: 'hug',
+    hMode: 'hug',
     component: componentId,
   }
   return updateDesignNode(next, located.parentId, (parent) => ({
@@ -1372,53 +1577,33 @@ export function renameComponent(doc: DesignDoc, componentId: string, raw: string
   return { ...doc, components }
 }
 
-function instanceAssetSize(doc: DesignDoc, node: DesignNode): { w: number; h: number } | null {
-  if (node?.kind !== 'instance' || !node.component) return null
-  const component = doc.components.find((item) => item.id === node.component)
-  const variant = component ? pickVariant(component, node.variant) : null
-  const w = variant?.node?.w
-  const h = variant?.node?.h
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return null
-  return { w, h }
-}
-
-function bindInstanceToAsset(doc: DesignDoc, node: DesignNode): DesignNode {
-  const asset = instanceAssetSize(doc, node)
-  if (!asset) return node
-  const w = asset.w
-  const h = asset.h
-  if (node.w === w && node.h === h && node.maxW === w && node.maxH === h && node.wMode === 'fixed' && node.hMode === 'fixed') return node
-  return { ...node, w, h, maxW: w, maxH: h, wMode: 'fixed', hMode: 'fixed' }
-}
-
-/** Open-Pencil SCALE: children move/size by instance/component, they do not reflow. */
-function scaleInstanceVisual(node: DesignNode, sx: number, sy: number, root = true): DesignNode {
-  const next: DesignNode = {
-    ...node,
-    x: root ? node.x : node.x * sx,
-    y: root ? node.y : node.y * sy,
-    w: Math.max(1, node.w * sx),
-    h: Math.max(1, node.h * sy),
+/**
+ * Older files pinned every instance to its component with fixed modes and max sizes equal to its box.
+ * The parser reads that pin as hug, so those instances keep following the component.
+ */
+export function unpinInstance(node: DesignNode): DesignNode {
+  const next: DesignNode = { ...node }
+  if ((next.wMode ?? 'fixed') === 'fixed' && next.maxW != null && next.maxW === next.w) {
+    next.wMode = 'hug'
+    delete next.maxW
   }
-  if (node.fontSize) next.fontSize = Math.max(1, node.fontSize * Math.abs(sy))
-  if (node.radius != null) next.radius = node.radius * Math.min(Math.abs(sx), Math.abs(sy))
-  if (node.pad != null) next.pad = node.pad * Math.min(Math.abs(sx), Math.abs(sy))
-  if (node.gap != null) next.gap = node.gap * Math.min(Math.abs(sx), Math.abs(sy))
-  if (node.vector && (sx !== 1 || sy !== 1)) next.vector = scaleVector(node.vector, sx, sy)
-  if (node.children?.length) next.children = node.children.map((child) => scaleInstanceVisual(child, sx, sy, false))
+  if ((next.hMode ?? 'fixed') === 'fixed' && next.maxH != null && next.maxH === next.h) {
+    next.hMode = 'hug'
+    delete next.maxH
+  }
   return next
 }
 
-function bindInstanceTree(doc: DesignDoc, node: DesignNode, frozenId?: string): DesignNode {
-  let next = node.id !== frozenId && node.kind === 'instance' ? bindInstanceToAsset(doc, node) : node
-  if (!next.children?.length) return next
-  let changed = next !== node
-  const children = next.children.map((child) => {
-    const bound = bindInstanceTree(doc, child, frozenId)
-    if (bound !== child) changed = true
-    return bound
-  })
-  return changed ? { ...next, children } : next
+/** A hugging axis takes the laid-out component's size. Other axes keep the instance's own size. */
+function sizeInstance(doc: DesignDoc, node: DesignNode): DesignNode {
+  const hugW = node.wMode === 'hug'
+  const hugH = node.hMode === 'hug'
+  if (!hugW && !hugH) return node
+  const visual = resolveInstanceTree(doc, node)
+  if (!visual) return node
+  const w = hugW ? visual.w : node.w
+  const h = hugH ? visual.h : node.h
+  return w === node.w && h === node.h ? node : { ...node, w, h }
 }
 
 export function makeInstance(doc: DesignDoc, componentId: string, id: string, x: number, y: number): DesignNode | null {
@@ -1435,10 +1620,8 @@ export function makeInstance(doc: DesignDoc, componentId: string, id: string, x:
     y,
     w: Math.max(1, w),
     h: Math.max(1, h),
-    wMode: 'fixed',
-    hMode: 'fixed',
-    maxW: Math.max(1, w),
-    maxH: Math.max(1, h),
+    wMode: 'hug',
+    hMode: 'hug',
     component: componentId,
   }
 }
@@ -1452,17 +1635,9 @@ export function setInstanceVariant(doc: DesignDoc, id: string, props: Record<str
   const picked = pickVariant(component, clean)
   if (!picked) return null
   return updateDesignNode(doc, id, (node) => {
-    const assetW = Math.max(1, picked.node?.w ?? node.w)
-    const assetH = Math.max(1, picked.node?.h ?? node.h)
-    const next: DesignNode = {
-      ...node,
-      w: assetW,
-      h: assetH,
-      wMode: 'fixed',
-      hMode: 'fixed',
-      maxW: assetW,
-      maxH: assetH,
-    }
+    const next: DesignNode = { ...node }
+    if (next.wMode === 'hug') next.w = Math.max(1, picked.node?.w ?? node.w)
+    if (next.hMode === 'hug') next.h = Math.max(1, picked.node?.h ?? node.h)
     if (Object.keys(clean).length) next.variant = clean
     else delete next.variant
     return next
@@ -1482,33 +1657,46 @@ export function resetInstanceOverrides(doc: DesignDoc, id: string): DesignDoc {
 
 /** Lay out the chosen variant and paint this instance's text and fill overrides. */
 export function resolveInstanceTree(doc: DesignDoc, node: DesignNode): DesignNode | null {
-  if (node.kind !== 'instance' || !node.component) return null
+  if (node.kind !== 'instance' || !node.component || resolving.has(node.component)) return null
+  const cached = resolvedInstances.get(node)
+  if (cached && cached.components === doc.components && cached.tokens === doc.tokens && cached.mode === doc.mode) return cached.tree
+  const tree = resolveInstanceUncached(doc, node)
+  resolvedInstances.set(node, { components: doc.components, tokens: doc.tokens, mode: doc.mode, tree })
+  return tree
+}
+
+/** Resolved trees per instance node. Nodes are immutable, so a node plus the inputs it reads identifies its tree. */
+const resolvedInstances = new WeakMap<DesignNode, { components: DesignComponent[]; tokens: DesignToken[]; mode: string; tree: DesignNode | null }>()
+
+function resolveInstanceUncached(doc: DesignDoc, node: DesignNode): DesignNode | null {
   const component = doc.components.find((item) => item.id === node.component)
   if (!component) return null
   const variant = pickVariant(component, node.variant)
   if (!variant) return null
   const overridden = applyOverrides(variant.node, { text: node.text, fill: node.fill, overrides: node.overrides })
-  const assetW = Number.isFinite(overridden.w) && overridden.w > 0 ? overridden.w : 1
-  const assetH = Number.isFinite(overridden.h) && overridden.h > 0 ? overridden.h : 1
-  const pinned: DesignNode = {
-    ...overridden,
-    x: 0,
-    y: 0,
-    w: Math.max(1, assetW),
-    h: Math.max(1, assetH),
-    wMode: 'fixed',
-    hMode: 'fixed',
-    maxW: assetW,
-    maxH: assetH,
+  const root: DesignNode = { ...overridden, x: 0, y: 0 }
+  // A fixed or filled axis lays the component out at the instance's size. A hugging axis keeps the component's own sizing.
+  if (node.wMode !== 'hug' && Number.isFinite(node.w) && node.w > 0) {
+    root.w = node.w
+    root.wMode = 'fixed'
   }
-  const laid = layoutNode(doc, pinned)
-  const boxW = Number.isFinite(node.w) && node.w > 0 ? Math.min(node.w, laid.w) : laid.w
-  const boxH = Number.isFinite(node.h) && node.h > 0 ? Math.min(node.h, laid.h) : laid.h
-  const sx = laid.w > 0 ? boxW / laid.w : 1
-  const sy = laid.h > 0 ? boxH / laid.h : 1
-  if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) return laid
-  return scaleInstanceVisual(laid, sx, sy)
+  if (node.hMode !== 'hug' && Number.isFinite(node.h) && node.h > 0) {
+    root.h = node.h
+    root.hMode = 'fixed'
+  }
+  if (!root.layout && root.children?.length && overridden.w > 0 && overridden.h > 0 && (root.w !== overridden.w || root.h !== overridden.h)) {
+    root.children = applyConstraints(overridden, root.w, root.h)
+  }
+  resolving.add(component.id)
+  try {
+    return layoutNode(doc, root)
+  } finally {
+    resolving.delete(component.id)
+  }
 }
+
+/** Components being resolved, so a component that contains its own instance stops instead of recursing. */
+const resolving = new Set<string>()
 
 export function detachInstance(doc: DesignDoc, id: string, mint: () => string): DesignDoc | null {
   const located = locateDesign(doc, id)
@@ -1560,16 +1748,25 @@ export function syncLinkedComponents(doc: DesignDoc): DesignDoc {
     let touched = false
     const variants = component.variants.map((variant) => {
       const screen = doc.screens.find((item) => item.id === variant.node.id)
-      if (!screen) return variant
-      const node = zeroRoot(screen)
+      if (!screen || sameExceptPosition(variant.node, screen)) return variant
       touched = true
-      return { ...variant, node }
+      return { ...variant, node: zeroRoot(screen) }
     })
     if (!touched) return component
     changed = true
     return syncAxes({ ...component, variants })
   })
   return changed ? { ...doc, components } : doc
+}
+
+/** The variant root already mirrors this screen, apart from the screen's canvas position. */
+function sameExceptPosition(root: DesignNode, screen: DesignNode): boolean {
+  if (root.x !== 0 || root.y !== 0) return false
+  const keys = new Set([...Object.keys(root), ...Object.keys(screen)]) as Set<keyof DesignNode>
+  for (const key of keys) {
+    if (key !== 'x' && key !== 'y' && root[key] !== screen[key]) return false
+  }
+  return true
 }
 
 function applyLinkedScreens(screens: DesignNode[], variants: DesignVariant[]): DesignNode[] {
@@ -1686,6 +1883,24 @@ export function layerDropIndex(siblingIds: readonly string[], targetId: string, 
   const index = siblingIds.indexOf(targetId)
   if (index < 0) return null
   return place === 'before' ? index + 1 : index
+}
+
+/**
+ * Move layers next to a target row, keeping their order. Ids run top to bottom as the layers panel lists them,
+ * where the top row is the frontmost child. A target of null with `inside` appends to the parent.
+ */
+export function moveDesignNodes(doc: DesignDoc, ids: readonly string[], parentId: string | null, targetId: string | null, place: 'before' | 'after' | 'inside'): DesignDoc {
+  // Each insert lands on the same side of the target, so the order of inserts decides the stacking.
+  const order = place === 'before' ? ids : [...ids].reverse()
+  let next = doc
+  for (const id of order) {
+    if (id === targetId) continue
+    const siblings = parentId == null ? next.screens : findDesignNode(next, parentId)?.children ?? []
+    const index = place === 'inside' || !targetId ? siblings.length : layerDropIndex(siblings.map((item) => item.id), targetId, place)
+    if (index == null) continue
+    next = moveDesignNode(next, id, parentId, index)
+  }
+  return next
 }
 
 /** Add auto layout. Several nodes are framed first. A lone non-frame is framed too. */
@@ -1936,7 +2151,7 @@ export function vectorSvgPath(vector: DesignVector): string {
 /** Nodes under a canvas point, front to back, skipping hidden and locked nodes. */
 export function stackDesign(doc: DesignDoc, x: number, y: number): DesignNode[] {
   const found: DesignNode[] = []
-  for (let i = doc.screens.length - 1; i >= 0; i--) stackIn(doc.screens[i], x, y, found)
+  for (let i = doc.screens.length - 1; i >= 0; i--) stackIn(doc, doc.screens[i], x, y, found)
   return found
 }
 
@@ -2191,12 +2406,20 @@ function fmt(value: number): string {
   return String(Math.round(value * 100) / 100)
 }
 
-function stackIn(node: DesignNode, x: number, y: number, into: DesignNode[]) {
+function stackIn(doc: DesignDoc, node: DesignNode, x: number, y: number, into: DesignNode[]) {
   if (node.visible === false) return
   const local = parentPointToContent(node, x, y)
+  if (isBooleanNode(node)) {
+    if (insideNode(node, local, 0)) {
+      const children = node.children ?? []
+      for (let i = children.length - 1; i >= 0; i--) stackIn(doc, children[i], local.x, local.y, into)
+    }
+    if (!node.locked && booleanContains(doc, node, local)) into.push(node)
+    return
+  }
   if (!insideNode(node, local, node.kind === 'line' ? 6 : 0)) return
   const children = node.children ?? []
-  for (let i = children.length - 1; i >= 0; i--) stackIn(children[i], local.x, local.y, into)
+  for (let i = children.length - 1; i >= 0; i--) stackIn(doc, children[i], local.x, local.y, into)
   if (!node.locked) into.push(node)
 }
 
@@ -2218,7 +2441,7 @@ function pathIn(node: DesignNode, id: string): DesignNode[] | null {
 }
 
 /** A content-space point of a node, expressed in its parent's space. */
-function spinToParent(node: DesignNode, localX: number, localY: number): DesignVectorPoint {
+export function spinToParent(node: DesignNode, localX: number, localY: number): DesignVectorPoint {
   const cx = node.w / 2
   const cy = node.h / 2
   const scaledX = (localX - cx) * (node.flipX ? -1 : 1)
@@ -2346,18 +2569,29 @@ export function designSelectionCanvasBox(doc: DesignDoc, ids: string[]): DesignR
 }
 
 /** The moving union, and every other visible box. A moving node's descendants are not targets. */
-export function designSnapScene(doc: DesignDoc, ids: string[]): { moving: DesignRect; targets: DesignRect[] } | null {
+/**
+ * The moving union, and the boxes it can snap to: every root screen, plus the shapes inside the
+ * screens being moved. A moving node's descendants, shapes a clipping frame hides, and boxes outside
+ * the optional viewport are left out, so off-screen work does not pull the drag.
+ */
+export function designSnapScene(doc: DesignDoc, ids: string[], viewport?: DesignRect): { moving: DesignRect; targets: DesignRect[] } | null {
   const movingBoxes: DesignRect[] = []
+  const homes = new Set<string>()
   for (const id of designRoots(doc, ids)) {
     const box = designCanvasBox(doc, id)
     if (box) movingBoxes.push(box)
+    const root = pathToNode(doc, id)?.[0]
+    if (root) homes.add(root.id)
   }
   const moving = unionRects(movingBoxes)
   if (!moving) return null
   const targets: DesignRect[] = []
   const skip = new Set(ids)
-  for (const screen of doc.screens) collectSnapBoxes(screen, (x, y) => ({ x, y }), skip, targets)
-  return { moving, targets }
+  for (const screen of doc.screens) {
+    if (homes.has(screen.id)) collectSnapBoxes(screen, (x, y) => ({ x, y }), skip, targets, null)
+    else if (screen.visible !== false && !skip.has(screen.id)) targets.push(canvasBox(screen, (x, y) => ({ x, y })))
+  }
+  return { moving, targets: viewport ? targets.filter((box) => boxesIntersect(box, viewport)) : targets }
 }
 
 /**
@@ -2666,16 +2900,26 @@ function collectSnapBoxes(
   toCanvas: (x: number, y: number) => DesignVectorPoint,
   skip: Set<string>,
   into: DesignRect[],
+  clip: DesignRect | null,
 ) {
   if (node.visible === false || skip.has(node.id)) return
-  into.push(canvasBox(node, toCanvas))
+  const box = canvasBox(node, toCanvas)
+  if (clip && !boxesIntersect(box, clip)) return
+  into.push(box)
   if (!node.children?.length) return
   const outer = toCanvas
   const next = (x: number, y: number) => {
     const spun = spinToParent(node, x, y)
     return outer(spun.x, spun.y)
   }
-  for (const child of node.children) collectSnapBoxes(child, next, skip, into)
+  const inner = designClips(node) ? (clip ? overlapRect(box, clip) : box) : clip
+  for (const child of node.children) collectSnapBoxes(child, next, skip, into, inner)
+}
+
+function overlapRect(a: DesignRect, b: DesignRect): DesignRect {
+  const x = Math.max(a.x, b.x)
+  const y = Math.max(a.y, b.y)
+  return { x, y, w: Math.max(0, Math.min(a.x + a.w, b.x + b.w) - x), h: Math.max(0, Math.min(a.y + a.h, b.y + b.h) - y) }
 }
 
 function snapAxis(
@@ -2768,6 +3012,22 @@ function designMeasures(moved: DesignRect, targets: DesignRect[]): DesignMeasure
   return measures
 }
 
+/** Distances from a selection box to a hovered box, for Alt-hover. Inside a box, they run to its edges; apart, to the nearest gap. */
+export function designDistances(moving: DesignRect, target: DesignRect): DesignMeasure[] {
+  const contains = (outer: DesignRect, inner: DesignRect) => boxInside(inner, outer) && (inner.w < outer.w || inner.h < outer.h)
+  if (!contains(target, moving) && !contains(moving, target)) return designMeasures(moving, [target])
+  const [inner, outer] = contains(target, moving) ? [moving, target] : [target, moving]
+  const midY = inner.y + inner.h / 2
+  const midX = inner.x + inner.w / 2
+  const gaps: DesignMeasure[] = [
+    { axis: 'x', x: outer.x, y: midY, length: inner.x - outer.x, label: '' },
+    { axis: 'x', x: inner.x + inner.w, y: midY, length: outer.x + outer.w - (inner.x + inner.w), label: '' },
+    { axis: 'y', x: midX, y: outer.y, length: inner.y - outer.y, label: '' },
+    { axis: 'y', x: midX, y: inner.y + inner.h, length: outer.y + outer.h - (inner.y + inner.h), label: '' },
+  ]
+  return gaps.filter((gap) => gap.length >= 0.5).map((gap) => ({ ...gap, label: String(Math.round(gap.length)) }))
+}
+
 /** Move a flow child to a new index among its non-absolute siblings. */
 export function reorderDesignNode(doc: DesignDoc, id: string, index: number): DesignDoc {
   const located = locateDesign(doc, id)
@@ -2797,6 +3057,7 @@ function layoutNode(doc: DesignDoc, node: DesignNode, frozenId?: string): Design
     if (changed) next = { ...bound, children }
   }
   if (next.kind === 'text') next = hugText(next)
+  if (next.kind === 'instance') next = sizeInstance(doc, next)
   if (next.kind === 'group') next = fitGroup(next)
   if (next.kind === 'frame' && next.layout === 'grid') next = placeGrid(next, frozenId)
   else if (next.kind === 'frame' && next.layout) next = placeFlow(next, frozenId)
@@ -2876,7 +3137,7 @@ function placeGrid(frame: DesignNode, frozenId?: string): DesignNode {
   return { ...frame, children }
 }
 
-/** Hug a text node to the half-em estimate. Width hug sets both axes. Height hug wraps into the current width. */
+/** Hug a text node to its measured box. Width hug sets both axes. Height hug wraps into the current width. */
 function hugText(node: DesignNode): DesignNode {
   if (!node.textHug) return node
   const box = measureTextBox(node)
@@ -3168,17 +3429,28 @@ function locateIn(node: DesignNode, id: string): { node: DesignNode; parentId: s
   return null
 }
 
-function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNode | null {
+function hitIn(doc: DesignDoc, node: DesignNode, x: number, y: number, deep: boolean): DesignNode | null {
   if (node.visible === false) return null
   const local = parentPointToContent(node, x, y)
   const inside = insideNode(node, local, node.kind === 'line' ? 6 : 0)
+  if (isBooleanNode(node)) {
+    if (node.locked) return booleanContains(doc, node, local) ? node : null
+    if (deep && inside) {
+      const children = node.children ?? []
+      for (let i = children.length - 1; i >= 0; i--) {
+        const found = hitIn(doc, children[i], local.x, local.y, false)
+        if (found) return found
+      }
+    }
+    return booleanContains(doc, node, local) ? node : null
+  }
   if (node.locked) return inside ? node : null
   if (node.kind === 'group' || node.kind === 'instance') {
     if (!inside) return null
     if (deep) {
       const children = node.children ?? []
       for (let i = children.length - 1; i >= 0; i--) {
-        const found = hitIn(children[i], local.x, local.y, false)
+        const found = hitIn(doc, children[i], local.x, local.y, false)
         if (found) return found
       }
     }
@@ -3187,7 +3459,7 @@ function hitIn(node: DesignNode, x: number, y: number, deep: boolean): DesignNod
   if (node.kind === 'frame' && node.clip !== false && !inside) return null
   const children = node.children ?? []
   for (let i = children.length - 1; i >= 0; i--) {
-    const found = hitIn(children[i], local.x, local.y, deep)
+    const found = hitIn(doc, children[i], local.x, local.y, deep)
     if (found) return found
   }
   if (!inside) return null

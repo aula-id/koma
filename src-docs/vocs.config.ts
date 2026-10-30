@@ -112,6 +112,8 @@ function group(text: string, pages: readonly (readonly [string, string])[]) {
 }
 
 export default defineConfig({
+  // Served under koma.run/docs by the koma-landing runner.
+  basePath: '/docs',
   title: 'Koma',
   description: 'Learn the Koma terminal from the first launch.',
   renderStrategy: 'full-static',

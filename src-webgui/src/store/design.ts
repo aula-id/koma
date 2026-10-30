@@ -27,6 +27,8 @@ export type DesignFileUiState = {
   selection: string[]
   focusId: string | null
   overrideTargetId: string | null
+  /** Pan and zoom when the tab last let go of this file. Kept out of the file so panning never dirties it. */
+  view?: { panX: number; panY: number; zoom: number }
 }
 
 export type DesignSlice = {

@@ -7,6 +7,9 @@ import type { DesignFileUiState } from '../design'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
 
+const DIRTY_CHECK_MS = 400
+const dirtyChecks = new Map<string, ReturnType<typeof setTimeout>>()
+
 export function designActions(set: StoreSet, get: StoreGet): Pick<
   KomaState,
   'openDesignTab' | 'saveDesign' | 'updateDesign' | 'createDesignFile' | 'setDesignPanelTab' | 'setDesignFileUi'
@@ -24,7 +27,8 @@ export function designActions(set: StoreSet, get: StoreGet): Pick<
         if (
           prev.selection === next.selection &&
           prev.focusId === next.focusId &&
-          prev.overrideTargetId === next.overrideTargetId
+          prev.overrideTargetId === next.overrideTargetId &&
+          prev.view === next.view
         ) {
           return s
         }
@@ -98,22 +102,37 @@ export function designActions(set: StoreSet, get: StoreGet): Pick<
     },
     updateDesign: (root, path, doc: DesignDoc) => {
       const key = fileKey(root, path)
-      const text = serializeDesign(doc)
       set((s) => {
         const prev = s.design?.docs?.[key]
-        if (!prev || prev.loading) return s
-        const dirty = text !== (prev.savedText ?? '')
-        if (serializeDesign(prev.doc) === text && prev.dirty === dirty) return s
+        if (!prev || prev.loading || prev.doc === doc) return s
         return {
           design: normalizeDesignSlice({
             ...s.design,
             docs: {
               ...s.design?.docs,
-              [key]: { ...prev, doc, dirty },
+              [key]: { ...prev, doc, dirty: true },
             },
           }),
         }
       })
+      // Serializing on every pointer move is the slow part of a drag, so the
+      // back-to-saved check waits until edits pause.
+      const pending = dirtyChecks.get(key)
+      if (pending) clearTimeout(pending)
+      dirtyChecks.set(key, setTimeout(() => {
+        dirtyChecks.delete(key)
+        set((s) => {
+          const prev = s.design?.docs?.[key]
+          if (!prev || prev.loading || !prev.dirty || prev.savedText == null) return s
+          if (serializeDesign(prev.doc) !== prev.savedText) return s
+          return {
+            design: normalizeDesignSlice({
+              ...s.design,
+              docs: { ...s.design?.docs, [key]: { ...prev, dirty: false } },
+            }),
+          }
+        })
+      }, DIRTY_CHECK_MS))
     },
     createDesignFile: (root, path) => {
       if (get().design?.pendingCreate) return

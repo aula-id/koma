@@ -239,6 +239,74 @@ export function nodeFillCss(doc: DesignDoc, node: DesignNode, fallback: string):
   return layers.join(', ')
 }
 
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+/** One fill layer of an SVG shape. A gradient needs a `<linearGradient>` or `<radialGradient>` of its own. */
+export type SvgFillLayer = {
+  /** A color, or `url(#id)` pointing at `gradient`. */
+  fill: string
+  opacity?: number
+  gradient?: {
+    id: string
+    kind: 'linear' | 'radial'
+    /** Linear: the line the stops run along. Radial: its center and radius. All in the shape's own pixels. */
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+    stops: { offset: number; color: string }[]
+  }
+}
+
+/**
+ * The visible fills of a node as SVG layers, bottom to top. `nodeFillCss` builds CSS background
+ * layers (a solid becomes `linear-gradient(c, c)`), which is not a valid SVG `fill`, so shapes
+ * drawn as paths use this instead. Gradients follow the same geometry as the CSS ones. Angular
+ * gradients and images have no plain SVG form here and fall back to the fallback color.
+ */
+export function svgFillLayers(doc: DesignDoc, node: DesignNode, fallback: string, idPrefix: string, w: number, h: number): SvgFillLayer[] {
+  const paints = nodePaints(node, 'fill').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none')
+  const layers: SvgFillLayer[] = []
+  // The first paint is the top layer, so draw from the last.
+  for (let index = paints.length - 1; index >= 0; index--) {
+    const paint = paints[index] as DesignPaint
+    const key = `${idPrefix}-${index}`.replace(/[^A-Za-z0-9_-]/g, '_')
+    if (paint.type === 'gradient' && (paint.kind ?? 'linear') !== 'angular') {
+      const stops = (paint.stops?.length ? paint.stops : [{ color: paint.color ?? '#000000', at: 0 }, { color: paint.color ?? '#ffffff', at: 1 }])
+        .slice()
+        .sort((a, b) => a.at - b.at)
+        .map((stop) => ({ offset: Number.isFinite(stop.at) ? Math.max(0, Math.min(1, stop.at)) : 0, color: resolveColor(doc, stop.color, '#000000') }))
+      const center = paintGradientCenter(paint)
+      if ((paint.kind ?? 'linear') === 'linear') {
+        // CSS angles run clockwise from "up"; the line's length makes the corners land on 0% and 100%.
+        const angle = (paintGradientAngle(paint) * Math.PI) / 180
+        const dx = Math.sin(angle)
+        const dy = -Math.cos(angle)
+        const half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2
+        const cx = w / 2
+        const cy = h / 2
+        layers.push({
+          fill: `url(#${key})`,
+          opacity: paint.opacity,
+          gradient: { id: key, kind: 'linear', x1: round3(cx - dx * half), y1: round3(cy - dy * half), x2: round3(cx + dx * half), y2: round3(cy + dy * half), stops },
+        })
+      } else {
+        // `circle at x y` reaches the farthest corner.
+        const cx = center.x * w
+        const cy = center.y * h
+        const reach = Math.max(Math.hypot(cx, cy), Math.hypot(w - cx, cy), Math.hypot(cx, h - cy), Math.hypot(w - cx, h - cy))
+        layers.push({ fill: `url(#${key})`, opacity: paint.opacity, gradient: { id: key, kind: 'radial', x1: round3(cx), y1: round3(cy), x2: round3(reach), y2: 0, stops } })
+      }
+      continue
+    }
+    const color = paint.type === 'solid' ? resolveColor(doc, paint.color, fallback) || fallback : fallback
+    layers.push({ fill: color, opacity: paint.type === 'solid' ? paint.opacity : undefined })
+  }
+  return layers
+}
+
 export function nodeStrokeCss(doc: DesignDoc, node: DesignNode, fallback: string): string {
   const paints = nodePaints(node, 'stroke')
   const first = firstVisiblePaint(paints)

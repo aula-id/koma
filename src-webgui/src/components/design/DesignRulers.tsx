@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { MessageSquarePlus } from 'lucide-react'
-import { locateDesign, designLayerName, stackDesign, type DesignDoc } from '../../lib/design'
+import { booleanEligible, isBooleanNode, locateDesign, designLayerName, stackDesign, type DesignDoc } from '../../lib/design'
 import type { DesignMenuItem } from '../DesignMenu'
 import { SELECTION } from './tabShared'
 
@@ -15,7 +15,8 @@ export function canvasBackdrop(snap: boolean, grid: number, view: View): { backg
       backgroundPosition: `${view.panX}px ${view.panY}px`,
     }
   }
-  if (!snap) return {}
+  // Dots closer than 4px merge into a grey wash, so a zoomed-out grid is left off.
+  if (!snap || grid * view.zoom < 4) return {}
   return {
     backgroundImage: 'radial-gradient(circle, var(--color-koma-border) 1px, transparent 1px)',
     backgroundSize: `${grid * view.zoom}px ${grid * view.zoom}px`,
@@ -27,7 +28,7 @@ const RULER_SIZE = 16
 const RULER_BADGE_EXCLUSION = 28
 
 export function DesignRulers({ panX, panY, zoom, bounds }: { panX: number; panY: number; zoom: number; bounds: { x: number; y: number; w: number; h: number } | null }) {
-  const step = zoom >= 32 ? 10 : zoom >= 8 ? 50 : zoom >= 2 ? 100 : 200
+  const step = zoom >= 32 ? 10 : zoom >= 8 ? 50 : zoom >= 2 ? 100 : zoom >= 0.25 ? 200 : zoom >= 0.1 ? 500 : zoom >= 0.05 ? 1000 : 2500
   const ticks = (span: number, origin: number, edge?: number, edge2?: number) => {
     const start = Math.floor(-origin / zoom / step) * step - step
     const items: { at: number; label: number }[] = []
@@ -119,6 +120,11 @@ export function designMenuItems(doc: DesignDoc, selection: string[], x: number, 
   const rows = selection.map((id) => locateDesign(doc, id))
   const sameParent = rows.length > 0 && rows.every((row) => row && row.parentId === rows[0]?.parentId)
   const canUngroup = rows.some((row) => row?.node.kind === 'group')
+  const oneBoolean = rows.length === 1 && isBooleanNode(rows[0]?.node)
+  // The same rules as the sidebar row: text and lines block it, and one plain group can take an
+  // operation but has nothing to flatten yet.
+  const canCombine = booleanEligible(doc, selection).ok
+  const canFlatten = canCombine && (oneBoolean || selection.length >= 2)
   const stack = stackDesign(doc, x, y).slice(0, 12)
   return [
     { id: 'chat', label: 'Add to chat', disabled: !canChat, icon: <MessageSquarePlus size={12} /> },
@@ -142,11 +148,11 @@ export function designMenuItems(doc: DesignDoc, selection: string[], x: number, 
     { id: 'auto', label: 'Add auto layout', shortcut: '⇧A', disabled: !sameParent },
     { id: 'component', label: 'Create component', shortcut: '⌥⌘K', disabled: !canComponent },
     { id: 'detach', label: 'Detach instance', shortcut: '⌥⌘B', disabled: rows.every((row) => row?.node.kind !== 'instance') },
-    { id: 'union', label: 'Union', shortcut: '⌥⌘U', disabled: selection.length < 2 },
-    { id: 'subtract', label: 'Subtract', shortcut: '⌥⌘S', disabled: selection.length < 2 },
-    { id: 'intersect', label: 'Intersect', shortcut: '⌥⌘I', disabled: selection.length < 2 },
-    { id: 'exclude', label: 'Exclude', shortcut: '⌥⌘X', disabled: selection.length < 2 },
-    { id: 'flatten', label: 'Flatten', disabled: rows.every((row) => !row?.node.booleanOp) },
+    { id: 'union', label: 'Union', shortcut: '⌥⇧U', disabled: !canCombine },
+    { id: 'subtract', label: 'Subtract', shortcut: '⌥⇧S', disabled: !canCombine },
+    { id: 'intersect', label: 'Intersect', shortcut: '⌥⇧I', disabled: !canCombine },
+    { id: 'exclude', label: 'Exclude', shortcut: '⌥⇧E', disabled: !canCombine },
+    { id: 'flatten', label: 'Flatten', shortcut: '⌥⇧F', disabled: !canFlatten },
     { id: 'outline', label: 'Outline stroke', shortcut: '⌥⌘O', disabled: rows.every((row) => row?.node.kind !== 'vector') },
     { id: 'divider-4', label: '' },
     { id: 'hide', label: 'Show/Hide', shortcut: '⇧⌘H', disabled: !selected },
@@ -166,7 +172,7 @@ export function ToolButton({ label, selected, onClick, children }: { label: stri
       aria-label={label}
       aria-pressed={selected}
       onClick={onClick}
-      className={`flex h-6 w-6 items-center justify-center rounded ${selected ? 'bg-koma-accent/20 text-koma-accent ring-1 ring-inset ring-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
+      className={`flex h-6 w-6 flex-none items-center justify-center rounded ${selected ? 'bg-koma-accent/20 text-koma-accent ring-1 ring-inset ring-koma-accent' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}
     >
       {children}
     </button>

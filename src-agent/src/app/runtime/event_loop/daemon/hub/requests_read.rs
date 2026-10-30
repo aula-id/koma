@@ -264,8 +264,10 @@ impl DaemonHub {
     //    SPAWNed on the tokio handle rather than run inline); if that comes back
     //    empty (error OR a genuinely empty catalogue), fall back to the curated
     //    `catalogue_overlay` for that endpoint.
-    //  - Any `config.oauth_conns` entry: cached public OA membership only,
-    //    via `catalogue_overlay::oauth_catalogue`, without native requests.
+    //  - Any `config.oauth_conns` entry: cached OA membership, via
+    //    `catalogue_overlay::oauth_catalogue_for` (the public list, plus the private
+    //    and token models a signed-in Koma account may use). Never a native provider
+    //    request. A Koma connection waits briefly for fresh account rows.
     //  - Neither: unknown provider uuid — reply with an EMPTY list so the picker's
     //    spinner clears instead of hanging with no answer.
     // Every branch ships a `ListModelsReply` over the hub's channel, which
@@ -327,14 +329,29 @@ impl DaemonHub {
             .iter()
             .find(|c| c.uuid == provider)
         {
-            let models = crate::service::catalogue_overlay::oauth_catalogue(conn.provider)
+            let conn_uuid = conn.uuid.clone();
+            let conn_provider = conn.provider;
+            handle.spawn(async move {
+                if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
+                    // Fresh rows if koma.run answers quickly; cached rows otherwise.
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(4),
+                        crate::service::catalogue_overlay::refresh_account(&conn_uuid),
+                    )
+                    .await;
+                }
+                let models = crate::service::catalogue_overlay::oauth_catalogue_for(
+                    &conn_uuid,
+                    conn_provider,
+                )
                 .into_iter()
                 .map(|m| m.id)
                 .collect();
-            let _ = tx.send(super::core::ListModelsReply {
-                client_id,
-                provider,
-                models,
+                let _ = tx.send(super::core::ListModelsReply {
+                    client_id,
+                    provider,
+                    models,
+                });
             });
         } else {
             // Unknown provider uuid — reply empty so the GUI picker's spinner

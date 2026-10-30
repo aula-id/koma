@@ -1,17 +1,24 @@
 import { useId, useState } from 'react'
-import { ChevronDown, Clipboard, MessageSquarePlus, Shapes } from 'lucide-react'
+import { ChevronDown, Clipboard, MessageSquarePlus, Shapes, Ungroup } from 'lucide-react'
 import {
   arrowHead,
   edgeRoute,
   edgeStyle,
+  GROUP_TITLE,
   nodeCenter,
   nodeStyle,
   routeMidpoint,
+  routePath,
+  TABLE_HEADER,
+  TABLE_INDENT,
+  TABLE_ROW,
+  tableLines,
   type DiagramArrow,
   type DiagramDoc,
   type DiagramNode,
 } from '../lib/diagram'
 import { diagramViewForMermaid, mermaidTitle, nodeBounds } from '../lib/diagramMermaid'
+import { DiagramShapeSvg } from './diagram/DiagramShapeSvg'
 
 function dashArray(dash: string, width: number): string | undefined {
   if (dash === 'dashed') return `${Math.max(4, width * 4)} ${Math.max(3, width * 2.5)}`
@@ -36,11 +43,17 @@ export function DiagramMarker({
   const strokeWidth = head.fill ? undefined : 1.2
   return (
     <marker id={id} markerWidth="8" markerHeight="8" refX={head.refX} refY={head.refY} orient="auto" overflow="visible">
+      {head.d ? <path d={head.d} fill={head.fill ? color : 'none'} stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="miter" /> : null}
       {head.circle ? (
-        <circle cx={head.circle.cx} cy={head.circle.cy} r={head.circle.r} fill={head.fill ? color : 'none'} stroke={stroke} strokeWidth={strokeWidth} />
-      ) : (
-        <path d={head.d} fill={head.fill ? color : 'none'} stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="miter" />
-      )}
+        <circle
+          cx={head.circle.cx}
+          cy={head.circle.cy}
+          r={head.circle.r}
+          fill={head.fill ? color : head.knockout ? 'var(--color-koma-bg)' : 'none'}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
+      ) : null}
     </marker>
   )
 }
@@ -96,11 +109,16 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
           )
         })}
       </defs>
+      {doc.nodes
+        .filter((node) => node.kind === 'group')
+        .map((node) => (
+          <DiagramShape key={node.id} node={node} />
+        ))}
       {routes.map(({ edge, points }, index) => {
         const style = edgeStyle(edge)
         const color = style.color || 'var(--color-koma-fg)'
         const id = `${markerBase}-${index}`
-        const d = points.map((point, i) => `${i ? 'L' : 'M'}${point.x} ${point.y}`).join(' ')
+        const d = routePath(points, style.corner === 'rounded', { curved: style.route === 'curved' })
         const label = edge.text?.trim()
         const at = label ? routeMidpoint(points) : null
         const width = label ? Math.min(160, label.length * 6 + 10) : 0
@@ -126,9 +144,11 @@ export function DiagramSketch({ doc }: { doc: DiagramDoc }) {
           </g>
         )
       })}
-      {doc.nodes.map((node) => (
-        <DiagramShape key={node.id} node={node} />
-      ))}
+      {doc.nodes
+        .filter((node) => node.kind !== 'group')
+        .map((node) => (
+          <DiagramShape key={node.id} node={node} />
+        ))}
     </svg>
   )
 }
@@ -144,52 +164,51 @@ function shapePaint(node: DiagramNode): { fill: string; stroke: string; strokeWi
 
 function DiagramShape({ node }: { node: DiagramNode }) {
   const center = nodeCenter(node)
-  const transform = node.rotation ? `rotate(${node.rotation} ${center.x} ${center.y})` : undefined
+  const rotate = node.rotation ? ` rotate(${node.rotation} ${node.w / 2} ${node.h / 2})` : ''
   const paint = shapePaint(node)
-  const label = (
-    <text
-      x={center.x}
-      y={center.y}
-      textAnchor="middle"
-      dominantBaseline="middle"
-      fontSize="12"
-      fill="var(--color-koma-fg)"
-    >
-      {node.text}
-    </text>
-  )
-  if (node.kind === 'text') {
-    const style = nodeStyle(node)
+  if (node.kind === 'group') {
+    const line = paint.stroke === 'none' ? 'var(--color-koma-border)' : paint.stroke
+    const rotate = node.rotation ? ` rotate(${node.rotation} ${node.w / 2} ${node.h / 2})` : ''
     return (
-      <g transform={transform}>
-        {style.fill || style.stroke ? (
-          <rect x={node.x} y={node.y} width={node.w} height={node.h} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
-        ) : null}
-        {label}
+      <g transform={`translate(${node.x} ${node.y})${rotate}`}>
+        <rect width={node.w} height={node.h} fill={paint.fill} stroke={line} />
+        <path d={`M0 ${GROUP_TITLE} H${node.w}`} stroke={line} />
+        <text x={node.w / 2} y={GROUP_TITLE / 2} textAnchor="middle" dominantBaseline="middle" fontSize="12" fontWeight="600" fill="var(--color-koma-fg)">
+          {node.text}
+        </text>
       </g>
     )
   }
-  if (node.kind === 'ellipse') {
+  if (node.kind === 'table') {
+    const line = paint.stroke === 'none' ? 'var(--color-koma-border)' : paint.stroke
     return (
-      <g transform={transform}>
-        <ellipse cx={center.x} cy={center.y} rx={node.w / 2} ry={node.h / 2} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
-        {label}
-      </g>
-    )
-  }
-  if (node.kind === 'diamond') {
-    const points = `${center.x},${node.y} ${node.x + node.w},${center.y} ${center.x},${node.y + node.h} ${node.x},${center.y}`
-    return (
-      <g transform={transform}>
-        <polygon points={points} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
-        {label}
+      <g transform={`translate(${node.x} ${node.y})`}>
+        <rect width={node.w} height={node.h} rx="4" fill={paint.fill} stroke={line} />
+        <path d={`M0 ${TABLE_HEADER} H${node.w}`} stroke={line} />
+        <text x={node.w / 2} y={TABLE_HEADER / 2} textAnchor="middle" dominantBaseline="middle" fontSize="12" fontWeight="600" fill="var(--color-koma-fg)">
+          {node.text}
+        </text>
+        {tableLines(node).map(({ row, depth }, i) => (
+          <text key={row.id} x={8 + depth * TABLE_INDENT} y={TABLE_HEADER + i * TABLE_ROW + TABLE_ROW / 2} dominantBaseline="middle" fontSize="11" fill="var(--color-koma-fg)">
+            {`${row.key ? `${row.key.toUpperCase()} ` : ''}${row.children?.length ? (row.collapsed ? '▸ ' : '▾ ') : ''}${row.name}${row.optional ? '?' : ''}${row.type ? ` ${row.type}` : ''}`}
+          </text>
+        ))}
       </g>
     )
   }
   return (
-    <g transform={transform}>
-      <rect x={node.x} y={node.y} width={node.w} height={node.h} rx="4" fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth} />
-      {label}
+    <g transform={`translate(${node.x} ${node.y})${rotate}`}>
+      <DiagramShapeSvg kind={node.kind} w={node.w} h={node.h} fill={paint.fill} stroke={paint.stroke} strokeWidth={paint.strokeWidth || 1} />
+      <text
+        x={center.x - node.x}
+        y={center.y - node.y}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize="12"
+        fill="var(--color-koma-fg)"
+      >
+        {node.text}
+      </text>
     </g>
   )
 }
@@ -224,9 +243,23 @@ export function DiagramObservationCard({ mermaid }: { mermaid: string }) {
 
 const menuItem = 'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-koma-fg opacity-90 hover:bg-koma-hover'
 
-export function DiagramRefMenuItems({ onAdd, onCopy }: { onAdd: () => void; onCopy: () => void }) {
+export function DiagramRefMenuItems({
+  onAdd,
+  onCopy,
+  onUngroup,
+}: {
+  onAdd: () => void
+  onCopy: () => void
+  onUngroup?: () => void
+}) {
   return (
     <>
+      {onUngroup ? (
+        <button type="button" className={menuItem} onClick={onUngroup}>
+          <Ungroup size={12} className="opacity-70" />
+          Ungroup
+        </button>
+      ) : null}
       <button type="button" className={menuItem} onClick={onAdd}>
         <MessageSquarePlus size={12} className="opacity-70" />
         Add to chat

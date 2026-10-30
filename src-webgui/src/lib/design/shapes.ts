@@ -1,5 +1,6 @@
 import type { DesignBooleanOp, DesignDoc, DesignNode, DesignPenPoint } from './types'
-import { createNode, nodeFromPen, updateDesignNode, wrapDesignNodes } from './model'
+import { booleanEligible, booleanPaintNode, booleanResult, contoursToVector, isBooleanNode } from './boolean'
+import { createNode, findDesignNode, fitVectorNode, nodeFromPen, spinToParent, updateDesignNode, wrapDesignNodes } from './model'
 import { setNodeSolid } from './paint'
 
 function regularPoints(count: number, turn = -Math.PI / 2): DesignPenPoint[] {
@@ -146,12 +147,66 @@ export function createStarNode(id: string, x: number, y: number, w = 100, points
   return { ...node, name: 'Star', pointCount: n, innerRadius: inner, x, y, w: width, h: height }
 }
 
+function opTitle(op: string): string {
+  return op[0].toUpperCase() + op.slice(1)
+}
+
 export function booleanDesignNodes(doc: DesignDoc, ids: string[], op: DesignBooleanOp, mint: () => string): DesignDoc | null {
   if (ids.length < 2) return null
   const id = mint()
   const wrapped = wrapDesignNodes(doc, ids, 'group', id)
   if (!wrapped) return null
-  return updateDesignNode(wrapped, id, (node) => ({ ...node, name: op[0].toUpperCase() + op.slice(1), booleanOp: op }))
+  return updateDesignNode(wrapped, id, (node) => booleanPaintNode({ ...node, name: opTitle(op), booleanOp: op }))
+}
+
+/** A boolean back to a plain group; its shapes stay as they are. */
+export function booleanToGroup(node: DesignNode): DesignNode {
+  if (!node.booleanOp) return node
+  const next = { ...node }
+  delete next.booleanOp
+  if (next.name === opTitle(node.booleanOp)) next.name = 'Group'
+  return next
+}
+
+/** A plain group takes a boolean operation in place (Penpot's group-to-bool). */
+export function groupToBoolean(node: DesignNode, op: DesignBooleanOp): DesignNode {
+  if (node.kind !== 'group' || !node.children?.length) return node
+  return booleanPaintNode({ ...node, name: node.name === 'Group' || !node.name ? opTitle(op) : node.name, booleanOp: op })
+}
+
+export function retargetBooleanOp(node: DesignNode, op: DesignBooleanOp): DesignNode {
+  if (!node.booleanOp) return node
+  const name = node.name === opTitle(node.booleanOp) ? opTitle(op) : node.name
+  if (node.booleanOp === op && name === node.name) return node
+  return { ...node, booleanOp: op, name }
+}
+
+/**
+ * Union, subtract, intersect, exclude, or flatten. One boolean changes op instead of nesting,
+ * and picking the operation it already has turns it back into a group. One plain group takes
+ * the operation in place.
+ */
+export function applyDesignBoolean(doc: DesignDoc, ids: string[], op: DesignBooleanOp | 'flatten', mint: () => string): DesignDoc | null {
+  if (!ids.length) return null
+  if (!booleanEligible(doc, ids).ok) return null
+  if (ids.length === 1) {
+    const node = findDesignNode(doc, ids[0])
+    if (!node) return null
+    if (!isBooleanNode(node)) {
+      if (op === 'flatten') return null
+      return updateDesignNode(doc, ids[0], (item) => groupToBoolean(item, op))
+    }
+    if (op === 'flatten') return updateDesignNode(doc, ids[0], (item) => flattenBooleanNode(doc, item))
+    if (node.booleanOp === op) return updateDesignNode(doc, ids[0], booleanToGroup)
+    return updateDesignNode(doc, ids[0], (item) => retargetBooleanOp(item, op))
+  }
+  if (op === 'flatten') {
+    const id = mint()
+    const union = booleanDesignNodes(doc, ids, 'union', () => id)
+    if (!union) return null
+    return updateDesignNode(union, id, (item) => flattenBooleanNode(union, item))
+  }
+  return booleanDesignNodes(doc, ids, op, mint)
 }
 
 export function outlineStrokeNode(node: DesignNode): DesignNode {
@@ -161,35 +216,36 @@ export function outlineStrokeNode(node: DesignNode): DesignNode {
   return setNodeSolid(next, 'stroke', 'none')
 }
 
-export function flattenBooleanNode(node: DesignNode): DesignNode {
-  if (!node.booleanOp || !node.children?.length) return node
-  const first = node.children.find((child) => child.kind === 'vector' && child.vector)
-  if (!first?.vector) return node
-  const vertices = first.vector.vertices.map((point) => ({ x: point.x + first.x, y: point.y + first.y }))
-  const segments = first.vector.segments.map((segment) => ({ ...segment, tangentStart: { ...segment.tangentStart }, tangentEnd: { ...segment.tangentEnd } }))
-  for (const child of node.children) {
-    if (child.id === first.id || child.kind !== 'vector' || !child.vector) continue
-    const offset = vertices.length
-    for (const point of child.vector.vertices) vertices.push({ x: point.x + child.x, y: point.y + child.y })
-    for (const segment of child.vector.segments) {
-      segments.push({
-        start: segment.start + offset,
-        end: segment.end + offset,
-        tangentStart: { ...segment.tangentStart },
-        tangentEnd: { ...segment.tangentEnd },
-      })
-    }
-  }
-  return {
+export function flattenBooleanNode(doc: DesignDoc, node: DesignNode): DesignNode {
+  if (!isBooleanNode(node)) return node
+  const painted = booleanPaintNode(node)
+  const geometry = booleanResult(doc, node)
+  const vector = contoursToVector(geometry.contours, geometry.rule)
+  const base: DesignNode = {
     id: node.id,
     kind: 'vector',
     name: node.name || 'Flatten',
     x: node.x,
     y: node.y,
-    w: node.w,
-    h: node.h,
-    fill: first.fill ?? '#d9d9d9',
-    stroke: first.stroke ?? 'none',
-    vector: { vertices, segments, regions: first.vector.regions.map((region) => ({ ...region, loops: region.loops.map((loop) => loop.slice()) })) },
+    w: Math.max(1, node.w),
+    h: Math.max(1, node.h),
+    rotation: node.rotation,
+    flipX: node.flipX,
+    flipY: node.flipY,
+    fill: painted.fill,
+    fills: painted.fills,
+    stroke: painted.stroke,
+    strokes: painted.strokes,
+    strokeWidth: painted.strokeWidth,
+    opacity: painted.opacity,
+    effects: painted.effects,
+    blend: painted.blend,
+    vector,
   }
+  if (!vector.vertices.length) return { ...base, vector: { vertices: [], segments: [], regions: [] } }
+  const fitted = fitVectorNode({ ...base, x: 0, y: 0 })
+  const probe: DesignNode = { ...node, x: 0, y: 0, w: fitted.w, h: fitted.h }
+  const origin = spinToParent(probe, 0, 0)
+  const parent = spinToParent(node, fitted.x, fitted.y)
+  return { ...fitted, x: parent.x - origin.x, y: parent.y - origin.y, rotation: node.rotation, flipX: node.flipX, flipY: node.flipY }
 }

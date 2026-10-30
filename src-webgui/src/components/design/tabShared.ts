@@ -1,3 +1,7 @@
+import { isMacTerminalPlatform } from '../../lib/terminalInput'
+import type { HandleMode } from '../../lib/design/vectorEdit'
+
+type Point = { x: number; y: number }
 import {
   snapDesign,
   componentView,
@@ -17,9 +21,15 @@ import {
 } from '../../lib/design'
 
 export const DESIGN_PATCH_DEBOUNCE_MS = 200
-export const UNDO_CAP = 50
-export const ZOOM_MIN = 0.25
+export const UNDO_CAP = 200
+export const ZOOM_MIN = 0.02
 export const ZOOM_MAX = 64
+/** Zoom factor for one + or - key press. */
+export const ZOOM_KEY_STEP = 1.3
+/** Zoom change per wheel pixel: about 14% for one mouse notch. */
+export const ZOOM_PER_PIXEL = 0.0015
+/** Idle time after a zoom gesture before the canvas re-lays out at the new zoom. */
+export const ZOOM_SETTLE_MS = 150
 export const SELECTION = 'var(--koma-accent)'
 export const SHAPE_FILL = '#d9d9d9'
 /** Default text color on the canvas — not tied to the app theme. */
@@ -35,7 +45,7 @@ export const HANDLES: { id: DesignHandle; x: string; y: string; cursor: string }
   { id: 'w', x: '0%', y: '50%', cursor: 'ew-resize' },
 ]
 
-export type Tool = 'select' | 'frame' | 'section' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text' | 'pan' | 'polygon' | 'star'
+export type Tool = 'select' | 'frame' | 'section' | 'rect' | 'ellipse' | 'line' | 'pen' | 'text' | 'pan' | 'polygon' | 'star' | 'triangle'
 export type DrawShape = 'frame' | 'rect' | 'ellipse' | 'line' | 'text'
 export type View = { panX: number; panY: number; zoom: number }
 export type Ghost =
@@ -61,6 +71,13 @@ export type DesignCommands = {
   auto: () => void
   component: () => void
   select: (id: string) => void
+  /** Tab and Shift+Tab: the next or previous sibling. */
+  step: (dir: 1 | -1) => void
+  /** Enter: edit a lone text, otherwise select the children. */
+  selectChildren: () => void
+  selectParent: () => void
+  /** A factor around the viewport center. 0 resets to 100%. */
+  zoomStep: (factor: number) => void
   boolean: (op: 'union' | 'subtract' | 'intersect' | 'exclude' | 'flatten') => void
   outline: () => void
   detach: () => void
@@ -70,14 +87,42 @@ export type Drag =
   | { kind: 'move'; ids: string[]; startX: number; startY: number; origins: Record<string, { x: number; y: number }>; remembered: boolean; moved: boolean; broke: boolean; alt: boolean; scene: { moving: DesignRect; targets: DesignRect[] } | null }
   | { kind: 'resize'; id: string; handle: DesignHandle; startX: number; startY: number; node: DesignNode; remembered: boolean }
   | { kind: 'crop'; id: string; startX: number; startY: number; paint: DesignPaint; remembered: boolean }
-  | { kind: 'rotate'; id: string; startX: number; startY: number; rotation: number; node: DesignNode; remembered: boolean }
+  | { kind: 'rotate'; id: string; cx: number; cy: number; startAngle: number; sign: 1 | -1; rotation: number; node: DesignNode; remembered: boolean }
   | { kind: 'radius'; id: string; corner: RadiusCorner; startX: number; startY: number; radius: number; node: DesignNode; remembered: boolean }
   | { kind: 'pan'; lastX: number; lastY: number }
   | { kind: 'marquee'; x0: number; y0: number; x1: number; y1: number }
   | { kind: 'draw'; shape: DrawShape; cx: number; cy: number; x0: number; y0: number; x1: number; y1: number; parentId: string | null }
   | { kind: 'pen'; index: number; space: boolean }
-  | { kind: 'vertex'; id: string; index: number; startX: number; startY: number }
-  | { kind: 'handle'; id: string; segment: number; end: 'start' | 'end'; startX: number; startY: number }
+  | { kind: 'handle'; id: string; segment: number; end: 'start' | 'end'; startX: number; startY: number; remembered: boolean; mode: HandleMode }
+  /**
+   * Path edit drags. `base` is the vector node when the drag began and `start` the doc point
+   * of the press; every move recomputes from them. `alt` duplicates the nodes on the first
+   * move, or deletes the pressed node if the press ends without moving.
+   */
+  | { kind: 'vnodes'; id: string; ids: number[]; start: Point; base: DesignNode; moved: boolean; remembered: boolean; pressed: number; narrow: boolean; alt: boolean }
+  | { kind: 'vcurve'; id: string; index: number; start: Point; base: DesignNode; moved: boolean; remembered: boolean }
+  | { kind: 'vseg'; id: string; segment: number; t: number; start: Point; base: DesignNode; moved: boolean; remembered: boolean; bend: boolean }
+  | { kind: 'vmarquee'; id: string; start: Point; end: Point; base: number[] }
+
+export type DesignHistoryEntry = { doc: DesignDoc; selection: string[] }
+/** Undo stacks per file, outside the tab, so switching tabs keeps them. `head` is the document they lead up to. */
+export type DesignHistory = { past: DesignHistoryEntry[]; future: DesignHistoryEntry[]; head: DesignDoc | null }
+
+const histories = new Map<string, DesignHistory>()
+
+export function designHistory(key: string): DesignHistory {
+  let history = histories.get(key)
+  if (!history) {
+    history = { past: [], future: [], head: null }
+    histories.set(key, history)
+  }
+  return history
+}
+
+export function clearDesignHistory(history: DesignHistory) {
+  history.past.length = 0
+  history.future.length = 0
+}
 
 let copiedShape: { nodes: DesignNode[]; parentId: string | null; components?: DesignDoc['components']; images?: DesignDoc['images'] } | null = null
 let copiedStyle: DesignStyle | null = null
@@ -163,10 +208,23 @@ export function editingDoc(stored: DesignDoc, focusId: string | null): DesignDoc
   return componentView(stored, focusId) ?? stored
 }
 
-export function projectDoc(stored: DesignDoc, focusId: string | null, view: DesignDoc): DesignDoc {
-  if (!focusId) return layoutDesign(syncLinkedComponents(view))
+/** Lay out an edited view and write it back to the stored document. A frozen id keeps the node a drag is previewing out of auto layout. */
+export function projectDoc(stored: DesignDoc, focusId: string | null, view: DesignDoc, frozenId?: string): DesignDoc {
+  if (!focusId) return layoutDesign(syncLinkedComponents(view), frozenId)
   const written = writeComponentView(stored, focusId, view)
-  return written ? layoutDesign(written) : stored
+  return written ? layoutDesign(written, frozenId) : stored
+}
+
+/**
+ * The document with no screens, kept as the same object while tokens, components, images and mode stay put.
+ * Nodes paint from it, so a geometry edit re-renders only the nodes it replaced.
+ */
+export function paintOnlyDoc(ref: { current: DesignDoc | null }, doc: DesignDoc): DesignDoc {
+  const prev = ref.current
+  if (prev && prev.tokens === doc.tokens && prev.components === doc.components && prev.images === doc.images && prev.mode === doc.mode && prev.modes === doc.modes) return prev
+  const next = { ...doc, screens: [] }
+  ref.current = next
+  return next
 }
 
 export function paintCss(doc: DesignDoc, ref: string, fallback: string): string {
@@ -179,4 +237,11 @@ export function weightCss(weight: DesignWeight): number {
   if (weight === 'bold') return 700
   if (weight === 'medium') return 500
   return 400
+}
+
+const MAC = isMacTerminalPlatform()
+
+/** Cmd on macOS, Ctrl elsewhere: a click with it selects the deepest shape. Ctrl-click is the context menu on a Mac. */
+export function deepSelectKey(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  return MAC ? event.metaKey : event.ctrlKey
 }

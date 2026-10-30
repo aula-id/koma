@@ -1,9 +1,14 @@
-import { useEffect, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronRight, Circle, Component, Eye, EyeOff, Frame, Group, Lock, LockOpen, Minus, Spline, Square, Type } from 'lucide-react'
-import { designLayerName, designPath, isDesignContainer, layerDropIndex, type DesignDoc, type DesignNode } from '../lib/design'
+import { designLayerName, designPath, isDesignContainer, type DesignDoc, type DesignNode } from '../lib/design'
+import { getDesignHover, setDesignHover, subscribeDesignHover } from '../lib/designUi'
 
 const LAYER_MIME = 'application/x-koma-layer'
-let layerDrag: { x: number; y: number } | null = null
+let layerDrag: { x: number; y: number; ids: string[] } | null = null
+
+type LayerPlace = 'before' | 'after' | 'inside'
+/** `range` extends from the last selected row; `toggle` flips one row. */
+type LayerPick = { range: boolean; toggle: boolean }
 
 export function DesignLayers({
   doc,
@@ -18,12 +23,12 @@ export function DesignLayers({
 }: {
   doc: DesignDoc
   selection: string[]
-  onSelect: (id: string, shift: boolean) => void
+  onSelect: (ids: string[], toggle: boolean) => void
   onEnter: (id: string) => void
   onRename: (id: string, name: string) => void
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
-  onMove: (id: string, parentId: string | null, index: number) => void
+  onMove: (ids: string[], parentId: string | null, targetId: string | null, place: LayerPlace) => void
   onMenu: (id: string, clientX: number, clientY: number) => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -44,8 +49,31 @@ export function DesignLayers({
   useEffect(() => {
     if (!selectedId) return
     document.querySelector(`[data-layer-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [collapsed, doc, selectedId])
+  }, [collapsed, selectedId])
   const screens = doc.screens.slice().reverse()
+  // Rows top to bottom, as shown, so Shift ranges and multi-row drags follow what the user sees.
+  const order = useMemo(() => {
+    const ids: string[] = []
+    const walk = (nodes: DesignNode[]) => {
+      for (const node of nodes.slice().reverse()) {
+        ids.push(node.id)
+        if (node.children?.length && !collapsed.has(node.id)) walk(node.children)
+      }
+    }
+    walk(doc.screens)
+    return ids
+  }, [collapsed, doc.screens])
+  const pick = (id: string, how: LayerPick) => {
+    const anchor = selection[selection.length - 1]
+    const from = anchor ? order.indexOf(anchor) : -1
+    const to = order.indexOf(id)
+    if (how.range && from >= 0 && to >= 0) {
+      onSelect(order.slice(Math.min(from, to), Math.max(from, to) + 1), false)
+      return
+    }
+    onSelect([id], how.toggle)
+  }
+  const dragIds = (id: string) => (selection.includes(id) ? order.filter((item) => selection.includes(item)) : [id])
   return (
     <aside className="flex min-h-0 flex-1 flex-col" onContextMenu={(event) => event.preventDefault()}>
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
@@ -53,7 +81,6 @@ export function DesignLayers({
         <LayerList
           nodes={screens}
           parentId={null}
-          siblings={doc.screens}
           depth={0}
           collapsed={collapsed}
           editing={editing}
@@ -67,7 +94,8 @@ export function DesignLayers({
             })
           }}
           onEdit={setEditing}
-          onSelect={onSelect}
+          onSelect={pick}
+          dragIds={dragIds}
           onEnter={onEnter}
           onRename={(id, name) => {
             setEditing(null)
@@ -86,7 +114,6 @@ export function DesignLayers({
 function LayerList({
   nodes,
   parentId,
-  siblings,
   depth,
   collapsed,
   editing,
@@ -94,6 +121,7 @@ function LayerList({
   onToggle,
   onEdit,
   onSelect,
+  dragIds,
   onEnter,
   onRename,
   onVisible,
@@ -103,19 +131,19 @@ function LayerList({
 }: {
   nodes: DesignNode[]
   parentId: string | null
-  siblings: DesignNode[]
   depth: number
   collapsed: Set<string>
   editing: string | null
   selection: string[]
   onToggle: (id: string) => void
   onEdit: (id: string | null) => void
-  onSelect: (id: string, shift: boolean) => void
+  onSelect: (id: string, how: LayerPick) => void
+  dragIds: (id: string) => string[]
   onEnter: (id: string) => void
   onRename: (id: string, name: string) => void
   onVisible: (id: string, visible: boolean) => void
   onLocked: (id: string, locked: boolean) => void
-  onMove: (id: string, parentId: string | null, index: number) => void
+  onMove: (ids: string[], parentId: string | null, targetId: string | null, place: LayerPlace) => void
   onMenu: (id: string, clientX: number, clientY: number) => void
 }) {
   return (
@@ -135,28 +163,24 @@ function LayerList({
               open={open}
               onToggle={() => onToggle(node.id)}
               onEdit={() => onEdit(node.id)}
-              onSelect={(shift) => onSelect(node.id, shift)}
+              onSelect={(how) => onSelect(node.id, how)}
+              dragIds={() => dragIds(node.id)}
               onEnter={() => onEnter(node.id)}
               onRename={(name) => onRename(node.id, name)}
               onVisible={() => onVisible(node.id, node.visible === false)}
               onLocked={() => onLocked(node.id, !node.locked)}
               onMenu={(event) => onMenu(node.id, event.clientX, event.clientY)}
-              onDrop={(dragId, place) => {
-                if (!dragId || dragId === node.id) return
-                if (place === 'inside') {
-                  onMove(dragId, node.id, children.length)
-                  return
-                }
-                const index = layerDropIndex(siblings.map((item) => item.id), node.id, place)
-                if (index == null) return
-                onMove(dragId, parentId, index)
+              onDrop={(ids, place) => {
+                const moving = ids.filter((id) => id !== node.id)
+                if (!moving.length) return
+                if (place === 'inside') onMove(moving, node.id, null, 'inside')
+                else onMove(moving, parentId, node.id, place)
               }}
             />
             {container && open ? (
               <LayerList
                 nodes={children.slice().reverse()}
                 parentId={node.id}
-                siblings={children}
                 depth={depth + 1}
                 collapsed={collapsed}
                 editing={editing}
@@ -164,6 +188,7 @@ function LayerList({
                 onToggle={onToggle}
                 onEdit={onEdit}
                 onSelect={onSelect}
+                dragIds={dragIds}
                 onEnter={onEnter}
                 onRename={onRename}
                 onVisible={onVisible}
@@ -189,6 +214,7 @@ function LayerRow({
   onToggle,
   onEdit,
   onSelect,
+  dragIds,
   onEnter,
   onRename,
   onVisible,
@@ -204,15 +230,17 @@ function LayerRow({
   open: boolean
   onToggle: () => void
   onEdit: () => void
-  onSelect: (shift: boolean) => void
+  onSelect: (how: LayerPick) => void
+  dragIds: () => string[]
   onEnter: () => void
   onRename: (name: string) => void
   onVisible: () => void
   onLocked: () => void
-  onDrop: (id: string, place: 'before' | 'inside' | 'after') => void
+  onDrop: (ids: string[], place: LayerPlace) => void
   onMenu: (event: ReactMouseEvent<HTMLDivElement>) => void
 }) {
-  const [place, setPlace] = useState<'before' | 'inside' | 'after' | null>(null)
+  const [place, setPlace] = useState<LayerPlace | null>(null)
+  const hovered = useSyncExternalStore(subscribeDesignHover, () => getDesignHover() === node.id)
   const hidden = node.visible === false
   const dropAt = (event: ReactDragEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -224,9 +252,8 @@ function LayerRow({
     <div
       draggable={!editing}
       onDragStart={(event) => {
-        layerDrag = { x: event.clientX, y: event.clientY }
+        layerDrag = { x: event.clientX, y: event.clientY, ids: dragIds() }
         event.dataTransfer.setData(LAYER_MIME, node.id)
-        event.dataTransfer.setData('application/x-koma-design', node.kind === 'frame' || node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'line' || node.kind === 'text' ? node.kind : 'rect')
         event.dataTransfer.setData('text/plain', node.id)
         event.dataTransfer.effectAllowed = 'move'
       }}
@@ -246,12 +273,15 @@ function LayerRow({
         layerDrag = null
         if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 8) return
         const dragId = event.dataTransfer.getData(LAYER_MIME)
-        if (dragId && dragId !== node.id) onDrop(dragId, next)
+        const ids = start?.ids.length ? start.ids : dragId ? [dragId] : []
+        if (ids.length) onDrop(ids, next)
       }}
       data-layer-id={node.id}
-      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : 'text-koma-fg/80 hover:bg-koma-hover'} ${hidden ? 'opacity-45' : ''}`}
+      className={`group relative flex h-7 items-center gap-1 pr-1 text-[12px] ${selected ? 'bg-koma-accent/20 text-koma-fg' : hovered ? 'bg-koma-hover text-koma-fg/80' : 'text-koma-fg/80'} ${hidden ? 'opacity-45' : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
-      onClick={(event) => onSelect(event.shiftKey)}
+      onMouseEnter={() => setDesignHover(node.id)}
+      onMouseLeave={() => setDesignHover(null)}
+      onClick={(event) => onSelect({ range: event.shiftKey, toggle: event.metaKey || event.ctrlKey })}
       onContextMenu={(event) => {
         event.preventDefault()
         event.stopPropagation()

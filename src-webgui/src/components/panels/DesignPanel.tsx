@@ -528,12 +528,12 @@ export function DesignPanel() {
               <DesignLayers
                 doc={viewDoc}
                 selection={selection}
-                onSelect={(id, shift) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', id, shift })}
+                onSelect={(ids, toggle) => emitDesignLayer(designTab.root, designTab.path, { op: 'select', ids, toggle })}
                 onEnter={(id) => emitDesignLayer(designTab.root, designTab.path, { op: 'enter', id })}
                 onRename={(id, name) => emitDesignLayer(designTab.root, designTab.path, { op: 'rename', id, name })}
                 onVisible={(id, visible) => emitDesignLayer(designTab.root, designTab.path, { op: 'visible', id, visible })}
                 onLocked={(id, locked) => emitDesignLayer(designTab.root, designTab.path, { op: 'locked', id, locked })}
-                onMove={(id, parentId, index) => emitDesignLayer(designTab.root, designTab.path, { op: 'move', id, parentId, index })}
+                onMove={(ids, parentId, targetId, place) => emitDesignLayer(designTab.root, designTab.path, { op: 'move', ids, parentId, targetId, place })}
                 onMenu={(id, x, y) => emitDesignLayer(designTab.root, designTab.path, { op: 'menu', id, x, y })}
               />
             ) : (

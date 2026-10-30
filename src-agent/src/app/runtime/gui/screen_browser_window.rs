@@ -734,6 +734,9 @@ impl BrowserWindow {
             status.prefs.always_on_top || saved.as_ref().map(|s| s.always_on_top).unwrap_or(false);
         #[cfg(target_os = "linux")]
         let linux_chrome_h = std::rc::Rc::new(std::cell::Cell::new(CHROME_H_DEFAULT));
+        // Opaque on Windows, and on Linux where install.sh chose it.
+        let transparent =
+            cfg!(not(target_os = "windows")) && crate::model::linux_window::transparent();
         let mut builder = WindowBuilder::new()
             .with_title("Koma · Browser")
             .with_inner_size(PhysicalSize::new(1100, 760))
@@ -743,7 +746,7 @@ impl BrowserWindow {
             // desktop. Windows WebView2 in a WS_EX_LAYERED host paints white —
             // stay opaque there and round with SetWindowRgn.
             .with_decorations(false)
-            .with_transparent(cfg!(not(target_os = "windows")))
+            .with_transparent(transparent)
             .with_resizable(true)
             .with_always_on_top(always_on_top)
             // Hidden until chrome React has painted tabs (avoids empty "New Tab" flash).
@@ -792,8 +795,8 @@ impl BrowserWindow {
             // Same as main GUI: transparent webview so CSS radius on `.sb-chrome`
             // is not filled with an opaque plate in the corner pockets.
             // Windows: opaque (layered parent + transparent child = white page).
-            .with_transparent(cfg!(not(target_os = "windows")))
-            .with_background_color(if cfg!(target_os = "windows") {
+            .with_transparent(transparent)
+            .with_background_color(if !transparent {
                 (14, 17, 23, 255)
             } else {
                 (0, 0, 0, 0)

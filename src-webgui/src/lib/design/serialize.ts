@@ -22,7 +22,7 @@ import {
   type DesignLayoutGrid,
   type DesignPageView,
 } from './types'
-import { emptyDesign, isDesignContainer } from './model'
+import { emptyDesign, isDesignContainer, unpinInstance } from './model'
 import { clonePaint } from './paint'
 
 const KINDS = ['frame', 'group', 'rect', 'ellipse', 'line', 'vector', 'text', 'instance'] as const
@@ -477,6 +477,7 @@ function parseNode(value: unknown): DesignNode | null {
       if (!overrides) return null
       if (overrides.length) node.overrides = overrides
     }
+    return unpinInstance(node)
   }
   return node
 }

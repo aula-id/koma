@@ -9,6 +9,10 @@ type AccordionSectionProps = {
   children?: ReactNode
   /** Open sections fill leftover height. Short palettes pass false so the list below can. */
   fill?: boolean
+  /** Non-filling only: shrink below the content height and scroll inside when the panel is short. */
+  shrink?: boolean
+  /** Smallest height (px) an open filling section keeps, so a shrinking sibling cannot squeeze it out. */
+  minHeight?: number
 }
 
 // VSCode-style collapsible section. `action` (e.g. a + button) shows on hover.
@@ -17,9 +21,13 @@ type AccordionSectionProps = {
 // and a long list never shoves the other headers out of view. A CLOSED section
 // collapses to just its header (`flex-none`). Requires the parent to be a flex
 // column with `min-h-0` (see ExplorePanel/ConnectorListView).
-export function AccordionSection({ title, open, onToggle, action, children, fill = true }: AccordionSectionProps) {
+export function AccordionSection({ title, open, onToggle, action, children, fill = true, shrink = false, minHeight }: AccordionSectionProps) {
+  const body = fill ? 'min-h-0 flex-1 overflow-y-auto pb-1' : shrink ? 'min-h-0 overflow-y-auto pb-1' : 'pb-1'
   return (
-    <div className={`flex flex-col ${open ? (fill ? 'min-h-0 flex-1' : 'flex-none') : 'flex-none'}`}>
+    <div
+      className={`flex flex-col ${open ? (fill ? 'min-h-0 flex-1' : shrink ? 'min-h-0 flex-initial' : 'flex-none') : 'flex-none'}`}
+      style={open && fill && minHeight ? { minHeight } : undefined}
+    >
       <div className="group flex h-[22px] flex-none items-center bg-koma-head pr-1 hover:bg-koma-hover">
         <button
           onClick={onToggle}
@@ -36,7 +44,7 @@ export function AccordionSection({ title, open, onToggle, action, children, fill
           <div className="flex items-center opacity-70 group-hover:opacity-100">{action}</div>
         )}
       </div>
-      {open && <div className={fill ? 'min-h-0 flex-1 overflow-y-auto pb-1' : 'pb-1'}>{children}</div>}
+      {open && <div className={body}>{children}</div>}
     </div>
   )
 }

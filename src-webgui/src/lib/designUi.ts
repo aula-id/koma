@@ -9,12 +9,14 @@ export type DesignUiState = {
 }
 
 export type DesignLayerOp =
-  | { op: 'select'; id: string; shift: boolean }
+  /** `toggle` flips the ids in or out of the selection. Otherwise they replace it. */
+  | { op: 'select'; ids: string[]; toggle: boolean }
   | { op: 'enter'; id: string }
   | { op: 'rename'; id: string; name: string }
   | { op: 'visible'; id: string; visible: boolean }
   | { op: 'locked'; id: string; locked: boolean }
-  | { op: 'move'; id: string; parentId: string | null; index: number }
+  /** Ids run top to bottom as the layers panel lists them. */
+  | { op: 'move'; ids: string[]; parentId: string | null; targetId: string | null; place: 'before' | 'after' | 'inside' }
   | { op: 'menu'; id: string; x: number; y: number }
 
 let state: DesignUiState | null = null
@@ -36,4 +38,23 @@ export function publishDesignUi(next: DesignUiState | null) {
 
 export function emitDesignLayer(root: string, path: string, action: DesignLayerOp) {
   window.dispatchEvent(new CustomEvent('koma-design-layer', { detail: { root, path, action } }))
+}
+
+/** The node under the pointer, shared by the canvas and the layers panel so each can outline what the other hovers. */
+let hover: string | null = null
+const hoverListeners = new Set<() => void>()
+
+export function getDesignHover(): string | null {
+  return hover
+}
+
+export function subscribeDesignHover(listener: () => void): () => void {
+  hoverListeners.add(listener)
+  return () => hoverListeners.delete(listener)
+}
+
+export function setDesignHover(id: string | null) {
+  if (hover === id) return
+  hover = id
+  for (const listener of hoverListeners) listener()
 }

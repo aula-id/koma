@@ -1,6 +1,7 @@
 // HTML snapshot of one design node for chat. The chat chip stays a name.
 // The model receives this fragment. Image fills point at asset files.
 import { designImageSize } from './assets'
+import { booleanPaintNode, booleanResult, contoursSvgPath, isBooleanNode } from './boolean'
 import {
   cornerPixels,
   designClips,
@@ -108,6 +109,7 @@ function laidRoot(doc: DesignDoc, node: DesignNode): DesignNode {
 function flatten(node: DesignNode, toCanvas: (x: number, y: number) => Point, into: Flat[]) {
   if (node.visible === false) return
   into.push({ node, box: axisBox(node, toCanvas), origin: toCanvas(node.x, node.y), children: [] })
+  if (isBooleanNode(node)) return
   const nested = (x: number, y: number) => {
     const spun = spinToParent(node, x, y)
     return toCanvas(spun.x, spun.y)
@@ -197,24 +199,25 @@ function styleOf(doc: DesignDoc, item: Flat, rootItem: Flat, fileRoot: string): 
     rules.push(`top:${px(item.origin.y - origin.y)}`)
   }
   rules.push(`width:${px(node.w)}`, `height:${px(node.h)}`)
-  const fill = firstVisiblePaint(nodePaints(node, 'fill'))
-  const image = fill?.type === 'image' ? imageSrc(doc, fileRoot, fill) : ''
+  const booleanShape = isBooleanNode(node)
+  const fill = firstVisiblePaint(nodePaints(booleanShape ? booleanPaintNode(node) : node, 'fill'))
+  const image = !booleanShape && fill?.type === 'image' ? imageSrc(doc, fileRoot, fill) : ''
   const clipImage = !!image && fill?.scale === 'crop'
-  if (fill && fill.type !== 'image') {
+  if (!booleanShape && fill && fill.type !== 'image') {
     const background = resolvePaintCss(doc, fill, 'transparent')
     if (background && background !== 'transparent') rules.push(`background:${background}`)
-  } else if (!fill && (node.kind === 'line' || node.kind === 'vector')) {
+  } else if (!booleanShape && !fill && (node.kind === 'line' || node.kind === 'vector')) {
     const stroke = strokeCss(doc, node)
     if (stroke) rules.push(`background:${stroke}`)
   }
-  if (node.kind !== 'line' && node.kind !== 'text') {
+  if (!booleanShape && node.kind !== 'line' && node.kind !== 'text') {
     const stroke = strokeCss(doc, node)
     const width = nodeChrome(node).strokeWidth
     if (stroke && width > 0 && !(node.kind === 'vector' && (!fill || fill.type === 'image'))) {
       rules.push(`border:${Math.max(1, Math.round(width))}px solid ${stroke}`)
     }
   }
-  const radius = radiusCss(doc, node)
+  const radius = booleanShape ? null : radiusCss(doc, node)
   if (radius) rules.push(`border-radius:${radius}`)
   const opacity = nodeChrome(node).opacity
   if (opacity < 1) rules.push(`opacity:${Math.round(opacity * 1000) / 1000}`)
@@ -246,18 +249,34 @@ function styleOf(doc: DesignDoc, item: Flat, rootItem: Flat, fileRoot: string): 
 
 const parentOf = new WeakMap<Flat, Flat>()
 
+function booleanSvg(doc: DesignDoc, node: DesignNode): string {
+  const painted = booleanPaintNode(node)
+  const geometry = booleanResult(doc, node)
+  if (!geometry.contours.length) return ''
+  const fillPaint = firstVisiblePaint(nodePaints(painted, 'fill'))
+  const rawFill = fillPaint && fillPaint.type !== 'image' ? resolvePaintCss(doc, fillPaint, 'none') : nodeChrome(painted).fill
+  const stroke = strokeCss(doc, painted)
+  const width = nodeChrome(painted).strokeWidth
+  const fill = !rawFill || rawFill === 'none' || rawFill === 'transparent' ? 'none' : rawFill
+  const strokeColor = stroke && width > 0 ? stroke : 'none'
+  const w = Math.max(1, Math.round(node.w))
+  const h = Math.max(1, Math.round(node.h))
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="position:absolute;left:0;top:0;overflow:visible"><path d="${escHtml(contoursSvgPath(geometry.contours))}" fill="${escHtml(fill)}" fill-rule="${geometry.rule}" stroke="${escHtml(strokeColor)}" stroke-width="${width}"></path></svg>`
+}
+
 function emit(doc: DesignDoc, item: Flat, rootItem: Flat, fileRoot: string, indent: number): string {
   const pad = '  '.repeat(indent)
   const name = escHtml(designLayerName(item.node))
   const styled = styleOf(doc, item, rootItem, fileRoot)
   const kids = item.children.map((child) => emit(doc, child, rootItem, fileRoot, indent + 1)).join('\n')
   const text = item.node.kind === 'text' ? escHtml(textStyle(item.node).text) : ''
+  const shape = isBooleanNode(item.node) ? `${'  '.repeat(indent + 1)}${booleanSvg(doc, item.node)}` : ''
   const img = styled.image
     ? `${'  '.repeat(indent + 1)}<img alt="${name}" src="${escHtml(styled.image)}" style="${imageStyle(doc, firstVisiblePaint(nodePaints(item.node, 'fill'))!)}">`
     : ''
   const open = `<div data-koma-name="${name}" style="${styled.css}">`
-  if (!kids && !img) return text ? `${pad}${open}${text}</div>` : `${pad}${open}</div>`
-  const body = [img, text ? `${'  '.repeat(indent + 1)}${text}` : '', kids].filter(Boolean).join('\n')
+  if (!kids && !img && !shape) return text ? `${pad}${open}${text}</div>` : `${pad}${open}</div>`
+  const body = [shape, img, text ? `${'  '.repeat(indent + 1)}${text}` : '', kids].filter(Boolean).join('\n')
   return `${pad}${open}\n${body}\n${pad}</div>`
 }
 

@@ -1,8 +1,12 @@
 // Raster of a design node for chat. The model sees this picture next to the coordinate list.
 import {
+  booleanPaintNode,
+  booleanResult,
+  contoursSvgPath,
   cornerPixels,
   firstVisiblePaint,
   fontFamilyCss,
+  isBooleanNode,
   nodeChrome,
   nodePaints,
   resolveColor,
@@ -120,14 +124,33 @@ function drawNode(ctx: CanvasRenderingContext2D, doc: DesignDoc, node: DesignNod
   ctx.rotate(((node.rotation ?? 0) * Math.PI) / 180)
   ctx.scale(node.flipX ? -1 : 1, node.flipY ? -1 : 1)
   ctx.translate(-node.w / 2, -node.h / 2)
+  const bool = isBooleanNode(node)
+  const paintNode = bool ? booleanPaintNode(node) : node
   ctx.globalAlpha *= nodeChrome(node).opacity
-  const fillPaint = firstVisiblePaint(nodePaints(node, 'fill'))
-  const strokePaint = firstVisiblePaint(nodePaints(node, 'stroke'))
-  const fill = canvasPaint(ctx, doc, fillPaint, node.w, node.h, paintFill(doc, node))
-  const stroke = canvasPaint(ctx, doc, strokePaint, node.w, node.h, paintStroke(doc, node))
+  const fillPaint = firstVisiblePaint(nodePaints(paintNode, 'fill'))
+  const strokePaint = firstVisiblePaint(nodePaints(paintNode, 'stroke'))
+  const fill = canvasPaint(ctx, doc, fillPaint, node.w, node.h, paintFill(doc, paintNode))
+  const stroke = canvasPaint(ctx, doc, strokePaint, node.w, node.h, paintStroke(doc, paintNode))
   const radius = radiiOf(doc, node)
   const hasFill = fill !== ''
   const hasStroke = stroke !== ''
+  if (bool) {
+    const geometry = booleanResult(doc, node)
+    if (geometry.contours.length && (hasFill || hasStroke)) {
+      const path = new Path2D(contoursSvgPath(geometry.contours))
+      if (hasFill) {
+        ctx.fillStyle = fill
+        ctx.fill(path, geometry.rule)
+      }
+      if (hasStroke) {
+        ctx.strokeStyle = stroke
+        ctx.lineWidth = nodeChrome(paintNode).strokeWidth
+        ctx.stroke(path)
+      }
+    }
+    ctx.restore()
+    return
+  }
   if (node.kind !== 'line' && node.kind !== 'vector' && node.kind !== 'text' && (hasFill || hasStroke)) {
     traceRound(ctx, node.w, node.h, radius)
     if (hasFill) {

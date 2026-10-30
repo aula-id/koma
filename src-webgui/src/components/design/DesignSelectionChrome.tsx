@@ -5,6 +5,7 @@ import {
   DESIGN_AFFINE_ID,
   designImageSize,
   designNodeMatrix,
+  designPath,
   imageCropRect,
   isImageCropPaint,
   isPaintVisible,
@@ -101,6 +102,23 @@ function collectChrome(
   return items
 }
 
+/** Screen placement of one node's box, for the hover outline. Unlike selection, it reaches into groups. */
+function hoverPlacement(doc: DesignDoc, id: string, panX: number, panY: number, zoom: number) {
+  const path = designPath(doc, id)
+  const node = path?.[path.length - 1]
+  if (!path || !node || path.some((item) => item.visible === false)) return null
+  let toCanvas = DESIGN_AFFINE_ID
+  let boxW = node.w
+  let boxH = node.h
+  for (const item of path) {
+    const visual = item.kind === 'instance' ? resolveInstanceTree(doc, item) : null
+    boxW = visual?.w ?? item.w
+    boxH = visual?.h ?? item.h
+    toCanvas = composeDesignAffine(toCanvas, designNodeMatrix(item, boxW, boxH))
+  }
+  return screenChromePlacement(toCanvas, boxW, boxH, panX, panY, zoom)
+}
+
 function matrixCss(matrix: DesignAffine): string {
   return `matrix(${matrix.a}, ${matrix.b}, ${matrix.c}, ${matrix.d}, ${matrix.e}, ${matrix.f})`
 }
@@ -118,6 +136,7 @@ export function DesignSelectionChrome({
   dragCursor,
   enteredContainerId,
   cropEditId,
+  hoverId = null,
   onResize,
   onRotate,
   onCorner,
@@ -127,6 +146,7 @@ export function DesignSelectionChrome({
   panY: number
   zoom: number
   selectedIds: string[]
+  hoverId?: string | null
   dragCursor: string | null
   enteredContainerId: string | null
   cropEditId: string | null
@@ -134,11 +154,17 @@ export function DesignSelectionChrome({
   onRotate?: (id: string, event: ReactPointerEvent<Element>) => void
   onCorner: (id: string, corner: RadiusCorner, event: ReactPointerEvent<Element>) => void
 }) {
-  if (!selectedIds.length) return null
-  const items = collectChrome(doc, selectedIds, panX, panY, zoom, dragCursor, enteredContainerId, cropEditId, !!onRotate)
-  if (!items.length) return null
+  const items = selectedIds.length ? collectChrome(doc, selectedIds, panX, panY, zoom, dragCursor, enteredContainerId, cropEditId, !!onRotate) : []
+  const hover = hoverId && !dragCursor && !selectedIds.includes(hoverId) ? hoverPlacement(doc, hoverId, panX, panY, zoom) : null
+  if (!items.length && !hover) return null
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      {hover ? (
+        <div
+          className="pointer-events-none absolute left-0 top-0"
+          style={{ width: hover.width, height: hover.height, transformOrigin: '0 0', transform: matrixCss(hover.matrix), boxShadow: `inset 0 0 0 1px ${SELECTION}` }}
+        />
+      ) : null}
       {items.map((item) => {
         const { matrix } = item
         const outside = item.width <= 25 || item.height <= 25

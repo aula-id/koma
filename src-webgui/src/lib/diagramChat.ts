@@ -1,13 +1,8 @@
 import { useKoma } from '../store/koma'
 import { fileKey, type FileReadPush } from '../store/coding'
 import { codingRequest } from './coding-service'
-import { parseDiagram, type DiagramDoc } from './diagram'
-import {
-  captureDiagram,
-  diagramToMermaid,
-  rememberDiagramView,
-  type DiagramRect,
-} from './diagramMermaid'
+import { parseDiagram, selectionDoc, type DiagramDoc, type DiagramSelection } from './diagram'
+import { diagramToMermaid, rememberDiagramView } from './diagramMermaid'
 import { attachDiagramShapesToComposer } from './diagramNoteAttach'
 
 function toast(text: string, kind: 'info' | 'error' = 'info') {
@@ -89,16 +84,11 @@ export async function copyDiagramFileMermaid(root: string, path: string) {
   }
 }
 
-export function addDiagramAreaToChat(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {
-  const captured = captureDiagram(doc, area)
-  addDiagramDocToChat(
-    captured,
-    `${title} selection`,
-    'Nothing in that area.',
-    source ? { ...source, notes: captured } : undefined,
-  )
+export function addDiagramSelectionToChat(doc: DiagramDoc, selection: DiagramSelection, title: string, source?: DiagramSource) {
+  const picked = selectionDoc(doc, selection)
+  addDiagramDocToChat(picked, `${title} selection`, 'Nothing selected.', source ? { ...source, notes: picked } : undefined)
 }
 
-export function copyDiagramArea(doc: DiagramDoc, area: DiagramRect, title: string, source?: DiagramSource) {
-  return copyDiagramMermaid(captureDiagram(doc, area), `${title} selection`, 'Nothing in that area.', source ? { ...source, notes: doc } : undefined)
+export function copyDiagramSelection(doc: DiagramDoc, selection: DiagramSelection, title: string, source?: DiagramSource) {
+  return copyDiagramMermaid(selectionDoc(doc, selection), `${title} selection`, 'Nothing selected.', source ? { ...source, notes: doc } : undefined)
 }

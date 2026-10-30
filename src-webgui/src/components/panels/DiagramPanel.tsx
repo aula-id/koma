@@ -6,18 +6,15 @@ import { AddBtn, Empty, IconBtn } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
-import { SHAPE_MIME, diagramFileName, isDiagramPath, type DiagramKind } from '../../lib/diagram'
+import { SHAPE_MIME, diagramFileName, isDiagramPath } from '../../lib/diagram'
 import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
 import { DiagramRefMenuItems } from '../DiagramVisual'
+import { DIAGRAM_PALETTE, ShapePreview, type DiagramPaletteEntry } from '../diagram/DiagramShapePreview'
+
+const PALETTE_GROUPS = ['Basic', 'Flowchart', 'Containers', 'Database'] as const
 
 const EMPTY_ROOTS: string[] = []
 
-const SHAPES: { kind: DiagramKind; label: string }[] = [
-  { kind: 'rect', label: 'Rectangle' },
-  { kind: 'text', label: 'Text' },
-  { kind: 'ellipse', label: 'Ellipse' },
-  { kind: 'diamond', label: 'Diamond' },
-]
 
 function rootLabel(root: string): string {
   const parts = root.split('/').filter(Boolean)
@@ -85,49 +82,24 @@ function InlineNameInput({
   )
 }
 
-function ShapeTile({ kind, label }: { kind: DiagramKind; label: string }) {
+function ShapeTile({ entry }: { entry: DiagramPaletteEntry }) {
   return (
     <div
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData(SHAPE_MIME, kind)
-        e.dataTransfer.setData('text/plain', kind)
+        e.dataTransfer.setData(SHAPE_MIME, entry.id)
+        e.dataTransfer.setData('text/plain', entry.id)
         try {
           e.dataTransfer.effectAllowed = 'copy'
         } catch {
           /* ignore */
         }
       }}
-      className="flex cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
-      title={`Drag ${label} onto the canvas`}
+      className="flex h-9 w-14 cursor-grab items-center justify-center rounded p-0.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg active:cursor-grabbing"
+      title={`Drag ${entry.label} onto the canvas`}
     >
-      <ShapePreview kind={kind} />
+      <ShapePreview entry={entry} />
     </div>
-  )
-}
-
-function ShapePreview({ kind }: { kind: DiagramKind }) {
-  if (kind === 'ellipse') {
-    return (
-      <svg viewBox="0 0 64 36" className="h-8 w-16" aria-hidden="true">
-        <ellipse cx="32" cy="18" rx="30" ry="15" fill="var(--color-koma-bg)" stroke="currentColor" strokeWidth="1.25" />
-      </svg>
-    )
-  }
-  if (kind === 'diamond') {
-    return (
-      <svg viewBox="0 0 40 36" className="h-8 w-10" aria-hidden="true">
-        <polygon points="20,1.5 38.5,18 20,34.5 1.5,18" fill="var(--color-koma-bg)" stroke="currentColor" strokeWidth="1.25" />
-      </svg>
-    )
-  }
-  if (kind === 'text') {
-    return <span className="flex h-8 items-center px-1 text-[13px] leading-none text-koma-fg/80">Text</span>
-  }
-  return (
-    <span className="flex h-8 items-center justify-center rounded border border-current bg-koma-bg px-2 text-[11px] leading-none text-koma-fg/80">
-      Heading
-    </span>
   )
 }
 
@@ -234,16 +206,24 @@ export function DiagramPanel() {
           />
         </div>
       </div>
-      <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false}>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-2 py-1.5">
-          {SHAPES.map((shape) => (
-            <ShapeTile key={shape.kind} {...shape} />
+      <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false} shrink>
+        <div className="flex flex-col gap-1 px-2 py-1.5">
+          {PALETTE_GROUPS.map((group) => (
+            <div key={group} className="flex flex-col gap-0.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-dim">{group}</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {DIAGRAM_PALETTE.filter((entry) => entry.group === group).map((entry) => (
+                  <ShapeTile key={entry.id} entry={entry} />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </AccordionSection>
       <AccordionSection
         title="Diagrams"
         open={diagramsOpen}
+        minHeight={120}
         onToggle={() => setDiagramsOpen((v) => !v)}
         action={<AddBtn label="New diagram" onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }} />}
       >

@@ -53,8 +53,10 @@ pub(crate) fn linux_disable_webkit_prefetch(webview: &wry::WebView) {
         linux_disable_crash_features(settings.to_glib_none().0);
     }
     // Same webviews. An RGBA toplevel only keeps the pixels WebKit copies on
-    // this draw; see `linux_keep_full_frame`.
-    linux_keep_full_frame(webview);
+    // this draw; see `linux_keep_full_frame`. An opaque window keeps them all.
+    if crate::model::linux_window::transparent() {
+        linux_keep_full_frame(webview);
+    }
 }
 
 /// WebKitGTK 2.54 copies only the damage clip into an RGBA toplevel
@@ -479,12 +481,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // stats the launch binary before any window exists. On macOS that stat is
     // the Documents / Desktop / Downloads dialog, so the app never appears.
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    // Opaque when install.sh chose it in /etc/koma/gui.conf (Linux outside
+    // the Debian family); see `model::linux_window`.
+    let transparent = crate::model::linux_window::transparent();
     let window_builder = WindowBuilder::new()
         .with_title("Koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
         .with_decorations(false)
         .with_resizable(true)
-        .with_transparent(true);
+        .with_transparent(transparent);
     // Reassigned only on Linux, where the taskbar icon is applied here. On
     // macOS the Dock icon is set after the window exists.
     #[cfg(target_os = "linux")]
@@ -643,10 +648,14 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         .with_devtools(true)
         // Palette now rides `Snapshot.palette` (pushed live), so only the platform
         // hint the React chrome reads at boot is injected here.
-        .with_initialization_script(format!("window.__komaOS='{}';", std::env::consts::OS))
+        .with_initialization_script(format!(
+            "window.__komaOS='{}';window.__komaOpaque={};",
+            std::env::consts::OS,
+            !transparent
+        ))
         .with_url("koma://localhost/index.html")
         .with_navigation_handler(|url| allow_webview_navigation(&url))
-        .with_transparent(true)
+        .with_transparent(transparent)
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })

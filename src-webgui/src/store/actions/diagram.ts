@@ -8,6 +8,9 @@ import { normalizeGroups } from '../editorGroups'
 import type { KomaState } from '../state'
 import type { Tab } from '../types/tabs'
 
+const DIRTY_CHECK_MS = 400
+const dirtyChecks = new Map<string, ReturnType<typeof setTimeout>>()
+
 export function diagramActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openDiagramTab' | 'saveDiagram' | 'updateDiagram' | 'createDiagramFile'> {
   return {
     openDiagramTab: (root, path) => {
@@ -79,22 +82,32 @@ export function diagramActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
     },
     updateDiagram: (root, path, doc: DiagramDoc) => {
       const key = fileKey(root, path)
-      const text = serializeDiagram(doc)
       set((s) => {
         const prev = s.diagram.docs[key]
-        if (!prev || prev.loading) return s
-        const dirty = text !== (prev.savedText ?? '')
-        if (serializeDiagram(prev.doc) === text && prev.dirty === dirty) return s
+        if (!prev || prev.loading || prev.doc === doc) return s
         return {
           diagram: {
             ...s.diagram,
             docs: {
               ...s.diagram.docs,
-              [key]: { ...prev, doc, dirty },
+              [key]: { ...prev, doc, dirty: true },
             },
           },
         }
       })
+      // Serializing on every pointer move is the slow part of a drag, so the
+      // back-to-saved check waits until edits pause.
+      const pending = dirtyChecks.get(key)
+      if (pending) clearTimeout(pending)
+      dirtyChecks.set(key, setTimeout(() => {
+        dirtyChecks.delete(key)
+        set((s) => {
+          const prev = s.diagram.docs[key]
+          if (!prev || prev.loading || !prev.dirty || prev.savedText == null) return s
+          if (serializeDiagram(prev.doc) !== prev.savedText) return s
+          return { diagram: { ...s.diagram, docs: { ...s.diagram.docs, [key]: { ...prev, dirty: false } } } }
+        })
+      }, DIRTY_CHECK_MS))
     },
     createDiagramFile: (root, path) => {
       if (get().diagram.pendingCreate) return

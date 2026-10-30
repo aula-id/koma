@@ -1436,48 +1436,42 @@ function sample(): DesignDoc {
   assert.ok(placed)
   assert.equal(placed.w, 80)
   assert.equal(placed.h, 40)
-  assert.equal(placed.wMode, 'fixed')
-  assert.equal(placed.hMode, 'fixed')
-  assert.equal(placed.maxW, 80)
-  assert.equal(placed.maxH, 40)
-  const visual = resolveInstanceTree({ ...emptyDesign(), components: [component] }, placed)
-  assert.equal(visual?.w, 80)
+  assert.equal(placed.wMode, 'hug')
+  assert.equal(placed.hMode, 'hug')
+  assert.equal(placed.maxW, undefined)
+  assert.equal(placed.maxH, undefined)
+  const lib = { ...emptyDesign(), components: [component] }
+  // A hugging instance takes the component's laid-out size: the row hugs its 40px dot.
+  const visual = resolveInstanceTree(lib, placed)
+  assert.equal(visual?.w, 40)
   assert.equal(visual?.h, 40)
-  const blown = resolveInstanceTree({ ...emptyDesign(), components: [component] }, { ...placed, w: 400, h: 300 })
-  assert.equal(blown?.w, 80)
-  assert.equal(blown?.h, 40)
+  // A fixed instance lays the component out at its own size instead of scaling it.
+  const blown = resolveInstanceTree(lib, { ...placed, w: 400, h: 300, wMode: 'fixed', hMode: 'fixed' })
+  assert.equal(blown?.w, 400)
+  assert.equal(blown?.h, 300)
   assert.equal(blown?.children?.[0].w, visual?.children?.[0].w)
   assert.equal(blown?.children?.[0].h, visual?.children?.[0].h)
-  assert.equal(blown?.children?.[0].x, visual?.children?.[0].x)
-  assert.equal(blown?.children?.[0].y, visual?.children?.[0].y)
-  const half = resolveInstanceTree({ ...emptyDesign(), components: [component] }, { ...placed, w: 40, h: 20 })
-  assert.equal(half?.w, 40)
-  assert.equal(half?.h, 20)
-  assert.equal(Math.round(half?.children?.[0].w ?? 0), Math.round((visual?.children?.[0].w ?? 0) * 0.5))
-  assert.equal(Math.round(half?.children?.[0].h ?? 0), Math.round((visual?.children?.[0].h ?? 0) * 0.5))
   const host = createNode('frame', 'host', 0, 0)
   host.layout = 'column'
   host.align = 'stretch'
   host.w = 240
   host.h = 180
   host.children = [placed]
-  const grown = layoutDesign({ ...emptyDesign(), components: [component], screens: [host] }).screens[0]
-  assert.equal(grown.children?.[0].w, 80)
+  const grown = layoutDesign({ ...lib, screens: [host] }).screens[0]
+  assert.equal(grown.children?.[0].w, 40)
   assert.equal(grown.children?.[0].h, 40)
   const filling = { ...placed, wMode: 'fill' as const, hMode: 'fill' as const }
   host.children = [filling]
-  const filled = layoutDesign({ ...emptyDesign(), components: [component], screens: [host] }).screens[0]
-  assert.equal(filled.children?.[0].w, 80)
-  assert.equal(filled.children?.[0].h, 40)
+  const filled = layoutDesign({ ...lib, screens: [host] }).screens[0]
+  assert.equal(filled.children?.[0].w, 240)
+  assert.equal(filled.children?.[0].h, 180)
   const huge: DesignNode = { id: 'huge', kind: 'instance', x: 0, y: 0, w: 400, h: 300, component: 'btn' }
-  const clamped = layoutDesign({ ...emptyDesign(), components: [component], screens: [huge] }).screens[0]
-  assert.equal(clamped.w, 80)
-  assert.equal(clamped.h, 40)
-  assert.equal(clamped.maxW, 80)
-  assert.equal(clamped.maxH, 40)
+  const kept = layoutDesign({ ...lib, screens: [huge] }).screens[0]
+  assert.equal(kept.w, 400)
+  assert.equal(kept.h, 300)
   const stretched = resizeDesignNode(placed, 'se', 200, 200, 1, false)
-  assert.equal(stretched.w, 80)
-  assert.equal(stretched.h, 40)
+  assert.equal(stretched.w, 280)
+  assert.equal(stretched.h, 240)
   const page = createNode('frame', 'page', 0, 0)
   page.w = 200
   page.h = 200

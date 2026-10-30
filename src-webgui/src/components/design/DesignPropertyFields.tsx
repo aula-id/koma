@@ -237,9 +237,9 @@ export function GeomField({ label, ariaLabel, value, mixed, suffix, tokens, boun
   )
 }
 
-export function AlignButton({ label, caption, pressed, onClick, children }: { label: string; caption?: string; pressed?: boolean; onClick: () => void; children: ReactNode }) {
+export function AlignButton({ label, caption, pressed, disabled, onClick, children }: { label: string; caption?: string; pressed?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick} className={`flex h-7 flex-none items-center justify-center gap-1 rounded px-1.5 text-[11px] ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
+    <button type="button" aria-label={label} title={label} aria-pressed={pressed} disabled={disabled} onClick={onClick} className={`flex h-7 flex-none items-center justify-center gap-1 rounded px-1.5 text-[11px] disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-koma-dim ${pressed ? 'bg-koma-hover text-koma-fg' : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'}`}>
       {children}
       {caption ? <span>{caption}</span> : null}
     </button>
@@ -484,7 +484,7 @@ function penCurve(points: DesignPenPoint[], closed: boolean): string {
 }
 
 export function PenOverlay({ draft, hover, zoom }: { draft: PenDraft; hover: { x: number; y: number } | null; zoom: number }) {
-  const unit = 1 / Math.max(zoom, 0.25)
+  const unit = 1 / zoom
   const points = draft.points
   const last = points[points.length - 1]
   const first = points[0]

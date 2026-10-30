@@ -1,7 +1,10 @@
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import { memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
+  booleanPaintNode,
+  booleanResult,
+  contoursSvgPath,
   cornerPixels,
-  designLayerName,
+  isBooleanNode,
   nodeChrome,
   designImageSize,
   firstVisiblePaint,
@@ -10,8 +13,9 @@ import {
   imageFillPlacement,
   isImageCropPaint,
   isPaintVisible,
-  nodeFillCss,
   nodeFillLayers,
+  svgFillLayers,
+  type SvgFillLayer,
   nodeHasImageFill,
   nodePaints,
   roundedRectPath,
@@ -38,11 +42,38 @@ import {
   paintCss,
   weightCss,
 } from './tabShared'
+import { DesignTextEditor } from './DesignTextEditor'
 
-export function DesignNodeView({
+export type DesignNodeHandlers = {
+  /** `exact` selects this id as is, skipping the hit test at the pointer. */
+  onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>, exact?: boolean) => void
+  onEnterContainer: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void
+  onEdit: (id: string) => void
+  onOpenFill: (id: string) => void
+  onText: (id: string, text: string) => void
+  onTextRange: (id: string, start: number, end: number) => void
+  onTextBlur: () => void
+  onMenu: (id: string, clientX: number, clientY: number) => void
+}
+
+/** Handlers that never change identity and call whatever the ref holds now, so memoized nodes keep their props. */
+export function stableNodeHandlers(ref: { current: DesignNodeHandlers | null }): DesignNodeHandlers {
+  return {
+    onSelect: (id, event, exact) => ref.current?.onSelect(id, event, exact),
+    onEnterContainer: (id, event) => ref.current?.onEnterContainer(id, event),
+    onEdit: (id) => ref.current?.onEdit(id),
+    onOpenFill: (id) => ref.current?.onOpenFill(id),
+    onText: (id, text) => ref.current?.onText(id, text),
+    onTextRange: (id, start, end) => ref.current?.onTextRange(id, start, end),
+    onTextBlur: () => ref.current?.onTextBlur(),
+    onMenu: (id, clientX, clientY) => ref.current?.onMenu(id, clientX, clientY),
+  }
+}
+
+/** Re-renders only when its node or paint context changes. Unchanged siblings keep their object identity. */
+export const DesignNodeView = memo(function DesignNodeView({
   doc,
   node,
-  selectedIds,
   editing,
   dragCursor,
   locked = false,
@@ -59,20 +90,17 @@ export function DesignNodeView({
   onEnterContainer,
   clipPath,
   maskStyle,
-  zoom = 1,
 }: {
   doc: DesignDoc
   node: DesignNode
-  selectedIds: string[]
   editing: string | null
   dragCursor: string | null
-  zoom?: number
   locked?: boolean
   enteredContainerId?: string | null
   overrideTargetId?: string | null
   cropEditId?: string | null
   onSelect: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
-  onEnterContainer?: (id: string, event: ReactPointerEvent<HTMLDivElement>) => void
+  onEnterContainer?: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void
   onEdit: (id: string) => void
   onOpenFill?: (id: string) => void
   onText: (id: string, text: string) => void
@@ -83,24 +111,31 @@ export function DesignNodeView({
   maskStyle?: { clipPath?: string; maskImage?: string; WebkitMaskImage?: string; maskSize?: string; WebkitMaskSize?: string; maskPosition?: string; WebkitMaskPosition?: string; maskRepeat?: string; WebkitMaskRepeat?: string; maskMode?: string }
 }) {
   if (node.visible === false) return null
+  const booleanShape = isBooleanNode(node)
+  const booleanGeometry = booleanShape ? booleanResult(doc, node) : null
   const visual = node.kind === 'instance' ? resolveInstanceTree(doc, node) : null
   const boxW = visual?.w ?? node.w
   const boxH = visual?.h ?? node.h
-  const chrome = nodeChrome(visual ?? node)
+  const painted = booleanShape ? booleanPaintNode(node) : (visual ?? node)
+  const chrome = nodeChrome(painted)
   const style = textStyle(visual && node.kind !== 'instance' ? visual : node)
-  const selected = selectedIds.includes(node.id)
   const overrideMark = overrideTargetId === node.id
-  const container = node.kind === 'frame' || node.kind === 'group'
-  const bareFill = node.fill === 'none' || chrome.fill === 'none'
+  const bareFill = booleanShape ? chrome.fill === 'none' : node.fill === 'none' || chrome.fill === 'none'
   const bareStroke = (node.kind === 'frame' || node.kind === 'group') && (!node.stroke || node.stroke === 'none')
   const strokeOff = chrome.stroke === 'none' || ((node.kind === 'rect' || node.kind === 'ellipse') && node.stroke == null)
-  const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' ? SHAPE_FILL : 'var(--color-koma-panel)'
-  const painted = visual ?? node
+  const fillFallback = node.kind === 'frame' ? '#ffffff' : node.kind === 'rect' || node.kind === 'ellipse' || node.kind === 'vector' || booleanShape ? SHAPE_FILL : 'var(--color-koma-panel)'
   const fillPaints = nodePaints(painted, 'fill').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none')
   const fillPaint = firstVisiblePaint(fillPaints)
   const fillFallbackCss = paintCss(doc, chrome.fill, fillFallback)
-  const fill = bareFill ? 'transparent' : nodeFillCss(doc, painted, fillFallbackCss)
   const stroke = nodeStrokeCss(doc, painted, paintCss(doc, chrome.stroke, node.kind === 'line' || node.kind === 'vector' ? '#1c1c1c' : 'var(--color-koma-border)'))
+  // Shapes drawn as paths take SVG fills. A shape with no fill paint of its own uses the fallback color.
+  const pathFills: SvgFillLayer[] =
+    chrome.fill === 'none'
+      ? []
+      : (() => {
+          const layers = svgFillLayers(doc, painted, fillFallbackCss, `${node.id}-fill`, boxW, boxH)
+          return layers.length ? layers : [{ fill: fillFallbackCss }]
+        })()
   const fillLayers = bareFill || node.kind === 'line' || node.kind === 'vector' ? [] : nodeFillLayers(doc, painted, fillFallbackCss)
   const fillPlacements = fillPaints.map((paint) => imageFillPlacement({ w: boxW, h: boxH }, paint, paint.hash ? designImageSize(doc, paint.hash) : null))
   const fillSizes = fillPlacements.map((item) => item.size)
@@ -120,10 +155,9 @@ export function DesignNodeView({
   const flipX = node.flipX ? -1 : 1
   const flipY = node.flipY ? -1 : 1
   const transform = rotation || node.flipX || node.flipY ? `rotate(${rotation}deg) scale(${flipX}, ${flipY})` : undefined
-  const opaqueUntilEnter = node.kind === 'group' || node.kind === 'instance'
+  const opaqueUntilEnter = booleanShape || node.kind === 'group' || node.kind === 'instance'
   const enteredHere = enteredContainerId === node.id
   const lockChildren = locked || !!node.locked || (opaqueUntilEnter && !enteredHere)
-  const childIds = lockChildren ? [] : selectedIds
   const hitHere = !locked
   const textColor = paintCss(doc, style.color, TEXT_COLOR_DEFAULT)
   const textTypeStyle = {
@@ -157,7 +191,8 @@ export function DesignNodeView({
         maskRepeat: maskStyle?.maskRepeat,
         WebkitMaskRepeat: maskStyle?.WebkitMaskRepeat,
         maskMode: maskStyle?.maskMode,
-        cursor: !hitHere || node.locked || dragCursor ? undefined : cropEdit ? 'move' : 'grab',
+        // Shapes keep the arrow, like Penpot; the grab hand is for panning.
+        cursor: cropEdit && hitHere && !node.locked && !dragCursor ? 'move' : undefined,
       }}
       onPointerDown={hitHere ? (event) => onSelect(node.id, event) : undefined}
       onContextMenu={hitHere ? (event) => {
@@ -172,6 +207,11 @@ export function DesignNodeView({
           onEdit(node.id)
           return
         }
+        if (booleanShape && onEnterContainer) {
+          event.stopPropagation()
+          onEnterContainer(node.id, event)
+          return
+        }
         if (nodeHasImageFill(painted) && onOpenFill) {
           event.stopPropagation()
           onOpenFill(node.id)
@@ -183,22 +223,6 @@ export function DesignNodeView({
         }
       }}
     >
-      {container ? (
-        <span
-          className={`absolute left-0 truncate text-[11px] ${selected ? 'text-koma-fg' : 'text-koma-dim'} ${hitHere && !locked && !node.locked ? 'pointer-events-auto cursor-grab' : 'pointer-events-none'}`}
-          style={{ top: -16, maxWidth: Math.max(boxW, 80) }}
-          onPointerDown={
-            hitHere && !locked && !node.locked
-              ? (event) => {
-                  event.stopPropagation()
-                  onSelect(node.id, event)
-                }
-              : undefined
-          }
-        >
-          {designLayerName(node)}
-        </span>
-      ) : null}
       {cropEdit && cropRect && cropUrl ? (
         <span
           aria-hidden
@@ -222,13 +246,11 @@ export function DesignNodeView({
           border: undefined,
           borderRadius: radius,
           overflow: clips ? 'hidden' : undefined,
-          boxShadow: painted.effects?.filter((item) => item.visible !== false && (item.kind === 'drop-shadow' || item.kind === 'inner-shadow')).map((item) => `${item.kind === 'inner-shadow' ? 'inset ' : ''}${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${item.color && item.color !== 'none' ? item.color : 'rgba(0,0,0,0.25)'}`).join(', ') || undefined,
-          filter: painted.effects?.some((item) => item.visible !== false && item.kind === 'layer-blur') ? `blur(${painted.effects.find((item) => item.kind === 'layer-blur')?.blur ?? 4}px)` : undefined,
-          backdropFilter: painted.effects?.some((item) => item.visible !== false && item.kind === 'background-blur') ? `blur(${painted.effects.find((item) => item.kind === 'background-blur')?.blur ?? 8}px)` : undefined,
+          ...effectStyle(doc, painted.effects, booleanShape || node.kind === 'text' || node.kind === 'line' || node.kind === 'vector'),
           mixBlendMode: painted.blend && painted.blend !== 'normal' && painted.blend !== 'pass-through' ? painted.blend : undefined,
         }}
       >
-        {node.kind !== 'line' && node.kind !== 'vector' && node.kind !== 'text' ? (
+        {!booleanShape && node.kind !== 'line' && node.kind !== 'vector' && node.kind !== 'text' ? (
           <span
             aria-hidden
             className="pointer-events-none absolute inset-0"
@@ -242,7 +264,7 @@ export function DesignNodeView({
             }}
           />
         ) : null}
-        {node.kind !== 'text' && node.kind !== 'vector' && !bareStroke && !strokeOff ? (
+        {!booleanShape && node.kind !== 'text' && node.kind !== 'vector' && !bareStroke && !strokeOff ? (
           <svg className="pointer-events-none absolute overflow-visible" width={boxW} height={boxH}>
             {nodePaints(painted, 'stroke').filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
               <StrokeShape key={`${paint.type}-${index}`} doc={doc} node={painted} paint={paint} fallback={stroke} boxW={boxW} boxH={boxH} />
@@ -255,60 +277,64 @@ export function DesignNodeView({
             ))}
           </svg>
         ) : null}
-        {node.kind === 'vector' && node.vector ? (
+        {booleanGeometry && booleanGeometry.contours.length ? (
+          <svg className="pointer-events-none absolute inset-0 overflow-visible" width={boxW} height={boxH}>
+            <PathFills layers={pathFills} d={contoursSvgPath(booleanGeometry.contours)} rule={booleanGeometry.rule} />
+            <path d={contoursSvgPath(booleanGeometry.contours)} fillRule={booleanGeometry.rule} fill="none" stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} />
+            {nodePaints(painted, 'stroke').slice(1).filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
+              <path key={`stroke-${index}`} d={contoursSvgPath(booleanGeometry.contours)} fill="none" fillRule={booleanGeometry.rule} stroke={resolvePaintCss(doc, paint, stroke)} strokeWidth={strokePaintWidth(paint, chrome.strokeWidth)} strokeDasharray={strokePaintDash(paint, painted.strokeDash)} />
+            ))}
+          </svg>
+        ) : null}
+        {!booleanShape && node.kind === 'vector' && node.vector ? (
           <svg className="absolute inset-0 overflow-visible" width={boxW} height={boxH}>
-            <path d={vectorSvgPath(node.vector)} fill={chrome.fill === 'none' ? 'none' : fill} stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} {...(node.svgAttrs ?? {})} />
+            <PathFills layers={pathFills} d={vectorSvgPath(node.vector)} />
+            <path d={vectorSvgPath(node.vector)} fill="none" stroke={chrome.stroke === 'none' ? 'none' : stroke} strokeWidth={chrome.strokeWidth} strokeLinecap={painted.strokeCap === 'round' || painted.strokeCap === 'square' ? painted.strokeCap : 'butt'} strokeLinejoin={painted.strokeJoin ?? 'miter'} strokeDasharray={painted.strokeDash?.join(' ')} {...(node.svgAttrs ?? {})} />
             {nodePaints(painted, 'stroke').slice(1).filter((paint) => isPaintVisible(paint) && paintAlias(paint) !== 'none').map((paint, index) => (
               <path key={`stroke-${index}`} d={vectorSvgPath(node.vector)} fill="none" stroke={resolvePaintCss(doc, paint, stroke)} strokeWidth={strokePaintWidth(paint, chrome.strokeWidth)} strokeDasharray={strokePaintDash(paint, painted.strokeDash)} />
             ))}
           </svg>
         ) : null}
-        {node.kind === 'text' && editing === node.id ? (
-          <textarea
-            autoFocus
-            value={node.text ?? ''}
-            onChange={(event) => onText(node.id, event.target.value)}
-            onSelect={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
-            onKeyUp={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
-            onMouseUp={(event) => onTextRange?.(node.id, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
-            onBlur={onTextBlur}
-            onPointerDown={(event) => event.stopPropagation()}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                onTextBlur()
-              }
-            }}
-            className="z-10 h-full w-full resize-none border-0 bg-transparent px-1 shadow-none outline-none"
-            style={{ ...textTypeStyle, textAlign: style.align }}
-          />
-        ) : node.kind === 'text' ? (
+        {node.kind === 'text' ? (
           <div
-            className="flex h-full w-full px-1"
+            className="flex h-full w-full"
             style={{
               ...textTypeStyle,
-              justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : style.align === 'justify' ? 'stretch' : 'flex-start',
+              justifyContent: style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start',
               textAlign: style.align,
               alignItems: style.vertical === 'top' ? 'flex-start' : style.vertical === 'bottom' ? 'flex-end' : 'center',
             }}
           >
-            <span className="whitespace-pre-wrap">
-              {splitTextByRuns(node.text || 'Text', node.runs).map((part, index) => (
-                <span
-                  key={`${part.text}-${index}`}
-                  style={{
-                    fontSize: part.run?.fontSize,
-                    fontWeight: part.run?.weight ? weightCss(part.run.weight) : undefined,
-                    fontStyle: part.run?.italic ? 'italic' : undefined,
-                    textDecoration: [part.run?.underline ? 'underline' : '', part.run?.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined,
-                    fontFamily: part.run?.fontFamily || undefined,
-                    color: part.run?.color ? paintCss(doc, part.run.color, 'inherit') : undefined,
-                  }}
-                >
-                  {part.text}
-                </span>
-              ))}
-            </span>
+            {editing === node.id ? (
+              <DesignTextEditor
+                doc={doc}
+                text={node.text ?? ''}
+                runs={node.runs}
+                style={{ flex: style.align === 'justify' ? 1 : undefined }}
+                wrap={node.textHug !== 'width'}
+                onText={(text) => onText(node.id, text)}
+                onTextRange={onTextRange ? (start, end) => onTextRange(node.id, start, end) : undefined}
+                onDone={onTextBlur}
+              />
+            ) : (
+              <span className={node.textHug === 'width' ? 'whitespace-pre' : 'whitespace-pre-wrap'} style={{ flex: style.align === 'justify' ? 1 : undefined }}>
+                {splitTextByRuns(node.text || 'Text', node.runs).map((part, index) => (
+                  <span
+                    key={`${part.text}-${index}`}
+                    style={{
+                      fontSize: part.run?.fontSize,
+                      fontWeight: part.run?.weight ? weightCss(part.run.weight) : undefined,
+                      fontStyle: part.run?.italic ? 'italic' : undefined,
+                      textDecoration: [part.run?.underline ? 'underline' : '', part.run?.strike ? 'line-through' : ''].filter(Boolean).join(' ') || undefined,
+                      fontFamily: part.run?.fontFamily || undefined,
+                      color: part.run?.color ? paintCss(doc, part.run.color, 'inherit') : undefined,
+                    }}
+                  >
+                    {part.text}
+                  </span>
+                ))}
+              </span>
+            )}
           </div>
         ) : node.kind === 'instance' && !visual ? (
           <span className="pointer-events-none absolute left-2 top-1 truncate text-[11px] text-koma-dim">Missing component</span>
@@ -318,11 +344,18 @@ export function DesignNodeView({
             {node.layoutGrids.map((grid, index) => {
               const color = grid.color || 'rgba(255,0,0,0.18)'
               if (grid.kind === 'square') {
-                const size = grid.size ?? 8
-                const lines = []
-                for (let x = grid.offset ?? 0; x < boxW; x += size) lines.push(<line key={`v${index}-${x}`} x1={x} y1={0} x2={x} y2={boxH} stroke={color} strokeWidth={1} />)
-                for (let y = grid.offset ?? 0; y < boxH; y += size) lines.push(<line key={`h${index}-${y}`} x1={0} y1={y} x2={boxW} y2={y} stroke={color} strokeWidth={1} />)
-                return lines
+                // One pattern tile instead of a line per cell, so a fine grid on a big frame stays cheap.
+                const size = Math.max(1, grid.size ?? 8)
+                const offset = grid.offset ?? 0
+                const pattern = `grid-${node.id.replace(/[^\w-]/g, '_')}-${index}`
+                return [
+                  <defs key={`d${index}`}>
+                    <pattern id={pattern} width={size} height={size} x={offset} y={offset} patternUnits="userSpaceOnUse">
+                      <path d={`M ${size} 0 L 0 0 0 ${size}`} fill="none" stroke={color} strokeWidth={1} />
+                    </pattern>
+                  </defs>,
+                  <rect key={`r${index}`} width={boxW} height={boxH} fill={`url(#${pattern})`} />,
+                ]
               }
               return layoutGridBands(grid, boxW, boxH).map((band, at) => (
                 <rect key={`${grid.kind}${index}-${at}`} x={band.x} y={band.y} width={band.w} height={band.h} fill={color} />
@@ -330,17 +363,15 @@ export function DesignNodeView({
             })}
           </svg>
         ) : null}
-        {children?.map((child, index) => {
+        {(!booleanShape || enteredHere) && children?.map((child, index) => {
           const mask = [...(children ?? [])].slice(0, index).reverse().find((item) => item.mask)
           return (
           <DesignNodeView
             key={child.id}
             doc={doc}
             node={child}
-            selectedIds={childIds}
             editing={editing}
             dragCursor={dragCursor}
-            zoom={zoom}
             locked={lockChildren}
             enteredContainerId={enteredContainerId}
             overrideTargetId={overrideTargetId}
@@ -359,6 +390,53 @@ export function DesignNodeView({
         })}
       </div>
     </div>
+  )
+})
+
+/**
+ * Effects as CSS. A box shadow follows the box, so text, lines and vectors take drop-shadow
+ * filters that follow their glyphs or path. Several blurs of one kind all apply.
+ */
+function effectStyle(doc: DesignDoc, effects: DesignNode['effects'], followsShape: boolean): { boxShadow?: string; filter?: string; backdropFilter?: string } {
+  const on = (effects ?? []).filter((item) => item.visible !== false)
+  const color = (item: { color?: string }) => paintCss(doc, item.color && item.color !== 'none' ? item.color : '', 'rgba(0,0,0,0.25)')
+  const shadows = on.filter((item) => item.kind === 'drop-shadow' || (item.kind === 'inner-shadow' && !followsShape))
+  const blurs = on.filter((item) => item.kind === 'layer-blur').map((item) => `blur(${item.blur ?? 4}px)`)
+  const drops = followsShape ? shadows.map((item) => `drop-shadow(${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${color(item)})`) : []
+  const boxShadow = followsShape ? '' : shadows.map((item) => `${item.kind === 'inner-shadow' ? 'inset ' : ''}${item.x ?? 0}px ${item.y ?? 4}px ${item.blur ?? 8}px ${item.spread ?? 0}px ${color(item)}`).join(', ')
+  const backdrop = on.filter((item) => item.kind === 'background-blur').map((item) => `blur(${item.blur ?? 8}px)`).join(' ')
+  return {
+    boxShadow: boxShadow || undefined,
+    filter: [...drops, ...blurs].join(' ') || undefined,
+    backdropFilter: backdrop || undefined,
+  }
+}
+
+/** The fill layers of a path shape (and the gradients they point at), drawn under its stroke. */
+function PathFills({ layers, d, rule }: { layers: SvgFillLayer[]; d: string; rule?: 'nonzero' | 'evenodd' }) {
+  const gradients = layers.flatMap((layer) => (layer.gradient ? [layer.gradient] : []))
+  return (
+    <>
+      {gradients.length ? (
+        <defs>
+          {gradients.map((gradient) => {
+            const stops = gradient.stops.map((stop, index) => <stop key={index} offset={stop.offset} stopColor={stop.color} />)
+            return gradient.kind === 'linear' ? (
+              <linearGradient key={gradient.id} id={gradient.id} gradientUnits="userSpaceOnUse" x1={gradient.x1} y1={gradient.y1} x2={gradient.x2} y2={gradient.y2}>
+                {stops}
+              </linearGradient>
+            ) : (
+              <radialGradient key={gradient.id} id={gradient.id} gradientUnits="userSpaceOnUse" cx={gradient.x1} cy={gradient.y1} r={gradient.x2}>
+                {stops}
+              </radialGradient>
+            )
+          })}
+        </defs>
+      ) : null}
+      {layers.map((layer, index) => (
+        <path key={index} d={d} fill={layer.fill} fillOpacity={layer.opacity} fillRule={rule} stroke="none" />
+      ))}
+    </>
   )
 }
 

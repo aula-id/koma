@@ -161,3 +161,63 @@ fn oauth_picker_merges_only_public_koma_tiers() {
         ["premium", "shared", "free"]
     );
 }
+
+fn overlay_model(id: &str) -> OverlayModel {
+    OverlayModel {
+        id: id.to_string(),
+        supported_parameters: Vec::new(),
+        reasoning: None,
+        context_length: None,
+        pricing: None,
+    }
+}
+
+#[test]
+fn account_rows_extend_only_their_own_connection() {
+    set_account_rows(
+        "acct-a",
+        vec![
+            overlay_model("vendor/secret-a"),
+            overlay_model("koma-token/a"),
+        ],
+    );
+    set_account_rows("acct-b", vec![overlay_model("vendor/secret-b")]);
+
+    let ids = |uuid: &str| -> Vec<String> {
+        oauth_catalogue_with_account(uuid, OAuthProvider::KomaRun)
+            .into_iter()
+            .map(|m| m.id)
+            .collect()
+    };
+    let a = ids("acct-a");
+    assert!(a.contains(&"vendor/secret-a".to_string()));
+    assert!(a.contains(&"koma-token/a".to_string()));
+    assert!(!a.contains(&"vendor/secret-b".to_string()));
+    let b = ids("acct-b");
+    assert!(b.contains(&"vendor/secret-b".to_string()));
+    assert!(!b.contains(&"vendor/secret-a".to_string()));
+    // A connection with no rows sees only the public list.
+    assert!(!ids("acct-none").contains(&"vendor/secret-a".to_string()));
+}
+
+#[test]
+fn account_rows_do_not_repeat_public_ids_and_empty_clears() {
+    set_account_rows("acct-c", vec![overlay_model("vendor/only-c")]);
+    let ids = |uuid: &str| -> Vec<String> {
+        oauth_catalogue_with_account(uuid, OAuthProvider::KomaRun)
+            .into_iter()
+            .map(|m| m.id)
+            .collect()
+    };
+    let before = ids("acct-c");
+    assert_eq!(
+        before
+            .iter()
+            .filter(|id| id.as_str() == "vendor/only-c")
+            .count(),
+        1
+    );
+    // A revoked grant disappears on the next refresh.
+    set_account_rows("acct-c", Vec::new());
+    assert!(!ids("acct-c").contains(&"vendor/only-c".to_string()));
+}

@@ -91,6 +91,8 @@ function RootLayout() {
   // Resolved once — window.__komaOS is injected by the Rust host before the app
   // boots and never changes for the lifetime of the window.
   const [platform] = useState(getPlatform)
+  // Opaque host window (Linux outside the Debian family): no rounded corners.
+  const appClass = `os-${platform}${window.__komaOpaque ? ' opaque' : ''}`
   const [overlay, setOverlay] = useState<'none' | 'resume' | 'rename'>('none')
   const [activeView, setActiveView] = useState<SidebarView>('explore')
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -395,7 +397,7 @@ function RootLayout() {
   // so host Config pushes during setup keep flowing.
   if (needsOnboarding) {
     return (
-      <div id="app" className={`os-${platform}`}>
+      <div id="app" className={appClass}>
         <Titlebar onSearch={() => {}} onRename={() => {}} onTerminal={handleTerminal} overlayOpen />
         <div className="absolute inset-x-0 top-8 bottom-0 overflow-hidden">
           <Onboarding />
@@ -407,7 +409,7 @@ function RootLayout() {
   }
 
   return (
-    <div id="app" className={`os-${platform}`}>
+    <div id="app" className={appClass}>
       <Titlebar
         onSearch={() => setOverlay('resume')}
         onRename={() => setOverlay('rename')}

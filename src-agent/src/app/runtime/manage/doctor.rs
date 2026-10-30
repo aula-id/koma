@@ -562,8 +562,18 @@ fn check_gui() -> CheckResult {
 fn check_gui_linux(details: &mut Vec<String>) -> (String, Status) {
     let mut status = Status::Ok;
     let mut note = String::new();
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
 
-    match std::process::Command::new("ldconfig").arg("-p").output() {
+    // Debian keeps ldconfig in /sbin, which is not on a regular user's PATH.
+    let ldconfig = std::process::Command::new("ldconfig")
+        .arg("-p")
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("/sbin/ldconfig")
+                .arg("-p")
+                .output()
+        });
+    match ldconfig {
         Ok(out) => {
             let list = String::from_utf8_lossy(&out.stdout);
             let has_webkit = list.contains("libwebkit2gtk-4.1.so");
@@ -572,14 +582,7 @@ fn check_gui_linux(details: &mut Vec<String>) -> (String, Status) {
                 note.push_str(", webkit2gtk + gtk-3 present");
             } else {
                 status = Status::Fail;
-                let mut missing = Vec::new();
-                if !has_webkit {
-                    missing.push("libwebkit2gtk-4.1-0");
-                }
-                if !has_gtk3 {
-                    missing.push("libgtk-3-0");
-                }
-                details.push(format!("install {}", missing.join(" / ")));
+                details.push(gui_install_hint(&os_release));
                 note.push_str(", missing shared libs");
             }
         }
@@ -598,12 +601,70 @@ fn check_gui_linux(details: &mut Vec<String>) -> (String, Status) {
         note.push_str(", display ok");
     }
 
+    let (window_note, window_warn) =
+        window_mode_note(crate::model::linux_window::configured(), &os_release);
+    note.push_str(&format!(", window: {window_note}"));
+    if window_warn {
+        if status == Status::Ok {
+            status = Status::Warn;
+        }
+        details.push(format!(
+            "outside Debian/Ubuntu a transparent window may only paint under the cursor; rerun install.sh, or write `window=opaque` to {}",
+            crate::model::linux_window::CONFIG_PATH
+        ));
+    }
+
     details.push(
         "WEBKIT_DISABLE_COMPOSITING_MODE is defaulted to 1 by koma on Linux so scroll layers repaint; View Transitions are disabled"
             .to_string(),
     );
 
     (note, status)
+}
+
+/// The window mode for the GUI headline, and whether it deserves a warning:
+/// no `gui.conf` outside the Debian family keeps the transparent window that
+/// WebKitGTK 2.54 paints only under the cursor.
+#[cfg(any(target_os = "linux", test))]
+fn window_mode_note(
+    configured: Option<crate::model::linux_window::Mode>,
+    os_release: &str,
+) -> (String, bool) {
+    match configured {
+        Some(mode) => (
+            format!(
+                "{} ({})",
+                mode.as_str(),
+                crate::model::linux_window::CONFIG_PATH
+            ),
+            false,
+        ),
+        None => (
+            "transparent (no gui.conf)".to_string(),
+            !crate::model::linux_window::is_debian_family(os_release),
+        ),
+    }
+}
+
+/// Install command for the GUI libraries, picked from `/etc/os-release`.
+/// WebKitGTK 4.1 depends on GTK 3 on every distro, so one package covers both.
+#[cfg(any(target_os = "linux", test))]
+fn gui_install_hint(os_release: &str) -> String {
+    let family = crate::model::linux_window::os_ids(os_release);
+    let is = |id: &str| family.contains(&id);
+    let command = if is("debian") || is("ubuntu") {
+        "sudo apt-get install libwebkit2gtk-4.1-0"
+    } else if is("fedora") || is("rhel") || is("centos") {
+        "sudo dnf install webkit2gtk4.1"
+    } else if is("arch") {
+        "sudo pacman -S webkit2gtk-4.1"
+    } else if is("suse") || is("opensuse") {
+        "sudo zypper install libwebkit2gtk-4_1-0"
+    } else {
+        return "install WebKitGTK 4.1 (libwebkit2gtk-4.1.so.0) and GTK 3 with your package manager"
+            .to_string();
+    };
+    format!("install WebKitGTK 4.1: {command}")
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -947,3 +1008,7 @@ fn check_update() -> CheckResult {
         },
     }
 }
+
+#[cfg(test)]
+#[path = "doctor_test.rs"]
+mod tests;
