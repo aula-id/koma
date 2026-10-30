@@ -4,41 +4,73 @@
 
 **An AI coding workspace for the work between an idea and a commit.**
 
-Koma brings an AI agent, code editor, terminal, and Git tools together. Describe what you want to build or fix, and Koma can explore your project, make changes, and run checks while you stay in control of the work.
+Koma brings an AI agent, code editor, visual tools, terminal, and Git together. Describe what you want to build or fix, and Koma can explore your project, make changes, and run checks alongside you.
 
 [Explore Koma](https://koma.run) · [Get started](https://koma.run/#install) · [Documentation](https://koma.run/docs)
 
-![Koma's agent workspace showing a completed coding task](assets/readme/chat.png)
+Koma is free and open source under the [Apache 2.0 license](LICENSE), and is available for macOS, Linux, and Windows. Model providers may have their own pricing.
 
-*Images on this page are captured from the scripted product showcase on koma.run. The tasks and usage figures shown are illustrative.*
+## Meet your workspace
 
-## Give your ideas room to move
+The images below are captured from Koma's scripted product showcase. Projects, tasks, prices, and usage figures in the images are illustrative.
 
-Whether you're adding a feature, investigating a bug, or learning an unfamiliar codebase, Koma gives you a place to work alongside an agent. Ask a question, share a task, and follow the files, commands, and results as the work unfolds.
+### Work with an AI agent
 
-Koma can divide larger tasks among sub-agents, run jobs in the background, and keep project context across sessions. You choose how much to delegate and which actions need approval.
+Ask Koma to investigate a bug, add a feature, or explain a codebase. Follow its activity as it reads files, makes changes, and runs checks. For larger tasks, Koma can delegate work to sub-agents, run jobs in the background, and keep project context across sessions.
 
-## A workspace built around your project
+![Koma agent completing a coding task](assets/readme/chat.png)
 
-The desktop app puts the agent beside the tools you use to build: a code editor, Git, a terminal, a browser, diagrams, and a visual designer. Review changes and continue working in the same workspace.
+### Write and review code
 
-![Koma's editor with a project tree and two files open side by side](assets/readme/ide.png)
+Browse your project and work in a code editor with split views. The agent and editor share the same workspace, so you can inspect and continue the work yourself.
 
-Prefer the command line? Koma also runs in your terminal, where you can keep several sessions going and return to them later.
+![Koma editor with a project tree and two files open side by side](assets/readme/ide.png)
+
+### Design an interface
+
+Sketch an interface in the visual designer, adjust properties in the inspector, and send a design to the agent as context for implementation.
+
+![Koma designer showing a selected pricing card and its properties](assets/readme/design.png)
+
+### Map an idea
+
+Draw a flow with shapes and connectors in the diagram editor. Add the diagram to chat when you want the agent to work from it.
+
+![Koma diagram editor showing an example sign-in flow](assets/readme/diagram.png)
+
+### Work from the terminal
+
+Use Koma from the command line, run multiple sessions, and return to them later. Each session can work on its own task and project.
 
 ![Koma terminal sessions working on separate tasks](assets/readme/cli.png)
 
-## Choose how you work with AI
+### Keep track of changes
 
-Connect your preferred model providers and assign models to different roles. Koma also supports MCP servers for connecting additional tools. Its usage view helps you follow token consumption and costs across sessions.
+Review and stage changes, make commits, and explore branches and history in Koma's Git workspace.
+
+![Koma source control and commit graph](assets/readme/git.png)
+
+### Work with desktop apps
+
+With computer use enabled, share a screen or application with the agent so it can observe and interact with it. You can pause, take back control, or stop sharing. Available controls depend on your platform and the source you share.
+
+![Koma agent working with a shared calendar application](assets/readme/computer.png)
+
+### Browse together
+
+Open Koma's on-screen browser to let the agent inspect pages and interact with them. You can take control when a task needs you, such as signing in.
+
+![Koma agent inspecting a page in the on-screen browser](assets/readme/browser.png)
+
+### See model usage
+
+Connect model providers and assign models to different roles. Koma also supports MCP servers for connecting additional tools. The usage view helps you follow token consumption and costs across sessions.
 
 ![Koma usage analytics showing example model and token activity](assets/readme/usage.png)
 
 ## Get started
 
-Koma is available for macOS, Linux, and Windows. Visit [koma.run](https://koma.run/#install) to choose an installer, then open Koma, connect a model, and tell it what you want to work on. The [documentation](https://koma.run/docs) walks through your first session.
-
-Koma is free and open source under the [Apache 2.0 license](LICENSE). Model providers may have their own pricing.
+Visit [koma.run](https://koma.run/#install) to choose an installer, then open Koma, connect a model, and tell it what you want to work on. The [documentation](https://koma.run/docs) walks through your first session.
 
 ## For teams
 
