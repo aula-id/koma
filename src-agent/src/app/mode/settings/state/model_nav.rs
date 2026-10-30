@@ -87,8 +87,9 @@ impl SettingsState {
         }
     }
 
-    /// OAuth pickers use the locally cached public OA membership list, never
-    /// a native provider request or a bundled client-side fallback.
+    /// OAuth pickers use the cached OA membership list, never a native provider
+    /// request or a bundled client-side fallback. For a signed-in Koma account the
+    /// list also carries the private and token models that account may use.
     pub fn mm_selected_is_static_overlay(&self) -> bool {
         matches!(
             self.mm_selected_provider(),
@@ -99,7 +100,7 @@ impl SettingsState {
     pub fn mm_static_overlay_catalogue(&self) -> Vec<crate::dto::openrouter::ModelInfo> {
         match self.mm_selected_provider() {
             Some(SelectedProvider::OAuth(d)) => {
-                crate::service::catalogue_overlay::oauth_catalogue(d.provider)
+                crate::service::catalogue_overlay::oauth_catalogue_for(&d.uuid, d.provider)
             }
             _ => Vec::new(),
         }
