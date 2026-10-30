@@ -2,6 +2,8 @@
 
 # Koma
 
+[English](README.md) · [한국어](docs/README.ko.md) · [中文](docs/README.zh.md) · [日本語](docs/README.ja.md) · [Bahasa Indonesia](docs/README.id.md) · [Русский](docs/README.ru.md) · [Deutsch](docs/README.de.md) · [Español](docs/README.es.md)
+
 **Build what you have in mind.**
 
 Koma is an AI coding workspace where your ideas can become working software. Bring a question, a bug, or that feature you've been meaning to build. Your agent can explore the project, make changes, and run checks while you work alongside it.
