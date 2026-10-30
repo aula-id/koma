@@ -31,3 +31,18 @@ fn gui_install_hint_names_the_library_when_the_distro_is_unknown() {
         assert!(!hint.contains("sudo"), "{hint}");
     }
 }
+
+#[test]
+fn window_mode_warns_only_without_gui_conf_outside_debian() {
+    use crate::model::linux_window::Mode;
+    let (note, warn) = window_mode_note(Some(Mode::Opaque), "ID=fedora\n");
+    assert!(note.starts_with("opaque (/etc/koma/gui.conf"), "{note}");
+    assert!(!warn);
+    let (_, warn) = window_mode_note(Some(Mode::Transparent), "ID=arch\n");
+    assert!(!warn, "an explicit choice is respected");
+    let (note, warn) = window_mode_note(None, "ID=ubuntu\n");
+    assert_eq!(note, "transparent (no gui.conf)");
+    assert!(!warn);
+    let (_, warn) = window_mode_note(None, "ID=fedora\n");
+    assert!(warn);
+}

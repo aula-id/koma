@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "install.sh"
+      - "src-agent/src/model/linux_window.rs"
       - "packaging/linux/**"
       - ".github/workflows/distro.yml"
   schedule:
@@ -32,15 +33,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # window: the GUI mode install.sh should leave in /etc/koma/gui.conf
+          # ("none" means no file, which koma reads as transparent).
           - image: debian:stable-slim
             prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+            window: none
           - image: ubuntu:22.04
             prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+            window: none
           - image: fedora:latest
             prepare: "true"
+            window: opaque
           # The image ships without synced package databases; a real system has them.
           - image: archlinux:latest
             prepare: pacman -Syu --noconfirm
+            window: opaque
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +64,20 @@ jobs:
             echo "$missing"
             exit 1
           fi
+
+      - name: GUI window mode matches the distro
+        run: |
+          if [ "${{ matrix.window }}" = "none" ]; then
+            test ! -e /etc/koma/gui.conf
+          else
+            cat /etc/koma/gui.conf
+            grep -qx "window=${{ matrix.window }}" /etc/koma/gui.conf
+          fi
+
+      - name: Installer flag overrides the detection
+        run: |
+          sh install.sh --gui-window=transparent >/dev/null
+          grep -qx "window=transparent" /etc/koma/gui.conf
 
       - name: koma starts
         run: |
