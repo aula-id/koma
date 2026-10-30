@@ -289,3 +289,36 @@ fn custom_reply_limit_wins_and_zero_uses_128k_on_every_endpoint() {
         assert!(got.output_tokens(0, 298_000).is_err());
     }
 }
+
+#[test]
+fn a_koma_account_model_uses_its_catalogue_window_instead_of_the_128k_fallback() {
+    let endpoint = "https://koma.run/api/v1/koma-premium";
+    // Unknown to the public catalogue and with no native list: the 128k fallback.
+    let blind = resolve("koma-token/wide", endpoint, "", 0, &[], &[]);
+    assert_eq!(blind.effective_window, FALLBACK_WINDOW);
+    assert_eq!(blind.catalogue_source, "fallback");
+    // The account's own catalogue knows the real window.
+    let known: ModelInfo = serde_json::from_value(serde_json::json!({
+        "id": "koma-token/wide", "context_length": 512_000,
+    }))
+    .unwrap();
+    let informed = resolve(
+        "koma-token/wide",
+        endpoint,
+        "",
+        0,
+        &[],
+        std::slice::from_ref(&known),
+    );
+    assert_eq!(informed.effective_window, OPERATING_CEILING);
+    assert_eq!(informed.catalogue_source, "active_provider");
+    // A smaller real window is respected, never inflated by the fallback.
+    let small: ModelInfo = serde_json::from_value(serde_json::json!({
+        "id": "koma-token/narrow", "context_length": 32_000,
+    }))
+    .unwrap();
+    assert_eq!(
+        resolve("koma-token/narrow", endpoint, "", 0, &[], &[small]).effective_window,
+        32_000
+    );
+}

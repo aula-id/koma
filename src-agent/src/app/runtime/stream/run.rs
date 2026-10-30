@@ -545,6 +545,26 @@ over sec_remote (stateful socket).\n",
         .filter(|m| state.rest.models_cache_endpoint.as_deref() == Some(m.endpoint.as_str()))
         .and_then(|_| state.rest.models_cache.clone())
         .unwrap_or_default();
+    // OAuth connections have no native /models list, so a model the public catalogue
+    // does not know would fall back to a 128k window and a 128k output wish. A Koma
+    // account's catalogue carries each model's real context length; use it. Koma
+    // only: every other OAuth provider keeps its current behaviour.
+    let native_models = if native_models.is_empty() {
+        main.as_ref()
+            .filter(|m| {
+                crate::app::runtime::commands::effort::route_provider(&state.rest.config, m)
+                    == Some(crate::model::app_config::OAuthProvider::KomaRun)
+            })
+            .map(|m| {
+                crate::service::catalogue_overlay::oauth_catalogue_for(
+                    &m.oauth_uuid,
+                    crate::model::app_config::OAuthProvider::KomaRun,
+                )
+            })
+            .unwrap_or(native_models)
+    } else {
+        native_models
+    };
     // Image-attachment send context: the session dir (source of record for image
     // bytes), whether the resolved Main model can read images, and its id (named
     // in the strip-warning). Built BEFORE the spawn so the task holds no borrow of
