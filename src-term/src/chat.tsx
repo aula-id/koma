@@ -156,10 +156,12 @@ export function HistoryPane({
   const stickRef = useRef(true)
   const expandingRef = useRef(false)
   const restoreRef = useRef<(() => void) | null>(null)
-  const stickyMessages = useRef<Array<ChatMessage | null>>([])
+  const sessionRef = useRef(session)
+  sessionRef.current = session
   const rows = useMemo(() => historyRows(session.messages), [session.messages])
   const prevRows = useRef(rows)
-  const prevSession = useRef(session.id)
+  const historyKey = `${session.id}:${session.history_rev}`
+  const prevSession = useRef(historyKey)
   const [from, setFrom] = useState(() => visibleFromTurn(historyRows(session.messages), CHAT_TURNS_DEFAULT))
   const [following, setFollowing] = useState(true)
   const [sticky, setSticky] = useState<ChatMessage | null>(null)
@@ -187,7 +189,7 @@ export function HistoryPane({
   }, [cleanups])
 
   useEffect(() => {
-    const sessionChanged = prevSession.current !== session.id
+    const sessionChanged = prevSession.current !== historyKey
     const next = nextRenderFrom(
       prevRows.current,
       rows,
@@ -197,13 +199,14 @@ export function HistoryPane({
       sessionChanged,
     )
     prevRows.current = rows
-    prevSession.current = session.id
+    prevSession.current = historyKey
     if (sessionChanged) {
       stickRef.current = true
       setFollowing(true)
+      setSticky(null)
     }
     if (next !== from) setFrom(next)
-  }, [rows, session.id, from])
+  }, [rows, historyKey, from])
 
   useEffect(() => {
     const box = scrollRef.current
@@ -237,9 +240,8 @@ export function HistoryPane({
     const box = scrollRef.current
     if (!box || stickRef.current) return
     const turn = box.getChildren()[0]?.getChildren().find((node) => node.y + node.height > box.viewport.y)
-    const message = turn ? stickyMessages.current[Number(String(turn.id).slice(5))] : null
-    if (!message) return
-    const sourceIndex = session.messages.indexOf(message)
+    const sourceIndex = turn ? turnIndex(turn) : -1
+    if (sourceIndex < 0) return
     const next = rows.findIndex((row) => row.sourceIndex === sourceIndex)
     if (next >= 0) { preserveAnchor(box); setFrom(next) }
   }
@@ -268,15 +270,14 @@ export function HistoryPane({
     const top = box.scrollTop
     let next: ChatMessage | null = null
     for (const turn of root.getChildren()) {
-      const id = String(turn.id ?? "")
-      if (!id.startsWith("turn-")) continue
+      const index = turnIndex(turn)
+      if (index < 0) continue
       const user = turn.getChildren().find((child) => String(child.id ?? "").startsWith("user-"))
       if (!user) continue
       const y = turn.y - root.y
       const pos = y >= 0 && y < box.scrollHeight ? y : turn.y
       if (pos + user.height <= top) {
-        const index = Number(id.slice("turn-".length))
-        next = stickyMessages.current[index] ?? null
+        next = sessionRef.current.messages[index] ?? null
       } else {
         break
       }
@@ -347,9 +348,6 @@ export function HistoryPane({
             session={mounted}
             theme={theme}
             syntaxStyle={syntaxStyle}
-            onTurns={(messages) => {
-              stickyMessages.current = messages
-            }}
           />
         </scrollbox>
         <SolidScrollBar source={scrollRef} theme={theme} />
@@ -367,17 +365,28 @@ const SHELL_MARK = "\u2064"
 const BASH_NUDGE_MARK = "\u2061"
 const EXT_PROMPT_MARK = "\u2060\u2060"
 
-function groupTurns(messages: ChatMessage[]): { user: ChatMessage | null; rest: ChatMessage[] }[] {
-  const turns: { user: ChatMessage | null; rest: ChatMessage[] }[] = []
-  for (const message of messages) {
+type Turn = { at: number; user: ChatMessage | null; rest: { message: ChatMessage; at: number }[] }
+
+/** Group visible messages into turns. `at` is the index in the full session history. */
+function groupTurns(messages: ChatMessage[], offset: number): Turn[] {
+  const turns: Turn[] = []
+  messages.forEach((message, i) => {
+    if (message.role === "system" || message.role === "tool") return
+    const at = offset + i
     if (message.role === "user") {
-      turns.push({ user: message, rest: [] })
-      continue
+      turns.push({ at, user: message, rest: [] })
+      return
     }
-    if (turns.length === 0) turns.push({ user: null, rest: [] })
-    turns[turns.length - 1].rest.push(message)
-  }
+    if (turns.length === 0) turns.push({ at, user: null, rest: [] })
+    turns[turns.length - 1]!.rest.push({ message, at })
+  })
   return turns
+}
+
+/** History index of a mounted turn box, or -1. */
+function turnIndex(node: { id?: unknown }): number {
+  const id = String(node.id ?? "")
+  return id.startsWith("turn-") ? Number(id.slice("turn-".length)) : -1
 }
 
 function Transcript({
@@ -385,33 +394,30 @@ function Transcript({
   session,
   theme,
   syntaxStyle,
-  onTurns,
 }: {
   sourceOffset: number
   session: SessionSnap
   theme: Theme
   syntaxStyle: SyntaxStyle
-  onTurns: (users: Array<ChatMessage | null>) => void
 }) {
   const results = new Map<string, ChatMessage>()
   for (const message of session.messages) {
     if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message)
   }
-  const visible = session.messages.filter((message) => message.role !== "system" && message.role !== "tool")
   const used = new Set<string>()
-  for (const message of visible) {
+  for (const message of session.messages) {
+    if (message.role === "system" || message.role === "tool") continue
     for (const call of message.tool_calls ?? []) used.add(call.id)
   }
   const live = Boolean(session.streaming || session.stream_reasoning)
   const pending = session.pending_tool_calls.filter((call) => !used.has(call.id))
-  const turns = groupTurns(visible)
-  onTurns(turns.map((turn) => turn.user))
+  const turns = groupTurns(session.messages, sourceOffset)
   return (
     <box flexDirection="column" gap={1} paddingLeft={1} paddingRight={1}>
-      {turns.map((turn, index) => (
-        <box key={`turn-${sourceOffset + session.messages.indexOf(turn.user ?? turn.rest[0])}`} id={`turn-${index}`} flexDirection="column" gap={1}>
+      {turns.map((turn) => (
+        <box key={`turn-${session.history_rev}-${turn.at}`} id={`turn-${turn.at}`} flexDirection="column" gap={1}>
           {turn.user ? (
-            <box id={`user-${index}`}>
+            <box id={`user-${turn.at}`}>
               <HistoryTurn
                 message={turn.user}
                 session={session}
@@ -421,9 +427,9 @@ function Transcript({
               />
             </box>
           ) : null}
-          {turn.rest.map((message, restIndex) => (
+          {turn.rest.map(({ message, at }) => (
             <HistoryTurn
-              key={`${index}-${restIndex}-${message.role}`}
+              key={`m-${at}`}
               message={message}
               session={session}
               theme={theme}

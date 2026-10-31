@@ -1,6 +1,4 @@
 /** Length-prefixed JSON frames and the snapshot fold. Wire shapes match `ipc/proto`. */
-import { isDeepStrictEqual } from "node:util"
-
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 export interface ToolCall {
@@ -59,6 +57,8 @@ export interface SessionSnap {
   context_usage: ContextUsage | null
   sdlc_phase: string | null
   sdlc_branch: string | null
+  /** Client-only. Changes when history is replaced rather than appended (rewind, compaction, clear). */
+  history_rev: number
 }
 
 export interface ContextUsage {
@@ -238,14 +238,43 @@ export function fold(snap: Snapshot | null, event: unknown): Snapshot | null {
     const next = normalizeSnapshot(record.Snapshot)
     for (const session of next.sessions) {
       const old = snap?.sessions.find((row) => row.id === session.id)
-      if (!old) continue
-      session.messages = session.messages.map((message, i) => isDeepStrictEqual(message, old.messages[i]) ? old.messages[i] : message)
-      if (session.messages.length === old.messages.length && session.messages.every((message, i) => message === old.messages[i])) session.messages = old.messages
+      if (old) reconcileMessages(old, session)
     }
     return next
   }
   if ("Delta" in record) return applyDelta(snap, record.Delta)
   return snap
+}
+
+/**
+ * Keep the previous message objects for the shared prefix so rendered turns stay mounted.
+ * A shorter or diverged history is a replacement and bumps `history_rev`.
+ */
+export function reconcileMessages(old: SessionSnap, next: SessionSnap): void {
+  const prev = old.messages
+  const incoming = next.messages
+  const limit = Math.min(prev.length, incoming.length)
+  let shared = 0
+  while (shared < limit && sameMessage(prev[shared]!, incoming[shared]!)) shared++
+  const appended = shared === prev.length
+  next.history_rev = appended ? old.history_rev : old.history_rev + 1
+  if (appended && incoming.length === prev.length) next.messages = prev
+  else if (shared > 0) next.messages = prev.slice(0, shared).concat(incoming.slice(shared))
+}
+
+function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (a === b) return true
+  if (a.role !== b.role || a.content !== b.content || a.tool_call_id !== b.tool_call_id || a.reasoning !== b.reasoning) return false
+  if ((a.attachments?.length ?? 0) !== (b.attachments?.length ?? 0)) return false
+  const left = a.tool_calls ?? []
+  const right = b.tool_calls ?? []
+  if (left.length !== right.length) return false
+  for (let i = 0; i < left.length; i++) {
+    const x = left[i]!
+    const y = right[i]!
+    if (x.id !== y.id || x.function?.name !== y.function?.name || x.function?.arguments !== y.function?.arguments) return false
+  }
+  return true
 }
 
 export function showImagePath(result: string): string | null {
@@ -424,6 +453,7 @@ function normalizeSession(raw: unknown): SessionSnap {
     context_usage: normalizeUsage(body.context_usage),
     sdlc_phase: body.sdlc_phase == null ? null : String(body.sdlc_phase),
     sdlc_branch: body.sdlc_branch == null ? null : String(body.sdlc_branch),
+    history_rev: 0,
   }
 }
 

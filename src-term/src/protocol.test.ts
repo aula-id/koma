@@ -47,6 +47,30 @@ describe("fold", () => {
     changed.sessions[0].messages[0].tool_calls[0].function.arguments = "changed"
     expect(fold(second, { Snapshot: changed })!.sessions[0].messages[0]).not.toBe(first.sessions[0].messages[0])
   })
+  test("history revision moves only when history is replaced", () => {
+    const msg = (role: string, content: string) => ({ role, content })
+    const base = [msg("system", "sys"), msg("user", "a"), msg("assistant", "b")]
+    const snapOf = (messages: unknown[]) => ({ Snapshot: { sessions: [{ id: "s", messages }], global: {} } })
+    const first = fold(null, snapOf(structuredClone(base)))!
+    const appended = fold(first, snapOf([...structuredClone(base), msg("user", "c")]))!
+    expect(appended.sessions[0]!.history_rev).toBe(0)
+    expect(appended.sessions[0]!.messages[1]).toBe(first.sessions[0]!.messages[1])
+    expect(appended.sessions[0]!.messages[3]!.content).toBe("c")
+
+    const rewound = fold(appended, snapOf(structuredClone(base).slice(0, 2)))!
+    expect(rewound.sessions[0]!.history_rev).toBe(1)
+    expect(rewound.sessions[0]!.messages[1]).toBe(first.sessions[0]!.messages[1])
+
+    const resent = fold(rewound, snapOf([msg("system", "sys"), msg("user", "a"), msg("assistant", "other")]))!
+    expect(resent.sessions[0]!.history_rev).toBe(1)
+    const replaced = fold(resent, snapOf([msg("system", "sys"), msg("user", "a"), msg("assistant", "edited")]))!
+    expect(replaced.sessions[0]!.history_rev).toBe(2)
+
+    const compacted = fold(replaced, snapOf([msg("system", "sys"), msg("assistant", "[summary]"), msg("assistant", "edited")]))!
+    expect(compacted.sessions[0]!.history_rev).toBe(3)
+    expect(fold(compacted, snapOf(structuredClone(compacted.sessions[0]!.messages)))!.sessions[0]!.messages).toBe(compacted.sessions[0]!.messages)
+  })
+
   test("snapshot then token and input", () => {
     const first = fold(null, {
       Snapshot: {
