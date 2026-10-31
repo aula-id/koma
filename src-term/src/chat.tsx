@@ -162,12 +162,24 @@ export function HistoryPane({
   const sessionRef = useRef(session)
   sessionRef.current = session
   const rows = useMemo(() => historyRows(session.messages), [session.messages])
-  const prevRows = useRef(rows)
   const historyKey = `${session.id}:${session.history_rev}`
-  const prevSession = useRef(historyKey)
   const [from, setFrom] = useState(() => visibleFromTurn(historyRows(session.messages), CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES))
   const [following, setFollowing] = useState(true)
   const [sticky, setSticky] = useState<ChatMessage | null>(null)
+  // Moved during render: a commit with the stale window mounts and drops whole
+  // turns, and OpenTUI keeps some native memory for every destroyed renderable.
+  const [seen, setSeen] = useState({ rows, historyKey })
+  if (seen.rows !== rows || seen.historyKey !== historyKey) {
+    const sessionChanged = seen.historyKey !== historyKey
+    if (sessionChanged) {
+      stickRef.current = true
+      setFollowing(true)
+      setSticky(null)
+    }
+    const next = nextRenderFrom(seen.rows, rows, from, stickRef.current, CHAT_TURNS_DEFAULT, sessionChanged, 0, CHAT_WINDOW_BYTES)
+    setSeen({ rows, historyKey })
+    if (next !== from) setFrom(next)
+  }
   const pressureCleanup = useRef(() => {})
   const pressure = usePressureValve(
     session.id,
@@ -179,28 +191,6 @@ export function HistoryPane({
   const step = reduced ? 15 : 30
   const end = windowEnd(rows, from, reduced ? CHAT_TURNS_DEFAULT : CHAT_MOUNT_TURNS, mountBytes)
   const notice = pressureNotice(pressure)
-
-  useEffect(() => {
-    const sessionChanged = prevSession.current !== historyKey
-    const next = nextRenderFrom(
-      prevRows.current,
-      rows,
-      from,
-      stickRef.current,
-      CHAT_TURNS_DEFAULT,
-      sessionChanged,
-      0,
-      CHAT_WINDOW_BYTES,
-    )
-    prevRows.current = rows
-    prevSession.current = historyKey
-    if (sessionChanged) {
-      stickRef.current = true
-      setFollowing(true)
-      setSticky(null)
-    }
-    if (next !== from) setFrom(next)
-  }, [rows, historyKey, from])
 
   useEffect(() => {
     const box = scrollRef.current
