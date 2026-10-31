@@ -168,6 +168,7 @@ const COMPOSER_FIELD_CLASS =
 // region there (owned by a parallel branch) stays untouched by this work.
 export function Composer() {
   const working = useKoma((s) => s.session.working)
+  const version = useKoma((s) => s.version)
   const attachments = useKoma((s) => s.session.attachments)
   const pendingSteer = useKoma((s) => s.session.pendingSteer)
   const refillComposer = useKoma((s) => s.refillComposer)
@@ -1388,6 +1389,14 @@ export function Composer() {
           </div>
 
           <div className="flex flex-none items-center gap-1.5 @max-xs/chat:gap-1">
+            {version?.latest ? (
+              <span
+                className="whitespace-nowrap text-[11px] text-koma-dim @max-xs/chat:hidden"
+                title={`koma ${version.latest} is available. Run koma update.`}
+              >
+                {version.current} <span className="text-koma-warn">({version.latest})</span>
+              </span>
+            ) : null}
             {/* STOP is a SEPARATE control from send (not a morph): while the turn
                 runs, both are shown — send stays LIVE so a submit QUEUES as a
                 steer, and stop aborts the in-flight turn (GuiReq Interrupt). */}

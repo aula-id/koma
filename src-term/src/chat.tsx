@@ -1301,7 +1301,7 @@ function Composer({
         <text>
           <span fg={theme.fg}>Koma </span>
           <span fg={theme.dim}>{version}</span>
-          {snap.global.latest_version ? <span fg={theme.warn}>{` · update ${snap.global.latest_version}`}</span> : null}
+          {snap.global.latest_version ? <span fg={theme.warn}>{` (${snap.global.latest_version})`}</span> : null}
           <span fg={theme.dim}> | </span>
           <span fg={modeColor}>{mode.label}</span>
         </text>

@@ -43,6 +43,12 @@ impl DaemonHub {
         // the freshest models/providers/agents (covers detach-reopen and any
         // missed broadcast).
         crate::app::runtime::actions::apply_global_catalogue_reload(state);
+        // Every attach (terminal or GUI, first entry or re-entry) re-checks for a
+        // newer koma. The daemon outlives its clients, so a startup-only check goes
+        // stale. The result arrives later through `drain_version` and a full snapshot.
+        if let Some(tx) = state.rest.version_tx.as_ref() {
+            crate::app::version::spawn_check_on_reentry(tx.clone());
+        }
         // ATOMIC attach (critique #2): build the full snapshot, send it, and
         // flip the client to attached + seed ITS OWN baseline IN THIS TICK.
         // Only this client's baseline is (re)seeded (blocker #2) — never a

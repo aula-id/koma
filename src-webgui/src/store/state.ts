@@ -20,6 +20,8 @@ export type KomaState = {
   computerError: string | null
   screenBrowser: import('../types/screenBrowser').ScreenBrowserStatus | null
   screenBrowserError: string | null
+  /** koma readout from the host. `latest` is set only when a newer release exists. */
+  version: { current: string; latest: string | null } | null
   session: SessionSlice
   hub: HubSlice
   palette: PaletteColors
