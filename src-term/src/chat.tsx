@@ -7,6 +7,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import {
   CHAT_TURNS_DEFAULT,
   CHAT_MOUNT_TURNS,
+  CHAT_WINDOW_BYTES,
   countTurns,
   historyRows,
   nextRenderFrom,
@@ -31,6 +32,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { setMemoryCounts } from "./memlog.ts"
+import { pressureNotice, usePressureValve } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -162,31 +164,20 @@ export function HistoryPane({
   const prevRows = useRef(rows)
   const historyKey = `${session.id}:${session.history_rev}`
   const prevSession = useRef(historyKey)
-  const [from, setFrom] = useState(() => visibleFromTurn(historyRows(session.messages), CHAT_TURNS_DEFAULT))
+  const [from, setFrom] = useState(() => visibleFromTurn(historyRows(session.messages), CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES))
   const [following, setFollowing] = useState(true)
   const [sticky, setSticky] = useState<ChatMessage | null>(null)
-  const [cleanups, setCleanups] = useState(0)
   const pressureCleanup = useRef(() => {})
-  const end = windowEnd(rows, from, cleanups > 0 ? CHAT_TURNS_DEFAULT : CHAT_MOUNT_TURNS)
-  useEffect(() => {
-    if (process.platform === "win32") return
-    let last = 0
-    const cleanup = () => {
-      if (Date.now() - last < 30_000) return
-      last = Date.now()
-      pressureCleanup.current()
-      setCleanups((n) => n + 1)
-    }
-    const timer = setInterval(() => {
-      if (process.memoryUsage().rss > 512 * 1024 * 1024) cleanup()
-    }, 5000)
-    process.on("SIGUSR2", cleanup)
-    return () => { clearInterval(timer); process.off("SIGUSR2", cleanup) }
-  }, [])
-  useEffect(() => {
-    if (cleanups === 0) return
-    scrollRef.current?.afterLayout(() => { Bun.gc(true) })
-  }, [cleanups])
+  const pressure = usePressureValve(
+    session.id,
+    () => pressureCleanup.current(),
+    (run) => { const box = scrollRef.current; if (box) box.afterLayout(run); else run() },
+  )
+  const reduced = pressure.reduced
+  const mountBytes = reduced ? CHAT_WINDOW_BYTES / 2 : CHAT_WINDOW_BYTES
+  const step = reduced ? 15 : 30
+  const end = windowEnd(rows, from, reduced ? CHAT_TURNS_DEFAULT : CHAT_MOUNT_TURNS, mountBytes)
+  const notice = pressureNotice(pressure)
 
   useEffect(() => {
     const sessionChanged = prevSession.current !== historyKey
@@ -197,6 +188,8 @@ export function HistoryPane({
       stickRef.current,
       CHAT_TURNS_DEFAULT,
       sessionChanged,
+      0,
+      CHAT_WINDOW_BYTES,
     )
     prevRows.current = rows
     prevSession.current = historyKey
@@ -217,11 +210,11 @@ export function HistoryPane({
       marker()
       expandingRef.current = false
     })
-  }, [from, cleanups])
+  }, [from, pressure.cleanups])
 
   function expand() {
     if (expandingRef.current || from <= 0) return
-    const next = shiftWindow(rows, from, -1, cleanups > 0 ? 15 : 30)
+    const next = shiftWindow(rows, from, -1, step, mountBytes)
     if (next >= from) return
     const box = scrollRef.current
     if (box) preserveAnchor(box)
@@ -251,7 +244,7 @@ export function HistoryPane({
     if (!box || expandingRef.current) return
     preserveAnchor(box)
     expandingRef.current = true
-    setFrom(shiftWindow(rows, from, 1, cleanups > 0 ? 15 : 30))
+    setFrom(shiftWindow(rows, from, 1, step, mountBytes))
   }
 
   function followTail() {
@@ -259,7 +252,7 @@ export function HistoryPane({
     stickRef.current = true
     setFollowing(true)
     if (was) return
-    const tail = visibleFromTurn(rows, CHAT_TURNS_DEFAULT)
+    const tail = visibleFromTurn(rows, CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES)
     if (tail !== from) setFrom(tail)
   }
 
@@ -303,7 +296,7 @@ export function HistoryPane({
     if (box.scrollTop < 2) expand()
   }
 
-  const start = rows[from]?.sourceIndex ?? rows[visibleFromTurn(rows, CHAT_TURNS_DEFAULT)]?.sourceIndex ?? 0
+  const start = rows[from]?.sourceIndex ?? rows[visibleFromTurn(rows, CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES)]?.sourceIndex ?? 0
   const stop = rows[end]?.sourceIndex ?? session.messages.length
   const mounted = { ...session, messages: session.messages.slice(start, stop),
     ...(end < rows.length ? { streaming: null, stream_reasoning: "", pending_tool_calls: [] } : {}) }
@@ -315,10 +308,10 @@ export function HistoryPane({
       mountedTurns: countTurns(rows.slice(from, end)),
       loadedContentBytes: session.messages.reduce((sum, message) => sum + Buffer.byteLength(message.content ?? ""), 0),
       streaming: Boolean(session.streaming || session.stream_reasoning),
-      cleanups,
+      cleanups: pressure.cleanups,
     })
     return () => setMemoryCounts(null)
-  }, [session, rows, from, end, cleanups])
+  }, [session, rows, from, end, pressure.cleanups])
   useEffect(() => {
     const timer = setInterval(() => updateSticky(), 150)
     return () => clearInterval(timer)
@@ -352,8 +345,8 @@ export function HistoryPane({
         </scrollbox>
         <SolidScrollBar source={scrollRef} theme={theme} />
       </box>
-      {!following || cleanups > 1 ? <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between">
-        <text fg={theme.dim} flexGrow={1} minWidth={0}>{cleanups > 1 ? "Memory high; reduced history window." : "Reading history"}</text>
+      {!following || notice ? <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between">
+        <text fg={pressure.warned ? theme.warn : theme.dim} flexGrow={1} minWidth={0}>{notice ?? "Reading history"}</text>
         <text fg={theme.accent} onMouseDown={followTail}>Latest ↓</text>
       </box> : null}
     </box>
