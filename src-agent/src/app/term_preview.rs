@@ -89,13 +89,6 @@ pub fn run_term_preview(start: TermStart) -> Result<()> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to start {}", bun.display()))?;
-    let ceiling = super::term_memory::ceiling_bytes();
-    #[cfg(windows)]
-    let job = {
-        use std::os::windows::io::AsRawHandle;
-        super::term_memory::TermJob::arm(child.as_raw_handle(), ceiling)
-    };
-    let watch = super::term_memory::Watch::start(child.id(), ceiling);
 
     #[cfg(unix)]
     let _foreground = ForegroundGuard::handoff(child.id());
@@ -112,19 +105,6 @@ pub fn run_term_preview(start: TermStart) -> Result<()> {
     let status = child
         .wait()
         .context("the new terminal stopped before it could exit")?;
-    let capped = watch.finish();
-    #[cfg(windows)]
-    let capped = capped || job.map(|job| job.finish(ceiling)).unwrap_or(false);
-    if capped {
-        #[cfg(unix)]
-        super::term_memory::restore_terminal();
-        let mb = ceiling / (1024 * 1024);
-        eprintln!(
-            "koma closed the terminal because it passed {mb} MB. The session is still running."
-        );
-        std::process::exit(1);
-    }
-
     match status.code() {
         Some(0) => Ok(()),
         Some(code) => std::process::exit(code),

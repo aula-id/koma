@@ -6,6 +6,7 @@ import { charIndexAt, composerIsAhead, mergeComposerChange, utf16Offset } from "
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   CHAT_TURNS_DEFAULT,
+  countTurns,
   historyRows,
   nextRenderFrom,
   pageFromTurn,
@@ -27,6 +28,7 @@ import { SolidScrollBar } from "./modes/bits.tsx"
 import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-paint.ts"
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
+import { setMemoryCounts } from "./memlog.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -213,7 +215,7 @@ function HistoryPane({
 
   function updateSticky() {
     const box = scrollRef.current
-    const root = box?.content.getChildren()[0]
+    const root = box?.getChildren()[0]
     if (!box || !root) return
     const top = box.scrollTop
     let next: ChatMessage | null = null
@@ -253,6 +255,17 @@ function HistoryPane({
 
   const start = rows[from]?.sourceIndex ?? 0
   const mounted = { ...session, messages: session.messages.slice(start) }
+  useEffect(() => {
+    if (process.env.KOMA_TERM_MEMLOG !== "1") return
+    setMemoryCounts({
+      loadedMessages: session.messages.length,
+      mountedMessages: mounted.messages.length,
+      mountedTurns: countTurns(rows.slice(from)),
+      loadedContentBytes: session.messages.reduce((sum, message) => sum + Buffer.byteLength(message.content ?? ""), 0),
+      streaming: Boolean(session.streaming || session.stream_reasoning),
+    })
+    return () => setMemoryCounts(null)
+  }, [session, rows, from])
   useEffect(() => {
     const timer = setInterval(() => updateSticky(), 150)
     return () => clearInterval(timer)

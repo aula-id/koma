@@ -18,6 +18,23 @@ describe("frames", () => {
     expect(reader.push(readerBytes)).toEqual([])
     expect(reader.push(rest)).toEqual([{ SendKey: { code: "Enter", mods: 0 } }])
   })
+
+  test("reads fragmented and coalesced frames without losing the next header", () => {
+    const first = encodeFrame({ text: "안녕 🌱" })
+    const second = encodeFrame({ n: 2 })
+    const all = new Uint8Array(first.length + second.length)
+    all.set(first)
+    all.set(second, first.length)
+    const reader = new FrameReader()
+    const frames: unknown[] = []
+    for (let i = 0; i < all.length; i += 3) frames.push(...reader.push(all.subarray(i, i + 3)))
+    expect(frames).toEqual([{ text: "안녕 🌱" }, { n: 2 }])
+  })
+
+  test("rejects an oversized length and invalid JSON", () => {
+    expect(() => new FrameReader().push(new Uint8Array([4, 0, 0, 1]))).toThrow("over the")
+    expect(() => new FrameReader().push(new Uint8Array([0, 0, 0, 1, 0xff]))).toThrow()
+  })
 })
 
 describe("fold", () => {

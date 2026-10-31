@@ -177,21 +177,38 @@ export function isSnapshotEvent(event: unknown): boolean {
 }
 
 export class FrameReader {
-  private buf: Uint8Array<ArrayBufferLike> = new Uint8Array(0)
+  private header = new Uint8Array(4)
+  private headerLength = 0
+  private body: Uint8Array | null = null
+  private bodyLength = 0
+  private decoder = new TextDecoder()
 
   push(chunk: Uint8Array): unknown[] {
-    this.buf = concat(this.buf, chunk)
     const out: unknown[] = []
-    while (this.buf.length >= 4) {
-      const length = readU32BE(this.buf, 0)
-      if (length > MAX_FRAME_BYTES) {
-        throw new Error(`frame is ${length} bytes, over the ${MAX_FRAME_BYTES} limit`)
+    let offset = 0
+    while (offset < chunk.length) {
+      if (this.body === null) {
+        const count = Math.min(4 - this.headerLength, chunk.length - offset)
+        this.header.set(chunk.subarray(offset, offset + count), this.headerLength)
+        this.headerLength += count
+        offset += count
+        if (this.headerLength < 4) break
+        const length = readU32BE(this.header, 0)
+        if (length > MAX_FRAME_BYTES) {
+          throw new Error(`frame is ${length} bytes, over the ${MAX_FRAME_BYTES} limit`)
+        }
+        this.body = new Uint8Array(length)
+        this.bodyLength = 0
       }
-      if (this.buf.length < 4 + length) break
-      const payload = this.buf.subarray(4, 4 + length)
-      this.buf = this.buf.subarray(4 + length)
-      const text = new TextDecoder().decode(payload)
-      out.push(JSON.parse(text))
+      const count = Math.min(this.body.length - this.bodyLength, chunk.length - offset)
+      this.body.set(chunk.subarray(offset, offset + count), this.bodyLength)
+      this.bodyLength += count
+      offset += count
+      if (this.bodyLength < this.body.length) break
+      const body = this.body
+      this.body = null
+      this.headerLength = 0
+      out.push(JSON.parse(this.decoder.decode(body)))
     }
     return out
   }
@@ -424,15 +441,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback
-}
-
-function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
-  if (left.length === 0) return right
-  if (right.length === 0) return left
-  const out = new Uint8Array(left.length + right.length)
-  out.set(left, 0)
-  out.set(right, left.length)
-  return out
 }
 
 function readU32BE(bytes: Uint8Array, offset: number): number {
