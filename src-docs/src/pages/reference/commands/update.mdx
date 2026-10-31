@@ -1,0 +1,18 @@
+---
+title: "/update"
+description: Install the newest koma and come back to this conversation.
+command: "/update"
+---
+
+# /update
+
+Install the newest koma and come back to this conversation.
+
+import { Guide } from '../../../components/Guide.client'
+import { referenceSteps } from '../../../guides/reference'
+
+<Guide steps={referenceSteps['/update']} />
+
+When a newer koma is out, the line above the composer shows it, for example `0.4.6 (new 0.4.7 update)`. Type `/update`. The installer runs in your terminal, then this conversation opens again on the new version.
+
+Wait until koma has finished replying first. `/update` only works for a conversation on this computer. For another computer, run `koma update` there.

@@ -200,6 +200,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::Status(_)
         | DaemonEvent::RunState { .. }
         | DaemonEvent::AttachSession { .. }
+        | DaemonEvent::RunUpdate
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::PasteBody { .. }
         | DaemonEvent::AttachmentLocated { .. }

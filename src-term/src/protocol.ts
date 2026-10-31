@@ -117,6 +117,7 @@ export type Control =
   | { kind: "open"; id: string }
   | { kind: "select" }
   | { kind: "remote"; remote: RemoteHandoff }
+  | { kind: "update" }
   | { kind: "error"; text: string }
 
 export function modeName(mode: unknown): string {
@@ -141,6 +142,7 @@ export function foregroundSession(snap: Snapshot): SessionSnap | null {
 export function controlOf(event: unknown): Control {
   if (event === "OpenSwapper") return { kind: "home" }
   if (event === "EnterSelect") return { kind: "select" }
+  if (event === "RunUpdate") return { kind: "update" }
   if (!event || typeof event !== "object" || Array.isArray(event)) return { kind: "frame" }
   const record = event as Record<string, unknown>
   if ("Error" in record) return { kind: "error", text: String(record.Error ?? "") }

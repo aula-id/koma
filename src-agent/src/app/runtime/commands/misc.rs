@@ -167,6 +167,18 @@ pub(super) fn handle_quit(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
+/// Handle the `/update` command: ask the controlling client to install the latest
+/// release and reopen this session on it. Refused mid-turn, because reopening
+/// restarts this session's daemon.
+pub(super) fn handle_update(state: &mut AppState) -> Result<()> {
+    if state.rest.fg().waiting {
+        state.rest.fg_mut().status = "busy — /update after this turn finishes".into();
+        return Ok(());
+    }
+    state.rest.update_pending = true;
+    Ok(())
+}
+
 /// Handle the `/usage` command: open the cost/token usage dashboard.
 ///
 /// Read-only; no waiting guard needed (the dashboard never writes).

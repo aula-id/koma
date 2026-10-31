@@ -217,7 +217,7 @@ export class DaemonLink {
     const control = controlOf(event)
     if (control.kind !== "frame") {
       this.onControl(control)
-      if (control.kind === "home" || control.kind === "new" || control.kind === "open") return
+      if (control.kind === "home" || control.kind === "new" || control.kind === "open" || control.kind === "update") return
     }
     const next = fold(this.snap, event)
     if (next !== this.snap) {

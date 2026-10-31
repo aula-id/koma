@@ -93,7 +93,25 @@ pub fn run_update() -> Result<()> {
     // while the daemon is still running from its in-memory image.
     let _ = super::run_daemon_subcommand(DaemonSub::Kill, None);
 
-    // 2. Fetch + run the installer.
+    // 2. Fetch + run the installer, then refresh the app list entry.
+    install_latest(None)?;
+
+    // 3. Reap any surviving daemons — covers a pre-0.2.0 global daemon that was running
+    //    alongside 0.2.0 daemons (or a first upgrade FROM 0.1.x where step 1 killed
+    //    nothing). Best-effort: a reap failure must never block a successful update.
+    super::migrate_legacy_daemon();
+
+    // 4. Done.
+    println!("koma updated. Run 'koma' to start.");
+    Ok(())
+}
+
+/// Run the official installer and refresh the app list entry. Running daemons are
+/// left alone: the installer renames the new binary into place, so they keep their
+/// in-memory image until the build-skew handshake restarts them. `dir` overrides
+/// the install directory (`KOMA_INSTALL_DIR`).
+#[cfg(not(windows))]
+pub fn install_latest(dir: Option<&std::path::Path>) -> Result<()> {
     println!("koma update: fetching latest installer…");
 
     // Prefer curl; fall back to wget; hard error if neither is found.
@@ -109,7 +127,11 @@ pub fn run_update() -> Result<()> {
 
     // Inherit stdout/stderr so the installer's progress is visible in the
     // terminal. stdin is also inherited (some installers prompt for sudo).
-    let status = crate::tool::shell::os_shell_command(sh_cmd)
+    let mut installer = crate::tool::shell::os_shell_command(sh_cmd);
+    if let Some(dir) = dir {
+        installer.env("KOMA_INSTALL_DIR", dir);
+    }
+    let status = installer
         .status()
         .map_err(|e| anyhow!("failed to launch installer: {e}"))?;
 
@@ -127,14 +149,6 @@ pub fn run_update() -> Result<()> {
     if let Err(e) = super::launcher::install() {
         eprintln!("koma update: could not refresh the app list entry: {e:#}");
     }
-
-    // 3. Reap any surviving daemons — covers a pre-0.2.0 global daemon that was running
-    //    alongside 0.2.0 daemons (or a first upgrade FROM 0.1.x where step 1 killed
-    //    nothing). Best-effort: a reap failure must never block a successful update.
-    super::migrate_legacy_daemon();
-
-    // 4. Done.
-    println!("koma updated. Run 'koma' to start.");
     Ok(())
 }
 

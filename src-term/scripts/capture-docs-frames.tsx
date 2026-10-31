@@ -293,6 +293,7 @@ async function main() {
   await save("chat-mode-sdlc", chat({ sdlc_phase: "assess" }, { agent_mode: "sdlc" }))
   await save("chat-mode-yolo", chat({}, { agent_mode: "yolo" }))
   await save("chat-free", chat({ resolved_model_id: "koma-free" }, { input: "/free", cursor: 5, agent_mode: "auto", command_palette: [{ name: "/free", desc: "Toggle this session to use koma-free" }] }))
+  await save("chat-update", chat({ messages: [user, reply] }, { input: "/update", cursor: 7, latest_version: "0.4.7", command_palette: [{ name: "/update", desc: "Install the latest koma and reopen this session" }] }))
   await save("chat-rename", chat({ name: "quarterly brief" }, { input: "/rename quarterly brief", cursor: 23, command_palette: [{ name: "/rename", desc: "Rename the current session" }] }))
   await save("chat-cd", chat({}, { input: "/cd ~/Clients/acme", cursor: 18, command_palette: [{ name: "/cd", desc: "Change the session working directory" }] }))
   await save("chat-adddir", chat({}, { input: "/adddir ~/Clients/acme/assets", cursor: 30, command_palette: [{ name: "/adddir", desc: "Add another folder" }] }))

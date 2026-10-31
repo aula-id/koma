@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs"
 import { createCliRenderer, SyntaxStyle, type SyntaxStyle as SyntaxStyleHandle } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useSelectionHandler } from "@opentui/react"
 import { RemoteScreen } from "./remote-screen.tsx"
@@ -23,6 +24,9 @@ function initialRoute(): Route {
 }
 
 const MIN_COLUMNS = 50
+/** Matches `UPDATE_EXIT` in `src-agent/src/app/term_preview.rs`. */
+const UPDATE_EXIT = 75
+const UPDATE_FILE = process.env.KOMA_UPDATE_FILE
 
 process.title = "koma"
 startMemoryLog()
@@ -91,6 +95,13 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
     process.exit(0)
   }
 
+  function update(id: string) {
+    writeFileSync(UPDATE_FILE!, id)
+    renderer.destroy()
+    syntaxStyle.destroy()
+    process.exit(UPDATE_EXIT)
+  }
+
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
     if (text) copyText(text)
@@ -140,6 +151,7 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
         onOpen={onOpen}
         onExit={leave}
         onRemote={onRemote}
+        onUpdate={UPDATE_FILE ? update : undefined}
         onPalette={setPalette}
         ctrlC={sessionCtrlC}
       />
