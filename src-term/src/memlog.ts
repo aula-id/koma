@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-type Counts = { loadedMessages: number; mountedMessages: number; mountedTurns: number; loadedContentBytes: number; streaming: boolean }
+type Counts = { loadedMessages: number; mountedMessages: number; mountedTurns: number; loadedContentBytes: number; streaming: boolean; cleanups: number }
 let counts: Counts | null = null
 
 export function setMemoryCounts(next: Counts | null): void {

@@ -1,4 +1,5 @@
 /** Length-prefixed JSON frames and the snapshot fold. Wire shapes match `ipc/proto`. */
+import { isDeepStrictEqual } from "node:util"
 
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024
 
@@ -233,7 +234,16 @@ export function decodeFrames(bytes: Uint8Array): unknown[] {
 export function fold(snap: Snapshot | null, event: unknown): Snapshot | null {
   if (!event || typeof event !== "object" || Array.isArray(event)) return snap
   const record = event as Record<string, unknown>
-  if ("Snapshot" in record) return normalizeSnapshot(record.Snapshot)
+  if ("Snapshot" in record) {
+    const next = normalizeSnapshot(record.Snapshot)
+    for (const session of next.sessions) {
+      const old = snap?.sessions.find((row) => row.id === session.id)
+      if (!old) continue
+      session.messages = session.messages.map((message, i) => isDeepStrictEqual(message, old.messages[i]) ? old.messages[i] : message)
+      if (session.messages.length === old.messages.length && session.messages.every((message, i) => message === old.messages[i])) session.messages = old.messages
+    }
+    return next
+  }
   if ("Delta" in record) return applyDelta(snap, record.Delta)
   return snap
 }

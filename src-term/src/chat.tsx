@@ -3,14 +3,16 @@ import { syntaxClient } from "./syntax.ts"
 import type { Renderable, ScrollBoxRenderable, SyntaxStyle, TextareaRenderable, TextareaAction } from "@opentui/core"
 import { useKeyboard, useRenderer } from "@opentui/react"
 import { charIndexAt, composerIsAhead, mergeComposerChange, utf16Offset } from "./caret.ts"
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   CHAT_TURNS_DEFAULT,
+  CHAT_MOUNT_TURNS,
   countTurns,
   historyRows,
   nextRenderFrom,
-  pageFromTurn,
   visibleFromTurn,
+  windowEnd,
+  shiftWindow,
 } from "./history.ts"
 import { FolderGuide } from "./dirs.tsx"
 import { PALETTE_VISIBLE, commandSuggestions, commandSuggestionOffset, paletteWindow } from "./palette.ts"
@@ -141,7 +143,7 @@ function modeMark(agentMode: string, session: SessionSnap | undefined): { icon: 
   }
 }
 
-function HistoryPane({
+export function HistoryPane({
   session,
   theme,
   syntaxStyle,
@@ -153,7 +155,7 @@ function HistoryPane({
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
   const stickRef = useRef(true)
   const expandingRef = useRef(false)
-  const restoreRef = useRef<number | null>(null)
+  const restoreRef = useRef<(() => void) | null>(null)
   const stickyMessages = useRef<Array<ChatMessage | null>>([])
   const rows = useMemo(() => historyRows(session.messages), [session.messages])
   const prevRows = useRef(rows)
@@ -161,6 +163,28 @@ function HistoryPane({
   const [from, setFrom] = useState(() => visibleFromTurn(historyRows(session.messages), CHAT_TURNS_DEFAULT))
   const [following, setFollowing] = useState(true)
   const [sticky, setSticky] = useState<ChatMessage | null>(null)
+  const [cleanups, setCleanups] = useState(0)
+  const pressureCleanup = useRef(() => {})
+  const end = windowEnd(rows, from, cleanups > 0 ? CHAT_TURNS_DEFAULT : CHAT_MOUNT_TURNS)
+  useEffect(() => {
+    if (process.platform === "win32") return
+    let last = 0
+    const cleanup = () => {
+      if (Date.now() - last < 30_000) return
+      last = Date.now()
+      pressureCleanup.current()
+      setCleanups((n) => n + 1)
+    }
+    const timer = setInterval(() => {
+      if (process.memoryUsage().rss > 512 * 1024 * 1024) cleanup()
+    }, 5000)
+    process.on("SIGUSR2", cleanup)
+    return () => { clearInterval(timer); process.off("SIGUSR2", cleanup) }
+  }, [])
+  useEffect(() => {
+    if (cleanups === 0) return
+    scrollRef.current?.afterLayout(() => { Bun.gc(true) })
+  }, [cleanups])
 
   useEffect(() => {
     const sessionChanged = prevSession.current !== session.id
@@ -186,22 +210,46 @@ function HistoryPane({
     const marker = restoreRef.current
     if (!box || marker == null) return
     restoreRef.current = null
-    queueMicrotask(() => {
-      box.scrollTop = Math.max(0, box.scrollHeight - marker)
+    box.afterLayout(() => {
+      marker()
       expandingRef.current = false
     })
-  }, [from])
+  }, [from, cleanups])
 
   function expand() {
     if (expandingRef.current || from <= 0) return
-    const next = pageFromTurn(rows, from, CHAT_TURNS_DEFAULT)
+    const next = shiftWindow(rows, from, -1, cleanups > 0 ? 15 : 30)
     if (next >= from) return
     const box = scrollRef.current
-    if (box) restoreRef.current = box.scrollHeight - box.scrollTop
+    if (box) preserveAnchor(box)
     stickRef.current = false
     expandingRef.current = true
     setFollowing(false)
     setFrom(next)
+  }
+
+  function preserveAnchor(box: ScrollBoxRenderable) {
+    const turns = box.getChildren()[0]?.getChildren() ?? []
+    const visible = turns.find((turn) => turn.y + turn.height > box.viewport.y)
+    if (visible) restoreRef.current = box.anchor(visible)
+  }
+  pressureCleanup.current = () => {
+    const box = scrollRef.current
+    if (!box || stickRef.current) return
+    const turn = box.getChildren()[0]?.getChildren().find((node) => node.y + node.height > box.viewport.y)
+    const message = turn ? stickyMessages.current[Number(String(turn.id).slice(5))] : null
+    if (!message) return
+    const sourceIndex = session.messages.indexOf(message)
+    const next = rows.findIndex((row) => row.sourceIndex === sourceIndex)
+    if (next >= 0) { preserveAnchor(box); setFrom(next) }
+  }
+
+  function newer() {
+    const box = scrollRef.current
+    if (!box || expandingRef.current) return
+    preserveAnchor(box)
+    expandingRef.current = true
+    setFrom(shiftWindow(rows, from, 1, cleanups > 0 ? 15 : 30))
   }
 
   function followTail() {
@@ -243,6 +291,7 @@ function HistoryPane({
     const view = box.viewport?.height ?? box.height
     const distance = box.scrollHeight - box.scrollTop - view
     if (distance < 2) {
+      if (end < rows.length) { newer(); return }
       followTail()
       return
     }
@@ -253,19 +302,22 @@ function HistoryPane({
     if (box.scrollTop < 2) expand()
   }
 
-  const start = rows[from]?.sourceIndex ?? 0
-  const mounted = { ...session, messages: session.messages.slice(start) }
+  const start = rows[from]?.sourceIndex ?? rows[visibleFromTurn(rows, CHAT_TURNS_DEFAULT)]?.sourceIndex ?? 0
+  const stop = rows[end]?.sourceIndex ?? session.messages.length
+  const mounted = { ...session, messages: session.messages.slice(start, stop),
+    ...(end < rows.length ? { streaming: null, stream_reasoning: "", pending_tool_calls: [] } : {}) }
   useEffect(() => {
     if (process.env.KOMA_TERM_MEMLOG !== "1") return
     setMemoryCounts({
       loadedMessages: session.messages.length,
       mountedMessages: mounted.messages.length,
-      mountedTurns: countTurns(rows.slice(from)),
+      mountedTurns: countTurns(rows.slice(from, end)),
       loadedContentBytes: session.messages.reduce((sum, message) => sum + Buffer.byteLength(message.content ?? ""), 0),
       streaming: Boolean(session.streaming || session.stream_reasoning),
+      cleanups,
     })
     return () => setMemoryCounts(null)
-  }, [session, rows, from])
+  }, [session, rows, from, end, cleanups])
   useEffect(() => {
     const timer = setInterval(() => updateSticky(), 150)
     return () => clearInterval(timer)
@@ -291,6 +343,7 @@ function HistoryPane({
           scrollbarOptions={scrollbars(theme)}
         >
           <Transcript
+            sourceOffset={start}
             session={mounted}
             theme={theme}
             syntaxStyle={syntaxStyle}
@@ -301,6 +354,10 @@ function HistoryPane({
         </scrollbox>
         <SolidScrollBar source={scrollRef} theme={theme} />
       </box>
+      {!following || cleanups > 1 ? <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between">
+        <text fg={theme.dim} flexGrow={1} minWidth={0}>{cleanups > 1 ? "Memory high; reduced history window." : "Reading history"}</text>
+        <text fg={theme.accent} onMouseDown={followTail}>Latest ↓</text>
+      </box> : null}
     </box>
   )
 }
@@ -324,11 +381,13 @@ function groupTurns(messages: ChatMessage[]): { user: ChatMessage | null; rest: 
 }
 
 function Transcript({
+  sourceOffset,
   session,
   theme,
   syntaxStyle,
   onTurns,
 }: {
+  sourceOffset: number
   session: SessionSnap
   theme: Theme
   syntaxStyle: SyntaxStyle
@@ -350,7 +409,7 @@ function Transcript({
   return (
     <box flexDirection="column" gap={1} paddingLeft={1} paddingRight={1}>
       {turns.map((turn, index) => (
-        <box key={`turn-${index}`} id={`turn-${index}`} flexDirection="column" gap={1}>
+        <box key={`turn-${sourceOffset + session.messages.indexOf(turn.user ?? turn.rest[0])}`} id={`turn-${index}`} flexDirection="column" gap={1}>
           {turn.user ? (
             <box id={`user-${index}`}>
               <HistoryTurn
@@ -395,7 +454,7 @@ function Transcript({
   )
 }
 
-function HistoryTurn({
+const HistoryTurn = memo(function HistoryTurn({
   message,
   session,
   theme,
@@ -459,7 +518,8 @@ function HistoryTurn({
       ) : null}
     </AssistantCard>
   )
-}
+}, (prev, next) => prev.message === next.message && prev.theme === next.theme && prev.syntaxStyle === next.syntaxStyle &&
+  (prev.message.tool_calls ?? []).every((call) => prev.results.get(call.id) === next.results.get(call.id)))
 
 function pasteFence(): RegExp {
   return /<<<pasted_text n=(\d+) path="[^"]*">>>([\s\S]*?)<<<end_pasted_text n=\d+>>>/g

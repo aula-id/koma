@@ -38,6 +38,15 @@ describe("frames", () => {
 })
 
 describe("fold", () => {
+  test("snapshots reuse unchanged messages and replace changed nested tool calls", () => {
+    const raw = { sessions: [{ id: "s", messages: [{ role: "assistant", content: "ok", tool_calls: [{ id: "t", function: { name: "x", arguments: "{}" } }] }] }], global: {} }
+    const first = fold(null, { Snapshot: raw })!
+    const second = fold(first, { Snapshot: structuredClone(raw) })!
+    expect(second.sessions[0].messages).toBe(first.sessions[0].messages)
+    const changed = structuredClone(raw)
+    changed.sessions[0].messages[0].tool_calls[0].function.arguments = "changed"
+    expect(fold(second, { Snapshot: changed })!.sessions[0].messages[0]).not.toBe(first.sessions[0].messages[0])
+  })
   test("snapshot then token and input", () => {
     const first = fold(null, {
       Snapshot: {

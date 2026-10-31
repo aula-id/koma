@@ -2,6 +2,22 @@
 export const CHAT_TURNS_DEFAULT = 30
 export const CHAT_TURNS_MIN = 1
 export const CHAT_TURNS_MAX = 200
+export const CHAT_MOUNT_TURNS = 90
+
+/** Exclusive row boundary for a bounded forward window. */
+export function windowEnd(rows: readonly HistoryRow[], from: number, turns = CHAT_MOUNT_TURNS): number {
+  let count = 0
+  for (let i = from; i < rows.length; i++) {
+    if (isTurnStart(rows[i]) && ++count > turns) return i
+  }
+  return rows.length
+}
+
+export function shiftWindow(rows: readonly HistoryRow[], from: number, direction: -1 | 1, step = CHAT_TURNS_DEFAULT): number {
+  const starts = rows.flatMap((row, i) => isTurnStart(row) ? [i] : [])
+  const at = Math.max(0, starts.findIndex((i) => i >= from))
+  return starts[Math.max(0, Math.min(starts.length - 1, at + direction * step))] ?? 0
+}
 
 const SHELL_MARK = "\u2064"
 const BASH_NUDGE_MARK = "\u2061"
