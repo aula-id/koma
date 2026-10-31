@@ -21,12 +21,65 @@ pub enum TermStart {
     Session(Option<String>),
 }
 
+/// Client exit code for `/update`: the client has written its session id to
+/// `KOMA_UPDATE_FILE` and wants this process to install and reopen it.
+const UPDATE_EXIT: i32 = 75;
+
 /// Spawn the OpenTUI preview and wait until it exits.
 ///
 /// The preview owns the terminal. On Unix it is moved into the foreground
 /// process group so Ctrl-C reaches OpenTUI, which restores the screen, instead
 /// of killing this process mid-frame.
 pub fn run_term_preview(start: TermStart) -> Result<()> {
+    let update_file = crate::model::store::base_dir()?
+        .join(format!("update-{}.session", std::process::id()));
+    // Captured before the installer renames a new binary over this one.
+    let exe = std::env::current_exe().ok();
+    let code = run_client(start, &update_file)?;
+    if code == Some(UPDATE_EXIT) {
+        let session = std::fs::read_to_string(&update_file).unwrap_or_default();
+        let _ = std::fs::remove_file(&update_file);
+        return update_and_reopen(exe, session.trim());
+    }
+    match code {
+        Some(0) => Ok(()),
+        Some(code) => std::process::exit(code),
+        None => std::process::exit(1),
+    }
+}
+
+/// Install the latest release on this terminal, then replace this process with
+/// the new binary attached to `session`. A failed install reopens the session on
+/// the current binary once the user has read the error.
+#[cfg(not(windows))]
+fn update_and_reopen(exe: Option<std::path::PathBuf>, session: &str) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let exe = exe.ok_or_else(|| anyhow!("cannot locate the koma binary to reopen"))?;
+    if let Err(e) = super::update::install_latest(exe.parent()) {
+        eprintln!("koma update failed: {e:#}");
+        if session.is_empty() {
+            std::process::exit(1);
+        }
+        eprintln!("Press Enter to return to your session.");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+    let mut cmd = Command::new(&exe);
+    if !session.is_empty() {
+        cmd.args(["--attach", "--session", session]);
+    }
+    Err(anyhow!("failed to reopen koma: {}", cmd.exec()))
+}
+
+/// Windows cannot replace a running executable, so this runs the MSI flow
+/// (which stops the daemons) and leaves reopening to the user.
+#[cfg(windows)]
+fn update_and_reopen(_exe: Option<std::path::PathBuf>, _session: &str) -> Result<()> {
+    super::run_update()
+}
+
+/// Run the client until it exits. `None` means it was killed by a signal.
+fn run_client(start: TermStart, update_file: &std::path::Path) -> Result<Option<i32>> {
     let launch = super::term_bundle::prepare().context(
         "the new terminal could not be prepared on this machine.\n  \
          Use `koma legacy` to open the legacy terminal.",
@@ -53,6 +106,7 @@ pub fn run_term_preview(start: TermStart) -> Result<()> {
     cmd.env("KOMA_DATA_DIR", crate::model::store::base_dir()?);
     cmd.env("KOMA_BUILD", crate::model::store::build_fingerprint());
     cmd.env("KOMA_VERSION", crate::model::store::current_version());
+    cmd.env("KOMA_UPDATE_FILE", update_file);
     match start {
         TermStart::Remote {
             target,
@@ -105,11 +159,7 @@ pub fn run_term_preview(start: TermStart) -> Result<()> {
     let status = child
         .wait()
         .context("the new terminal stopped before it could exit")?;
-    match status.code() {
-        Some(0) => Ok(()),
-        Some(code) => std::process::exit(code),
-        None => std::process::exit(1),
-    }
+    Ok(status.code())
 }
 
 #[cfg(unix)]

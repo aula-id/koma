@@ -32,6 +32,7 @@ export function SessionScreen({
   onRestart,
   onSuspendedExit,
   onRemote,
+  onUpdate,
   onPalette,
   ctrlC,
   transport,
@@ -46,6 +47,8 @@ export function SessionScreen({
   onRestart?: () => void
   onSuspendedExit?: () => void
   onRemote: (remote: RemoteHandoff) => void
+  /** Hands the terminal to the launcher to install and reopen `id`. Local sessions only. */
+  onUpdate?: (id: string) => void
   onPalette: (name: string) => void
   ctrlC?: { current: () => void }
 }) {
@@ -169,6 +172,15 @@ export function SessionScreen({
         }
         if (control.kind === "remote") {
           onRemote(control.remote)
+          return
+        }
+        if (control.kind === "update") {
+          if (transport?.remote || !onUpdate) {
+            report("/update only works in a local session. On the host, run `koma update`.")
+            return
+          }
+          link.detach()
+          onUpdate(id)
           return
         }
         if (control.kind === "error" && control.text) {

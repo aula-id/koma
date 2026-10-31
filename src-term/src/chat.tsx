@@ -1301,7 +1301,7 @@ function Composer({
         <text>
           <span fg={theme.fg}>Koma </span>
           <span fg={theme.dim}>{version}</span>
-          {snap.global.latest_version ? <span fg={theme.warn}>{` · update ${snap.global.latest_version}`}</span> : null}
+          {snap.global.latest_version ? <span fg={theme.warn}>{` (new ${snap.global.latest_version} update)`}</span> : null}
           <span fg={theme.dim}> | </span>
           <span fg={modeColor}>{mode.label}</span>
         </text>
@@ -1392,6 +1392,7 @@ export const COMPOSER_TIPS = [
   "/todo shows the session task list",
   "/skill loads or unloads a skill",
   "/cd changes the session working directory",
+  "/update installs the latest koma and reopens this session",
 ]
 
 /** Model name, plus the selected effort when `/effort` is not the model default. */

@@ -191,6 +191,22 @@ pub(super) fn serialize_and_push(
         push_snapshot_if_changed(shadow, fg, &session, &mode, push, last, view);
     }
 
+    // The daemon only sets `latest_version` when it is newer than its own build.
+    let version = (
+        env!("CARGO_PKG_VERSION").to_string(),
+        shadow.rest.latest_version.as_ref().map(|v| v.version.clone()),
+    );
+    if last.version.as_ref() != Some(&version) {
+        super::render::emit(
+            push,
+            &PushEnvelope::Version {
+                current: version.0.clone(),
+                latest: version.1.clone(),
+            },
+        );
+        last.version = Some(version);
+    }
+
     // --- Stream: prefer StreamDelta (append) when last is a prefix; else full reset ---
     match &fg.streaming {
         Some(text) => {

@@ -125,6 +125,7 @@ pub(super) fn apply_slash(
         }
         Command::Help => misc::handle_help(state)?,
         Command::Usage => misc::handle_usage(state)?,
+        Command::Update => misc::handle_update(state)?,
         Command::Quit => misc::handle_quit(state)?,
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
         Command::Model(args) => model_cmd::handle_model(args, state)?,

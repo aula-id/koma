@@ -104,6 +104,7 @@ const commands = [
   ['/select', '/reference/commands/select'],
   ['/notification', '/reference/commands/notification'],
   ['/help', '/reference/commands/help'],
+  ['/update', '/reference/commands/update'],
   ['/quit', '/reference/commands/quit'],
 ] as const
 

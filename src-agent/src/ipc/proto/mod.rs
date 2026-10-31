@@ -1033,6 +1033,11 @@ pub enum DaemonEvent {
     NewSession {
         kill: bool,
     },
+    /// One-shot: the `/update` hand-off. The controlling client leaves its screen,
+    /// runs the installer on its terminal, and reopens this session on the new
+    /// binary. The daemon's own mode is untouched; the build-skew handshake restarts
+    /// it when the new client attaches.
+    RunUpdate,
     /// One-shot: instruct the CONTROLLING client to ATTACH to ANOTHER session's daemon (the
     /// extension `sessions.switch` hand-off to a session this daemon does not own, W7). A
     /// broker `sessions.switch` whose target uuid is NOT a live session in THIS daemon sets

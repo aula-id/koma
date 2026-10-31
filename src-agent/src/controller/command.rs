@@ -9,7 +9,7 @@
 //! `/rename [session] <name>`, `/settings` (alias `/config`),
 //! `/resume` (alias `/sessions`), `/task <agent> <task>`,
 //! `/cd <path>`, `/adddir <path>`,
-//! `/internet [simple|full]`, `/clear`, `/help`, `/quit` (aliases: `/q`, `/exit`).
+//! `/internet [simple|full]`, `/clear`, `/help`, `/update`, `/quit` (aliases: `/q`, `/exit`).
 
 use crate::model::settings::InternetMode;
 
@@ -71,6 +71,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Search saved session and App notifications",
     ),
     ("/help", "List the available commands"),
+    ("/update", "Install the latest koma and reopen this session"),
     ("/quit", "Quit koma"),
 ];
 
@@ -204,6 +205,8 @@ pub enum Command {
     Help,
     /// Open the usage dashboard (`/usage`).
     Usage,
+    /// Install the latest release and reopen this session on it (`/update`).
+    Update,
     /// Exit the application.
     Quit,
     /// Switch session or agent model. Inner string is the raw remainder after
@@ -301,6 +304,7 @@ pub fn parse(line: &str) -> Command {
         "notification" => Command::Notification,
         "help" => Command::Help,
         "usage" => Command::Usage,
+        "update" => Command::Update,
         "quit" | "q" | "exit" => Command::Quit,
         "attach" => Command::Attach(rest.to_string()),
         "rename" => {
