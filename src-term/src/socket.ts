@@ -1,8 +1,9 @@
 import { createConnection, type Socket } from "node:net"
 import type { DaemonTransport } from "./transport.ts"
 import { EventDispatcher, PendingOperations } from "./events.ts"
-import { controlOf, encodeFrame, fold, FrameReader, needsRestart, type Control, type Snapshot } from "./protocol.ts"
+import { controlOf, encodeFrame, fold, FrameReader, isSnapshotEvent, needsRestart, needsResync, type Control, type Snapshot } from "./protocol.ts"
 import { ensureDaemon, killSession, socketPath } from "./paths.ts"
+import { countFrames } from "./memlog.ts"
 
 type ClientSocket = {
   write(data: Uint8Array): number | boolean
@@ -13,6 +14,8 @@ export class DaemonLink {
   private socket: ClientSocket | null = null
   private reader = new FrameReader()
   private seq = -1
+  /** A Resync is in flight; deltas until the next Snapshot would apply to a stale shadow. */
+  private resyncing = false
   private closed = false
   private detached = false
   private restarting = false
@@ -108,6 +111,7 @@ export class DaemonLink {
     this.usageReader = false
     this.reader = new FrameReader()
     this.seq = -1
+    this.resyncing = false
     if (this.transport) {
       await this.transport.open(sessionId, (data) => this.onData(data), () => this.onClose(), (error) => this.fail(error))
       if (this.closed || this.detached) { this.transport.end(); return }
@@ -177,6 +181,7 @@ export class DaemonLink {
       this.fail(error)
       return
     }
+    countFrames(data.length, frames)
     for (const frame of frames) this.onFrame(frame)
   }
 
@@ -192,11 +197,23 @@ export class DaemonLink {
     this.events.dispatch(event)
     if (this.detached || this.closed) return
     if (event && typeof event === "object" && "Hello" in (event as object)) {
-      const version = String(((event as { Hello?: { version?: string } }).Hello ?? {}).version ?? "")
-      this.helloResolve?.(version)
+      const hello = (event as { Hello?: { version?: string; capabilities?: unknown } }).Hello ?? {}
+      if (Array.isArray(hello.capabilities) && hello.capabilities.includes("session_progress")) {
+        this.send({ SetProgressDeltas: { enabled: true } })
+      }
+      this.helloResolve?.(String(hello.version ?? ""))
       return
     }
     if (event === "Ack") return
+    if (isSnapshotEvent(event)) this.resyncing = false
+    else if (event && typeof event === "object" && "Delta" in event) {
+      if (this.resyncing) return
+      if (needsResync(this.snap, event)) {
+        this.resyncing = true
+        this.send("Resync")
+        return
+      }
+    }
     const control = controlOf(event)
     if (control.kind !== "frame") {
       this.onControl(control)

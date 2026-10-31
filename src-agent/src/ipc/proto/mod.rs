@@ -93,6 +93,10 @@ pub enum ClientRequest {
     SetUsageReader {
         enabled: bool,
     },
+    /// Opt in to `StateDelta::SessionProgress` (advertised as `session_progress` in `Hello`).
+    SetProgressDeltas {
+        enabled: bool,
+    },
     ReplaceInputTracked {
         request_id: String,
         text: String,
@@ -1491,6 +1495,25 @@ pub enum StateDelta {
         session_id: String,
     },
     SessionAdded(Box<SessionSnapshot>),
+    /// One agent step on a session whose committed history only grew: `messages`
+    /// replaces `[from_index..]` and every other field replaces its counterpart.
+    /// `committed_reasoning` is not carried; it is `messages[i].reasoning`.
+    /// Sent only to clients that sent `SetProgressDeltas { enabled: true }`.
+    SessionProgress {
+        session_id: String,
+        from_index: usize,
+        messages: Vec<crate::dto::chat::ChatMessage>,
+        streaming: Option<String>,
+        stream_reasoning: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<crate::ipc::proto::turn::TurnRecord>,
+        tokens_in: u64,
+        tokens_out: u64,
+        tokens_cached: u64,
+        cost: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_usage: Option<crate::service::context_limits::ContextUsage>,
+    },
     Toast {
         #[serde(default)]
         session: Option<String>,

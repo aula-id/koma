@@ -1,5 +1,4 @@
 /** Length-prefixed JSON frames and the snapshot fold. Wire shapes match `ipc/proto`. */
-
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 export interface ToolCall {
@@ -58,6 +57,8 @@ export interface SessionSnap {
   context_usage: ContextUsage | null
   sdlc_phase: string | null
   sdlc_branch: string | null
+  /** Client-only. Changes when history is replaced rather than appended (rewind, compaction, clear). */
+  history_rev: number
 }
 
 export interface ContextUsage {
@@ -177,21 +178,38 @@ export function isSnapshotEvent(event: unknown): boolean {
 }
 
 export class FrameReader {
-  private buf: Uint8Array<ArrayBufferLike> = new Uint8Array(0)
+  private header = new Uint8Array(4)
+  private headerLength = 0
+  private body: Uint8Array | null = null
+  private bodyLength = 0
+  private decoder = new TextDecoder()
 
   push(chunk: Uint8Array): unknown[] {
-    this.buf = concat(this.buf, chunk)
     const out: unknown[] = []
-    while (this.buf.length >= 4) {
-      const length = readU32BE(this.buf, 0)
-      if (length > MAX_FRAME_BYTES) {
-        throw new Error(`frame is ${length} bytes, over the ${MAX_FRAME_BYTES} limit`)
+    let offset = 0
+    while (offset < chunk.length) {
+      if (this.body === null) {
+        const count = Math.min(4 - this.headerLength, chunk.length - offset)
+        this.header.set(chunk.subarray(offset, offset + count), this.headerLength)
+        this.headerLength += count
+        offset += count
+        if (this.headerLength < 4) break
+        const length = readU32BE(this.header, 0)
+        if (length > MAX_FRAME_BYTES) {
+          throw new Error(`frame is ${length} bytes, over the ${MAX_FRAME_BYTES} limit`)
+        }
+        this.body = new Uint8Array(length)
+        this.bodyLength = 0
       }
-      if (this.buf.length < 4 + length) break
-      const payload = this.buf.subarray(4, 4 + length)
-      this.buf = this.buf.subarray(4 + length)
-      const text = new TextDecoder().decode(payload)
-      out.push(JSON.parse(text))
+      const count = Math.min(this.body.length - this.bodyLength, chunk.length - offset)
+      this.body.set(chunk.subarray(offset, offset + count), this.bodyLength)
+      this.bodyLength += count
+      offset += count
+      if (this.bodyLength < this.body.length) break
+      const body = this.body
+      this.body = null
+      this.headerLength = 0
+      out.push(JSON.parse(this.decoder.decode(body)))
     }
     return out
   }
@@ -216,9 +234,57 @@ export function decodeFrames(bytes: Uint8Array): unknown[] {
 export function fold(snap: Snapshot | null, event: unknown): Snapshot | null {
   if (!event || typeof event !== "object" || Array.isArray(event)) return snap
   const record = event as Record<string, unknown>
-  if ("Snapshot" in record) return normalizeSnapshot(record.Snapshot)
+  if ("Snapshot" in record) {
+    const next = normalizeSnapshot(record.Snapshot)
+    for (const session of next.sessions) {
+      const old = snap?.sessions.find((row) => row.id === session.id)
+      if (old) reconcileMessages(old, session)
+    }
+    return next
+  }
   if ("Delta" in record) return applyDelta(snap, record.Delta)
   return snap
+}
+
+/** A progress delta that does not continue this shadow's history needs a fresh snapshot. */
+export function needsResync(snap: Snapshot | null, event: unknown): boolean {
+  if (!event || typeof event !== "object" || !("Delta" in event)) return false
+  const delta = asRecord((event as { Delta: unknown }).Delta)
+  if (!("SessionProgress" in delta)) return false
+  const body = asRecord(delta.SessionProgress)
+  const session = snap?.sessions.find((row) => row.id === String(body.session_id ?? ""))
+  return !session || body.from_index !== session.messages.length
+}
+
+/**
+ * Keep the previous message objects for the shared prefix so rendered turns stay mounted.
+ * A shorter or diverged history is a replacement and bumps `history_rev`.
+ */
+export function reconcileMessages(old: SessionSnap, next: SessionSnap): void {
+  const prev = old.messages
+  const incoming = next.messages
+  const limit = Math.min(prev.length, incoming.length)
+  let shared = 0
+  while (shared < limit && sameMessage(prev[shared]!, incoming[shared]!)) shared++
+  const appended = shared === prev.length
+  next.history_rev = appended ? old.history_rev : old.history_rev + 1
+  if (appended && incoming.length === prev.length) next.messages = prev
+  else if (shared > 0) next.messages = prev.slice(0, shared).concat(incoming.slice(shared))
+}
+
+function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (a === b) return true
+  if (a.role !== b.role || a.content !== b.content || a.tool_call_id !== b.tool_call_id || a.reasoning !== b.reasoning) return false
+  if ((a.attachments?.length ?? 0) !== (b.attachments?.length ?? 0)) return false
+  const left = a.tool_calls ?? []
+  const right = b.tool_calls ?? []
+  if (left.length !== right.length) return false
+  for (let i = 0; i < left.length; i++) {
+    const x = left[i]!
+    const y = right[i]!
+    if (x.id !== y.id || x.function?.name !== y.function?.name || x.function?.arguments !== y.function?.arguments) return false
+  }
+  return true
 }
 
 export function showImagePath(result: string): string | null {
@@ -294,6 +360,26 @@ function applyDelta(snap: Snapshot | null, delta: unknown): Snapshot | null {
         toast_event_id: body.id == null ? snap.global.toast_event_id : String(body.id),
       },
     }
+  }
+  if ("SessionProgress" in record) {
+    const body = asRecord(record.SessionProgress)
+    const id = String(body.session_id ?? "")
+    const from = numberOr(body.from_index, -1)
+    const tail = Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : []
+    return mapSession(snap, id, (session) => {
+      if (from < 0 || from > session.messages.length) return session
+      return {
+        ...session,
+        messages: tail.length === 0 && from === session.messages.length ? session.messages : session.messages.slice(0, from).concat(tail),
+        streaming: body.streaming == null ? null : String(body.streaming),
+        stream_reasoning: String(body.stream_reasoning ?? ""),
+        tokens_in: numberOr(body.tokens_in, session.tokens_in),
+        tokens_out: numberOr(body.tokens_out, session.tokens_out),
+        tokens_cached: numberOr(body.tokens_cached, session.tokens_cached),
+        cost: numberOr(body.cost, session.cost),
+        context_usage: normalizeUsage(body.context_usage),
+      }
+    })
   }
   if ("SessionAdded" in record) {
     const session = normalizeSession(record.SessionAdded)
@@ -397,6 +483,7 @@ function normalizeSession(raw: unknown): SessionSnap {
     context_usage: normalizeUsage(body.context_usage),
     sdlc_phase: body.sdlc_phase == null ? null : String(body.sdlc_phase),
     sdlc_branch: body.sdlc_branch == null ? null : String(body.sdlc_branch),
+    history_rev: 0,
   }
 }
 
@@ -424,15 +511,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback
-}
-
-function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
-  if (left.length === 0) return right
-  if (right.length === 0) return left
-  const out = new Uint8Array(left.length + right.length)
-  out.set(left, 0)
-  out.set(right, left.length)
-  return out
 }
 
 function readU32BE(bytes: Uint8Array, offset: number): number {

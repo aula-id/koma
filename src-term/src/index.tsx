@@ -12,6 +12,7 @@ import { QuitScreen, type QuitState } from "./quit.tsx"
 import { SessionScreen } from "./session.tsx"
 import { syntaxStyles } from "./syntax.ts"
 import { themeFor } from "./theme.ts"
+import { startMemoryLog } from "./memlog.ts"
 
 type Route = { kind: "hub" } | { kind: "session"; id: string } | { kind: "remote"; remote: RemoteHandoff }
 
@@ -24,6 +25,7 @@ function initialRoute(): Route {
 const MIN_COLUMNS = 50
 
 process.title = "koma"
+startMemoryLog()
 
 function isCtrlC(key: { name?: string; ctrl?: boolean; sequence?: string }): boolean {
   return (key.ctrl && key.name === "c") || key.sequence === "\u0003" || key.name === "ctrl+c"

@@ -214,6 +214,8 @@ pub(super) struct HubClient {
     /// then (and whenever both ids are `None`).
     pub(super) stream_session: Option<String>,
     pub(super) usage_reader: bool,
+    /// Receives `StateDelta::SessionProgress` instead of a full snapshot per agent step.
+    pub(super) progress_deltas: bool,
 }
 
 /// The sync-loop <-> per-client-task bridge + the render-state streaming engine
