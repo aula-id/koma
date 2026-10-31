@@ -246,6 +246,16 @@ export function fold(snap: Snapshot | null, event: unknown): Snapshot | null {
   return snap
 }
 
+/** A progress delta that does not continue this shadow's history needs a fresh snapshot. */
+export function needsResync(snap: Snapshot | null, event: unknown): boolean {
+  if (!event || typeof event !== "object" || !("Delta" in event)) return false
+  const delta = asRecord((event as { Delta: unknown }).Delta)
+  if (!("SessionProgress" in delta)) return false
+  const body = asRecord(delta.SessionProgress)
+  const session = snap?.sessions.find((row) => row.id === String(body.session_id ?? ""))
+  return !session || body.from_index !== session.messages.length
+}
+
 /**
  * Keep the previous message objects for the shared prefix so rendered turns stay mounted.
  * A shorter or diverged history is a replacement and bumps `history_rev`.
@@ -350,6 +360,26 @@ function applyDelta(snap: Snapshot | null, delta: unknown): Snapshot | null {
         toast_event_id: body.id == null ? snap.global.toast_event_id : String(body.id),
       },
     }
+  }
+  if ("SessionProgress" in record) {
+    const body = asRecord(record.SessionProgress)
+    const id = String(body.session_id ?? "")
+    const from = numberOr(body.from_index, -1)
+    const tail = Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : []
+    return mapSession(snap, id, (session) => {
+      if (from < 0 || from > session.messages.length) return session
+      return {
+        ...session,
+        messages: tail.length === 0 && from === session.messages.length ? session.messages : session.messages.slice(0, from).concat(tail),
+        streaming: body.streaming == null ? null : String(body.streaming),
+        stream_reasoning: String(body.stream_reasoning ?? ""),
+        tokens_in: numberOr(body.tokens_in, session.tokens_in),
+        tokens_out: numberOr(body.tokens_out, session.tokens_out),
+        tokens_cached: numberOr(body.tokens_cached, session.tokens_cached),
+        cost: numberOr(body.cost, session.cost),
+        context_usage: normalizeUsage(body.context_usage),
+      }
+    })
   }
   if ("SessionAdded" in record) {
     const session = normalizeSession(record.SessionAdded)

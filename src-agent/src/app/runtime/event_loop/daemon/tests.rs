@@ -171,7 +171,7 @@ fn attach_emits_hello_then_snapshot() {
     match f0.event {
         DaemonEvent::Hello { version, protocol, capabilities } => {
             assert_eq!(protocol, crate::ipc::proto::IPC_PROTOCOL_VERSION);
-            assert_eq!(capabilities, vec!["submit_turn", "interrupt_turn", "session_policy", "session_policy_readback", "enqueue_follow_up", "interrupt_and_submit", "turn_attachments"]);
+            assert_eq!(capabilities, vec!["submit_turn", "interrupt_turn", "session_policy", "session_policy_readback", "enqueue_follow_up", "interrupt_and_submit", "turn_attachments", "session_progress"]);
             assert_eq!(
                 version,
                 crate::model::store::build_fingerprint(),

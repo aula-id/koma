@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::app::state::AppState;
 use crate::ipc::proto::{DaemonEvent, DaemonFrame};
-use crate::ipc::snapshot::{build_snapshot_with_mode, diff};
+use crate::ipc::snapshot::{build_snapshot_with_mode, diff_for_client};
 
 use super::core::DaemonHub;
 
@@ -260,7 +260,7 @@ impl DaemonHub {
                     );
                     continue;
                 };
-                diff(prev, &next, stream_subagent, stream_session)
+                diff_for_client(prev, &next, stream_subagent, stream_session, self.clients[i].progress_deltas)
             };
 
             if force || result.needs_full {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, showImagePath } from "./protocol.ts"
+import { decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, needsResync, showImagePath } from "./protocol.ts"
 import { uuidV5Simple } from "./paths.ts"
 import { themeFor } from "./theme.ts"
 
@@ -69,6 +69,31 @@ describe("fold", () => {
     const compacted = fold(replaced, snapOf([msg("system", "sys"), msg("assistant", "[summary]"), msg("assistant", "edited")]))!
     expect(compacted.sessions[0]!.history_rev).toBe(3)
     expect(fold(compacted, snapOf(structuredClone(compacted.sessions[0]!.messages)))!.sessions[0]!.messages).toBe(compacted.sessions[0]!.messages)
+  })
+
+  test("progress deltas append history, keep old objects, and flag gaps for a resync", () => {
+    const snap = fold(null, { Snapshot: { sessions: [{ id: "s", messages: [{ role: "user", content: "a" }], streaming: "" }], global: {} } })!
+    const progress = (from_index: number, messages: unknown[], extra: Record<string, unknown> = {}) =>
+      ({ Delta: { SessionProgress: { session_id: "s", from_index, messages, streaming: null, stream_reasoning: "", tokens_in: 4, tokens_out: 2, tokens_cached: 1, cost: 0.5, ...extra } } })
+    const step = progress(1, [{ role: "assistant", content: "b" }])
+    expect(needsResync(snap, step)).toBe(false)
+    const next = fold(snap, step)!
+    const session = next.sessions[0]!
+    expect(session.messages.map((m) => m.content)).toEqual(["a", "b"])
+    expect(session.messages[0]).toBe(snap.sessions[0]!.messages[0])
+    expect(session.history_rev).toBe(0)
+    expect(session.streaming).toBeNull()
+    expect([session.tokens_in, session.tokens_out, session.tokens_cached, session.cost]).toEqual([4, 2, 1, 0.5])
+
+    const counters = fold(next, progress(2, [], { streaming: "", tokens_out: 9 }))!
+    expect(counters.sessions[0]!.messages).toBe(session.messages)
+    expect(counters.sessions[0]!.streaming).toBe("")
+
+    expect(needsResync(next, progress(1, []))).toBe(true)
+    expect(needsResync(next, progress(5, []))).toBe(true)
+    expect(needsResync(next, { Delta: { SessionProgress: { session_id: "missing", from_index: 0, messages: [] } } })).toBe(true)
+    expect(needsResync(next, { Delta: { TokenAppended: { session_id: "s", text: "x" } } })).toBe(false)
+    expect(fold(next, progress(5, [{ role: "assistant", content: "lost" }]))!.sessions[0]!.messages).toBe(session.messages)
   })
 
   test("snapshot then token and input", () => {

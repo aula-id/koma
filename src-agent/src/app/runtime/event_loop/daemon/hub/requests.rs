@@ -104,6 +104,7 @@ impl DaemonHub {
                     stream_bash: None,
                     stream_session: None,
                     usage_reader: false,
+                    progress_deltas: false,
                 });
             }
             HubInbound::Request { client_id, req } => {
@@ -195,6 +196,9 @@ impl DaemonHub {
             ClientRequest::SetUsageReader { enabled } => {
                 self.clients[idx].usage_reader = enabled;
                 self.clients[idx].mode_snapshot_cache = None;
+            }
+            ClientRequest::SetProgressDeltas { enabled } => {
+                self.clients[idx].progress_deltas = enabled;
             }
             ClientRequest::GetMenuCapabilities => self.send_to(
                 idx,
@@ -470,6 +474,7 @@ impl DaemonHub {
     ) {
         match req {
             ClientRequest::SetUsageReader { enabled } => { self.clients[idx].usage_reader = enabled; self.clients[idx].mode_snapshot_cache = None; },
+            ClientRequest::SetProgressDeltas { enabled } => self.clients[idx].progress_deltas = enabled,
             ClientRequest::GetMenuCapabilities => self.send_to(idx, DaemonEvent::MenuCapabilities { version: 1, usage_reader: true }),
             ClientRequest::ReplaceInputTracked { request_id, text, cursor } => {
                 self.replace_input(idx, state, text, cursor);

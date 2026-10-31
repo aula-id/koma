@@ -26,6 +26,21 @@ test("launcher data directory is shared by palette, sessions, and Unix endpoints
 })
 
 test("local daemon link probes and attaches over a Unix socket or Windows named pipe", async () => {
+  const requests = await attachFixture([])
+  expect(requests).toContainEqual({ Attach: { foreground_id: null, cwd: process.cwd() } })
+  expect(requests).toContain("GetMenuCapabilities")
+  expect(requests).not.toContainEqual({ SetProgressDeltas: { enabled: true } })
+  expect(requests).not.toContain("Resync")
+})
+
+test("a daemon advertising progress deltas gets the opt-in, and a gap in history asks for a resync", async () => {
+  const requests = await attachFixture(["session_progress"])
+  expect(requests).toContainEqual({ SetProgressDeltas: { enabled: true } })
+  expect(requests.filter((request) => request === "Resync")).toHaveLength(1)
+})
+
+/** Attach a DaemonLink to a fixture daemon and return every request it sent. */
+async function attachFixture(capabilities: string[]): Promise<unknown[]> {
   const root = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "koma-ipc-"))
   const previousDir = process.env.KOMA_DATA_DIR
   const previousBuild = process.env.KOMA_BUILD
@@ -47,10 +62,16 @@ test("local daemon link probes and attaches over a Unix socket or Windows named 
       for (const request of reader.push(data)) {
         requests.push(request)
         if (typeof request === "object" && request !== null && "Attach" in request) {
-          socket.write(encodeFrame({ seq: 0, event: { Hello: { version: "fixture-build" } } }))
-          const frame = encodeFrame({ seq: 1, event: { Snapshot: { foreground_id: id, sessions: [], global: { mode: "Chat" } } } })
+          socket.write(encodeFrame({ seq: 0, event: { Hello: { version: "fixture-build", capabilities } } }))
+          const sessions = [{ id, messages: [{ role: "user", content: "hi" }] }]
+          const frame = encodeFrame({ seq: 1, event: { Snapshot: { foreground_id: id, sessions, global: { mode: "Chat" } } } })
           socket.write(frame.subarray(0, 3))
           socket.write(frame.subarray(3))
+          if (capabilities.length > 0) {
+            const gap = (seq: number) => encodeFrame({ seq, event: { Delta: { SessionProgress: { session_id: id, from_index: 5, messages: [] } } } })
+            socket.write(gap(2))
+            socket.write(gap(3))
+          }
         }
       }
     })
@@ -65,9 +86,9 @@ test("local daemon link probes and attaches over a Unix socket or Windows named 
     })
     await link.start(id)
     await Promise.race([received, Bun.sleep(1000).then(() => { throw new Error("daemon snapshot not received") })])
-    expect(requests).toContainEqual({ Attach: { foreground_id: null, cwd: process.cwd() } })
-    expect(requests).toContain("GetMenuCapabilities")
+    await Bun.sleep(50)
     expect(errors).toEqual([])
+    return requests
   } finally {
     link.detach()
     for (const socket of clients) socket.destroy()
@@ -78,4 +99,4 @@ test("local daemon link probes and attaches over a Unix socket or Windows named 
     else process.env.KOMA_BUILD = previousBuild
     rmSync(root, { recursive: true, force: true })
   }
-})
+}

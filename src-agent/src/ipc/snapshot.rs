@@ -24,5 +24,7 @@ mod diff;
 pub(crate) mod projection;
 
 #[allow(unused_imports)]
+pub use diff::diff_for_client;
+#[cfg(test)]
 pub use diff::{diff, DiffResult};
 pub use projection::{bash_job_views, build_snapshot, build_snapshot_with_mode, mode_snapshot};
