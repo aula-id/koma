@@ -31,19 +31,23 @@ describe("pressure valve", () => {
     expect(pressureTick(first, 900 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).cleanups).toBe(2)
   })
 
-  test("stops forcing GC once it frees too little, and then explains the short window", () => {
+  test("stops forcing GC after two weak cleanups in a row, and then explains the short window", () => {
     const hot = pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits)
     expect(afterGc(hot, 800 * MIB, 800 * MIB - GC_USEFUL_BYTES)).toBe(hot)
-    const stuck = afterGc(hot, 800 * MIB, 790 * MIB)
+    const once = afterGc(hot, 800 * MIB, 790 * MIB)
+    expect(once.gcUseful).toBe(true)
+    expect(pressureNotice(once)).toBeNull()
+    expect(afterGc(once, 800 * MIB, 700 * MIB).gcMisses).toBe(0)
+    const stuck = afterGc(once, 800 * MIB, 790 * MIB)
     expect(stuck.gcUseful).toBe(false)
     expect(pressureNotice(stuck)).toBe("Memory high; reduced history window.")
-    expect(pressureNotice(hot)).toBeNull()
   })
 
-  test("warns once above the warning mark", () => {
+  test("warns above the warning mark until RSS falls below the low mark", () => {
     const warned = pressureTick(CALM, 2100 * MIB, CLEANUP_INTERVAL_MS, limits)
     expect(warned.warned).toBe(true)
     expect(pressureNotice(warned)).toContain("Restarting the terminal keeps your session")
-    expect(pressureTick(warned, 100 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
+    expect(pressureTick(warned, 600 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
+    expect(pressureTick(warned, 500 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(false)
   })
 })

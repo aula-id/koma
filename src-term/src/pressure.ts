@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 const MIB = 1024 * 1024
 export const PRESSURE_CHECK_MS = 5000
 export const CLEANUP_INTERVAL_MS = 30_000
-/** A forced GC that frees less than this is not repeated. */
+/** Forced GC stops after this many cleanups in a row free less than `GC_USEFUL_BYTES`. */
 export const GC_USEFUL_BYTES = 32 * MIB
+export const GC_MISSES = 2
 
 export type PressureLimits = { high: number; low: number; warn: number }
 
@@ -14,12 +15,14 @@ export type Pressure = {
   cleanups: number
   lastAt: number
   gcUseful: boolean
+  /** RSS lags behind freed pages, so one weak GC is not enough to give up. */
+  gcMisses: number
   /** GC stopped helping; tell the reader why history is shorter. */
   hint: boolean
   warned: boolean
 }
 
-export const CALM: Pressure = { reduced: false, cleanups: 0, lastAt: 0, gcUseful: true, hint: false, warned: false }
+export const CALM: Pressure = { reduced: false, cleanups: 0, lastAt: 0, gcUseful: true, gcMisses: 0, hint: false, warned: false }
 
 /** `KOMA_TERM_MEM="high,low,warn"` in MiB. Missing or invalid parts keep their defaults. */
 export function pressureLimits(raw = process.env.KOMA_TERM_MEM): PressureLimits {
@@ -36,6 +39,7 @@ export function pressureLimits(raw = process.env.KOMA_TERM_MEM): PressureLimits 
 export function pressureTick(state: Pressure, rss: number, now: number, limits: PressureLimits, forced = false): Pressure {
   let next = state
   if (rss >= limits.warn && !next.warned) next = { ...next, warned: true }
+  if (next.warned && rss < limits.low) next = { ...next, warned: false }
   if (next.reduced && !forced && rss < limits.low) next = { ...next, reduced: false }
   if ((forced || rss > limits.high) && now - next.lastAt >= CLEANUP_INTERVAL_MS) {
     next = { ...next, reduced: true, lastAt: now, cleanups: next.cleanups + 1 }
@@ -44,8 +48,10 @@ export function pressureTick(state: Pressure, rss: number, now: number, limits: 
 }
 
 export function afterGc(state: Pressure, before: number, after: number): Pressure {
-  if (before - after >= GC_USEFUL_BYTES) return state
-  return { ...state, gcUseful: false, hint: true }
+  if (before - after >= GC_USEFUL_BYTES) return state.gcMisses ? { ...state, gcMisses: 0 } : state
+  const gcMisses = state.gcMisses + 1
+  if (gcMisses < GC_MISSES) return { ...state, gcMisses }
+  return { ...state, gcMisses, gcUseful: false, hint: true }
 }
 
 export function pressureNotice(state: Pressure): string | null {
@@ -56,7 +62,7 @@ export function pressureNotice(state: Pressure): string | null {
 
 /**
  * Shrink the history window under memory pressure and restore it once RSS drops.
- * State resets per session; GC usefulness and the high-memory warning are per process.
+ * State resets per session; GC usefulness and the high-memory warning carry over.
  * `onCleanup` runs before the shrink renders; `afterLayout` runs GC once it has committed.
  */
 export function usePressureValve(
@@ -81,7 +87,7 @@ export function usePressureValve(
     if (session.current === sessionId) return
     session.current = sessionId
     const kept = ref.current
-    update({ ...CALM, gcUseful: kept.gcUseful, warned: kept.warned })
+    update({ ...CALM, gcUseful: kept.gcUseful, gcMisses: kept.gcMisses, warned: kept.warned })
   }, [sessionId])
 
   useEffect(() => {

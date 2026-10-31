@@ -319,7 +319,7 @@ export function HistoryPane({
     <box flexGrow={1} flexBasis={0} minHeight={0} flexDirection="column">
       {sticky ? (
         <box flexShrink={0} backgroundColor={theme.bg}>
-          <UserBand message={sticky} session={session} theme={theme} syntaxStyle={syntaxStyle} muted />
+          <UserBand message={sticky} theme={theme} syntaxStyle={syntaxStyle} muted />
         </box>
       ) : null}
       <box flexGrow={1} flexBasis={0} minHeight={0}>
@@ -411,7 +411,6 @@ function Transcript({
             <box id={`user-${turn.at}`}>
               <HistoryTurn
                 message={turn.user}
-                session={session}
                 theme={theme}
                 syntaxStyle={syntaxStyle}
                 results={results}
@@ -422,7 +421,6 @@ function Transcript({
             <HistoryTurn
               key={`m-${at}`}
               message={message}
-              session={session}
               theme={theme}
               syntaxStyle={syntaxStyle}
               results={results}
@@ -453,13 +451,11 @@ function Transcript({
 
 const HistoryTurn = memo(function HistoryTurn({
   message,
-  session,
   theme,
   syntaxStyle,
   results,
 }: {
   message: ChatMessage
-  session: SessionSnap
   theme: Theme
   syntaxStyle: SyntaxStyle
   results: Map<string, ChatMessage>
@@ -492,7 +488,7 @@ const HistoryTurn = memo(function HistoryTurn({
         </box>
       )
     }
-    return <UserBand message={message} session={session} theme={theme} syntaxStyle={syntaxStyle} />
+    return <UserBand message={message} theme={theme} syntaxStyle={syntaxStyle} />
   }
   return (
     <AssistantCard theme={theme}>
@@ -564,13 +560,11 @@ export function steerPreview(text: string, attachments: number): string {
 
 function UserBand({
   message,
-  session,
   theme,
   syntaxStyle,
   muted = false,
 }: {
   message: ChatMessage
-  session: SessionSnap
   theme: Theme
   syntaxStyle: SyntaxStyle
   muted?: boolean

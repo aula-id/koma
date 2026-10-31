@@ -40,10 +40,11 @@ stale window and then trims it grows the process on each update.
 On Unix, a five-second RSS check enters reduced mode above 768 MiB and leaves it
 below 512 MiB. Reduced mode shrinks the window to 30 turns and half the byte
 budget around the current reading position, then requests synchronous Bun GC
-after layout commits, at most once per 30 seconds. If GC frees less than 32 MiB,
-later cleanups skip it and the footer says the history window was reduced. Above
-2 GiB the footer suggests restarting the terminal, which keeps the session; the
-client is never killed or restarted. Set the thresholds with
+after layout commits, at most once per 30 seconds. If two cleanups in a row free
+less than 32 MiB each, later cleanups skip GC and the footer says the history
+window was reduced. Above 2 GiB the footer suggests restarting the terminal,
+which keeps the session, until RSS falls below the low mark; the client is never
+killed or restarted. Set the thresholds with
 `KOMA_TERM_MEM=high,low,warn` in MiB. `SIGUSR2` requests the same cleanup for
 diagnostics. Windows receives the moving window and allocation fixes but has no
 pressure signal handler.
