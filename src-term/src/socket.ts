@@ -3,6 +3,7 @@ import type { DaemonTransport } from "./transport.ts"
 import { EventDispatcher, PendingOperations } from "./events.ts"
 import { controlOf, encodeFrame, fold, FrameReader, needsRestart, type Control, type Snapshot } from "./protocol.ts"
 import { ensureDaemon, killSession, socketPath } from "./paths.ts"
+import { countFrames } from "./memlog.ts"
 
 type ClientSocket = {
   write(data: Uint8Array): number | boolean
@@ -177,6 +178,7 @@ export class DaemonLink {
       this.fail(error)
       return
     }
+    countFrames(data.length, frames)
     for (const frame of frames) this.onFrame(frame)
   }
 

@@ -10,6 +10,7 @@ import {
   CHAT_WINDOW_BYTES,
   countTurns,
   historyRows,
+  messageSize,
   nextRenderFrom,
   visibleFromTurn,
   windowEnd,
@@ -31,7 +32,7 @@ import { SolidScrollBar } from "./modes/bits.tsx"
 import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-paint.ts"
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
-import { setMemoryCounts } from "./memlog.ts"
+import { memlogEnabled, registerMemorySource } from "./memlog.ts"
 import { pressureNotice, usePressureValve } from "./pressure.ts"
 
 function useTerminalSize() {
@@ -300,18 +301,25 @@ export function HistoryPane({
   const stop = rows[end]?.sourceIndex ?? session.messages.length
   const mounted = { ...session, messages: session.messages.slice(start, stop),
     ...(end < rows.length ? { streaming: null, stream_reasoning: "", pending_tool_calls: [] } : {}) }
+  const memory = useRef({ session, rows, from, end, start, stop, cleanups: pressure.cleanups })
+  memory.current = { session, rows, from, end, start, stop, cleanups: pressure.cleanups }
   useEffect(() => {
-    if (process.env.KOMA_TERM_MEMLOG !== "1") return
-    setMemoryCounts({
-      loadedMessages: session.messages.length,
-      mountedMessages: mounted.messages.length,
-      mountedTurns: countTurns(rows.slice(from, end)),
-      loadedContentBytes: session.messages.reduce((sum, message) => sum + Buffer.byteLength(message.content ?? ""), 0),
-      streaming: Boolean(session.streaming || session.stream_reasoning),
-      cleanups: pressure.cleanups,
+    if (!memlogEnabled) return
+    registerMemorySource(() => {
+      const { session, rows, from, end, start, stop, cleanups } = memory.current
+      let loadedContentBytes = 0
+      for (const message of session.messages) loadedContentBytes += messageSize(message)
+      return {
+        loadedMessages: session.messages.length,
+        mountedMessages: stop - start,
+        mountedTurns: countTurns(rows.slice(from, end)),
+        loadedContentBytes,
+        streaming: Boolean(session.streaming || session.stream_reasoning),
+        cleanups,
+      }
     })
-    return () => setMemoryCounts(null)
-  }, [session, rows, from, end, pressure.cleanups])
+    return () => registerMemorySource(null)
+  }, [])
   useEffect(() => {
     const timer = setInterval(() => updateSticky(), 150)
     return () => clearInterval(timer)
