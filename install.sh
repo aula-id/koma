@@ -229,7 +229,10 @@ if [ "$os" = "linux" ]; then
     _install_linux_binary() {
         mv "$tmp" "$INSTALL_DIR/koma.bin"
         # --- embedded launcher — keep in sync with packaging/linux/koma-launcher.sh ---
-        cat > "$INSTALL_DIR/koma" << 'KOMA_LAUNCHER'
+        # Write to a temp file and rename over koma: an old single-binary koma may be
+        # the running process (ETXTBSY on a direct write), and a rename never is.
+        _launcher_tmp="$INSTALL_DIR/.koma.launcher.$$"
+        cat > "$_launcher_tmp" << 'KOMA_LAUNCHER'
 #!/bin/sh
 # koma launcher — preflight shared libs before the dynamic linker crashes.
 # Keep in sync with packaging/linux/koma-launcher.sh
@@ -342,7 +345,8 @@ if [ -n "$missing_libs" ]; then
 fi
 exec "$BIN" "$@"
 KOMA_LAUNCHER
-        chmod +x "$INSTALL_DIR/koma"
+        chmod +x "$_launcher_tmp"
+        mv -f "$_launcher_tmp" "$INSTALL_DIR/koma"
     }
 
     if [ -w "$INSTALL_DIR" ]; then
