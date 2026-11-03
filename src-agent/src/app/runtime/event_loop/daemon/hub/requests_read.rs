@@ -36,13 +36,19 @@ impl DaemonHub {
             DaemonEvent::Hello {
                 version: self.version.clone(),
                 protocol: crate::ipc::proto::IPC_PROTOCOL_VERSION,
-                capabilities: vec!["submit_turn".into(), "interrupt_turn".into(), "session_policy".into(), "session_policy_readback".into(), "enqueue_follow_up".into(), "interrupt_and_submit".into(), "turn_attachments".into()],
+                capabilities: vec!["submit_turn".into(), "interrupt_turn".into(), "session_policy".into(), "session_policy_readback".into(), "enqueue_follow_up".into(), "interrupt_and_submit".into(), "turn_attachments".into(), "session_progress".into()],
             },
         );
         // Reload global catalogue from disk so a reconnecting client always sees
         // the freshest models/providers/agents (covers detach-reopen and any
         // missed broadcast).
         crate::app::runtime::actions::apply_global_catalogue_reload(state);
+        // Every attach (terminal or GUI, first entry or re-entry) re-checks for a
+        // newer koma. The daemon outlives its clients, so a startup-only check goes
+        // stale. The result arrives later through `drain_version` and a full snapshot.
+        if let Some(tx) = state.rest.version_tx.as_ref() {
+            crate::app::version::spawn_check_on_reentry(tx.clone());
+        }
         // ATOMIC attach (critique #2): build the full snapshot, send it, and
         // flip the client to attached + seed ITS OWN baseline IN THIS TICK.
         // Only this client's baseline is (re)seeded (blocker #2) — never a
@@ -264,8 +270,10 @@ impl DaemonHub {
     //    SPAWNed on the tokio handle rather than run inline); if that comes back
     //    empty (error OR a genuinely empty catalogue), fall back to the curated
     //    `catalogue_overlay` for that endpoint.
-    //  - Any `config.oauth_conns` entry: cached public OA membership only,
-    //    via `catalogue_overlay::oauth_catalogue`, without native requests.
+    //  - Any `config.oauth_conns` entry: cached OA membership, via
+    //    `catalogue_overlay::oauth_catalogue_for` (the public list, plus the private
+    //    and token models a signed-in Koma account may use). Never a native provider
+    //    request. A Koma connection waits briefly for fresh account rows.
     //  - Neither: unknown provider uuid — reply with an EMPTY list so the picker's
     //    spinner clears instead of hanging with no answer.
     // Every branch ships a `ListModelsReply` over the hub's channel, which
@@ -327,14 +335,29 @@ impl DaemonHub {
             .iter()
             .find(|c| c.uuid == provider)
         {
-            let models = crate::service::catalogue_overlay::oauth_catalogue(conn.provider)
+            let conn_uuid = conn.uuid.clone();
+            let conn_provider = conn.provider;
+            handle.spawn(async move {
+                if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
+                    // Fresh rows if koma.run answers quickly; cached rows otherwise.
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(4),
+                        crate::service::catalogue_overlay::refresh_account(&conn_uuid),
+                    )
+                    .await;
+                }
+                let models = crate::service::catalogue_overlay::oauth_catalogue_for(
+                    &conn_uuid,
+                    conn_provider,
+                )
                 .into_iter()
                 .map(|m| m.id)
                 .collect();
-            let _ = tx.send(super::core::ListModelsReply {
-                client_id,
-                provider,
-                models,
+                let _ = tx.send(super::core::ListModelsReply {
+                    client_id,
+                    provider,
+                    models,
+                });
             });
         } else {
             // Unknown provider uuid — reply empty so the GUI picker's spinner

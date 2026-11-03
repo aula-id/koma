@@ -90,6 +90,12 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // The installer needs the terminal this loop is drawing on.
+        if std::mem::take(&mut state.rest.update_pending) {
+            state.rest.fg_mut().status = "quit, then run `koma update`".into();
+            dirty = true;
+        }
+
         // Refresh the todo overlay from disk when open (picked up by the draw below).
         // When any item is InProgress, force dirty every tick so the braille spinner
         // animates — spinner_glyph() uses wall-clock time but needs a redraw to cycle.

@@ -73,6 +73,8 @@ export type PushEvent =
   // `to` is the target session id/uuid — resolved to a friendly hub label,
   // falling back to any optimistic label already raised, then a generic one.
   | { k: 'Switching'; to: string }
+  // koma readout; `latest` only when the host found a newer release.
+  | { k: 'Version'; current: string; latest: string | null }
   // Append-only transcript growth (same session); concat onto messages.
   | { k: 'SnapshotTail'; session: string; messages: ChatMessage[] }
   // Prepend older history after a truncated first Snapshot (same session).

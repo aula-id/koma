@@ -277,6 +277,30 @@ fn concurrent_duplicates_execute_once_and_other_approaches_stay_available() {
     );
 }
 
+// A file created and removed within one coarse mtime tick leaves its directory
+// looking unchanged. Pin the mtime so this does not depend on the clock.
+#[cfg(unix)]
+#[test]
+fn success_between_identical_failures_allows_a_fresh_attempt() {
+    let f = Fixture::new();
+    f.dir("missing");
+    let dir = f.root.join("missing");
+    let mtime = std::fs::metadata(&dir).unwrap().modified().unwrap();
+    let args = json!({"path":"missing/file"});
+    let read = |ctx: &ToolCtx| Read.run(ctx, &args).unwrap();
+    assert!(!read(&f.ctx).contains("No new inspection ran"));
+    f.file("missing/file");
+    assert!(read(&f.ctx).contains("hello"));
+    std::fs::remove_file(dir.join("file")).unwrap();
+    std::fs::File::open(&dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+    assert_eq!(std::fs::metadata(&dir).unwrap().modified().unwrap(), mtime);
+    assert!(!read(&f.ctx).contains("No new inspection ran"));
+    assert!(read(&f.ctx).contains("No new inspection ran"));
+}
+
 #[test]
 fn state_changes_turn_reset_and_session_isolation_allow_fresh_attempts() {
     let mut f = Fixture::new();

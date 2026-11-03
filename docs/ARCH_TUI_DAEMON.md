@@ -168,6 +168,7 @@ Every message on the socket uses a fixed framing:
 | `SetModel`, `DeleteModel` | Model config management |
 | `SetTheme { name }` | Change the active theme |
 | `SetupKomaFree` | Enable the keyless Koma Free tier |
+| `SetProgressDeltas { enabled }` | Receive `SessionProgress` deltas instead of full snapshots during a turn |
 
 #### Daemon → Client (`DaemonFrame`)
 
@@ -177,6 +178,7 @@ Each frame carries a **monotonic `seq`** number for gap detection.
 |---|---|
 | `DaemonEvent::Hello { build_skew }` | Build-version handshake on connect |
 | `DaemonEvent::Snapshot { ... }` | Full state (on attach or resync) |
+| `StateDelta::SessionProgress` | Appended messages and turn counters (after `SetProgressDeltas`) |
 | `StateDelta::TokenAppended` | Incremental text token |
 | `StateDelta::ReasoningAppended` | Incremental reasoning text |
 | `StateDelta::StatusChanged` | Status bar update |

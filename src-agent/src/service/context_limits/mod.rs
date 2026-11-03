@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 /// unless the user set `context_window_limit`. An explicit setting may exceed
 /// it, up to the known model window. Above 300k is the user's risk.
 pub const OPERATING_CEILING: u64 = 300_000;
-pub const FALLBACK_WINDOW: u64 = 128_000;
+/// Window assumed when no catalogue or provider reports one. Deliberately
+/// generous: the provider rejects an oversized request instead of Koma
+/// truncating on a guess. `OPERATING_CEILING` or `context_window_limit` still apply.
+pub const FALLBACK_WINDOW: u64 = 1_000_000;
 pub const FALLBACK_OUTPUT_TOKENS: u32 = 128_000;
 pub const OUTPUT_MARGIN: u64 = 1_024;
 
@@ -154,14 +157,15 @@ pub fn resolve(
         .or(route.conservative_window);
     let catalog_window = found.model.and_then(CatalogModel::window);
     let mut window = catalog_window.or(route_window).unwrap_or(FALLBACK_WINDOW);
-    // A fuzzy spelling guess or ambiguous name must not inflate the fallback.
+    // A fuzzy spelling guess or ambiguous name is not trusted: use the generous
+    // fallback and let the provider reject what does not fit.
     let uncertain = if catalog_window.is_some() || found.conservative_window.is_some() {
         found.uncertain
     } else {
         route.uncertain
     };
     if uncertain {
-        window = window.min(FALLBACK_WINDOW);
+        window = FALLBACK_WINDOW;
     }
     if let Some(n) = found.conservative_window {
         window = window.min(n);

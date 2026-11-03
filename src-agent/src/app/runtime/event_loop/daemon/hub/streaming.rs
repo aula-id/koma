@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::app::state::AppState;
 use crate::ipc::proto::{DaemonEvent, DaemonFrame};
-use crate::ipc::snapshot::{build_snapshot_with_mode, diff};
+use crate::ipc::snapshot::{build_snapshot_with_mode, diff_for_client};
 
 use super::core::DaemonHub;
 
@@ -92,6 +92,17 @@ impl DaemonHub {
     ) {
         if let Some(kill) = state.rest.new_pending.take() {
             self.send_to_controller(DaemonEvent::NewSession { kill });
+        }
+    }
+
+    /// Drain a pending `/update` into a one-shot [`DaemonEvent::RunUpdate`] to the
+    /// controller. Same shape as [`drain_new_pending`](Self::drain_new_pending).
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_update_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
+        if std::mem::take(&mut state.rest.update_pending) {
+            self.send_to_controller(DaemonEvent::RunUpdate);
         }
     }
 
@@ -260,7 +271,7 @@ impl DaemonHub {
                     );
                     continue;
                 };
-                diff(prev, &next, stream_subagent, stream_session)
+                diff_for_client(prev, &next, stream_subagent, stream_session, self.clients[i].progress_deltas)
             };
 
             if force || result.needs_full {

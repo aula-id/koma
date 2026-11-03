@@ -389,6 +389,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `drain_resume_pending`, so it observes a same-tick `/new` and rides the same
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
+        hub.drain_update_pending(state);
 
         // 3a-pre3b. `/remote` hand-off: `Action::RemoteConnect` set
         //     `state.rest.connect_remote_pending = Some(target)` INSTEAD of relying on the

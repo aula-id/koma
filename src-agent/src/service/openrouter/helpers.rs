@@ -231,7 +231,7 @@ pub(crate) fn is_xai(endpoint: &str) -> bool {
 }
 
 /// Shared context/output fallback policy for the older sub-agent call path.
-/// Missing or zero context means 128k. A positive manual reply setting takes
+/// Missing or zero context assumes a 1M window. A positive manual reply setting takes
 /// priority; zero requests 128k, before the remaining-context clamp.
 /// Every host, including direct xAI, is constrained by prompt + framing room.
 /// Exhausted room returns 1 for wire compatibility; the provider may reject an

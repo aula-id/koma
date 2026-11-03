@@ -2,7 +2,9 @@
 //! and merge them into the catalogue overlay table (keyed by catalogue identity).
 //! Also resolves on-demand public model detail for incomplete/missing rows.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -26,6 +28,10 @@ const OA_PROVIDERS: &[(OAuthProvider, &str)] = &[
     (OAuthProvider::Kilocode, "kilocode"),
     (OAuthProvider::KomaRun, "komarun"),
 ];
+
+/// Minimum gap between two refresh attempts for the same connection, whether
+/// the last one worked or not. The picker reads on every keystroke.
+const ACCOUNT_RETRY: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Deserialize)]
 struct OaListResponse {
@@ -168,6 +174,136 @@ fn parse_detail(value: serde_json::Value, model_id: &str) -> anyhow::Result<Opti
     // requested id. Cache the capabilities under the caller's exact model id.
     model.id = model_id.to_string();
     Ok(Some(model))
+}
+
+// ---- per-account catalogue --------------------------------------------------
+//
+// koma.run's public list has no idea who is asking. With the account's token the
+// same URL also returns the private and token models that account may use, so
+// the picker can offer what the account can actually run. The answer is cached
+// per connection on disk and in memory, and never mixed into the shared tables.
+
+fn account_attempts() -> &'static Mutex<HashMap<String, Instant>> {
+    static ATTEMPTS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    ATTEMPTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `true` once per [`ACCOUNT_RETRY`] window for this connection.
+fn account_attempt_due(conn_uuid: &str) -> bool {
+    let Ok(mut attempts) = account_attempts().lock() else {
+        return false;
+    };
+    if attempts
+        .get(conn_uuid)
+        .is_some_and(|last| last.elapsed() < ACCOUNT_RETRY)
+    {
+        return false;
+    }
+    attempts.insert(conn_uuid.to_string(), Instant::now());
+    true
+}
+
+/// Cache file for one connection. `None` for an id that is not safe to use in
+/// a file name, so a hand-edited config cannot point outside the cache folder.
+fn account_cache_path(conn_uuid: &str) -> Option<std::path::PathBuf> {
+    let safe = !conn_uuid.is_empty()
+        && conn_uuid.len() <= 64
+        && conn_uuid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    safe.then(|| {
+        crate::model::store::base_dir()
+            .ok()
+            .map(|dir| dir.join("oa").join(format!("komarun-{conn_uuid}.json")))
+    })
+    .flatten()
+}
+
+fn parse_account_rows(text: &str) -> anyhow::Result<Vec<OverlayModel>> {
+    let parsed: OaListResponse = serde_json::from_str(text)?;
+    Ok(parsed.data.into_iter().map(OverlayModel::from).collect())
+}
+
+/// Load saved account rows for every Koma connection, then ask for fresh ones.
+pub(super) fn init_accounts() {
+    let config = crate::model::app_config::AppConfig::load();
+    for conn in config
+        .oauth_conns
+        .iter()
+        .filter(|conn| conn.provider == OAuthProvider::KomaRun)
+    {
+        if let Some(text) =
+            account_cache_path(&conn.uuid).and_then(|path| std::fs::read_to_string(path).ok())
+        {
+            if let Ok(rows) = parse_account_rows(&text) {
+                super::set_account_rows(&conn.uuid, rows);
+            }
+        }
+        refresh_account_in_background(&conn.uuid);
+    }
+}
+
+/// Refresh one connection's account rows off the calling thread. Cheap to call
+/// often: it returns at once unless the throttle window has passed.
+pub(super) fn refresh_account_in_background(conn_uuid: &str) {
+    if !account_attempt_due(conn_uuid) {
+        return;
+    }
+    let conn_uuid = conn_uuid.to_string();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        if let Err(e) = runtime.block_on(fetch_account(&conn_uuid)) {
+            crate::model::store::append_global_error_log(
+                "catalogue oa",
+                &format!("komarun account catalogue: {e}"),
+            );
+        }
+    });
+}
+
+/// Refresh one Koma connection's account rows now and wait for the answer.
+/// Throttled like the background path; a skipped call is not an error.
+pub async fn refresh_account(conn_uuid: &str) -> anyhow::Result<()> {
+    if !account_attempt_due(conn_uuid) {
+        return Ok(());
+    }
+    fetch_account(conn_uuid).await
+}
+
+async fn fetch_account(conn_uuid: &str) -> anyhow::Result<()> {
+    let config = crate::model::app_config::AppConfig::load();
+    let Some(conn) = config
+        .oauth_conns
+        .iter()
+        .find(|conn| conn.uuid == conn_uuid && conn.provider == OAuthProvider::KomaRun)
+    else {
+        return Ok(());
+    };
+    // Refreshes the token first when it is stale, like a chat request would.
+    let (token, _) = crate::service::oauth::manager::fresh_key(conn_uuid, &conn.access_token).await;
+    anyhow::ensure!(!token.is_empty(), "no access token for this connection");
+    let client = reqwest::Client::builder()
+        .timeout(FETCH_TIMEOUT)
+        .user_agent(concat!("koma/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let resp = client
+        .get(format!("{}/providers/komarun", oa_base()))
+        .bearer_auth(&token)
+        .send()
+        .await?;
+    anyhow::ensure!(resp.status().is_success(), "status {}", resp.status());
+    let text = resp.text().await?;
+    let rows = parse_account_rows(&text)?;
+    if let Some(path) = account_cache_path(conn_uuid) {
+        let _ = atomic_write(&path, text.as_bytes());
+    }
+    super::set_account_rows(conn_uuid, rows);
+    Ok(())
 }
 
 /// Background thread: refresh OA catalogues and merge into the live overlay.
@@ -364,6 +500,38 @@ mod tests {
         assert!(patch[KOMA_PREMIUM_CHAT_ENDPOINT].is_empty());
         apply_provider_rows(OAuthProvider::Xai, Vec::new(), &mut patch);
         assert!(patch[registry::meta(OAuthProvider::Xai).chat_endpoint].is_empty());
+    }
+
+    #[test]
+    fn account_rows_parse_every_row_including_private_and_token_models() {
+        let rows = parse_account_rows(
+            r#"{"data":[
+                {"id":"koma/apple","tier":"free"},
+                {"id":"vendor/secret-1","tier":"exclusive","context_length":65536},
+                {"id":"koma-token/demo","tier":"premium"}
+            ]}"#,
+        )
+        .unwrap();
+        let ids: Vec<&str> = rows.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["koma/apple", "vendor/secret-1", "koma-token/demo"]);
+        assert_eq!(rows[1].context_length, Some(65536));
+        assert!(parse_account_rows("not json").is_err());
+        assert!(parse_account_rows(r#"{"data":[]}"#).unwrap().is_empty());
+    }
+
+    #[test]
+    fn account_refresh_is_throttled_per_connection() {
+        assert!(account_attempt_due("throttle-conn-a"));
+        assert!(!account_attempt_due("throttle-conn-a"));
+        assert!(account_attempt_due("throttle-conn-b"));
+    }
+
+    #[test]
+    fn account_cache_path_rejects_unsafe_connection_ids() {
+        assert!(account_cache_path("../../etc/passwd").is_none());
+        assert!(account_cache_path("a/b").is_none());
+        assert!(account_cache_path("").is_none());
+        assert!(account_cache_path(&"a".repeat(65)).is_none());
     }
 
     #[test]

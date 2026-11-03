@@ -54,6 +54,8 @@ import chatModeYoloData from "./chat-mode-yolo.json"
 export const chatModeYolo = chatModeYoloData as CapturedFrame
 import chatFreeData from "./chat-free.json"
 export const chatFree = chatFreeData as CapturedFrame
+import chatUpdateData from "./chat-update.json"
+export const chatUpdate = chatUpdateData as CapturedFrame
 import chatRenameData from "./chat-rename.json"
 export const chatRename = chatRenameData as CapturedFrame
 import chatCdData from "./chat-cd.json"

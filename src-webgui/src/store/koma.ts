@@ -141,6 +141,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   computerError: null,
   screenBrowser: null,
   screenBrowserError: null,
+  version: null,
   session: initialSession,
   hub: initialHub,
   palette: initialPalette,

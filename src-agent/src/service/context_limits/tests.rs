@@ -65,7 +65,7 @@ fn fuzzy_and_ambiguous_matches_cannot_raise_context() {
     let models = vec![model("anthropic/claude-4-sonnet", 1_000_000)];
     let got = limits("claudee-4-sonnet", &models);
     assert_eq!(got.match_method, "fuzzy_estimate");
-    assert_eq!(got.effective_window, FALLBACK_WINDOW);
+    assert_eq!(got.effective_window, OPERATING_CEILING);
     let ambiguous = vec![
         model("vendor-a/model-1", 1_000_000),
         model("vendor-b/model-1", 32_000),
@@ -109,7 +109,11 @@ fn output_budget_respects_provider_and_full_request_room() {
 #[test]
 fn empty_catalogue_and_legacy_settings_have_stable_defaults() {
     let unknown = limits("unknown", &[]);
-    assert_eq!(unknown.effective_window, FALLBACK_WINDOW);
+    assert_eq!(unknown.effective_window, OPERATING_CEILING);
+    assert_eq!(
+        resolve("unknown", "", "", 512_000, &[], &[]).effective_window,
+        512_000
+    );
     assert_eq!(unknown.desired_output(0), 128_000);
     let settings: crate::model::settings::Settings = serde_json::from_str("{}").unwrap();
     assert_eq!(settings.context_window_limit, 0);
@@ -131,12 +135,12 @@ fn missing_null_and_zero_context_use_128k_reply_fallback_on_every_endpoint() {
             vec![serde_json::from_value(serde_json::json!({"id":"vendor/model-1","context_length":0,"top_provider":{"context_length":0}})).unwrap()],
         ] {
             let got = resolve("vendor/model-1", endpoint, "", 0, &public, &[]);
-            assert_eq!(got.effective_window, 128_000);
+            assert_eq!(got.effective_window, 300_000);
             assert_eq!(got.auto_output_tokens, 128_000);
             assert_eq!(got.catalogue_source, "fallback");
-            assert_eq!(got.output_tokens(0, 80_000).unwrap(), 46_976);
+            assert_eq!(got.output_tokens(0, 80_000).unwrap(), 128_000);
             assert_eq!(got.output_tokens(8192, 80_000).unwrap(), 8192);
-            assert_eq!(got.output_tokens(512_000, 80_000).unwrap(), 46_976);
+            assert_eq!(got.output_tokens(512_000, 80_000).unwrap(), 218_976);
         }
     }
 }
@@ -185,7 +189,7 @@ fn missing_public_context_does_not_make_an_uncertain_native_window_trusted() {
     let got = resolve("vendor/modeel-1", "", "", 0, &[public], &[native]);
     assert_eq!(got.match_method, "exact");
     assert_eq!(got.route_window, Some(1_000_000));
-    assert_eq!(got.effective_window, 128_000);
+    assert_eq!(got.effective_window, OPERATING_CEILING);
 }
 
 #[test]
@@ -200,7 +204,7 @@ fn missing_context_does_not_hide_identity_ambiguity() {
     let got = limits("model-1", &models);
     assert_eq!(got.match_method, "ambiguous");
     assert!(got.matched_model.is_none());
-    assert_eq!(got.effective_window, 128_000);
+    assert_eq!(got.effective_window, OPERATING_CEILING);
 }
 
 #[test]

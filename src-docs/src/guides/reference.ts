@@ -11,6 +11,7 @@ import {
   chatRename,
   chatSelect,
   chatTask,
+  chatUpdate,
   effort,
   extensionUse,
   extensions,
@@ -69,5 +70,6 @@ export const referenceSteps: Record<string, GuideStep[]> = {
   '/select': one('Copy everything', 'Type /select to print the conversation for the terminal’s own copy.', chatSelect),
   '/notification': one('Saved notices', 'Type /notification to search notices after they fade.', notifications),
   '/help': one('Help', 'Type /help for the command and key list inside koma.', help),
+  '/update': one('Get the new version', 'Type /update. Koma installs the newest version and reopens this conversation.', chatUpdate),
   '/quit': one('Leave', 'Type /quit. Pick Quit, Detach, or Cancel.', quit1),
 }

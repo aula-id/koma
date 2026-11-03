@@ -62,11 +62,26 @@ impl DiffResult {
 /// override is applied ONLY within the session whose snapshot `id` equals `stream_session`;
 /// for every other session the effective view is `None`, so viewing agent N in one session
 /// never un-suppresses agent N in another. `None` (unpinned) applies the override nowhere.
+#[cfg(test)]
 pub fn diff(
     prev: &StateSnapshot,
     next: &StateSnapshot,
     stream_subagent: Option<usize>,
     stream_session: Option<&str>,
+) -> DiffResult {
+    diff_for_client(prev, next, stream_subagent, stream_session, false)
+}
+
+/// [`diff`] for one client. With `progress_deltas`, an agent step whose committed history
+/// only grew (new messages, counters, a stream starting or ending) becomes one
+/// [`StateDelta::SessionProgress`] instead of a full snapshot. Rewind, compaction, and any
+/// other non-append history change still resync wholesale.
+pub fn diff_for_client(
+    prev: &StateSnapshot,
+    next: &StateSnapshot,
+    stream_subagent: Option<usize>,
+    stream_session: Option<&str>,
+    progress_deltas: bool,
 ) -> DiffResult {
     // --- structural: the mode VARIANT or its payload changed ---
     // `ModeSnapshot` is now a pure-data projection (not a bare tag), so this `!=`
@@ -206,17 +221,7 @@ pub fn diff(
         };
         // Any of these moving is either hard to fold incrementally or rare enough
         // that a full resync is the honest, cheap-correct answer.
-        let structural = p.turn != n.turn
-            || p.messages != n.messages
-            // Committed reasoning rides the message list; a change (new turn's
-            // thinking block committed) has no incremental delta, so resync.
-            || p.committed_reasoning != n.committed_reasoning
-            || p.tokens_in != n.tokens_in
-            || p.tokens_out != n.tokens_out
-            || p.tokens_cached != n.tokens_cached
-            || p.context_usage != n.context_usage
-            || p.cost != n.cost
-            || p.awaiting_approval != n.awaiting_approval
+        let structural = p.awaiting_approval != n.awaiting_approval
             || p.approval_reason != n.approval_reason
             // The pending tool-call set / cursor moving changes what the approval
             // overlay draws; no incremental delta carries it, so resync wholesale.
@@ -255,29 +260,63 @@ pub fn diff(
             return DiffResult::full();
         }
 
-        // Streaming content: only a pure APPEND is expressible as TokenAppended.
-        match append_suffix(p.streaming.as_deref(), n.streaming.as_deref()) {
-            AppendDiff::Same => {}
-            AppendDiff::Appended(text) => deltas.push(StateDelta::TokenAppended {
-                session_id: n.id.clone(),
-                text,
-            }),
-            // Buffer reset / diverged / cleared (turn boundary) — not a suffix
-            // append; a full snapshot keeps the shadow exact.
-            AppendDiff::Reset => return DiffResult::full(),
-        }
-
-        // Reasoning content: same pure-append rule on the parallel buffer.
-        match append_suffix(
+        // Per-step progress: committed history, its derived reasoning, the turn record,
+        // and the usage counters. Without `progress_deltas` any of these resyncs.
+        let progressed = p.turn != n.turn
+            || p.messages != n.messages
+            || p.committed_reasoning != n.committed_reasoning
+            || p.tokens_in != n.tokens_in
+            || p.tokens_out != n.tokens_out
+            || p.tokens_cached != n.tokens_cached
+            || p.context_usage != n.context_usage
+            || p.cost != n.cost;
+        // Streaming buffers: only a pure APPEND is expressible as Token/ReasoningAppended.
+        // A reset (stream start, end, or replacement at a turn boundary) is not.
+        let stream = append_suffix(p.streaming.as_deref(), n.streaming.as_deref());
+        let reasoning = append_suffix(
             Some(p.stream_reasoning.as_str()),
             Some(n.stream_reasoning.as_str()),
-        ) {
-            AppendDiff::Same => {}
-            AppendDiff::Appended(text) => deltas.push(StateDelta::ReasoningAppended {
+        );
+        let reset = matches!(stream, AppendDiff::Reset) || matches!(reasoning, AppendDiff::Reset);
+
+        if progressed || reset {
+            if !progress_deltas {
+                return DiffResult::full();
+            }
+            let Some(from_index) = append_tail(&p.messages, &n.messages) else {
+                return DiffResult::full();
+            };
+            if p.messages.len() == n.messages.len()
+                && p.committed_reasoning != n.committed_reasoning
+            {
+                return DiffResult::full();
+            }
+            deltas.push(StateDelta::SessionProgress {
                 session_id: n.id.clone(),
-                text,
-            }),
-            AppendDiff::Reset => return DiffResult::full(),
+                from_index,
+                messages: n.messages[from_index..].to_vec(),
+                streaming: n.streaming.clone(),
+                stream_reasoning: n.stream_reasoning.clone(),
+                turn: n.turn.clone(),
+                tokens_in: n.tokens_in,
+                tokens_out: n.tokens_out,
+                tokens_cached: n.tokens_cached,
+                cost: n.cost,
+                context_usage: n.context_usage,
+            });
+        } else {
+            if let AppendDiff::Appended(text) = stream {
+                deltas.push(StateDelta::TokenAppended {
+                    session_id: n.id.clone(),
+                    text,
+                });
+            }
+            if let AppendDiff::Appended(text) = reasoning {
+                deltas.push(StateDelta::ReasoningAppended {
+                    session_id: n.id.clone(),
+                    text,
+                });
+            }
         }
 
         // Working / finished-unseen flags (the sticky marker rides here).
@@ -407,6 +446,20 @@ fn subagents_differ_for_client(
             p.id != n.id || p.name != n.name || p.status != n.status || p.detached != n.detached
         }
     })
+}
+
+/// `Some(prev.len())` when `next` is `prev` with zero or more messages appended,
+/// else `None`. The last shared message is compared first: an in-place edit of the
+/// newest entry is the common non-append case and fails without scanning history.
+fn append_tail<T: PartialEq>(prev: &[T], next: &[T]) -> Option<usize> {
+    let shared = prev.len();
+    if next.len() < shared {
+        return None;
+    }
+    if shared > 0 && prev[shared - 1] != next[shared - 1] {
+        return None;
+    }
+    (prev == &next[..shared]).then_some(shared)
 }
 
 /// Result of comparing an old vs new append-only string buffer.

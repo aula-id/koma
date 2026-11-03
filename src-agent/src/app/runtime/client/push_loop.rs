@@ -90,6 +90,8 @@ pub(super) struct PushState {
     /// non-Loading transition (the last emitted frame is the only record of
     /// whether the webview still thinks a splash is up).
     pub(super) last_loading: Option<(bool, String, String)>,
+    /// Last `(current, latest)` pushed as a `Version` envelope.
+    pub(super) version: Option<(String, Option<String>)>,
 }
 
 impl PushState {
@@ -107,6 +109,7 @@ impl PushState {
             hub_json: None,
             config_json: None,
             last_loading: None,
+            version: None,
         }
     }
 

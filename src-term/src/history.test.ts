@@ -5,9 +5,12 @@ import {
   historyRows,
   isHistoryPrepend,
   isTurnStart,
+  messageSize,
   nextRenderFrom,
   pageFromTurn,
+  shiftWindow,
   visibleFromTurn,
+  windowEnd,
   type HistoryRow,
 } from "./history.ts"
 
@@ -77,5 +80,47 @@ describe("chat history window", () => {
     ])
     expect(rows.map((row) => row.role)).toEqual(["user", "assistant", "user"])
     expect(countTurns(rows)).toBe(1)
+  })
+})
+
+describe("byte-budgeted window", () => {
+  const sized = (sizes: number[]): HistoryRow[] =>
+    sizes.flatMap((size, t) => [
+      { role: "user", content: "hi", sourceIndex: t * 2, size: 2 },
+      { role: "assistant", content: "", sourceIndex: t * 2 + 1, size },
+    ])
+
+  test("tool results count toward the assistant row before them and sizes are cached per message", () => {
+    const tool = { role: "tool", content: "x".repeat(500) }
+    const messages = [{ role: "user", content: "hi" }, { role: "assistant", content: "ok", tool_calls: [{ function: { name: "run", arguments: "{}" } }] }, tool]
+    const rows = historyRows(messages)
+    expect(rows[1]?.size).toBe(2 + 3 + 2 + 500)
+    expect(messageSize(tool)).toBe(500)
+    tool.content = "changed"
+    expect(messageSize(tool)).toBe(500)
+  })
+
+  test("one oversized turn still mounts alone", () => {
+    const rows = sized([10, 5_000_000, 10])
+    expect(windowEnd(rows, 2, 90, 1000)).toBe(4)
+    expect(visibleFromTurn(sized([10, 10, 5_000_000]), 30, 1000)).toBe(4)
+  })
+
+  test("small turns stop at the turn cap and mixed sizes stop at the byte budget", () => {
+    const small = sized(Array(200).fill(10))
+    expect(countTurns(small.slice(0, windowEnd(small, 0, 90, 1_000_000)))).toBe(90)
+    const mixed = sized([300, 300, 300, 300, 300])
+    expect(countTurns(mixed.slice(0, windowEnd(mixed, 0, 90, 700)))).toBe(3)
+    expect(countTurns(mixed.slice(visibleFromTurn(mixed, 30, 700)))).toBe(2)
+    expect(visibleFromTurn(mixed, 30)).toBe(0)
+  })
+
+  test("paging crosses at most half the budget but always moves one turn", () => {
+    const rows = sized(Array(50).fill(100))
+    const tail = visibleFromTurn(rows, 30)
+    expect(countTurns(rows.slice(shiftWindow(rows, tail, -1, 30, 1000), tail))).toBe(4)
+    expect(countTurns(rows.slice(shiftWindow(rows, tail, -1, 30), tail))).toBe(20)
+    const huge = sized([5_000_000, 5_000_000, 5_000_000])
+    expect(shiftWindow(huge, 4, -1, 30, 1000)).toBe(2)
   })
 })

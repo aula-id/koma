@@ -932,6 +932,7 @@ declare global {
 
   interface Window {
     __komaOS?: string
+    __komaOpaque?: boolean
     __komaClient?: KomaClient
     ipc?: { postMessage(msg: string): void }
     komaIpc?: (req: GuiReq) => void

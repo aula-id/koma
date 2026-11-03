@@ -9,7 +9,8 @@
 /// swapper): load the GLOBAL config and resolve the provider by uuid. A `config.providers`
 /// entry gets a live `GET {endpoint}/models`, falling back to the curated `catalogue_overlay`
 /// if that comes back empty; every `config.oauth_conns` entry resolves exclusively
-/// via the cached public `catalogue_overlay::oauth_catalogue`. Returns an EMPTY list
+/// via the cached OA catalogue (`catalogue_overlay::oauth_catalogue_for`, which adds a
+/// signed-in Koma account's own models to the public list). Returns an EMPTY list
 /// on an unknown provider OR any fetch error — the caller ALWAYS pushes a reply, so the React
 /// picker's spinner clears. Mirrors the daemon's attached-path `ClientRequest::ListModels`
 /// handler (`hub::requests_read`), but sources the provider from disk since the swapper holds
@@ -40,7 +41,17 @@ pub(super) async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
         return models;
     }
     if let Some(conn) = cfg.oauth_conns.iter().find(|c| c.uuid == provider) {
-        return crate::service::catalogue_overlay::oauth_catalogue(conn.provider)
+        // A Koma account also lists the models only it may use. Wait a moment for
+        // fresh rows so a model granted a minute ago is already in the picker; the
+        // cached rows answer if koma.run is slow or unreachable.
+        if conn.provider == crate::model::app_config::OAuthProvider::KomaRun {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(4),
+                crate::service::catalogue_overlay::refresh_account(&conn.uuid),
+            )
+            .await;
+        }
+        return crate::service::catalogue_overlay::oauth_catalogue_for(&conn.uuid, conn.provider)
             .into_iter()
             .map(|m| m.id)
             .collect();

@@ -10,7 +10,7 @@ import { themeFor } from "./theme.ts"
 test("composer tips start with help and reveal one step at a time", () => {
   expect(COMPOSER_TIPS[0]).toContain("/help")
   expect(COMPOSER_TIPS.some((tip) => tip.includes("Shift+Tab"))).toBe(true)
-  expect(COMPOSER_TIPS.length).toBe(27)
+  expect(COMPOSER_TIPS.length).toBe(28)
   expect(COMPOSER_TIPS.some((tip) => tip.includes("$"))).toBe(false)
   expect(tipReveal("/help lists commands", 5, 40)).toBe("/help")
   expect(tipReveal("/help lists commands", 100, 6)).toBe("/help ")

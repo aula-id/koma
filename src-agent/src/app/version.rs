@@ -111,6 +111,24 @@ pub fn spawn_check(tx: tokio::sync::mpsc::UnboundedSender<VersionInfo>) {
     });
 }
 
+/// Minimum gap between attach-triggered checks, so a reconnect storm sends one request.
+const REENTRY_GAP: Duration = Duration::from_secs(30);
+
+/// [`spawn_check`] for a client attach. Skipped when another attach checked within
+/// [`REENTRY_GAP`]; session spawns keep calling [`spawn_check`] directly.
+pub fn spawn_check_on_reentry(tx: tokio::sync::mpsc::UnboundedSender<VersionInfo>) {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last.is_some_and(|at| at.elapsed() < REENTRY_GAP) {
+        return;
+    }
+    *last = Some(Instant::now());
+    drop(last);
+    spawn_check(tx);
+}
+
 fn parse_manifest(body: &str) -> Result<VersionInfo, ()> {
     let info: VersionInfo = serde_json::from_str(body).map_err(|_| ())?;
     if info.version.trim().is_empty() {

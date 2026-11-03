@@ -38,6 +38,11 @@ struct OverlayState {
     table: OverlayTable,
     oa: OverlayTable,
     details: OverlayTable,
+    /// What one signed-in Koma account may use on top of the public list,
+    /// keyed by connection uuid. Kept out of the shared tables on purpose:
+    /// the rows depend on who is signed in, so one account's private models
+    /// must never show up for another connection.
+    accounts: HashMap<String, Vec<OverlayModel>>,
 }
 
 impl OverlayState {
@@ -131,6 +136,7 @@ pub fn init() {
     }
     fetch::spawn_refresh();
     oa::spawn_refresh();
+    oa::init_accounts();
 }
 
 /// Load the starting table: on-disk cache if it parses, else the bundled
@@ -301,6 +307,51 @@ pub fn oauth_catalogue(provider: OAuthProvider) -> Vec<ModelInfo> {
     };
     oa_membership(&guard.oa, provider)
 }
+
+/// Picker membership for one signed-in connection: the public list plus the
+/// models only this account may use (private and token models for Koma).
+///
+/// Reading also asks for a quiet, throttled refresh of the account's rows, so
+/// a model granted while the app is open shows up on a later read.
+pub fn oauth_catalogue_for(conn_uuid: &str, provider: OAuthProvider) -> Vec<ModelInfo> {
+    if provider == OAuthProvider::KomaRun {
+        oa::refresh_account_in_background(conn_uuid);
+    }
+    oauth_catalogue_with_account(conn_uuid, provider)
+}
+
+/// [`oauth_catalogue_for`] without the refresh trigger.
+fn oauth_catalogue_with_account(conn_uuid: &str, provider: OAuthProvider) -> Vec<ModelInfo> {
+    let mut models = oauth_catalogue(provider);
+    let Some(lock) = OVERLAY.get() else {
+        return models;
+    };
+    let Ok(guard) = lock.read() else {
+        return models;
+    };
+    for model in guard.accounts.get(conn_uuid).into_iter().flatten() {
+        if !models.iter().any(|existing| existing.id == model.id) {
+            models.push(model.to_model_info());
+        }
+    }
+    models
+}
+
+/// Replace one connection's account rows. An empty list is authoritative:
+/// a revoked grant must disappear.
+pub(super) fn set_account_rows(conn_uuid: &str, rows: Vec<OverlayModel>) {
+    let lock = OVERLAY.get_or_init(|| {
+        RwLock::new(OverlayState {
+            table: load_initial(),
+            ..OverlayState::default()
+        })
+    });
+    if let Ok(mut guard) = lock.write() {
+        guard.accounts.insert(conn_uuid.to_string(), rows);
+    }
+}
+
+pub use oa::refresh_account;
 
 fn oa_membership(table: &OverlayTable, provider: OAuthProvider) -> Vec<ModelInfo> {
     let base = crate::service::oauth::registry::meta(provider).chat_endpoint;

@@ -383,6 +383,9 @@ em, i, .italic {
    layout above is unchanged. #app carries the os-<platform> class (set by
    RootLayout from window.__komaOS), replacing the old body.os-macos scoping. */
 .os-macos#app { border-radius: 16px; }
+/* The host window is opaque (/etc/koma/gui.conf), so a radius would show
+   square corners of the webview background. */
+#app.opaque { border-radius: 0; }
 .os-macos #winctl { order: -1; gap: 8px; align-items: center; }
 .os-macos #titlebar { padding: 0 12px 0 10px; }
 .os-macos #title { opacity: 0.6; font-size: 18px; font-weight: 700; }

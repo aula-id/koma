@@ -435,10 +435,11 @@ struct DaemonFrame {
 | `ModelList` | Model catalogue for GUI |
 | `ModelRoutes` | Provider route list for GUI |
 
-**`StateDelta`** (9 variants):
+**`StateDelta`** (selected variants):
 
 | Variant | Description |
 |---|---|
+| `SessionProgress { session_id, from_index, messages, ... }` | Messages appended from `from_index`, plus streaming buffers, tokens, cost and context usage (clients that sent `SetProgressDeltas`) |
 | `TokenAppended(String)` | New token appended to streaming content |
 | `ReasoningAppended(String)` | New reasoning token |
 | `StatusChanged(String)` | Status bar text changed |
@@ -475,14 +476,18 @@ Round-trips crossterm `KeyEvent` ↔ `KeyWire` for TUI clients. GUI clients tran
 
 ### Diffing
 
-`diff(prev, next)` in `src-agent/src/ipc/snapshot/diff.rs`:
+`diff_for_client(prev, next, ..., progress_deltas)` in `src-agent/src/ipc/snapshot/diff.rs`:
 
 **Structural changes** (triggers full `StateSnapshot`):
 - Mode change
 - Theme/accent/palette/agent_mode change
 - Session set change (add/remove)
-- Per-session: messages, committed_reasoning, tokens, approval, subagents, name, cwd, bash_jobs
+- Per-session: approval, subagents, name, cwd, bash_jobs
 - Agent viewer/panel state, staged attachments, models cache
+
+**Session progress** (turn, messages, committed_reasoning, tokens, cost, context usage, or a reset stream buffer):
+- Full `StateSnapshot` unless the client sent `SetProgressDeltas { enabled: true }`
+- With the opt-in, a `SessionProgress` delta when the new messages extend the baseline; otherwise a full snapshot
 
 **Incremental deltas** (triggers `StateDelta` frames):
 - `TokenAppended` — pure suffix append on streaming buffer

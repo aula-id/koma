@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs"
 import { createCliRenderer, SyntaxStyle, type SyntaxStyle as SyntaxStyleHandle } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useSelectionHandler } from "@opentui/react"
 import { RemoteScreen } from "./remote-screen.tsx"
@@ -12,6 +13,7 @@ import { QuitScreen, type QuitState } from "./quit.tsx"
 import { SessionScreen } from "./session.tsx"
 import { syntaxStyles } from "./syntax.ts"
 import { themeFor } from "./theme.ts"
+import { startMemoryLog } from "./memlog.ts"
 
 type Route = { kind: "hub" } | { kind: "session"; id: string } | { kind: "remote"; remote: RemoteHandoff }
 
@@ -22,8 +24,12 @@ function initialRoute(): Route {
 }
 
 const MIN_COLUMNS = 50
+/** Matches `UPDATE_EXIT` in `src-agent/src/app/term_preview.rs`. */
+const UPDATE_EXIT = 75
+const UPDATE_FILE = process.env.KOMA_UPDATE_FILE
 
 process.title = "koma"
+startMemoryLog()
 
 function isCtrlC(key: { name?: string; ctrl?: boolean; sequence?: string }): boolean {
   return (key.ctrl && key.name === "c") || key.sequence === "\u0003" || key.name === "ctrl+c"
@@ -89,6 +95,13 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
     process.exit(0)
   }
 
+  function update(id: string) {
+    writeFileSync(UPDATE_FILE!, id)
+    renderer.destroy()
+    syntaxStyle.destroy()
+    process.exit(UPDATE_EXIT)
+  }
+
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
     if (text) copyText(text)
@@ -138,6 +151,7 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
         onOpen={onOpen}
         onExit={leave}
         onRemote={onRemote}
+        onUpdate={UPDATE_FILE ? update : undefined}
         onPalette={setPalette}
         ctrlC={sessionCtrlC}
       />

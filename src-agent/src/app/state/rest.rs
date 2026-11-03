@@ -208,6 +208,10 @@ pub struct AppStateRest {
     /// [`crate::app::runtime::commands::new_session::apply_new_session_local`] (the legacy
     /// append-a-session path) so `--local` `/new` behaves exactly as before.
     pub new_pending: Option<bool>,
+    /// Set by `/update` in the DAEMON: drained next tick into a one-shot
+    /// [`crate::ipc::proto::DaemonEvent::RunUpdate`] to the controlling client, which
+    /// owns the terminal the installer runs in. Same transient shape as `new_pending`.
+    pub update_pending: bool,
     /// Set by the extension grant broker's `sessions.switch` (W7) when the target session
     /// uuid is NOT a live session in THIS daemon: a transient "tell the client to attach
     /// that session's OTHER daemon" request, drained next tick by the hub into a one-shot
@@ -604,6 +608,7 @@ impl AppStateRest {
             select_active: false,
             resume_pending: false,
             new_pending: None,
+            update_pending: false,
             ext_switch_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),

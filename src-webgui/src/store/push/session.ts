@@ -211,6 +211,9 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
         }
         break
       }
+      case 'Version':
+        set({ version: { current: env.current, latest: env.latest ?? null } })
+        return true
       case 'Switching':
         useComputerPreview.getState().hide()
         set({ computer: null, computerError: null, screenBrowser: null, screenBrowserError: null })

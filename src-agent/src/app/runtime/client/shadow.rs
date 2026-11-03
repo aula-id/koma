@@ -200,6 +200,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::Status(_)
         | DaemonEvent::RunState { .. }
         | DaemonEvent::AttachSession { .. }
+        | DaemonEvent::RunUpdate
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::PasteBody { .. }
         | DaemonEvent::AttachmentLocated { .. }
@@ -547,6 +548,8 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> FrameEffe
             FrameEffect::light()
         }
         StateDelta::ScrollChanged { .. } => FrameEffect::none(),
+        // Only sent to clients that opt in with `SetProgressDeltas`; this shadow never does.
+        StateDelta::SessionProgress { .. } => FrameEffect::none(),
         // working flag → Status envelope only.
         StateDelta::SessionStatusChanged {
             session_id,

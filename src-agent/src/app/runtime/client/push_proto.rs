@@ -143,6 +143,12 @@ pub(super) enum PushEnvelope {
     /// naturally by the next `Snapshot { state:"attached" }` — whose `session` equals `to`
     /// on a resolved swap.
     Switching { to: String },
+    /// koma version readout for the composer. `latest` is set only when the daemon's
+    /// check found a strictly newer release. Pushed when either value changes.
+    Version {
+        current: String,
+        latest: Option<String>,
+    },
     /// Append-only transcript growth: new committed messages after a shared prefix with
     /// the last Snapshot. Same session; React concatenates onto `messages`.
     SnapshotTail {

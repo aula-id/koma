@@ -10,7 +10,7 @@ name: ci
 #
 # Staged so one pull request does not start every job at once:
 #   1. lint and nix, together, on ubuntu
-#   2. sdk, test, and terminal, after those pass
+#   2. sdk, test, terminal, and distro (Fedora, Arch), after those pass
 #      (the test and terminal matrices take two runners at a time)
 # The slow macOS GUI release link lives in gui-link.yml, off the PR path.
 # A clippy or flake failure skips the later stages. rustfmt stays non-gating.
@@ -137,6 +137,62 @@ jobs:
       - name: Tests (src-extension)
         working-directory: src-extension
         run: cargo test --workspace --all-targets
+
+  # Builds the default (GUI) binary against each distro's own WebKitGTK and
+  # runs the suite with default features. The ubuntu test jobs use
+  # --no-default-features, so this is also where GUI code is compiled and
+  # tested on Linux. install.sh on clean containers lives in distro.yml.
+  distro:
+    name: distro (${{ matrix.name }})
+    needs: [lint, nix]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fedora
+            image: fedora:latest
+            deps: dnf install -y gcc gcc-c++ make perl python3 git unzip which nodejs npm pkgconf-pkg-config webkit2gtk4.1-devel libXtst-devel
+          - name: arch
+            image: archlinux:latest
+            deps: pacman -Syu --noconfirm --needed base-devel perl python git unzip nodejs npm webkit2gtk-4.1 libxtst
+    steps:
+      # Before checkout, which needs git in the container.
+      - name: Install build dependencies
+        run: ${{ matrix.deps }}
+
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.0.4-cache-rust-distro"
+          key: ${{ matrix.name }}
+
+      # After the cache: rust-cache empties target/ on a partial key match.
+      - name: Prepare offline terminal
+        run: python3 scripts/prepare-terminal.py
+
+      - name: Build GUI binary
+        run: cargo build --locked -p agent --bin koma
+
+      - name: koma starts
+        run: |
+          ./target/debug/koma --version
+          ./target/debug/koma doctor || true
+
+      - name: Tests (default features)
+        run: cargo test --locked --workspace --all-targets
 
   # The OpenTUI client is TypeScript plus a native library. Cargo embeds the
   # complete payload; this job tests frozen dependencies on every release OS. linux-arm64 is native here (the release job cross-builds it).

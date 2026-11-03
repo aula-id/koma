@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, showImagePath } from "./protocol.ts"
+import { decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, needsResync, showImagePath } from "./protocol.ts"
 import { uuidV5Simple } from "./paths.ts"
 import { themeFor } from "./theme.ts"
 
@@ -18,9 +18,84 @@ describe("frames", () => {
     expect(reader.push(readerBytes)).toEqual([])
     expect(reader.push(rest)).toEqual([{ SendKey: { code: "Enter", mods: 0 } }])
   })
+
+  test("reads fragmented and coalesced frames without losing the next header", () => {
+    const first = encodeFrame({ text: "안녕 🌱" })
+    const second = encodeFrame({ n: 2 })
+    const all = new Uint8Array(first.length + second.length)
+    all.set(first)
+    all.set(second, first.length)
+    const reader = new FrameReader()
+    const frames: unknown[] = []
+    for (let i = 0; i < all.length; i += 3) frames.push(...reader.push(all.subarray(i, i + 3)))
+    expect(frames).toEqual([{ text: "안녕 🌱" }, { n: 2 }])
+  })
+
+  test("rejects an oversized length and invalid JSON", () => {
+    expect(() => new FrameReader().push(new Uint8Array([4, 0, 0, 1]))).toThrow("over the")
+    expect(() => new FrameReader().push(new Uint8Array([0, 0, 0, 1, 0xff]))).toThrow()
+  })
 })
 
 describe("fold", () => {
+  test("snapshots reuse unchanged messages and replace changed nested tool calls", () => {
+    const raw = { sessions: [{ id: "s", messages: [{ role: "assistant", content: "ok", tool_calls: [{ id: "t", function: { name: "x", arguments: "{}" } }] }] }], global: {} }
+    const first = fold(null, { Snapshot: raw })!
+    const second = fold(first, { Snapshot: structuredClone(raw) })!
+    expect(second.sessions[0].messages).toBe(first.sessions[0].messages)
+    const changed = structuredClone(raw)
+    changed.sessions[0].messages[0].tool_calls[0].function.arguments = "changed"
+    expect(fold(second, { Snapshot: changed })!.sessions[0].messages[0]).not.toBe(first.sessions[0].messages[0])
+  })
+  test("history revision moves only when history is replaced", () => {
+    const msg = (role: string, content: string) => ({ role, content })
+    const base = [msg("system", "sys"), msg("user", "a"), msg("assistant", "b")]
+    const snapOf = (messages: unknown[]) => ({ Snapshot: { sessions: [{ id: "s", messages }], global: {} } })
+    const first = fold(null, snapOf(structuredClone(base)))!
+    const appended = fold(first, snapOf([...structuredClone(base), msg("user", "c")]))!
+    expect(appended.sessions[0]!.history_rev).toBe(0)
+    expect(appended.sessions[0]!.messages[1]).toBe(first.sessions[0]!.messages[1])
+    expect(appended.sessions[0]!.messages[3]!.content).toBe("c")
+
+    const rewound = fold(appended, snapOf(structuredClone(base).slice(0, 2)))!
+    expect(rewound.sessions[0]!.history_rev).toBe(1)
+    expect(rewound.sessions[0]!.messages[1]).toBe(first.sessions[0]!.messages[1])
+
+    const resent = fold(rewound, snapOf([msg("system", "sys"), msg("user", "a"), msg("assistant", "other")]))!
+    expect(resent.sessions[0]!.history_rev).toBe(1)
+    const replaced = fold(resent, snapOf([msg("system", "sys"), msg("user", "a"), msg("assistant", "edited")]))!
+    expect(replaced.sessions[0]!.history_rev).toBe(2)
+
+    const compacted = fold(replaced, snapOf([msg("system", "sys"), msg("assistant", "[summary]"), msg("assistant", "edited")]))!
+    expect(compacted.sessions[0]!.history_rev).toBe(3)
+    expect(fold(compacted, snapOf(structuredClone(compacted.sessions[0]!.messages)))!.sessions[0]!.messages).toBe(compacted.sessions[0]!.messages)
+  })
+
+  test("progress deltas append history, keep old objects, and flag gaps for a resync", () => {
+    const snap = fold(null, { Snapshot: { sessions: [{ id: "s", messages: [{ role: "user", content: "a" }], streaming: "" }], global: {} } })!
+    const progress = (from_index: number, messages: unknown[], extra: Record<string, unknown> = {}) =>
+      ({ Delta: { SessionProgress: { session_id: "s", from_index, messages, streaming: null, stream_reasoning: "", tokens_in: 4, tokens_out: 2, tokens_cached: 1, cost: 0.5, ...extra } } })
+    const step = progress(1, [{ role: "assistant", content: "b" }])
+    expect(needsResync(snap, step)).toBe(false)
+    const next = fold(snap, step)!
+    const session = next.sessions[0]!
+    expect(session.messages.map((m) => m.content)).toEqual(["a", "b"])
+    expect(session.messages[0]).toBe(snap.sessions[0]!.messages[0])
+    expect(session.history_rev).toBe(0)
+    expect(session.streaming).toBeNull()
+    expect([session.tokens_in, session.tokens_out, session.tokens_cached, session.cost]).toEqual([4, 2, 1, 0.5])
+
+    const counters = fold(next, progress(2, [], { streaming: "", tokens_out: 9 }))!
+    expect(counters.sessions[0]!.messages).toBe(session.messages)
+    expect(counters.sessions[0]!.streaming).toBe("")
+
+    expect(needsResync(next, progress(1, []))).toBe(true)
+    expect(needsResync(next, progress(5, []))).toBe(true)
+    expect(needsResync(next, { Delta: { SessionProgress: { session_id: "missing", from_index: 0, messages: [] } } })).toBe(true)
+    expect(needsResync(next, { Delta: { TokenAppended: { session_id: "s", text: "x" } } })).toBe(false)
+    expect(fold(next, progress(5, [{ role: "assistant", content: "lost" }]))!.sessions[0]!.messages).toBe(session.messages)
+  })
+
   test("snapshot then token and input", () => {
     const first = fold(null, {
       Snapshot: {

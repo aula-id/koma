@@ -1172,3 +1172,100 @@ fn turn_projection_changes_force_full_snapshot() {
     assert!(crate::ipc::snapshot::diff(&running, &finished, None, None).needs_full);
 
 }
+
+fn progress_diff(prev: &StateSnapshot, next: &StateSnapshot) -> super::snapshot::DiffResult {
+    super::snapshot::diff_for_client(prev, next, None, None, true)
+}
+
+#[test]
+fn appended_history_and_counters_become_one_progress_delta() {
+    use crate::dto::chat::{ChatMessage, Role};
+    let prev = sample_snapshot();
+    let mut next = prev.clone();
+    let reply = ChatMessage::new(Role::Assistant, "done");
+    next.sessions[0].messages.push(reply.clone());
+    next.sessions[0].tokens_out += 10;
+    next.sessions[0].cost += 0.5;
+    assert!(super::snapshot::diff(&prev, &next, None, None).needs_full);
+    let result = progress_diff(&prev, &next);
+    assert!(!result.needs_full);
+    let [StateDelta::SessionProgress { session_id, from_index, messages, tokens_out, cost, .. }] = result.deltas.as_slice() else {
+        panic!("expected one SessionProgress, got {:?}", result.deltas);
+    };
+    assert_eq!(session_id, &next.sessions[0].id);
+    assert_eq!(*from_index, prev.sessions[0].messages.len());
+    assert_eq!(messages, &vec![reply]);
+    assert_eq!(*tokens_out, next.sessions[0].tokens_out);
+    assert_eq!(*cost, next.sessions[0].cost);
+}
+
+#[test]
+fn stream_start_and_end_ride_progress_and_plain_tokens_stay_small() {
+    use crate::dto::chat::{ChatMessage, Role};
+    let mut idle = sample_snapshot();
+    idle.sessions[0].streaming = None;
+    idle.sessions[0].stream_reasoning.clear();
+    let mut started = idle.clone();
+    started.sessions[0].streaming = Some(String::new());
+    assert!(super::snapshot::diff(&idle, &started, None, None).needs_full);
+    assert!(matches!(progress_diff(&idle, &started).deltas.as_slice(),
+        [StateDelta::SessionProgress { from_index, messages, streaming: Some(s), .. }] if *from_index == 1 && messages.is_empty() && s.is_empty()));
+
+    let mut streamed = started.clone();
+    streamed.sessions[0].streaming = Some("partial".into());
+    assert!(matches!(progress_diff(&started, &streamed).deltas.as_slice(),
+        [StateDelta::TokenAppended { text, .. }] if text == "partial"));
+
+    let mut committed = streamed.clone();
+    committed.sessions[0].streaming = None;
+    committed.sessions[0].messages.push(ChatMessage::new(Role::Assistant, "partial"));
+    let result = progress_diff(&streamed, &committed);
+    assert!(!result.needs_full);
+    assert!(matches!(result.deltas.as_slice(),
+        [StateDelta::SessionProgress { streaming: None, messages, .. }] if messages.len() == 1));
+}
+
+#[test]
+fn replaced_history_and_structural_changes_still_resync_progress_clients() {
+    use crate::dto::chat::{ChatMessage, Role};
+    let mut prev = sample_snapshot();
+    prev.sessions[0].messages.push(ChatMessage::new(Role::Assistant, "one"));
+    let mut rewound = prev.clone();
+    rewound.sessions[0].messages.truncate(1);
+    assert!(progress_diff(&prev, &rewound).needs_full);
+    let mut edited_last = prev.clone();
+    edited_last.sessions[0].messages[1].content = "changed".into();
+    assert!(progress_diff(&prev, &edited_last).needs_full);
+    let mut compacted = prev.clone();
+    compacted.sessions[0].messages[0].content = "[summary]".into();
+    compacted.sessions[0].messages.push(ChatMessage::new(Role::User, "next"));
+    assert!(progress_diff(&prev, &compacted).needs_full);
+    let mut approval = prev.clone();
+    approval.sessions[0].awaiting_approval = !approval.sessions[0].awaiting_approval;
+    approval.sessions[0].messages.push(ChatMessage::new(Role::User, "next"));
+    assert!(progress_diff(&prev, &approval).needs_full);
+    let mut reasoning_only = prev.clone();
+    reasoning_only.sessions[0].committed_reasoning = vec![None, Some("late".into())];
+    assert!(progress_diff(&prev, &reasoning_only).needs_full);
+    assert!(progress_diff(&prev, &prev).deltas.is_empty());
+}
+
+#[test]
+fn progress_delta_and_opt_in_roundtrip() {
+    use crate::dto::chat::{ChatMessage, Role};
+    roundtrip(&ClientRequest::SetProgressDeltas { enabled: true });
+    let session = sample_session_snapshot();
+    roundtrip(&DaemonEvent::Delta(StateDelta::SessionProgress {
+        session_id: session.id.clone(),
+        from_index: 3,
+        messages: vec![ChatMessage::new(Role::Tool, "result")],
+        streaming: None,
+        stream_reasoning: String::new(),
+        turn: Some(TurnRecord { id: "t".into(), state: TurnState::Running, error: None }),
+        tokens_in: 1,
+        tokens_out: 2,
+        tokens_cached: 0,
+        cost: 0.25,
+        context_usage: session.context_usage,
+    }));
+}

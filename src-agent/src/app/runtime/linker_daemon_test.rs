@@ -394,14 +394,15 @@ fn empty_roots_clears_session() {
 #[test]
 fn first_registration_triggers_scan() {
     let state = test_state();
-    // Before first registration, scanning should be false.
+    let spawns = |state: &Arc<DaemonState>| state.scan_coordinator.lock().unwrap().spawn_count;
     assert!(!state.scanning.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(spawns(&state), 0);
     let _resp = register(&state, "s1", &["/nonexistent_root_for_test"]);
-    // After registration of new root, scanning should be true (scan thread spawned).
-    assert!(
-        state.scanning.load(std::sync::atomic::Ordering::SeqCst),
-        "first registration must trigger a scan"
-    );
+    // Count the spawn, not the `scanning` flag: a scan of a missing root can
+    // finish and clear the flag before this line runs, which made the old
+    // assertion fail on fast machines. The counter is bumped before the worker
+    // thread starts and is never reset.
+    assert_eq!(spawns(&state), 1, "first registration must trigger a scan");
 }
 
 // ── Response format checks ─────────────────────────────────────────
