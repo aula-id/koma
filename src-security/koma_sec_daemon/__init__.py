@@ -1,13 +1,9 @@
 """
-koma_sec_daemon — long-lived security daemon for the koma TUI agent.
+koma_sec_daemon — empty liveness process for the koma agent.
 
-Communicates with its parent process (koma) over newline-delimited JSON on
-stdin/stdout. stderr is used for logging and debug output.
-
-Tools shipped in this milestone:
-  sec_http    — stateless single HTTP request (proof of stateless tool)
-  sec_remote  — stateful pwntools remote session (proof of stateful session)
+No tools. Speaks newline-delimited JSON on stdin/stdout so the parent can
+mark the security daemon running and arm yolo. stderr is for logs only.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
