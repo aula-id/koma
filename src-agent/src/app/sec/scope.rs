@@ -186,6 +186,8 @@ pub enum Refusal {
     PortNotAllowed,
     /// The call carried no destination and the scope needs one.
     NoDestination,
+    /// A hop in the chain could not be parsed, so it cannot be admitted.
+    Unparseable,
 }
 
 impl Refusal {
@@ -199,6 +201,7 @@ impl Refusal {
             Self::Excluded => "target is explicitly excluded",
             Self::PortNotAllowed => "port not allowed for this host",
             Self::NoDestination => "call carries no destination",
+            Self::Unparseable => "hop could not be parsed, so it cannot be admitted",
         }
     }
 }
@@ -280,6 +283,29 @@ impl Scope {
     /// the answer elsewhere, so there is no cheaper path worth special-casing.
     pub fn admit_after_hop(&self, target: &str, port: u16) -> Result<(), Refusal> {
         self.admit(target, port, None)
+    }
+
+    /// Re-admit every hop of a followed redirect chain.
+    ///
+    /// The first hop is where the widening would happen: the daemon follows
+    /// redirects itself, so a `302` to an out-of-scope host is only caught here.
+    /// Each hop is checked in order and the first refusal wins, so the report can
+    /// name the hop that broke rather than a generic denial.
+    pub fn admit_chain<'a, I>(&self, hops: I) -> Result<(), (String, Refusal)>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        for hop in hops {
+            let Some(e) = self.endpoint(hop) else {
+                return Err((hop.to_owned(), Refusal::Unparseable));
+            };
+            // No path is threaded here: a hop is admitted on host and port, which
+            // is what the egress proxy checks anyway.
+            if let Err(refusal) = self.admit(&e.host, e.port, None) {
+                return Err((hop.to_owned(), refusal));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -488,5 +514,52 @@ mod tests {
         ] {
             assert!(!r.reason().is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+
+    fn scoped() -> Scope {
+        Scope {
+            version: 1,
+            state: State::Active,
+            auth_mode: Mode::None,
+            targets: vec![Host::parse("a.example").expect("valid")],
+            exclusions: Vec::new(),
+            caps: Caps::default(),
+            confirmed_by: Some("t".into()),
+        }
+    }
+
+    #[test]
+    fn a_chain_inside_scope_is_admitted() {
+        assert_eq!(
+            scoped().admit_chain(["https://a.example/1", "https://a.example/2"]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_hop_that_leaves_scope_is_the_one_named() {
+        let got = scoped().admit_chain(["https://a.example/1", "https://b.example/2"]);
+        let (hop, refusal) = got.expect_err("refused");
+        assert_eq!(hop, "https://b.example/2");
+        assert_eq!(refusal, Refusal::OutOfScope);
+    }
+
+    #[test]
+    fn an_unparseable_hop_refuses_rather_than_skipping() {
+        let (_, refusal) = scoped().admit_chain([""]).expect_err("refused");
+        assert_eq!(refusal, Refusal::Unparseable);
+    }
+
+    #[test]
+    fn the_first_refusal_wins() {
+        let (hop, _) = scoped()
+            .admit_chain(["https://b.example/", "https://c.example/"])
+            .expect_err("refused");
+        assert_eq!(hop, "https://b.example/");
     }
 }

@@ -45,6 +45,14 @@ pub enum Verdict {
     Error,
     /// Not migrated to the typed contract yet. Cannot establish a finding.
     Untyped,
+    /// The thing was tested and the answer was negative. Distinct from
+    /// `not_found`, which is the target saying "no" to something it understood.
+    Disproved,
+    /// Tested, but the result does not stand on its own (a 5xx, a partial scan).
+    Unproven,
+    /// Never attempted. Distinct from `unproven` so a gap cannot read as a
+    /// negative result.
+    Untested,
 }
 
 impl Verdict {
@@ -69,6 +77,9 @@ impl Verdict {
             Self::Unavailable => "unavailable",
             Self::Error => "error",
             Self::Untyped => "untyped",
+            Self::Disproved => "disproved",
+            Self::Unproven => "unproven",
+            Self::Untested => "untested",
         }
     }
 }
@@ -275,5 +286,30 @@ mod tests {
         assert!(got.excerpt.contains("not held"));
         // The retained prefix is still there, so the model reads real bytes.
         assert!(got.excerpt.starts_with('y'));
+    }
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    #[test]
+    fn the_provenance_verdicts_parse() {
+        for (raw, want) in [
+            (r#"{"verdict":"disproved","excerpt":"x"}"#, Verdict::Disproved),
+            (r#"{"verdict":"unproven","excerpt":"x"}"#, Verdict::Unproven),
+            (r#"{"verdict":"untested","excerpt":"x"}"#, Verdict::Untested),
+        ] {
+            assert_eq!(parse(raw).verdict, want, "{raw}");
+        }
+    }
+
+    #[test]
+    fn only_a_confirmation_establishes_a_finding() {
+        // Pinned: the provenance verdicts must NOT quietly count as proof.
+        for v in [Verdict::Disproved, Verdict::Unproven, Verdict::Untested] {
+            assert!(!v.establishes_finding(), "{v:?}");
+        }
+        assert!(Verdict::Confirmed.establishes_finding());
     }
 }

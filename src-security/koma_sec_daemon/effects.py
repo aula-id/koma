@@ -57,6 +57,7 @@ EXECS = (CPU, BINARY, NET, BROWSER)
 # surfaces then rather than as a silently mis-routed call.
 MANIFEST: dict[str, tuple[str, str, str | None, str]] = {
     "sec_http": (REMOTE, NET, None, "one request to one URL"),
+    "sec_browser": (REMOTE, BROWSER, None, "page render via a host browser"),
     "sec_remote": (REMOTE, BINARY, "host", "interactive pwn session; local without a host"),
     "sec_sqlmap": (EXPLOIT, BINARY, None, "fires injection payloads via the sqlmap binary"),
     "sec_nuclei": (REMOTE, NET, None, "template sweep"),

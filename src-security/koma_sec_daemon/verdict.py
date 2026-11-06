@@ -31,6 +31,11 @@ TIMED_OUT = "timed_out"
 UNAVAILABLE = "unavailable"
 ERROR = "error"
 UNTYPED = "untyped"
+# Provenance verdicts. Kept distinct from NOT_FOUND, which says the target
+# answered "no"; these say WHY no answer stands.
+DISPROVED = "disproved"
+UNPROVEN = "unproven"
+UNTESTED = "untested"
 
 VERDICTS = frozenset(
     {
@@ -42,6 +47,9 @@ VERDICTS = frozenset(
         UNAVAILABLE,
         ERROR,
         UNTYPED,
+        DISPROVED,
+        UNPROVEN,
+        UNTESTED,
     }
 )
 

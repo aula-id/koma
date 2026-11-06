@@ -53,6 +53,7 @@ _REQUIRES: dict[str, str] = {
     "sec_z3": "z3",
     "sec_rop": "pwn",
     "sec_crack": "requests",
+    "sec_browser": "playwright",
 }
 
 # Actionable text, not a bare name: the model can act on this and the user can
@@ -61,6 +62,7 @@ _HINTS = {
     "requests": "pip install requests",
     "pwn": "pip install pwntools",
     "z3": "pip install z3-solver",
+    "playwright": "pip install playwright && playwright install chromium",
 }
 
 
