@@ -52,6 +52,9 @@ pub(crate) fn handle_model_role_swap(
         ModelRole::Planner => "planner",
         ModelRole::Compactor => "compactor",
         ModelRole::Safeguard => "safeguard",
+        ModelRole::CyberRed => "cyber red",
+        ModelRole::CyberBlue => "cyber blue",
+        ModelRole::CyberResearch => "cyber research",
     };
     // Resolve the model label for the toast before any mutable borrows.
     let toast_msg = if model_uuid.is_none() {

@@ -396,6 +396,9 @@ fn parse_role(name: &str) -> Option<ModelRole> {
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
         "planner" => ModelRole::Planner,
+        "cyber-red" | "cyber_red" => ModelRole::CyberRed,
+        "cyber-blue" | "cyber_blue" => ModelRole::CyberBlue,
+        "cyber-research" | "cyber_research" => ModelRole::CyberResearch,
         _ => return None,
     })
 }
@@ -407,6 +410,9 @@ fn role_name(role: ModelRole) -> &'static str {
         ModelRole::Safeguard => "safeguard",
         ModelRole::Compactor => "compactor",
         ModelRole::Planner => "planner",
+        ModelRole::CyberRed => "cyber-red",
+        ModelRole::CyberBlue => "cyber-blue",
+        ModelRole::CyberResearch => "cyber-research",
     }
 }
 
@@ -417,6 +423,11 @@ fn role_rank(role: ModelRole) -> u8 {
         ModelRole::Safeguard => 2,
         ModelRole::Compactor => 3,
         ModelRole::Planner => 4,
+        // Cyber last: these are the most specific, so a generic assignment is
+        // the weakest and must not win a ranking tie.
+        ModelRole::CyberRed => 5,
+        ModelRole::CyberBlue => 6,
+        ModelRole::CyberResearch => 7,
     }
 }
 

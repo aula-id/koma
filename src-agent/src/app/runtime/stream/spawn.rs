@@ -142,6 +142,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         plan_read_only: rt.plan_read_only.clone(),
         workspace,
         session_id,
+        cyber_lane: None,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,

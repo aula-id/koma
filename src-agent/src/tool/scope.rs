@@ -243,6 +243,23 @@ pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> O
     }
 }
 
+/// Gate a call on the session's cyber lane, when one is set.
+///
+/// Separate from [`admit_from_call`] because the lane applies to EVERY tool, not
+/// only the ones with a destination — a research run calling `sec_triage` is fine,
+/// the same run calling `sec_http` is not.
+///
+/// `None` means the session is in a plain coding mode with no lane, and nothing
+/// is gated: ordinary coding must keep working untouched.
+pub fn lane_refusal(ctx: &ToolCtx, tool: &str) -> Option<String> {
+    let lane = ctx.cyber_lane?;
+    let cap = crate::app::sec::lane::Lane::cap_of_tool(tool);
+    if lane.permits(cap) {
+        return None;
+    }
+    Some(format!("{} lane: {}", lane.label(), lane.reason_for(cap)))
+}
+
 /// Settle a target's binding against the verdict the call returned.
 ///
 /// No timestamps: the verdict alone decides. A confirmation keeps the record
@@ -541,6 +558,7 @@ mod tests {
     fn ctx_for(dir: &Path, cwd: &Path) -> ToolCtx {
         crate::tool::ToolCtx {
             session_id: "sess".into(),
+            cyber_lane: None,
             session_dir: Some(dir.to_path_buf()),
             workspace: cwd.to_path_buf(),
             ..crate::tool::seqthink::test_ctx()

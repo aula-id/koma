@@ -10,6 +10,7 @@ fn test_ctx(workspaces: Vec<std::path::PathBuf>) -> crate::tool::ToolCtx {
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: workspaces.first().cloned().unwrap_or_default(),
         session_id: "sess-test".into(),
+        cyber_lane: None,
         workspaces,
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
         memory_dir: None,

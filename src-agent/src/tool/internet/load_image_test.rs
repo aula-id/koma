@@ -14,6 +14,7 @@ fn ctx(
 ) -> ToolCtx {
     ToolCtx {
         session_id,
+        cyber_lane: None,
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace,
         workspaces,

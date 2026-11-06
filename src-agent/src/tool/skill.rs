@@ -274,6 +274,7 @@ mod tests {
             plan_read_only: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             workspace: std::path::PathBuf::from("."),
             session_id: "sess-test".into(),
+            cyber_lane: None,
             workspaces: vec![std::path::PathBuf::from(".")],
             dir_cache: std::sync::Arc::new(
                 std::sync::RwLock::new(crate::tool::DirCache::default()),

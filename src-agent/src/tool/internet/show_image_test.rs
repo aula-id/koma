@@ -8,6 +8,7 @@ fn make_ctx(internet_mode: InternetMode) -> ToolCtx {
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: std::env::temp_dir(),
         session_id: "sess-test".into(),
+        cyber_lane: None,
         workspaces: vec![std::env::temp_dir()],
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
         memory_dir: None,

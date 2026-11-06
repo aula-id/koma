@@ -212,6 +212,9 @@ pub(crate) fn open_role_pick(role: ModelRole, state: &mut AppState) {
             ModelRole::Planner => "planner",
             ModelRole::Compactor => "compactor",
             ModelRole::Safeguard => "safeguard",
+            ModelRole::CyberRed => "cyber-red",
+            ModelRole::CyberBlue => "cyber-blue",
+            ModelRole::CyberResearch => "cyber-research",
         };
 
         *state.mode_mut() = crate::app::mode::Mode::Model(Box::new(ModelCmdState {

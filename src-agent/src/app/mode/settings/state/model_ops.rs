@@ -387,9 +387,9 @@ impl SettingsState {
 
     /// Open the Role checkbox picker, seeding its checked state from the modal's
     /// current `roles`. No-op when no modal is open.
-    pub fn open_role_picker(&mut self) {
+    pub fn open_role_picker(&mut self, security_enabled: bool) {
         if let Some(m) = self.model_modal.as_mut() {
-            m.role_picker = Some(RolePickerState::from_roles(&m.roles));
+            m.role_picker = Some(RolePickerState::from_roles(&m.roles, security_enabled));
         }
     }
 

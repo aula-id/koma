@@ -505,6 +505,9 @@ pub struct ToolCtx {
     /// Absolute workspace root (the session's primary workdir). Follows a live
     /// `cd`, so this is the run's cwd, not an allow-list.
     pub workspace: PathBuf,
+    /// The session's cyber lane, when security mode has one armed. `None` in a
+    /// plain coding session, which leaves every tool ungated as before.
+    pub cyber_lane: Option<crate::app::sec::lane::Lane>,
     /// Stable session identity. Every dynamic target traces back to this, so two
     /// sessions on one checkout cannot collide on a board, a scope record or a
     /// spilled artifact. Mirrors `SessionRuntime::id`.
@@ -1037,9 +1040,13 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     refusal.to_json(),
                 );
             }
+            // Lane first: a tool the lane forbids must not even be admitted, so
+            // the refusal names the lane rather than a scope miss.
+            let lane_refusal = scope::lane_refusal(ctx, &call.function.name)
+                .or_else(|| scope::admit_from_call(ctx, &call.function.name, &args));
             // Admit before anything else: a call whose target the scope does
             // not cover must not reach the container at all.
-            if let Some(reason) = scope::admit_from_call(ctx, &call.function.name, &args) {
+            if let Some(reason) = lane_refusal {
                 let denied = verdict::TypedResult {
                     verdict: verdict::Verdict::Blocked,
                     excerpt: reason,
