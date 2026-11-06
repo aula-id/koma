@@ -2,9 +2,12 @@
 koma_sec_daemon — long-lived security daemon entrypoint.
 
 Protocol (newline-delimited JSON, parent speaks first):
-  Handshake (parent → daemon):  {"v": 1, "token": "<T>"}   (token optional)
-  Handshake (daemon → parent):  {"ok": true, "tools": [...descriptors...]}
-                            or  {"ok": false, "error": "bad token"}
+  Handshake (parent → daemon):  {"v": 2, "token": "<T>"}   (token optional)
+  Handshake (daemon → parent):  {"ok": true, "v": 2, "tools": [...descriptors...]}
+                            or  {"ok": false, "error": "bad token" | "<refusal>"}
+
+  `v` is the protocol MAJOR. A mismatch is refused, not guessed — see
+  `protocol.negotiate`. Bump MAJOR when an older peer would mis-read a frame.
 
   Call (parent → daemon):       {"id": N, "op": "call", "tool": T, "args": {...}}
   Result (daemon → parent):     {"id": N, "ok": true, "result": "<str>"}
@@ -120,7 +123,17 @@ def main() -> None:
             write_frame(real_stdout, {"ok": False, "error": "bad token"})
             sys.exit(1)
 
-    write_frame(real_stdout, {"ok": True, "tools": descriptors()})
+    from koma_sec_daemon.protocol import PROTOCOL_VERSION, negotiate
+
+    refusal = negotiate(frame)
+    if refusal is not None:
+        write_frame(real_stdout, {"ok": False, "error": refusal})
+        sys.exit(1)
+
+    write_frame(
+        real_stdout,
+        {"ok": True, "v": PROTOCOL_VERSION, "tools": descriptors()},
+    )
 
     # --- MAIN LOOP ---
     # Processes one frame at a time (single-threaded serialization): concurrent

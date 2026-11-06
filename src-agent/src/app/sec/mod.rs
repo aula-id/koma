@@ -68,6 +68,7 @@ use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 // tasks) lives in the sibling `wire` module (file size); re-imported here so the
 // existing call sites in `SecDaemonManager::start` keep compiling unchanged.
 mod wire;
+mod wire_tool;
 use wire::{reader_task, spawn_and_handshake, stderr_drain_task, writer_task, Connected};
 
 /// In-flight calls awaiting a reply, keyed by request id. Shared between
@@ -86,12 +87,63 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// generous budget.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How far a tool's effects reach. Ordered weakest-first so a comparison is a
+/// containment question rather than a set-membership one.
+///
+/// The daemon speaks these as lowercase strings. `Deserialize` has no catch-all:
+/// an unrecognized label fails the tool's parse rather than becoming `Static`,
+/// which is what keeps a half-migrated pair from reading as non-risky.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecRisk {
+    /// Pure computation; no target, no filesystem.
+    Static,
+    /// Reads a local path or a loopback service.
+    Local,
+    /// Sends packets to a target in scope.
+    Remote,
+    /// Sends a crafted payload; effects go beyond observation.
+    Exploit,
+}
+
+impl Default for SecRisk {
+    /// The weakest tier, used when a daemon omits `risk` entirely. Deliberately
+    /// the weakest and not a guess at the middle: an older daemon that never
+    /// learned the field must not be trusted further than necessary.
+    fn default() -> Self {
+        Self::Static
+    }
+}
+
+/// Wire spelling of [`SecRisk`], split out so the field can default without a
+/// `Deserialize` impl on the fallible label.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RiskWire {
+    #[default]
+    Static,
+    Local,
+    Remote,
+    Exploit,
+}
+
+impl From<RiskWire> for SecRisk {
+    fn from(w: RiskWire) -> Self {
+        match w {
+            RiskWire::Static => Self::Static,
+            RiskWire::Local => Self::Local,
+            RiskWire::Remote => Self::Remote,
+            RiskWire::Exploit => Self::Exploit,
+        }
+    }
+}
+
 /// A tool advertised by the daemon during the handshake.
 ///
 /// `parameters` is the raw JSON-Schema object the daemon supplied (forwarded
 /// verbatim to the model). `risk`/`compute`/`domain` are the daemon's own metadata
 /// used by the `/security` cockpit and the risk-gating logic.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct SecToolDesc {
     /// Tool name, already `sec_`-prefixed by the daemon.
     name: String,
@@ -99,11 +151,15 @@ struct SecToolDesc {
     description: String,
     /// Raw JSON-Schema `parameters` object, verbatim from the daemon.
     parameters: serde_json::Value,
-    /// Whether the tool is considered risky (gated behind confirmation upstream).
-    risk: bool,
-    /// Free-form compute-class hint (e.g. `"light"`, `"heavy"`).
+    /// How far this tool's effects reach.
+    risk: SecRisk,
+    /// The string parameter that names a destination, recorded when `risk` is
+    /// `Remote` or `Exploit` so the egress gate has a field to read rather than
+    /// re-deriving one. `None` for `Static`/`Local`.
+    network_param: Option<String>,
+    /// Compute class, from the fixed allow-list in [`wire_tool`].
     compute: String,
-    /// Free-form domain tag (e.g. `"web"`, `"network"`).
+    /// Domain tag (e.g. `"web"`, `"network"`).
     domain: String,
 }
 
@@ -138,6 +194,10 @@ struct Inner {
     /// Tools advertised by the daemon at the last successful handshake. Empty when
     /// not running.
     tools: Vec<SecToolDesc>,
+    /// Descriptors the last handshake refused, as `(name, reason)`. Kept so the gap
+    /// is visible: a tool that fails the capability rules is not advertised, and
+    /// without this it would simply be missing with no explanation.
+    refused_tools: Vec<(String, String)>,
 }
 
 /// The security daemon client manager.
@@ -162,7 +222,8 @@ mod isolated_runtime_gate_tests {
             name: "sec_http".into(),
             description: "test".into(),
             parameters: serde_json::json!({}),
-            risk: true,
+            risk: SecRisk::Remote,
+            network_param: Some("url".into()),
             compute: "network".into(),
             domain: "web".into(),
         });
@@ -201,7 +262,8 @@ mod isolated_runtime_gate_tests {
             name: "sec_http".into(),
             description: "test".into(),
             parameters: serde_json::json!({}),
-            risk: true,
+            risk: SecRisk::Remote,
+            network_param: Some("url".into()),
             compute: "network".into(),
             domain: "web".into(),
         });
@@ -287,6 +349,7 @@ impl SecDaemonManager {
                 stdout,
                 stderr,
                 tools,
+                refused,
             } = connected;
 
             // Build the channels/maps the live tasks will share, but DON'T spawn the
@@ -298,6 +361,7 @@ impl SecDaemonManager {
             // Store the result — but only if this attempt is still current.
             {
                 let mut inner = mgr.inner.lock().unwrap_or_else(|p| p.into_inner());
+                inner.refused_tools = refused;
                 if inner.generation != gen_at_start {
                     // Superseded mid-handshake (stop/restart bumped the generation).
                     // Kill the just-spawned child and store nothing; the tasks were
@@ -589,22 +653,26 @@ impl SecDaemonManager {
         inner.tools.iter().any(|t| t.name == name)
     }
 
-    /// Look up a tool's `risk` flag. `false` for an unknown tool (fail-open on the
-    /// lookup, not on the gate — callers treat a missing tool as non-risky here).
-    pub fn tool_risk(&self, name: &str) -> bool {
+    /// A tool's effect tier. `None` for an unknown tool so a caller can tell
+    /// "not advertised" from "advertised as static" — the previous `bool` collapsed
+    /// both into `false`.
+    pub fn tool_risk(&self, name: &str) -> Option<SecRisk> {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        inner
-            .tools
-            .iter()
-            .find(|t| t.name == name)
-            .map(|t| t.risk)
-            .unwrap_or(false)
+        inner.tools.iter().find(|t| t.name == name).map(|t| t.risk)
     }
 
     /// `true` once the handshake succeeded and the daemon is live.
     pub fn is_running(&self) -> bool {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.running
+    }
+
+    /// Descriptors the last handshake refused, as `(name, reason)`. The cockpit
+    /// renders these so a tool that failed the capability rules is visibly missing
+    /// rather than silently absent.
+    pub fn refused_tools(&self) -> Vec<(String, String)> {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.refused_tools.clone()
     }
 
     /// A serializable snapshot for the `/security` cockpit: running/installed flags
@@ -621,7 +689,7 @@ impl SecDaemonManager {
                 .map(|t| SecToolInfo {
                     name: t.name.clone(),
                     domain: t.domain.clone(),
-                    risk: t.risk,
+                    risk: t.risk > SecRisk::Static,
                     compute: t.compute.clone(),
                 })
                 .collect(),
@@ -647,7 +715,8 @@ pub struct SecToolInfo {
     pub name: String,
     /// Free-form domain tag (e.g. `"web"`, `"network"`).
     pub domain: String,
-    /// Whether the tool is considered risky.
+    /// Whether the tool's effects go beyond pure computation. Derived from
+    /// [`SecRisk`] so the panel's advisory marker does not need the enum.
     pub risk: bool,
     /// Free-form compute-class hint.
     pub compute: String,
