@@ -152,6 +152,55 @@ pub struct Caps {
     pub total: Option<u32>,
 }
 
+/// A wall-clock window the scope is usable inside, in epoch seconds.
+///
+/// Separate from the caps on purpose: the caps bound how MUCH a run may do, the
+/// window bounds WHEN. A forgotten run against a production host is usually a
+/// timing problem, not a volume one, so volume limits do not cover it.
+///
+/// Both ends are inclusive-start, exclusive-end. A window with no end is a normal
+/// "from now on"; one with no start began whenever it was declared.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Window {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<i64>,
+}
+
+/// Seconds since the epoch. Only this module needs a clock, and only for the
+/// window, so the helper lives here rather than in a shared time module.
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+impl Window {
+    /// Is `now` (epoch seconds) inside? An empty window admits everything.
+    #[must_use]
+    pub fn admits(&self, now: i64) -> bool {
+        if let Some(from) = self.from {
+            if now < from {
+                return false;
+            }
+        }
+        if let Some(until) = self.until {
+            if now >= until {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Is any bound set? An unset window is not worth checking at the gate.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.from.is_some() || self.until.is_some()
+    }
+}
+
 /// The record. Serialised with `version` so a stale caller can be refused.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
@@ -165,6 +214,9 @@ pub struct Scope {
     pub exclusions: Vec<Host>,
     #[serde(default)]
     pub caps: Caps,
+    /// When this scope may be used. Empty admits at any time.
+    #[serde(default)]
+    pub window: Window,
     /// Who confirmed, and thus whether this scope may be used at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmed_by: Option<String>,
@@ -186,6 +238,8 @@ pub enum Refusal {
     PortNotAllowed,
     /// The call carried no destination and the scope needs one.
     NoDestination,
+    /// `now` is outside the scope's window.
+    OutsideWindow,
     /// A hop in the chain could not be parsed, so it cannot be admitted.
     Unparseable,
 }
@@ -201,6 +255,7 @@ impl Refusal {
             Self::Excluded => "target is explicitly excluded",
             Self::PortNotAllowed => "port not allowed for this host",
             Self::NoDestination => "call carries no destination",
+            Self::OutsideWindow => "the scope's time window is closed",
             Self::Unparseable => "hop could not be parsed, so it cannot be admitted",
         }
     }
@@ -217,6 +272,17 @@ impl Scope {
         port: u16,
         version: Option<u64>,
     ) -> Result<(), Refusal> {
+        self.admit_at(target, port, version, now_epoch())
+    }
+
+    /// [`Self::admit`] against an explicit clock, so window tests need no sleeping.
+    pub fn admit_at(
+        &self,
+        target: &str,
+        port: u16,
+        version: Option<u64>,
+        now: i64,
+    ) -> Result<(), Refusal> {
         if let Some(v) = version {
             if v != self.version {
                 return Err(Refusal::NotActive);
@@ -227,6 +293,12 @@ impl Scope {
         }
         if self.confirmed_by.is_none() {
             return Err(Refusal::NotConfirmed);
+        }
+        // Window before any host work: a closed window refuses every target, so
+        // checking it early keeps the diagnosis about the window rather than
+        // about whichever host happened to be tried.
+        if !self.window.admits(now) {
+            return Err(Refusal::OutsideWindow);
         }
         let Some(host) = normalise(target) else {
             return Err(Refusal::NoDestination);
@@ -389,6 +461,7 @@ mod tests {
             targets: vec![Host::parse("example.com").expect("valid")],
             exclusions: Vec::new(),
             caps: Caps::default(),
+            window: Window::default(),
             confirmed_by: Some("alice".into()),
         }
     }
@@ -529,6 +602,7 @@ mod chain_tests {
             targets: vec![Host::parse("a.example").expect("valid")],
             exclusions: Vec::new(),
             caps: Caps::default(),
+            window: Window::default(),
             confirmed_by: Some("t".into()),
         }
     }
@@ -561,5 +635,122 @@ mod chain_tests {
             .admit_chain(["https://b.example/", "https://c.example/"])
             .expect_err("refused");
         assert_eq!(hop, "https://b.example/");
+    }
+}
+
+#[cfg(test)]
+mod window {
+    //! Phase 3: a confirmed, active, in-target scope must still be refused outside
+    //! its window. A timing limit that can be stepped around is not a limit.
+
+    use super::*;
+
+    fn scoped(window: Window) -> Scope {
+        Scope {
+            version: 1,
+            state: State::Active,
+            auth_mode: Mode::None,
+            targets: vec![Host::parse("example.com").expect("valid")],
+            exclusions: Vec::new(),
+            caps: Caps::default(),
+            window,
+            confirmed_by: Some("tester".into()),
+        }
+    }
+
+    #[test]
+    fn an_unset_window_admits_at_any_time() {
+        let s = scoped(Window::default());
+        for now in [0, 1_000_000, i64::MAX] {
+            assert!(s.admit_at("example.com", 443, Some(1), now).is_ok(), "{now}");
+        }
+    }
+
+    #[test]
+    fn before_the_start_is_refused() {
+        let s = scoped(Window { from: Some(100), until: None });
+        assert_eq!(
+            s.admit_at("example.com", 443, Some(1), 99),
+            Err(Refusal::OutsideWindow)
+        );
+    }
+
+    #[test]
+    fn at_and_after_the_start_is_admitted() {
+        let s = scoped(Window { from: Some(100), until: None });
+        assert!(s.admit_at("example.com", 443, Some(1), 100).is_ok());
+        assert!(s.admit_at("example.com", 443, Some(1), 101).is_ok());
+    }
+
+    #[test]
+    fn the_end_is_exclusive() {
+        // Half-open, so a window ending at 200 permits 199 and not 200. Pinned
+        // because an off-by-one here silently extends every run by its last second.
+        let s = scoped(Window { from: None, until: Some(200) });
+        assert!(s.admit_at("example.com", 443, Some(1), 199).is_ok());
+        assert_eq!(
+            s.admit_at("example.com", 443, Some(1), 200),
+            Err(Refusal::OutsideWindow)
+        );
+    }
+
+    #[test]
+    fn inside_a_closed_range_works() {
+        let s = scoped(Window { from: Some(100), until: Some(200) });
+        assert!(s.admit_at("example.com", 443, Some(1), 150).is_ok());
+    }
+
+    #[test]
+    fn the_window_refusal_wins_over_a_host_diagnosis() {
+        // Outside the window every target is refused, so reporting "not in scope"
+        // for an out-of-target host would blame the wrong thing.
+        let s = scoped(Window { from: Some(100), until: Some(200) });
+        assert_eq!(
+            s.admit_at("elsewhere.test", 443, Some(1), 300),
+            Err(Refusal::OutsideWindow)
+        );
+    }
+
+    #[test]
+    fn the_window_is_checked_after_activation_and_confirmation() {
+        // A closed window on a paused scope should read as "not active", not as
+        // a window problem — the earlier condition is the real one.
+        let mut s = scoped(Window { from: Some(100), until: Some(200) });
+        s.state = State::Paused;
+        assert_eq!(
+            s.admit_at("example.com", 443, Some(1), 300),
+            Err(Refusal::NotActive)
+        );
+    }
+
+    #[test]
+    fn an_empty_window_is_not_worth_checking() {
+        assert!(!Window::default().is_set());
+        assert!(Window { from: Some(1), until: None }.is_set());
+    }
+
+    #[test]
+    fn the_reason_is_specific() {
+        assert!(Refusal::OutsideWindow.reason().contains("window"));
+    }
+
+    #[test]
+    fn a_window_survives_a_round_trip() {
+        let s = scoped(Window { from: Some(1), until: Some(2) });
+        let json = serde_json::to_string(&s).expect("serialise");
+        let back: Scope = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back.window, s.window);
+    }
+
+    #[test]
+    fn an_older_scope_document_without_a_window_still_loads() {
+        // Every scope written before this field must keep working, and an absent
+        // window means "no timing limit".
+        let s = scoped(Window::default());
+        let mut v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&s).expect("ser")).expect("parse");
+        v.as_object_mut().expect("object").remove("window");
+        let back: Scope = serde_json::from_value(v).expect("load");
+        assert!(!back.window.is_set());
     }
 }

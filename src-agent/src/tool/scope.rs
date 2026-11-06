@@ -551,6 +551,7 @@ mod tests {
             targets: vec![sc::Host::parse(target).expect("valid")],
             exclusions: Vec::new(),
             caps: sc::Caps::default(),
+            window: sc::Window::default(),
             confirmed_by: Some("tester".into()),
         }
     }

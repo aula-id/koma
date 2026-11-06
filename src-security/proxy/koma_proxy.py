@@ -106,7 +106,20 @@ def _rule_admits(host: str, ports: frozenset[int] | None, target: str, port: int
         return False
     if host.startswith("."):
         return target.endswith(host)
+    # `*.name` is the common spelling for "the name and its children". The boundary
+    # emits the bare-name form (which `_rule_admits` already treats that way), but a
+    # hand-written rules file would reasonably use this, so support it explicitly
+    # rather than letting it match nothing.
+    if host.startswith("*."):
+        stem = host[1:]
+        return target == host[2:] or target.endswith(stem)
     return target.endswith("." + host)
+
+
+def _is_v6_literal(host: str) -> bool:
+    """True for a v6 literal. Distinct from `_has_v6()` below, which asks whether
+    THIS HOST can bind v6 at all."""
+    return ":" in host
 
 
 def _is_ip(host: str) -> bool:
@@ -159,13 +172,28 @@ def _read_head(conn: socket.socket) -> bytes | None:
 
 
 def _split_authority(authority: str, default: int) -> tuple[str, int]:
+    """
+    Split `host[:port]` and return `(host, port)`, keeping any userinfo on the host
+    for the caller to strip.
+
+    Userinfo is removed BEFORE counting colons. `user:pass@host` carries a colon that
+    looks like a port separator, so counting first dropped to the default port and
+    admitted the call on the wrong one — a quiet widening.
+    """
+    if "@" in authority:
+        authority = authority.rsplit("@", 1)[1]
     if authority.startswith("["):
-        host, _, tail = authority.partition("]")
+        host, bracket, tail = authority.partition("]")
+        if not bracket:
+            # Unterminated bracket: refuse rather than guess where the host ended.
+            raise ValueError(f"unterminated ipv6 bracket in {authority!r}")
         host = host[1:]
         port = tail.lstrip(":")
         return host, int(port) if port else default
     if authority.count(":") == 1:
         host, port = authority.split(":", 1)
+        if not port:
+            raise ValueError(f"empty port in {authority!r}")
         return host, int(port)
     return authority, default
 
@@ -209,6 +237,13 @@ def handle(conn: socket.socket, rules: Rules) -> None:
             if not rules.allows(host, port):
                 _deny(conn, "403 Forbidden", f"{host}:{port} not in scope")
                 return
+            # v6 FAILS CLOSED. `create_connection` would happily follow a v6 route
+            # the scope never admitted, so a host allowed only as v4 could be
+            # reached over v6 — or a v6 literal compared as a name could match by
+            # suffix (`::1` ending in `.1`).
+            if _is_v6_literal(host):
+                _deny(conn, "403 Forbidden", f"{host}:{port}: ipv6 is not admitted")
+                return
             try:
                 upstream = socket.create_connection((host, port), timeout=10)
             except OSError as exc:
@@ -236,6 +271,9 @@ def handle(conn: socket.socket, rules: Rules) -> None:
         host = host.lower()
         if not rules.allows(host, port):
             _deny(conn, "403 Forbidden", f"{host}:{port} not in scope")
+            return
+        if _is_v6_literal(host):
+            _deny(conn, "403 Forbidden", f"{host}:{port}: ipv6 is not admitted")
             return
         try:
             upstream = socket.create_connection((host, port), timeout=10)

@@ -99,3 +99,59 @@ def _parse_from(text: str):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BypassTest(unittest.TestCase):
+    """Phase 3 bypass vectors: each is a way past the boundary if it slipped."""
+
+    def rules(self) -> Rules:
+        # Rule lines are `host<space>ports`, matching `boundary.rules_for`.
+        return rules_from("a.example 443\n.only.example 443\n")
+
+    def test_a_name_never_matches_by_suffix_without_the_dot(self):
+        # `evil-a.example` must not match `a.example`.
+        self.assertFalse(_rule_admits("a.example", None, "evila.example", 443))
+
+    def test_an_ip_neighbour_does_not_match_by_suffix(self):
+        # The classic: `10.0.0.1` must not admit `20.10.0.1`.
+        self.assertFalse(_rule_admits("10.0.0.1", None, "20.10.0.1", 443))
+
+    def test_ipv6_is_flagged_for_the_fail_closed_branch(self):
+        # v6 never matches the `_is_ip` v4 suffix path, and `create_connection`
+        # would happily follow a v6 route the scope never admitted, so the proxy
+        # refuses v6 literals outright.
+        from koma_proxy import _is_v6_literal as is_v6
+
+        self.assertTrue(is_v6("::1"))
+        self.assertTrue(is_v6("fe80::1"))
+        self.assertFalse(is_v6("a.example"))
+        self.assertFalse(is_v6("10.0.0.1"))
+
+    def test_a_prohibited_port_is_refused_while_the_host_is_allowed(self):
+        r = self.rules()
+        self.assertTrue(r.allows("a.example", 443))
+        self.assertFalse(r.allows("a.example", 22))
+
+    def test_the_subdomain_form_is_stricter_than_the_bare_name(self):
+        r = self.rules()
+        self.assertTrue(r.allows("x.only.example", 443))
+        self.assertFalse(r.allows("only.example", 443), "bare name admitted by a dot rule")
+
+    def test_wildcard_form_admits_the_bare_name_and_children(self):
+        r = rules_from("*.wild.example 443\n")
+        self.assertTrue(r.allows("wild.example", 443))
+        self.assertTrue(r.allows("x.wild.example", 443))
+        self.assertFalse(r.allows("notwild.example", 443))
+
+    def test_an_unparseable_authority_is_rejected_not_guessed(self):
+        for bad in ("a.example:", "[::1", ":"):
+            with self.assertRaises(ValueError):
+                _split_authority(bad, 443)
+
+    def test_userinfo_does_not_widen_the_port(self):
+        # `user:pass@host` is legal in an absolute URI and its colon looks like a
+        # port separator. Counting colons before stripping userinfo fell back to the
+        # DEFAULT port, admitting the call on 80 when 443 was meant.
+        host, port = _split_authority("user:pass@a.example:443", 80)
+        self.assertEqual(host, "a.example", "userinfo must not survive into the host")
+        self.assertEqual(port, 443, "the real port must survive the userinfo")

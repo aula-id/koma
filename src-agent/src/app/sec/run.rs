@@ -166,6 +166,7 @@ mod tests {
             targets: vec![scope::Host::parse("a.example").expect("valid")],
             exclusions: Vec::new(),
             caps: scope::Caps::default(),
+            window: scope::Window::default(),
             confirmed_by: Some("tester".into()),
         }
     }
