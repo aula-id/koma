@@ -38,6 +38,7 @@ pub mod recovery;
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
+pub mod scope;
 pub mod seqthink;
 pub mod verdict;
 pub mod shell;
@@ -501,8 +502,17 @@ pub struct ToolCtx {
     /// delegates. Checked immediately before dispatch; it cannot undo I/O that
     /// has already started.
     pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
-    /// Absolute workspace root (the session's primary workdir).
+    /// Absolute workspace root (the session's primary workdir). Follows a live
+    /// `cd`, so this is the run's cwd, not an allow-list.
     pub workspace: PathBuf,
+    /// Stable session identity. Every dynamic target traces back to this, so two
+    /// sessions on one checkout cannot collide on a board, a scope record or a
+    /// spilled artifact. Mirrors `SessionRuntime::id`.
+    ///
+    /// Read by [`scope::ScopeBase::of`]; unread by the tools themselves until the
+    /// phase-3 dispatch boundary lands.
+    #[allow(dead_code)]
+    pub session_id: String,
     /// All configured workspace roots (may be >1).
     pub workspaces: Vec<PathBuf>,
     pub dir_cache: Arc<RwLock<DirCache>>,

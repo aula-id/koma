@@ -18,6 +18,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         rt.agent_mode == crate::app::state::AgentMode::Plan,
         std::sync::atomic::Ordering::Release,
     );
+    let session_id = rt.id.clone();
     let session_ref = rt.session.as_ref();
     // The session's EFFECTIVE cwd: the live `cd` override when set, else the
     // configured workdir. This drives `bash` (its `current_dir`) and the dir
@@ -140,6 +141,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     crate::tool::ToolCtx {
         plan_read_only: rt.plan_read_only.clone(),
         workspace,
+        session_id,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,

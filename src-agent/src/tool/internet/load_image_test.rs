@@ -7,11 +7,13 @@ const PNG: &[u8] =
 
 fn ctx(
     workspace: PathBuf,
+    session_id: String,
     workspaces: Vec<PathBuf>,
     scratch: PathBuf,
     session_dir: Option<PathBuf>,
 ) -> ToolCtx {
     ToolCtx {
+        session_id,
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace,
         workspaces,
@@ -74,6 +76,7 @@ fn accepts_configured_workspace_worktree_and_exact_scratch() {
     put(&scratch.join("c.png"), PNG);
     let ctx = ctx(
         worktree.clone(),
+        "sess-test".into(),
         vec![worktree.clone(), ws.clone()],
         scratch.clone(),
         None,
@@ -94,7 +97,13 @@ fn accepts_session_images_dir_path_and_image_n() {
     put(&img, PNG);
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
-    let ctx = ctx(ws, vec![base.join("ws")], scratch, Some(session.clone()));
+    let ctx = ctx(
+        ws,
+        "sess-test".into(),
+        vec![base.join("ws")],
+        scratch,
+        Some(session.clone()),
+    );
 
     assert!(
         read_validated_image(&ctx, &img.display().to_string()).is_ok(),
@@ -137,7 +146,7 @@ fn image_marker_label_in_path_resolves_and_a_real_path_still_loads() {
         serde_json::to_string(&messages).unwrap(),
     )
     .unwrap();
-    let ctx = ctx(ws.clone(), vec![ws.clone()], scratch, Some(session));
+    let ctx = ctx(ws.clone(), "sess-test".into(), vec![ws.clone()], scratch, Some(session));
 
     let (from_label, _) = read_validated_image(&ctx, "Image #1").unwrap();
     assert_eq!(from_label, img.canonicalize().unwrap());
@@ -183,7 +192,7 @@ fn rejects_live_cwd_outside_configured_roots() {
     put(&cwd.join("outside.png"), PNG);
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
-    let ctx = ctx(cwd, vec![ws], scratch, None);
+    let ctx = ctx(cwd, "sess-test".into(), vec![ws], scratch, None);
     assert!(read_validated_image(&ctx, "outside.png").is_err());
     let _ = std::fs::remove_dir_all(base);
 }
@@ -213,7 +222,7 @@ fn rejects_disallowed_and_invalid_sources() {
     put(&ws.join("nested/a.png"), PNG);
     let session_a = base.join("sessions/session-a");
     std::fs::create_dir_all(session_a.join("images")).unwrap();
-    let ctx = ctx(ws.clone(), vec![ws.clone()], scratch, Some(session_a));
+    let ctx = ctx(ws.clone(), "sess-test".into(), vec![ws.clone()], scratch, Some(session_a));
     for p in [
         &other,
         &persistent_root,
