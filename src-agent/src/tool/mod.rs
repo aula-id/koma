@@ -39,6 +39,7 @@ mod screen_browser;
 pub mod sdlc;
 pub mod search;
 pub mod seqthink;
+pub mod verdict;
 pub mod shell;
 pub mod shell_filter;
 pub mod skill;
@@ -1013,12 +1014,43 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         // live and armed.
         if let Some(mgr) = ctx.sec_manager.as_ref() {
             if let Some(reason) = mgr.refusal(&call.function.name, true) {
-                return output::finish_tool_output(ctx, &call.function.name, &args, format!("error: {reason}"));
+                // A refusal is the tool's own `error` verdict, not a transport
+                // failure: it becomes typed so the model sees the same shape it
+                // sees from every other outcome.
+                let refusal = verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    refusal.to_json(),
+                );
             }
-            let raw = mgr
-                .execute_blocking(&call.function.name, &args)
-                .unwrap_or_else(|e| format!("error: {e}"));
-            return output::finish_tool_output(ctx, &call.function.name, &args, raw);
+            // Parse before the output caps run. The verdict is the result; the
+            // excerpt is only its body, and `finish_tool_output` trims bodies.
+            // Untyped results (no verdict) go through the unchanged path below.
+            let typed = match mgr.execute_blocking(&call.function.name, &args) {
+                // Hold an oversized payload aside BEFORE it reaches the model: a
+                // 200-row scan is a turn's context otherwise. Reuses the same tmp
+                // spill the other tools use, so cleanup is already handled.
+                Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
+                    output::spill_foreign(ctx.session_dir.as_deref(), &call.function.name, body)
+                }),
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            };
+            return output::finish_tool_output(
+                ctx,
+                &call.function.name,
+                &args,
+                typed.to_json(),
+            );
         }
     }
     output::finish_tool_output(

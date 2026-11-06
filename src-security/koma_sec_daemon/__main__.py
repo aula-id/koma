@@ -92,6 +92,7 @@ def main() -> None:
 
     from koma_sec_daemon.protocol import read_frame, write_frame
     from koma_sec_daemon import registry
+    from koma_sec_daemon import verdict
     from koma_sec_daemon.registry import descriptors, call
     from koma_sec_daemon.sessions import SessionStore
 
@@ -176,7 +177,14 @@ def main() -> None:
 
                 try:
                     result = call(tool_name, tool_args, sessions)
-                    write_frame(real_stdout, {"id": frame_id, "ok": True, "result": result})
+                    # One boundary wrap: a handler not yet migrated to `verdict`
+                    # returns a bare string, which is labelled `untyped` here so the
+                    # parent never special-cases a legacy shape.
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": verdict.as_typed(result),
+                    })
                 except Exception as exc:
                     write_frame(real_stdout, {
                         "id": frame_id,
