@@ -297,9 +297,11 @@ fn custom_reply_limit_wins_and_zero_uses_128k_on_every_endpoint() {
 #[test]
 fn a_koma_account_model_uses_its_catalogue_window_instead_of_the_128k_fallback() {
     let endpoint = "https://koma.run/api/v1/koma-premium";
-    // Unknown to the public catalogue and with no native list: the 128k fallback.
+    // Unknown to the public catalogue and with no native list: the unknown-model
+    // fallback, clamped by the operating ceiling (`FALLBACK_WINDOW` itself is 1M
+    // and an unconfigured limit never reaches past `OPERATING_CEILING`).
     let blind = resolve("koma-token/wide", endpoint, "", 0, &[], &[]);
-    assert_eq!(blind.effective_window, FALLBACK_WINDOW);
+    assert_eq!(blind.effective_window, OPERATING_CEILING);
     assert_eq!(blind.catalogue_source, "fallback");
     // The account's own catalogue knows the real window.
     let known: ModelInfo = serde_json::from_value(serde_json::json!({

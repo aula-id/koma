@@ -27,6 +27,67 @@ use crate::model::store::base_dir;
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
+/// Security tools remain unavailable until the isolated runtime is implemented.
+/// The daemon can still run for lifecycle and YOLO management.
+pub(crate) fn cyber_execution_available() -> bool {
+    false
+}
+
+/// True when `name` belongs to the security daemon's `sec_` namespace.
+///
+/// Kept here rather than at the call sites because [`execute_tool`] and the
+/// sub-agent loop both need it, and `security` is reachable from lib-less
+/// modules that cannot see `tool`. `sec_` is a namespace prefix, not a risk
+/// class — see [`crate::app::runtime::stream::tools::approval`] for how the
+/// exemption perverts approval once a call has already been admitted.
+///
+/// (See `crate::tool::execute_tool` for the dispatch site.)
+pub(crate) fn is_sec_tool(name: &str) -> bool {
+    name.starts_with("sec_")
+}
+
+/// Why a `sec_` call may not run right now, or `None` when it may.
+///
+/// Phase-1 fail-closed boundary. Deliberately narrow and **total**: every
+/// route that can reach the daemon resolves through this, so an unadvertised
+/// or forged name cannot execute even when the daemon is live and the lane is
+/// on. Reasons are stable strings — they are asserted by tests and echoed to
+/// the model, so they must not carry run-specific data.
+///
+/// Callers pass `enabled` (the session's lane flag) and `advertised` (names the
+/// daemon handed over for this session) rather than reading state themselves:
+/// the check re-runs at dispatch precisely so a lane stopped mid-round still
+/// refuses, and so a sub-agent inherits its parent's decision instead of
+/// re-deriving one.
+/// The final check takes a closure rather than `&[String]` so the hot path can
+/// answer from borrowed state: collecting advertised names allocates a clone of
+/// every `sec_` tool on each model call.
+#[must_use]
+pub(crate) fn sec_refusal(
+    name: &str,
+    enabled: bool,
+    advertised: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    if !is_sec_tool(name) {
+        return None;
+    }
+    if !enabled {
+        return Some("cyber lane off — enable security mode in /security first".into());
+    }
+    // Advertised-ness is checked BEFORE runtime availability: a forged name is
+    // forged regardless of whether the runtime happens to be configured, and
+    // "not advertised" is the more specific of the two diagnoses.
+    if !advertised(name) {
+        return Some(format!(
+            "tool '{name}' is not advertised for this session (disabled or unknown)"
+        ));
+    }
+    if !cyber_execution_available() {
+        return Some("security execution unavailable: isolated runtime not configured".into());
+    }
+    None
+}
+
 /// Returns `~/.koma/security/` — the root of the security daemon install.
 pub fn security_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("security"))

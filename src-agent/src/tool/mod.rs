@@ -1006,8 +1006,15 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
             return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
-    if call.function.name.starts_with("sec_") {
+    if crate::security::is_sec_tool(&call.function.name) {
+        // Fail-closed boundary. `ctx` carries the manager but not the lane flag
+        // or the advertised set, so ask the manager for its own view: an
+        // unadvertised/forged `sec_` name must not run even when the daemon is
+        // live and armed.
         if let Some(mgr) = ctx.sec_manager.as_ref() {
+            if let Some(reason) = mgr.refusal(&call.function.name, true) {
+                return output::finish_tool_output(ctx, &call.function.name, &args, format!("error: {reason}"));
+            }
             let raw = mgr
                 .execute_blocking(&call.function.name, &args)
                 .unwrap_or_else(|e| format!("error: {e}"));

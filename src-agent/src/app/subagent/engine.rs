@@ -558,6 +558,21 @@ pub async fn run_agent_loop(
                     args: args_json,
                 },
             );
+            // 4a2. `sec_` boundary. `execute_tool` also guards, but a forged
+            // name outside the agent's allow-list is refused at 4a before it
+            // gets there; this keeps the two reasons distinguishable and keeps a
+            // stopped lane from reaching the daemon at all.
+            if crate::security::is_sec_tool(&name) {
+                if let Some(reason) = ctx
+                    .sec_manager
+                    .as_ref()
+                    .and_then(|m| m.refusal(&name, true))
+                {
+                    convo.push_tool(call.id.clone(), format!("error: {reason}"));
+                    continue;
+                }
+            }
+
             let mut result = crate::tool::execute_tool(&ctx, call);
             // The `cd` tool returns a `CWD_CHANGE_PREFIX`-tagged target that only the
             // main runtime's interception knows how to apply (it repoints the LIVE

@@ -150,6 +150,67 @@ pub struct SecDaemonManager {
     inner: Mutex<Inner>,
 }
 
+#[cfg(test)]
+mod isolated_runtime_gate_tests {
+    use super::*;
+
+    #[test]
+    fn discovered_tools_cannot_be_advertised_or_dispatched_before_isolation() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let manager = SecDaemonManager::new(runtime.handle());
+        manager.inner.lock().unwrap().tools.push(SecToolDesc {
+            name: "sec_http".into(),
+            description: "test".into(),
+            parameters: serde_json::json!({}),
+            risk: true,
+            compute: "network".into(),
+            domain: "web".into(),
+        });
+        assert!(manager.tool_names().is_empty());
+        assert!(manager.tool_defs().is_empty());
+        let error = manager
+            .execute_blocking("sec_http", &serde_json::json!({}))
+            .unwrap_err();
+        assert!(error.contains("isolated runtime"), "{error}");
+    }
+
+    /// The boundary is consulted from OUTSIDE this manager (dispatch), so the
+    /// reasons must be stable strings a caller can assert and echo.
+    #[test]
+    fn sec_refusal_reasons_are_stable_and_fail_closed() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let manager = SecDaemonManager::new(runtime.handle());
+
+        // Not in the namespace: no opinion, so the caller falls through.
+        assert!(manager.refusal("read", true).is_none());
+
+        // Lane off beats every later check.
+        assert!(manager
+            .refusal("sec_http", false)
+            .is_some_and(|r| r.contains("lane off")));
+
+        // A name the daemon never handed over is refused BY NAME, before any
+        // runtime question — the more specific diagnosis wins.
+        assert!(manager
+            .refusal("sec_forged", true)
+            .is_some_and(|r| r.contains("sec_forged")));
+
+        // Advertised, but the isolated runtime is not configured yet: still
+        // unreachable, for the runtime reason rather than the name reason.
+        manager.inner.lock().unwrap().tools.push(SecToolDesc {
+            name: "sec_http".into(),
+            description: "test".into(),
+            parameters: serde_json::json!({}),
+            risk: true,
+            compute: "network".into(),
+            domain: "web".into(),
+        });
+        assert!(manager
+            .refusal("sec_http", true)
+            .is_some_and(|r| r.contains("isolated runtime")));
+    }
+}
+
 impl SecDaemonManager {
     /// Build an inert manager: not running, no child, no tools. Spawns nothing.
     ///
@@ -328,7 +389,20 @@ impl SecDaemonManager {
     /// timeout removes the pending entry and returns `Err("sec tool '<name>' timed
     /// out")`.
     pub fn execute_blocking(&self, tool: &str, args: &serde_json::Value) -> Result<String, String> {
+        // Namespace guard only. The lane flag and the per-session advertise
+        // check need a `SessionRuntime`, so they run at the boundary
+        // (`crate::tool::execute_tool`, `subagent::engine`) where both are in
+        // hand — see `crate::security::sec_refusal`.
+        if let Some(reason) = crate::security::sec_refusal(tool, true, |n| self.is_advertised(n)) {
+            return Err(reason);
+        }
         self.request(serde_json::json!({ "op": "call", "tool": tool, "args": args }))
+    }
+
+    /// The same guard as [`Self::execute_blocking`]'s prelude, for callers that
+    /// hold the session's lane flag and advertised names.
+    pub fn refusal(&self, tool: &str, enabled: bool) -> Option<String> {
+        crate::security::sec_refusal(tool, enabled, |n| self.is_advertised(n))
     }
 
     /// THE SYNC→ASYNC BRIDGE (op-generic). Send one request `frame` to the daemon and
@@ -473,6 +547,9 @@ impl SecDaemonManager {
     /// Wire [`ToolDef`]s for every advertised tool, ready to extend the request
     /// `tools` array. Empty when the daemon is not running.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
+        if !crate::security::cyber_execution_available() {
+            return Vec::new();
+        }
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner
             .tools
@@ -491,8 +568,25 @@ impl SecDaemonManager {
     /// The advertised tool names (already `sec_`-prefixed by the daemon), for the
     /// advertise allow-list. Empty when not running.
     pub fn tool_names(&self) -> Vec<String> {
+        if !crate::security::cyber_execution_available() {
+            return Vec::new();
+        }
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.tools.iter().map(|t| t.name.clone()).collect()
+    }
+
+    /// Is `name` currently advertised? Same predicate as [`Self::tool_names`]
+    /// without the `Vec<String>`: the `sec_` boundary runs on the model-call hot
+    /// path, so the check borrows the name it was given instead of allocating a
+    /// clone of every advertised tool name on each call.
+    ///
+    /// Answers only "is it in the advertised set". Deliberately independent of
+    /// [`crate::security::cyber_execution_available`] so the two reasons stay
+    /// separable — a forged name and an unconfigured runtime are different
+    /// diagnoses, and the boundary reports whichever applies first.
+    pub fn is_advertised(&self, name: &str) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.tools.iter().any(|t| t.name == name)
     }
 
     /// Look up a tool's `risk` flag. `false` for an unknown tool (fail-open on the

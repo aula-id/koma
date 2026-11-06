@@ -347,3 +347,27 @@ fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<Install
         s.refresh(status, inactive, yolo_armed);
     }
 }
+
+#[cfg(test)]
+mod security_baseline_tests {
+    use super::*;
+
+    #[test]
+    fn yolo_cannot_be_armed_without_a_running_daemon() {
+        let mut state = AppState::new(Mode::Chat);
+        assert!(handle_set_yolo_armed(&mut state, true).is_err());
+        assert!(!state.rest.yolo_armed);
+    }
+
+    #[test]
+    fn stopping_security_disarms_yolo_and_leaves_yolo_mode() {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.security_enabled = true;
+        state.rest.yolo_armed = true;
+        state.rest.set_agent_mode(AgentMode::Yolo);
+        handle_security_stop(&mut state).unwrap();
+        assert!(!state.rest.security_enabled);
+        assert!(!state.rest.yolo_armed);
+        assert_eq!(state.rest.agent_mode(), AgentMode::Auto);
+    }
+}

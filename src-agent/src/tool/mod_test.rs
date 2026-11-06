@@ -2,6 +2,18 @@
 use super::*;
 
 #[test]
+fn security_tools_are_not_builtin_or_allowed_in_plan() {
+    let builtin = main_tool_names();
+    assert!(builtin.iter().all(|name| !name.starts_with("sec_")));
+    for name in ["sec_http", "sec_remote", "sec_decode", "sec_xss_confirm"] {
+        assert!(
+            !tool_allowed_in_plan(name),
+            "{name} must be unavailable in plan mode"
+        );
+    }
+}
+
+#[test]
 fn plan_allowlist_blocks_mutating_and_offensive_tools() {
     assert!(!tool_allowed_in_plan("write"));
     assert!(!tool_allowed_in_plan("edit"));
