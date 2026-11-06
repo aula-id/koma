@@ -129,3 +129,6 @@ impl Tool for SeqThink {
 #[cfg(test)]
 #[path = "seqthink_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::test_ctx;

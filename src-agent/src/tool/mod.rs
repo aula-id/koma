@@ -1037,6 +1037,22 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     refusal.to_json(),
                 );
             }
+            // Admit before anything else: a call whose target the scope does
+            // not cover must not reach the container at all.
+            if let Some(reason) = scope::admit_from_call(ctx, &call.function.name, &args) {
+                let denied = verdict::TypedResult {
+                    verdict: verdict::Verdict::Blocked,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    denied.to_json(),
+                );
+            }
+
             // Bind the target BEFORE dispatch, so a call that is about to run
             // against a dynamic endpoint always has a record even if the tool
             // crashes. Best-effort: a binding failure must not block the call.

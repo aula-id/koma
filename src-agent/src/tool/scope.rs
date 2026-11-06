@@ -191,6 +191,9 @@ fn slug(text: &str) -> String {
 ///
 /// Best effort by design: a read-only filesystem or a missing session dir must
 /// not fail the call, so every step degrades to a no-op.
+///
+/// This RECORDS, it does not gate. Admission is [`admit_from_call`], kept separate
+/// so a refusal can be reported as a verdict while a binding failure stays silent.
 pub fn bind_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) {
     let Some((host, port, path)) = destination_of(tool, args) else {
         return;
@@ -214,6 +217,29 @@ pub fn bind_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) {
             "security",
             &format!("could not bind target under {}", base.dir().display()),
         );
+    }
+}
+
+/// Admit the call's target against the run's scope.
+///
+/// Returns the refusal reason, or `None` when the call may proceed. A call with no
+/// destination is admitted: pure-compute tools need no scope. A call WITH a
+/// destination and no scope record is refused, because "no scope" must not mean
+/// "no network checks".
+pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> Option<String> {
+    let (host, port, _path) = destination_of(tool, args)?;
+    let base = ScopeBase::of(ctx)?;
+    // `?` here would return None, which the caller reads as "admitted". A missing
+    // record must REFUSE instead, so it is matched rather than propagated.
+    let Some(scope) = crate::app::sec::scope::load(base.dir()) else {
+        return Some(crate::app::sec::scope::Refusal::NoScope.reason().to_string());
+    };
+    let port = port.unwrap_or_else(|| {
+        crate::app::sec::scope::Endpoint::default_port(crate::app::sec::scope::Transport::Http)
+    });
+    match scope.admit(&host, port, None) {
+        Ok(()) => None,
+        Err(refusal) => Some(refusal.reason().to_string()),
     }
 }
 
@@ -266,8 +292,14 @@ fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Optio
     if crate::security::fixed_host(tool) {
         return None;
     }
-    let without_scheme = raw.split_once("://").map_or(raw, |(_, rest)| rest);
+    use crate::app::sec::scope::{Endpoint, Transport};
+
+    let (scheme, without_scheme) = raw.split_once("://").map_or((None, raw), |(s, r)| (Some(s), r));
     let (hostport, path) = match without_scheme.split_once('/') {
+        // `https://h/` and `https://h` are the same target: a bare `/` is the
+        // default path, so it must not fork the key.
+        // An empty remainder is the bare `/`, the default path.
+        Some((h, "")) => (h, None),
         Some((h, p)) => (h, Some(format!("/{p}"))),
         None => (without_scheme, None),
     };
@@ -275,6 +307,16 @@ fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Optio
         Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse().ok()),
         _ => (hostport, None),
     };
+    // Default the port the same way `Scope::endpoint` does, so the binding and
+    // the admission cannot disagree about which port the same URL means.
+    let port = port.or_else(|| {
+        let transport = match scheme {
+            Some("http") => Transport::Http,
+            Some("tcp") => Transport::Tcp,
+            _ => Transport::Https,
+        };
+        Some(Endpoint::default_port(transport))
+    });
     let host = host.split('@').next_back().unwrap_or(host);
     if host.is_empty() {
         return None;
@@ -398,6 +440,17 @@ mod tests {
     }
 
     #[test]
+    fn a_scheme_defaults_the_port_so_it_matches_the_admission() {
+        assert_eq!(dest(serde_json::json!({"url": "http://h"})).map(|d| d.1), Some(Some(80)));
+        assert_eq!(dest(serde_json::json!({"url": "https://h"})).map(|d| d.1), Some(Some(443)));
+    }
+
+    #[test]
+    fn a_root_slash_does_not_fork_the_key() {
+        assert_eq!(dest(serde_json::json!({"url": "https://h/"})), dest(serde_json::json!({"url": "https://h"})));
+    }
+
+    #[test]
     fn a_url_is_split_into_host_port_and_path() {
         assert_eq!(
             dest(serde_json::json!({"url": "http://Example.COM:8080/api/x?y=1"})),
@@ -407,23 +460,31 @@ mod tests {
 
     #[test]
     fn a_bare_host_has_no_port_or_path() {
-        assert_eq!(dest(serde_json::json!({"host": "box"})), Some(("box".into(), None, None)));
+        assert_eq!(dest(serde_json::json!({"host": "box"})), Some(("box".into(), Some(443), None)));
     }
 
     #[test]
     fn userinfo_is_stripped_from_the_host() {
         assert_eq!(
             dest(serde_json::json!({"url": "https://u:p@h.example/x"})),
-            Some(("h.example".into(), None, Some("/x".into())))
+            Some(("h.example".into(), Some(443), Some("/x".into())))
         );
     }
 
     #[test]
     fn a_non_numeric_colon_tail_is_part_of_the_host() {
         // IPv6-ish or a scheme-y `host` must not lose its tail to the port split.
+        // `rsplit_once(':')` sees `:1` as a port and leaves `fe80:`. That is
+        // deliberate: a bare IPv6 literal is ambiguous with host:port, so the
+        // record keeps what the split produced. A bracketed `[fe80::1]` keeps it
+        // whole — that is the form to use when the address matters.
         assert_eq!(
             dest(serde_json::json!({"host": "fe80::1"})).map(|d| d.0),
             Some("fe80:".into())
+        );
+        assert_eq!(
+            dest(serde_json::json!({"host": "[fe80::1]"})).map(|d| d.0),
+            Some("[fe80::1]".into())
         );
     }
 
@@ -462,6 +523,75 @@ mod tests {
         let shown = base("a", &deep).dir().to_string_lossy().into_owned();
         assert!(shown.ends_with(&digest(&deep)));
         assert!(shown.matches('/').count() < 12, "{shown}");
+    }
+
+    fn active_scope(target: &str) -> crate::app::sec::scope::Scope {
+        use crate::app::sec::scope as sc;
+        sc::Scope {
+            version: 1,
+            state: sc::State::Active,
+            auth_mode: sc::Mode::None,
+            targets: vec![sc::Host::parse(target).expect("valid")],
+            exclusions: Vec::new(),
+            caps: sc::Caps::default(),
+            confirmed_by: Some("tester".into()),
+        }
+    }
+
+    fn ctx_for(dir: &Path, cwd: &Path) -> ToolCtx {
+        crate::tool::ToolCtx {
+            session_id: "sess".into(),
+            session_dir: Some(dir.to_path_buf()),
+            workspace: cwd.to_path_buf(),
+            ..crate::tool::seqthink::test_ctx()
+        }
+    }
+
+    #[test]
+    fn a_call_with_no_destination_needs_no_scope() {
+        let dir = tmp("nodest");
+        let ctx = ctx_for(&dir, Path::new("/w"));
+        assert_eq!(admit_from_call(&ctx, "sec_decode", &serde_json::json!({"data": "x"})), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_destination_with_no_scope_is_refused() {
+        let dir = tmp("noscope");
+        let ctx = ctx_for(&dir, Path::new("/w"));
+        let got = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "http://a.example"}));
+        assert!(got.as_deref().is_some_and(|r| r.contains("no scope record")), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_in_scope_target_is_admitted_and_an_out_of_scope_one_is_not() {
+        use crate::app::sec::scope as sc;
+        let dir = tmp("admit");
+        let ctx = ctx_for(&dir, Path::new("/w"));
+        let base = ScopeBase::of(&ctx).expect("base");
+        sc::store(base.dir(), &active_scope("a.example")).expect("store");
+        let ok = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "https://a.example/x"}));
+        assert_eq!(ok, None);
+        let bad = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "https://b.example/"})).expect("refused");
+        assert!(bad.contains("not in scope"), "{bad}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refused_target_writes_no_binding() {
+        use crate::app::sec::scope as sc;
+        let dir = tmp("nobind");
+        let ctx = ctx_for(&dir, Path::new("/w"));
+        let base = ScopeBase::of(&ctx).expect("base");
+        sc::store(base.dir(), &active_scope("a.example")).expect("store");
+        let args = serde_json::json!({"url": "https://b.example/"});
+        assert!(admit_from_call(&ctx, "sec_http", &args).is_some());
+        bind_from_call(&ctx, "sec_http", &args);
+        // Admission is the gate; a refused target can still be recorded for
+        // visibility, but only after an explicit bind.
+        assert!(base.read("sec", "b.example", Some(443), None).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -67,6 +67,7 @@ use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 // The child-process wire protocol (spawn + handshake, writer/reader/stderr-drain
 // tasks) lives in the sibling `wire` module (file size); re-imported here so the
 // existing call sites in `SecDaemonManager::start` keep compiling unchanged.
+pub mod scope;
 mod wire;
 mod wire_tool;
 use wire::{reader_task, spawn_and_handshake, stderr_drain_task, writer_task, Connected};
