@@ -27,6 +27,7 @@ IMAGE = os.environ.get("KOMA_SEC_IMAGE", "koma-cyber-guest:dev")
 # A name that is definitely not in the rules, resolvable only through the proxy's
 # forwarder. `example.com` is in scope below; wikipedia is not.
 OUT_OF_SCOPE = "wikipedia.org"
+OUT_OF_SCOPE_URL = f"http://{OUT_OF_SCOPE}/"
 
 
 def _image_present() -> bool:
@@ -162,3 +163,57 @@ class RecordTest(BoundaryCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EndToEndTest(BoundaryCase):
+    """Drives the real daemon inside the boundary: the whole loop, no mocks."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.frames = "".join(
+            json.dumps(f) + "\n"
+            for f in [
+                {"v": 2},
+                {"id": 1, "op": "call", "tool": "sec_http", "args": {"url": "http://example.com/"}},
+                {"id": 2, "op": "call", "tool": "sec_http", "args": {"url": OUT_OF_SCOPE_URL}},
+                {"id": 3, "op": "call", "tool": "sec_http", "args": {"url": "http://example.com/"}},
+            ]
+        )
+        (self.dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        (self.dir / "artifacts" / "in.jsonl").write_text(self.frames)
+
+    def _run(self) -> dict:
+        self.b.exec(["sh", "-c", "mkdir -p /tmp/run"], 20)
+        res = self.b.exec(
+            ["sh", "-c",
+             "cd /opt/koma && KOMA_BOARD=/tmp/run/board timeout 90 "
+             "python3 -m koma_sec_daemon < /artifacts/in.jsonl 2>/tmp/run/err"],
+            150,
+        )
+        out = {}
+        handshake = None
+        for line in res.stdout.splitlines():
+            try:
+                frame = json.loads(line)
+            except ValueError:
+                continue
+            if "tools" in frame:
+                handshake = len(frame["tools"])
+                continue
+            if "id" in frame:
+                out[frame["id"]] = json.loads(frame["result"])["verdict"]
+        return {"handshake": handshake, "verdicts": out}
+
+    def test_the_loop_holds_end_to_end(self) -> None:
+        got = self._run()
+        self.assertEqual(got["handshake"], 24, "the daemon did not advertise its tools")
+        self.assertEqual(got["verdicts"].get(1), "confirmed", "an in-scope call failed")
+        # The proxy's refusal must be distinguishable from the target answering.
+        self.assertEqual(got["verdicts"].get(2), "blocked", "out-of-scope was not blocked")
+        # The duplicate check is at dispatch, so the same route twice is refused.
+        self.assertEqual(got["verdicts"].get(3), "blocked", "a duplicate route was re-run")
+
+    def test_evidence_is_written_where_the_board_points(self) -> None:
+        self._run()
+        listing = self.b.exec(["sh", "-c", "ls /tmp/run/board/evidence 2>&1 | head -4"], 20).stdout
+        self.assertIn(".raw", listing)

@@ -69,7 +69,9 @@ use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 // existing call sites in `SecDaemonManager::start` keep compiling unchanged.
 pub mod lane;
 pub mod run;
+pub mod prompt;
 pub mod scope;
+pub mod supervise;
 mod wire;
 mod wire_tool;
 use wire::{reader_task, spawn_and_handshake, stderr_drain_task, writer_task, Connected};

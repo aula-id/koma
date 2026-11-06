@@ -110,6 +110,14 @@ def _handler(args: dict, sessions) -> str:
         if out_of_scope:
             status_line += "\n  refused by egress: " + ", ".join(out_of_scope)
 
+    # A PROXY refusal is not the target answering: the scope stopped us before the
+    # target saw the request, so it is `blocked`. Distinguishable by the proxy's
+    # marker header — an ordinary target 403 stays `confirmed`.
+    if resp.headers.get("X-Koma-Egress"):
+        return verdict.typed(
+            verdict.BLOCKED, f"egress refused: {resp.headers['X-Koma-Egress']}\n\n{status_line}"
+        )
+
     # Confirmed only for a real answer; a 5xx is the target failing, not a finding.
     kind = verdict.CONFIRMED if resp.status_code < 500 else verdict.UNPROVEN
     return verdict.typed(kind, f"{status_line}\n{resp_headers}\n\n{body_text}")

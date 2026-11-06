@@ -1,9 +1,14 @@
 # koma-sec Toolkit — System Binary Dependencies
 
 This document lists the external binaries the security daemon shells out to,
-grouped by domain. The daemon starts and the IPC socket binds regardless of
-whether these are installed, but every tool that calls a missing binary will
-return an error. Install what you need; leave the rest.
+grouped by domain.
+
+Missing binaries no longer fail the daemon or the handshake. Registration is
+isolated per tool: a tool whose dependency is absent is advertised as
+`unavailable` with its install hint and returns a typed `unavailable` if called.
+The daemon degrades one tool at a time, so install what you need and leave the
+rest. Nothing installs automatically — a pip run inside the daemon would block the
+frame reader.
 
 ---
 

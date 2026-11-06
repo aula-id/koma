@@ -32,6 +32,13 @@ RUN useradd --create-home --uid 10001 koma && \
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY koma_proxy.py /opt/koma/koma_proxy.py
+# The daemon runs IN the guest, so its package ships here. The per-tool CLIs
+# (nuclei, ffuf, sqlmap …) are separate: they are probed at handshake and their
+# absence only marks those tools unavailable.
+COPY koma_sec_daemon /opt/koma/koma_sec_daemon
+ENV PYTHONPATH=/opt/koma
+# The root is read-only and $HOME is not writable, so state lives in /tmp.
+ENV KOMA_STATE=/tmp/koma-state
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 USER koma

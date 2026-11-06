@@ -185,3 +185,26 @@ class VerdictShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImageCopyTest(unittest.TestCase):
+    """The image ships a COPY of the package, so the two can silently diverge."""
+
+    def test_the_shipped_copy_matches_the_source(self) -> None:
+        import filecmp
+
+        live = ROOT / "koma_sec_daemon"
+        shipped = ROOT / "image" / "koma_sec_daemon"
+        if not shipped.exists():
+            self.skipTest("image copy absent")
+        cmp = filecmp.dircmp(str(live), str(shipped))
+        diff = self._collect(cmp)
+        # `__pycache__` is build noise, not a source difference.
+        diff = [d for d in diff if "__pycache__" not in d]
+        self.assertEqual(diff, [], "image copy drifted — re-copy it before building")
+
+    def _collect(self, cmp) -> list[str]:
+        out = list(cmp.left_only) + list(cmp.right_only) + list(cmp.diff_files)
+        for sub in cmp.subdirs.values():
+            out += self._collect(sub)
+        return out

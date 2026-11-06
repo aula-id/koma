@@ -122,11 +122,18 @@ def _is_ip(host: str) -> bool:
         return False
 
 
+DENY_HEADER = "X-Koma-Egress"
+
+
 def _deny(conn: socket.socket, status: str, why: str) -> None:
     body = f"koma egress: {why}\n".encode()
     head = (
         f"HTTP/1.1 {status}\r\n"
         "Content-Type: text/plain\r\n"
+        # A marker header, so a client can tell a PROXY refusal from the target's
+        # own 403. Without it the two are indistinguishable and an egress stop gets
+        # recorded as if the target had answered.
+        f"{DENY_HEADER}: {why}\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n\r\n"
     ).encode()
