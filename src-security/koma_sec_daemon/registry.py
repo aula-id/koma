@@ -6,16 +6,23 @@ Each entry in REGISTRY is a descriptor dict:
     "name"        : str,
     "description" : str,
     "parameters"  : dict (JSON Schema object),
-    "risk"        : bool,
-    "compute"     : "instant-cpu"|"long-cpu"|"gpu"|"network"|"executes-target",
+    "effect"      : "static"|"local"|"remote"|"exploit",   # phase 2
+    "exec"        : "cpu"|"binary"|"net"|"browser",        # phase 2
     "domain"      : str,
     "handler"     : callable(args: dict, sessions) -> str,
   }
+
+A restored tool may still carry the legacy `risk` (bool) / `compute` pair instead
+of `effect`/`exec`; `metadata.validate` derives and cross-checks those, then
+`descriptors()` emits only the new names. Neither is shipped once derived, so the
+wire has one vocabulary.
 
 Only descriptors() (which strips the handler) is safe to send over the wire.
 """
 
 from __future__ import annotations
+
+from koma_sec_daemon import effects, metadata
 
 from koma_sec_daemon.tools.http import DESCRIPTOR as _HTTP_DESC
 from koma_sec_daemon.tools.remote import DESCRIPTOR as _REMOTE_DESC
@@ -41,8 +48,30 @@ from koma_sec_daemon.tools.sec_triage import DESCRIPTOR as _SEC_TRIAGE_DESC
 from koma_sec_daemon.tools.sec_rop import DESCRIPTOR as _SEC_ROP_DESC
 from koma_sec_daemon.tools.sec_pwntmpl import DESCRIPTOR as _SEC_PWNTMPL_DESC
 
-# Wire-safe keys — everything except the callable handler
-_WIRE_KEYS = ("name", "description", "parameters", "risk", "compute", "domain")
+# Wire-safe keys — everything except the callable handler. `risk`/`compute` are
+# deliberately absent: a descriptor is normalised to `effect`/`exec` before send.
+_WIRE_KEYS = ("name", "description", "parameters", "effect", "exec", "domain")
+
+# Old compute -> new exec, applied when a descriptor has not been migrated yet.
+_LEGACY_EXEC = {
+    "instant-cpu": effects.CPU,
+    "long-cpu": effects.CPU,
+    "gpu": effects.CPU,
+    "network": effects.NET,
+    "executes-target": effects.BINARY,
+}
+
+
+def _normalised(descriptor: dict) -> dict:
+    """The descriptor with capability metadata on the phase-2 vocabulary."""
+    out = dict(descriptor)
+    if out.get("effect") is None and out.get("exec") is None:
+        row = effects.MANIFEST.get(out.get("name", ""))
+        # The manifest is the authority for restored tools; the legacy bool only
+        # has to agree with it, which `metadata.validate` checks first.
+        out["effect"] = row[0] if row else None
+        out["exec"] = _LEGACY_EXEC.get(out.get("compute", ""))
+    return out
 
 REGISTRY: dict[str, dict] = {
     _HTTP_DESC["name"]: _HTTP_DESC,
@@ -72,11 +101,22 @@ REGISTRY: dict[str, dict] = {
 
 
 def descriptors() -> list[dict]:
-    """Return all tool descriptors with the handler key stripped (wire-safe)."""
+    """Return all VALID tool descriptors with the handler key stripped (wire-safe)."""
     return [
         {k: d[k] for k in _WIRE_KEYS if k in d}
-        for d in REGISTRY.values()
+        for d in (_normalised(d) for d in REGISTRY.values())
+        if not metadata.validate(d)
     ]
+
+
+def refused_descriptors() -> list[dict]:
+    """The descriptors `metadata.validate` rejected, with their reasons."""
+    out = []
+    for d in (_normalised(d) for d in REGISTRY.values()):
+        reasons = metadata.validate(d)
+        if reasons:
+            out.append({"name": d.get("name", "<unnamed>"), "reasons": reasons})
+    return out
 
 
 def call(name: str, args: dict, sessions) -> str:

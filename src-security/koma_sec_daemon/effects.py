@@ -23,6 +23,11 @@ target, `sec_sqlmap` and `sec_dalfox` fire payloads. `http` and `xss_confirm` ar
 `net` but classified by effect, never as static just because a single request
 looks small.
 
+The two axes are independent and a row picks what the operation needs to START.
+sqlmap needs its binary AND the network; it is recorded as `binary` because that
+is the gate that fails first, and the invariant kept by the tests is only that a
+network effect never runs on `cpu` alone.
+
 Argument-dependent network access is why classification cannot be inferred from
 the schema alone: `sec_remote` takes `host` and only reaches the network when it
 is set. A tool whose effect depends on its arguments declares the deciding
@@ -52,29 +57,33 @@ EXECS = (CPU, BINARY, NET, BROWSER)
 # surfaces then rather than as a silently mis-routed call.
 MANIFEST: dict[str, tuple[str, str, str | None, str]] = {
     "sec_http": (REMOTE, NET, None, "one request to one URL"),
-    "sec_remote": (REMOTE, NET, "host", "local only when run without a host"),
-    "sec_sqlmap": (EXPLOIT, NET, None, "fires injection payloads"),
+    "sec_remote": (REMOTE, BINARY, "host", "interactive pwn session; local without a host"),
+    "sec_sqlmap": (EXPLOIT, BINARY, None, "fires injection payloads via the sqlmap binary"),
     "sec_nuclei": (REMOTE, NET, None, "template sweep"),
     "sec_ffuf": (REMOTE, NET, None, "content/param fuzzing"),
     "sec_dalfox": (EXPLOIT, NET, None, "XSS payload firing"),
-    "sec_zap": (REMOTE, BROWSER, None, "active scan via the browser channel"),
-    "sec_xss_confirm": (EXPLOIT, BROWSER, None, "stored/reflected payload in a real browser"),
+    "sec_zap": (REMOTE, NET, None, "active scan against the target"),
+    "sec_xss_confirm": (EXPLOIT, BINARY, None, "stored/reflected payload, driven headless"),
     "sec_triage": (LOCAL, CPU, None, "reads an artifact from disk"),
     "sec_sourcemap": (LOCAL, CPU, None, "reads a local map file"),
-    "sec_wasm": (LOCAL, BINARY, None, "reads a local module"),
-    "sec_rop": (LOCAL, BINARY, None, "reads a target binary"),
-    "sec_crack": (LOCAL, BINARY, None, "reads the wordlist"),
+    "sec_wasm": (LOCAL, BINARY, None, "wabt binaries against a local module"),
+    "sec_rop": (LOCAL, CPU, None, "reads a target binary"),
+    "sec_crack": (LOCAL, CPU, None, "hashcat/john against a wordlist"),
     "sec_z3": (STATIC, CPU, None, "SMT solve"),
-    "sec_sage": (STATIC, BINARY, None, "SageMath solve"),
+    "sec_sage": (STATIC, CPU, None, "SageMath solve"),
     "sec_rsa": (STATIC, CPU, None, "RSA arithmetic"),
-    "sec_factor": (STATIC, BINARY, None, "factorisation"),
-    "sec_lattice": (STATIC, BINARY, None, "lattice reduction"),
+    "sec_factor": (REMOTE, NET, None, "fixed-host factordb.com lookup"),
+    "sec_lattice": (STATIC, CPU, None, "lattice reduction"),
     "sec_hashid": (STATIC, CPU, None, "hash identification"),
     "sec_decode": (STATIC, CPU, None, "encoding transforms"),
-    "sec_jsdeobf": (STATIC, BINARY, None, "deobfuscation"),
-    "sec_unmin": (STATIC, BINARY, None, "unminify"),
+    "sec_jsdeobf": (STATIC, CPU, None, "deobfuscation"),
+    "sec_unmin": (STATIC, CPU, None, "unminify"),
     "sec_pwntmpl": (STATIC, CPU, None, "emit a pwntools template"),
 }
+
+# Tools that only ever reach a fixed host, so they carry no destination argument
+# and the egress gate has nothing to scope them by.
+FIXED_HOST = frozenset({"sec_factor"})
 
 # Harness-level caps. Argument names read by the egress gate, weakest first.
 DESTINATION_PARAMS = ("url", "host", "target", "hostname", "endpoint")

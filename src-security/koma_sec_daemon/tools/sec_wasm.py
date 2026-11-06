@@ -40,6 +40,8 @@ DESCRIPTOR = {
     },
     "risk": False,
     "compute": "instant-cpu",
+    "effect": "local",
+    "exec": "binary",
     "domain": "web-re",
 }
 

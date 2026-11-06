@@ -1,9 +1,18 @@
 """
 sec_decode — decode/transform a string through common CTF encodings.
 
-compute : instant-cpu
-risk    : False
+effect  : static
+exec    : cpu
 domain  : crypto
+
+Migration reference for phase 2. Every other tool follows this shape:
+
+- `effect` and `exec` replace `risk`/`compute` and must agree with
+  `effects.MANIFEST`; the phase-2 metadata validator asserts that, so the
+  descriptor and the manifest cannot disagree.
+- the handler returns `verdict.typed(...)`, never a bare `error: …` string.
+- "it ran and found nothing" is NOT_FOUND; "the call itself was wrong" is ERROR.
+  Collapsing the two is the defect the typed contract exists to fix.
 
 Pure-Python only (base64, binascii, urllib.parse, codecs, gzip, zlib).
 No lazy imports required — all stdlib.
@@ -17,6 +26,8 @@ import codecs
 import gzip
 import io
 import urllib.parse
+
+from koma_sec_daemon import verdict
 
 # Minimum fraction of characters that must be printable for a candidate to be
 # accepted in "auto" mode.
@@ -85,7 +96,7 @@ def _try_gzip(data: str) -> str | None:
                 decompressed = gz.read()
             return decompressed.decode("utf-8", errors="replace")
         except Exception:
-            pass
+            return None
     # Also try treating the input itself as raw gzip bytes (via latin-1 roundtrip).
     try:
         raw = data.encode("latin-1")
@@ -123,9 +134,18 @@ DESCRIPTOR = {
         },
         "required": ["data"],
     },
-    "risk": False,
-    "compute": "instant-cpu",
+    "effect": "static",
+    "exec": "cpu",
     "domain": "crypto",
+}
+
+_SINGLE = {
+    "base64": (_try_base64, "base64"),
+    "base32": (_try_base32, "base32"),
+    "hex": (_try_hex, "hex"),
+    "url": (_try_url, "url"),
+    "rot13": (_try_rot13, "rot13"),
+    "gzip": (_try_gzip, "gzip"),
 }
 
 
@@ -134,66 +154,30 @@ def _handler(args: dict, sessions) -> str:
     operation = args.get("operation", "auto")
 
     if not data:
-        return "error: 'data' is required and must not be empty"
+        return verdict.typed(verdict.NEEDS_INPUT, "'data' is required and must not be empty")
 
-    if operation == "base64":
-        result = _try_base64(data)
-        return result if result is not None else "error: could not decode as base64"
+    if operation in _SINGLE:
+        fn, label = _SINGLE[operation]
+        result = fn(data)
+        if result is None:
+            return verdict.typed(verdict.NOT_FOUND, f"could not decode as {label}")
+        return verdict.typed(verdict.CONFIRMED, result, handle=None)
 
-    elif operation == "base32":
-        result = _try_base32(data)
-        return result if result is not None else "error: could not decode as base32"
+    if operation != "auto":
+        return verdict.typed(verdict.ERROR, f"unknown operation '{operation}'")
 
-    elif operation == "hex":
-        result = _try_hex(data)
-        return result if result is not None else "error: could not decode as hex"
+    candidates: list[str] = []
+    for label, (fn, _name) in _SINGLE.items():
+        got = fn(data)
+        # rot13 always produces printable text, so it is offered unconditionally.
+        if got is None:
+            continue
+        if label == "rot13" or _is_mostly_printable(got):
+            candidates.append(f"{label} -> {got}")
 
-    elif operation == "url":
-        result = _try_url(data)
-        return result if result is not None else "error: no URL-encoded sequences found"
-
-    elif operation == "rot13":
-        result = _try_rot13(data)
-        return result if result is not None else "error: could not apply rot13"
-
-    elif operation == "gzip":
-        result = _try_gzip(data)
-        return result if result is not None else "error: could not decompress as gzip"
-
-    elif operation == "auto":
-        candidates: list[str] = []
-
-        b64 = _try_base64(data)
-        if b64 is not None and _is_mostly_printable(b64):
-            candidates.append(f"base64 -> {b64}")
-
-        b32 = _try_base32(data)
-        if b32 is not None and _is_mostly_printable(b32):
-            candidates.append(f"base32 -> {b32}")
-
-        hx = _try_hex(data)
-        if hx is not None and _is_mostly_printable(hx):
-            candidates.append(f"hex -> {hx}")
-
-        url = _try_url(data)
-        if url is not None and _is_mostly_printable(url):
-            candidates.append(f"url -> {url}")
-
-        # rot13 always produces printable text — include unconditionally
-        r13 = _try_rot13(data)
-        if r13 is not None:
-            candidates.append(f"rot13 -> {r13}")
-
-        gz = _try_gzip(data)
-        if gz is not None and _is_mostly_printable(gz):
-            candidates.append(f"gzip -> {gz}")
-
-        if candidates:
-            return "\n".join(candidates)
-        return "error: could not decode"
-
-    else:
-        return f"error: unknown operation '{operation}'"
+    if not candidates:
+        return verdict.typed(verdict.NOT_FOUND, "no known encoding matched")
+    return verdict.typed(verdict.CONFIRMED, "\n".join(candidates))
 
 
 # Attach handler to descriptor for registry use

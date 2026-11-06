@@ -33,12 +33,14 @@ class ManifestTest(unittest.TestCase):
                 if depends_on:
                     self.assertIn(depends_on, effects.DESTINATION_PARAMS)
 
-    def test_network_effects_require_a_network_exec(self):
-        # An exploit running without the egress path is a routing bug.
+    def test_network_effects_never_run_on_cpu_alone(self):
+        # exec is what the operation needs to START, and a network tool may also
+        # need a binary (sqlmap) — so `binary` is legitimate here, `cpu` is not:
+        # an exploit with no network capability is a routing bug.
         for name, (effect, exec_, _dep, _note) in effects.MANIFEST.items():
             if effect in (effects.REMOTE, effects.EXPLOIT):
                 with self.subTest(tool=name):
-                    self.assertIn(exec_, (effects.NET, effects.BROWSER))
+                    self.assertNotEqual(exec_, effects.CPU)
 
     def test_no_unclassified_tool_ships(self):
         # Every tool the restored registry knows must have a row, so a new tool

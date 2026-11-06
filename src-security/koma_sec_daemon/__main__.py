@@ -93,7 +93,7 @@ def main() -> None:
     from koma_sec_daemon.protocol import read_frame, write_frame
     from koma_sec_daemon import registry
     from koma_sec_daemon import verdict
-    from koma_sec_daemon.registry import descriptors, call
+    from koma_sec_daemon.registry import descriptors, refused_descriptors, call
     from koma_sec_daemon.sessions import SessionStore
 
     sessions = SessionStore()
@@ -133,7 +133,14 @@ def main() -> None:
 
     write_frame(
         real_stdout,
-        {"ok": True, "v": PROTOCOL_VERSION, "tools": descriptors()},
+        {
+            "ok": True,
+            "v": PROTOCOL_VERSION,
+            # Refused descriptors travel with the reply so the parent can surface
+            # the reason. Absent (not empty) is fine: no refusals happened.
+            "tools": descriptors(),
+            "refused": refused_descriptors(),
+        },
     )
 
     # --- MAIN LOOP ---
