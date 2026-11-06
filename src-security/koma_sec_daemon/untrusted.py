@@ -13,7 +13,8 @@ The framing is therefore structural, not lexical:
    closing tag is harmless rather than removed.
 3. A machine-readable header sits ABOVE the fence, outside the untrusted region, so
    the origin, verdict and handle stay trusted even if the body forges one.
-4. On skim, a body that contains a closing delimiter is reported so the model knows
+4. On skim, a body carrying a fence token — in either spelling, since the fence is a
+   bare token and bodies naturally use the XML form — is reported, so the model knows
    to distrust any tag-looking line inside it.
 
 `skim` is deliberately crude and cheap. It is there to raise suspicion, not to
