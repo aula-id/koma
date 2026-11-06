@@ -32,6 +32,57 @@ pub enum Lane {
     Blue,
 }
 
+/// The tool surface each lane's agent definition is generated with.
+///
+/// Kept HERE, beside the matrix, so a capability change and the surface that
+/// expresses it are one edit. The subset is deliberately narrower than what the
+/// matrix permits: the matrix is the ceiling, the surface is the default, and the
+/// dispatch gate enforces the ceiling either way.
+///
+/// `edit` is absent from every lane because blue proposes through the normal Koma
+/// edit path rather than applying — so it is offered only when that path is open,
+/// which the plan keeps as an explicit later step rather than a default.
+pub const RESEARCH_SURFACE: &[&str] = &[
+    "read", "grep", "glob", "dir_list",
+    // Local analysis only; nothing in the matrix lets research open a socket.
+    "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_lattice",
+    // NOT sec_crack / sec_factor: both LOOK local but the daemon's effect manifest
+    // ties them to an external fetch (a hashcat download, a fixed factordb.com
+    // request), so `cap_of_tool` classifies both `Network` and research is refused
+    // them. The surface follows the manifest, not the appearance.
+];
+
+pub const RED_SURFACE: &[&str] = &[
+    "read", "grep", "glob", "dir_list",
+    // The target path: everything that dials out, plus the browser.
+    "sec_http", "sec_browser", "sec_nuclei", "sec_ffuf", "sec_dalfox", "sec_sqlmap",
+    "sec_zap", "sec_xss_confirm", "sec_remote", "sec_replay", "sec_recording",
+    // Local analysis, because a red turn reads what it just pulled back.
+    "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_lattice", "sec_crack", "sec_factor",
+];
+
+pub const BLUE_SURFACE: &[&str] = &[
+    "read", "grep", "glob", "dir_list",
+    // Blue verifies a fix against the target, so it keeps the read-only probes.
+    "sec_http", "sec_browser", "sec_xss_confirm",
+    // No listener tools: the matrix forbids `Listen` here.
+    "sec_decode", "sec_triage", "sec_hashid",
+];
+
+/// The surface for a lane.
+#[must_use]
+pub fn surface(lane: Lane) -> &'static [&'static str] {
+    match lane {
+        Lane::Research => RESEARCH_SURFACE,
+        Lane::Red => RED_SURFACE,
+        Lane::Blue => BLUE_SURFACE,
+    }
+}
+
 /// A capability a tool can require.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cap {
@@ -149,6 +200,54 @@ mod tests {
     }
 
     #[test]
+    fn every_surface_entry_is_permitted_by_its_own_lane() {
+        // The surface is generated into an agent definition, so a tool offered to a
+        // lane its matrix forbids would be refused at dispatch after the model had
+        // already tried it. This is the drift guard between the two lists.
+        for lane in lanes() {
+            for tool in surface(lane) {
+                let cap = Lane::cap_of_tool(tool);
+                assert!(
+                    lane.permits(cap),
+                    "{lane:?} surface offers {tool} but forbids {cap:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn research_gets_no_network_tool_at_all() {
+        // The sharpest edge of the split: research must not be able to open a socket.
+        for tool in surface(Lane::Research) {
+            assert_eq!(Lane::cap_of_tool(tool), Cap::Read, "{tool} is not local");
+        }
+    }
+
+    #[test]
+    fn blue_gets_no_listener() {
+        for tool in surface(Lane::Blue) {
+            assert_ne!(Lane::cap_of_tool(tool), Cap::Listen, "{tool} listens");
+        }
+    }
+
+    #[test]
+    fn red_gets_the_target_path() {
+        for tool in ["sec_http", "sec_browser", "sec_ffuf"] {
+            assert!(surface(Lane::Red).contains(&tool), "{tool} missing from red");
+        }
+    }
+
+    #[test]
+    fn every_surface_keeps_the_reading_tools() {
+        // All three lanes read; a surface without them cannot work at all.
+        for lane in lanes() {
+            for tool in ["read", "grep", "glob", "dir_list"] {
+                assert!(surface(lane).contains(&tool), "{lane:?} lost {tool}");
+            }
+        }
+    }
+
+    #[test]
     fn every_lane_reads() {
         for lane in lanes() {
             assert!(lane.permits(Cap::Read), "{lane:?}");
@@ -226,5 +325,92 @@ mod tests {
                 ("blue", vec![true, true, false, true, false]),
             ]
         );
+    }
+}
+
+/// Build the agent definition for a lane.
+///
+/// Generated rather than hand-written so the tool list IS the constant above: a
+/// hand-maintained markdown file would drift the moment the matrix moved, and the
+/// drift would be invisible until the model tried a tool it could not use.
+#[cfg(test)]
+pub(crate) fn definition_for(lane: Lane) -> crate::model::agent_def::AgentDef {
+    use crate::model::agent_def::AgentDef;
+
+    let mut def = AgentDef {
+        name: format!("cyber-{}", lane.label()),
+        description: match lane {
+            Lane::Research => "Cyber research lane: reads source and artifacts, proposes hypotheses.".into(),
+            Lane::Red => "Cyber red lane: tests hypotheses against the in-scope target.".into(),
+            Lane::Blue => "Cyber blue lane: turns confirmed findings into a proposed fix.".into(),
+        },
+        conditions: match lane {
+            Lane::Research => "Delegating desk work: reading code, decoding, forming hypotheses.".into(),
+            Lane::Red => "Testing a hypothesis against a target inside the recorded scope.".into(),
+            Lane::Blue => "Writing and re-verifying a fix for a confirmed finding.".into(),
+        },
+        ..Default::default()
+    };
+    def.tools = surface(lane).iter().map(|t| (*t).to_string()).collect();
+    def
+}
+
+#[cfg(test)]
+mod definitions {
+    //! The generated definitions are what a model actually sees, so they are tested
+    //! as artefacts rather than trusted from the constants.
+
+    use super::*;
+
+    #[test]
+    fn each_lane_gets_a_named_definition() {
+        for lane in [Lane::Research, Lane::Red, Lane::Blue] {
+            assert_eq!(definition_for(lane).name, format!("cyber-{}", lane.label()));
+        }
+    }
+
+    #[test]
+    fn the_definition_carries_the_surface_verbatim() {
+        for lane in [Lane::Research, Lane::Red, Lane::Blue] {
+            assert_eq!(definition_for(lane).tools, surface(lane));
+        }
+    }
+
+    #[test]
+    fn the_allow_list_survives_effective_tools_untouched() {
+        // `effective_tools` strips delegation tools; the surfaces carry none, so the
+        // list must come through whole. If that ever changes, this fails rather than
+        // the model silently losing a capability.
+        for lane in [Lane::Research, Lane::Red, Lane::Blue] {
+            let def = definition_for(lane);
+            assert_eq!(def.effective_tools(), def.tools);
+        }
+    }
+
+    #[test]
+    fn the_definitions_are_not_empty_and_have_conditions() {
+        // An empty `tools` would silently fall back to the read-only default, and an
+        // empty `conditions` would leave the agent un-delegatable.
+        for lane in [Lane::Research, Lane::Red, Lane::Blue] {
+            let def = definition_for(lane);
+            assert!(!def.effective_tools().is_empty());
+            assert!(!def.conditions.trim().is_empty());
+            assert!(!def.description.trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_definition_round_trips_through_markdown() {
+        // These are meant to be writable to disk as normal agent files.
+        let def = definition_for(Lane::Red);
+        let markdown = def.to_markdown();
+        assert!(markdown.contains("sec_http"));
+        let back = crate::model::agent_def::parse_agent(
+            "cyber-red",
+            &markdown,
+            crate::model::agent_def::AgentSource::Global,
+        )
+        .expect("parses");
+        assert_eq!(back.tools, def.tools);
     }
 }
