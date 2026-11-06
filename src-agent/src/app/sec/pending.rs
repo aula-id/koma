@@ -20,13 +20,8 @@ pub struct Pending {
 pub const PENDING: &[Pending] = &[
     Pending {
         phase: 2,
-        case: "malformed capability metadata fails closed",
-        why: "wire.rs still defaults missing metadata rather than refusing it",
-    },
-    Pending {
-        phase: 2,
-        case: "literal delimiter text in tool output cannot escape its wrapper",
-        why: "the central untrusted-data boundary is not built",
+        case: "untrusted framing for non-sec tool output",
+        why: "sec_ results are framed at dispatch; ordinary tool output is not",
     },
     Pending {
         phase: 3,

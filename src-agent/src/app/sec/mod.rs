@@ -68,6 +68,7 @@ use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 // tasks) lives in the sibling `wire` module (file size); re-imported here so the
 // existing call sites in `SecDaemonManager::start` keep compiling unchanged.
 pub mod active;
+pub mod untrusted;
 #[cfg(test)]
 mod pending;
 #[cfg(test)]

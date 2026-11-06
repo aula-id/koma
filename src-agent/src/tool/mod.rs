@@ -1086,11 +1086,26 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
             // revisit, so the record goes rather than lingering as a dead link
             // that a later call would happily re-admit.
             scope::settle(ctx, &call.function.name, &args, typed.verdict);
+            // Frame the body at the ONE place every sec_ result reaches the model:
+            // a target controls this text, so the model is told where the trusted
+            // metadata ends. The verdict and handle ride above the fence, so a body
+            // forging either cannot win.
+            let framed = crate::app::sec::untrusted::frame_result(
+                &typed.excerpt,
+                typed.verdict.as_str(),
+                typed.handle.as_deref(),
+                crate::app::sec::untrusted::Origin::ToolOutput,
+            );
+            let framed = verdict::TypedResult {
+                verdict: typed.verdict,
+                excerpt: framed,
+                handle: typed.handle,
+            };
             return output::finish_tool_output(
                 ctx,
                 &call.function.name,
                 &args,
-                typed.to_json(),
+                framed.to_json(),
             );
         }
     }

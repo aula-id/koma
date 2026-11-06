@@ -12,10 +12,13 @@
 //!    argument. Both are testable in isolation, which is the point — the rules
 //!    that matter cannot be exercised without a live child otherwise.
 //!
-//! Absent-vs-unknown is a real distinction here. `risk` falls back to
-//! [`RiskWire::Static`] (the weakest tier, so a daemon that never learned the
-//! field is not trusted), while `compute` fails the tool outright (the tier
-//! decides routing and containment, so a guess is worse than a gap).
+//! Absent-vs-unknown is a real distinction here, and both now fail CLOSED. `risk`
+//! is REQUIRED: an absent tier used to fall back to [`RiskWire::Static`], the
+//! weakest value, so a descriptor that never learned the field was advertised as
+//! harmless — a network tool would have been offered without an egress parameter
+//! and would have failed at dispatch instead of at handshake. `compute` and
+//! `domain` fail the tool outright for the same reason: the tier decides routing
+//! and containment, so a guess is worse than a visible gap.
 
 use serde::Deserialize;
 
@@ -36,8 +39,10 @@ struct WireTool {
     description: String,
     #[serde(default = "empty_object")]
     parameters: serde_json::Value,
+    /// No default: see the module note. `Option` so the refusal can say which
+    /// field was missing rather than reporting a generic malformed descriptor.
     #[serde(default)]
-    risk: RiskWire,
+    risk: Option<RiskWire>,
     #[serde(default)]
     compute: String,
     #[serde(default)]
@@ -99,7 +104,10 @@ impl WireTool {
         if !ALLOWED_COMPUTE.contains(&compute.as_str()) {
             return Err(format!("unknown compute class '{compute}'"));
         }
-        let risk = self.risk.into();
+        let Some(risk) = self.risk else {
+            return Err("descriptor carried no risk tier".to_owned());
+        };
+        let risk = risk.into();
         // A network tool whose schema offers no way to name a destination is
         // unreachable through the enforced egress path, so it is not safe to
         // advertise: `sec_nuclei` takes `url`, `sec_http` takes `url`, but a
@@ -197,15 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn missing_risk_falls_back_to_the_weakest_tier() {
+    fn missing_risk_is_refused_rather_than_assumed_harmless() {
+        // The tier decides containment. Defaulting it to `Static` advertised a
+        // network tool as pure compute, so it would be offered with no egress
+        // parameter and only fail later, at dispatch.
         let mut v = net_tool("network");
-        v.as_object_mut()
-            .expect("object")
-            .remove("risk");
-        let got = desc(v).expect("missing risk is tolerated");
-        assert_eq!(got.risk, super::super::SecRisk::Static);
-        // Static, so it does not need a network parameter even though it has one.
-        assert!(got.network_param.is_none());
+        v.as_object_mut().expect("object").remove("risk");
+        let reason = desc(v).expect_err("missing risk is refused");
+        assert!(reason.contains("risk"), "{reason}");
     }
 
     #[test]
@@ -254,9 +261,13 @@ mod tests {
             {"name": "sec_nameless_check", "compute": "light"},
         ]);
         let (ok, refused) = parse_tools(Some(&tools));
-        assert_eq!(ok.len(), 2);
-        assert_eq!(refused.len(), 1);
+        // One good descriptor survives; both bad ones are refused individually.
+        assert_eq!(ok.len(), 1);
+        assert_eq!(refused.len(), 2);
         assert_eq!(refused[0].0, "sec_broken");
+        // The nameless one has no risk tier either, so it is refused on that too —
+        // the point is the refusal is per-descriptor, not that it is one field.
+        assert_eq!(refused[1].0, "sec_nameless_check");
     }
 
     #[test]
