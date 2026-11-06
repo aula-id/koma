@@ -1,68 +1,28 @@
 """
-koma_sec_daemon — long-lived security daemon entrypoint.
+koma_sec_daemon — empty process entrypoint.
 
 Protocol (newline-delimited JSON, parent speaks first):
-  Handshake (parent → daemon):  {"v": 1, "token": "<T>"}   (token optional)
-  Handshake (daemon → parent):  {"ok": true, "tools": [...descriptors...]}
+  Handshake (parent → daemon):  {"v": 1, "token": "<T>"}
+  Handshake (daemon → parent):  {"ok": true, "tools": []}
                             or  {"ok": false, "error": "bad token"}
 
-  Call (parent → daemon):       {"id": N, "op": "call", "tool": T, "args": {...}}
-  Result (daemon → parent):     {"id": N, "ok": true, "result": "<str>"}
-                            or  {"id": N, "ok": false, "error": "<str>"}
+  Call / health / install are answered so the parent never hangs, but this
+  process advertises and runs no tools.
 
-  EOF from parent → daemon exits cleanly, closing all sessions.
-
-stdout is the frame channel (binary wire); all library/debug output goes to
-stderr (same pattern as scrapion_agent/__main__.py).
+  EOF from parent → daemon exits.
 """
 from __future__ import annotations
 
-import sys
-import os
-import json
 import argparse
 import io
+import sys
 
-
-def _augment_path() -> None:
-    """Append standard bin dirs to PATH so detection + tool subprocess calls find
-    binaries installed outside the daemon's inherited PATH (e.g. ~/.local/bin,
-    Homebrew). Only existing, not-already-present dirs are appended; existing PATH
-    order is preserved."""
-    home = os.path.expanduser("~")
-    if sys.platform == "darwin":
-        candidates = [
-            os.path.join(home, ".local", "bin"),
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/local/sbin",
-            "/usr/bin",
-            "/bin",
-        ]
-    else:  # linux and other unix
-        candidates = [
-            os.path.join(home, ".local", "bin"),
-            "/usr/local/bin",
-            "/usr/local/sbin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ]
-    path = os.environ.get("PATH", "")
-    existing = path.split(os.pathsep) if path else []
-    existing_set = set(existing)
-    additions = [d for d in candidates if os.path.isdir(d) and d not in existing_set]
-    if additions:
-        os.environ["PATH"] = os.pathsep.join(existing + additions)
+from koma_sec_daemon.protocol import read_frame, write_frame
 
 
 def main() -> None:
-    _augment_path()
-
     parser = argparse.ArgumentParser(
-        description="koma security daemon — speak newline-delimited JSON on stdin/stdout",
+        description="koma security daemon (empty) — newline-delimited JSON on stdin/stdout",
         prog="python -m koma_sec_daemon",
     )
     parser.add_argument(
@@ -73,37 +33,15 @@ def main() -> None:
     args = parser.parse_args()
     expected_token: str | None = args.token
 
-    # --- Capture real stdout BEFORE redirecting ---
-    # We need a text-mode, line-buffered writer for frames.
-    # sys.stdout may be in binary mode if spawned with os.pipe, so we
-    # wrap sys.stdout.buffer when available.
     if hasattr(sys.stdout, "buffer"):
-        _raw_out = sys.stdout.buffer
-        real_stdout = io.TextIOWrapper(_raw_out, encoding="utf-8", line_buffering=True)
+        real_stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", line_buffering=True
+        )
     else:
-        # Already text mode (e.g. interactive / tests piping text)
         real_stdout = sys.stdout
-
-    # Redirect print() / library output to stderr so the frame channel stays clean
+    # Keep the frame channel clean. Library output goes to stderr.
     sys.stdout = sys.stderr
 
-    from koma_sec_daemon.protocol import read_frame, write_frame
-    from koma_sec_daemon import registry
-    from koma_sec_daemon.registry import descriptors, call
-    from koma_sec_daemon.sessions import SessionStore
-
-    sessions = SessionStore()
-
-    # Ensure the persisted binary dir (where Tier-2 downloads land) is on PATH so
-    # sandbox.run() subprocesses can find tools installed via the `install` op.
-    # Done before the handshake so the very first tool call already sees them.
-    from koma_sec_daemon.install_manifest import bin_dir
-    _bd = bin_dir()
-    os.makedirs(_bd, exist_ok=True)
-    _venv_bin = os.path.dirname(sys.executable)
-    os.environ["PATH"] = _bd + os.pathsep + _venv_bin + os.pathsep + os.environ.get("PATH", "")
-
-    # --- HANDSHAKE ---
     try:
         frame = read_frame(sys.stdin)
     except ValueError as exc:
@@ -111,93 +49,50 @@ def main() -> None:
         sys.exit(1)
 
     if frame is None:
-        # EOF before handshake — nothing to do
         sys.exit(0)
 
-    if expected_token is not None:
-        received = frame.get("token")
-        if received != expected_token:
-            write_frame(real_stdout, {"ok": False, "error": "bad token"})
-            sys.exit(1)
+    if expected_token is not None and frame.get("token") != expected_token:
+        write_frame(real_stdout, {"ok": False, "error": "bad token"})
+        sys.exit(1)
 
-    write_frame(real_stdout, {"ok": True, "tools": descriptors()})
+    write_frame(real_stdout, {"ok": True, "tools": []})
 
-    # --- MAIN LOOP ---
-    # Processes one frame at a time (single-threaded serialization): concurrent
-    # Rust-side calls all queue up here, so a slow tool (e.g. a blocking sec_http
-    # network request) will delay every other pending call for its full duration.
-    # A future concurrency upgrade would use asyncio tasks or a ThreadPoolExecutor
-    # to run handlers in parallel while keeping the I/O loop single-threaded.
-    try:
-        while True:
-            try:
-                frame = read_frame(sys.stdin)
-            except ValueError as exc:
-                # Malformed JSON — log to stderr, write error without id, continue
-                print(f"[koma_sec_daemon] malformed frame: {exc}", file=sys.stderr)
-                write_frame(real_stdout, {"ok": False, "error": f"malformed frame: {exc}"})
-                continue
+    while True:
+        try:
+            frame = read_frame(sys.stdin)
+        except ValueError as exc:
+            write_frame(real_stdout, {"ok": False, "error": f"malformed frame: {exc}"})
+            continue
 
-            if frame is None:
-                # EOF — parent closed the pipe; exit cleanly
-                break
+        if frame is None:
+            break
 
-            frame_id = frame.get("id")
-            op = frame.get("op")
+        frame_id = frame.get("id")
+        op = frame.get("op")
 
-            if op == "call":
-                tool_name = frame.get("tool", "")
-                tool_args = frame.get("args") or {}
-
-                # Check for unknown tool BEFORE calling so a handler's internal
-                # KeyError (e.g. missing required arg) is never mis-reported as
-                # "unknown tool".  All handler exceptions fall through to the
-                # generic except below and produce a meaningful error string.
-                if tool_name not in registry.REGISTRY:
-                    write_frame(real_stdout, {
-                        "id": frame_id,
-                        "ok": False,
-                        "error": f"unknown tool: {tool_name}",
-                    })
-                    continue
-
-                try:
-                    result = call(tool_name, tool_args, sessions)
-                    write_frame(real_stdout, {"id": frame_id, "ok": True, "result": result})
-                except Exception as exc:
-                    write_frame(real_stdout, {
-                        "id": frame_id,
-                        "ok": False,
-                        "error": str(exc),
-                    })
-
-            elif op == "health":
-                # Install-health for every external dep. Modules imported lazily
-                # here so daemon startup stays lean. probe() is pure stdlib and
-                # never raises; result is a JSON-encoded string the Rust side
-                # json-parses out of the standard "result" field.
-                from koma_sec_daemon import health
-                write_frame(real_stdout, {
+        if op == "health":
+            # Rust parses `result` as a JSON array of install-health entries.
+            write_frame(real_stdout, {"id": frame_id, "ok": True, "result": "[]"})
+        elif op == "install":
+            write_frame(
+                real_stdout,
+                {"id": frame_id, "ok": True, "result": "no dependencies"},
+            )
+        elif op == "call":
+            tool = frame.get("tool") or ""
+            write_frame(
+                real_stdout,
+                {
                     "id": frame_id,
-                    "ok": True,
-                    "result": json.dumps(health.probe()),
-                })
-
-            elif op == "install":
-                # Best-effort tiered install for one dep. installer.install()
-                # returns a status string (incl. "error: …") and never raises.
-                key = frame.get("key", "")
-                from koma_sec_daemon import installer
-                write_frame(real_stdout, {
-                    "id": frame_id,
-                    "ok": True,
-                    "result": installer.install(key),
-                })
-
-            else:
-                write_frame(real_stdout, {"id": frame_id, "ok": False, "error": "unknown op"})
-    finally:
-        sessions.close_all()
+                    "ok": False,
+                    "error": f"unknown tool: {tool}",
+                },
+            )
+        else:
+            write_frame(
+                real_stdout,
+                {"id": frame_id, "ok": False, "error": "unknown op"},
+            )
 
 
 if __name__ == "__main__":
