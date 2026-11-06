@@ -16,6 +16,13 @@ import base64
 import os
 import tempfile
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_wasm",
     "description": (
@@ -66,7 +73,7 @@ def _handler(args: dict, sessions) -> str:
             wp = tmp.name
 
         tool = "wasm-decompile" if mode != "wat" else "wasm2wat"
-        output = sandbox.run([tool, wp], timeout=60)
+        output = sandbox.run([tool, wp], timeout=60, spawn=_spawn())
         return output
     except Exception as exc:
         return f"error: {exc}"

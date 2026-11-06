@@ -45,11 +45,26 @@ def _make_preexec(mem_mb: Optional[int]):
     return preexec
 
 
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill the child's whole group on timeout, so grandchildren die with it."""
+    import os
+    import signal
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
 def run(
     cmd: list[str],
     timeout: int,
     mem_mb: Optional[int] = None,
     bwrap: bool = False,
+    spawn=None,
 ) -> str:
     """
     Run *cmd* as a subprocess.
@@ -61,6 +76,9 @@ def run(
     mem_mb:  If set, cap virtual address space (RLIMIT_AS) to this many MiB.
              Also installs a 60-second RLIMIT_CPU. Unix only; silently skipped elsewhere.
     bwrap:   If True, wrap the command in bubblewrap with --unshare-net (best-effort).
+    spawn:   Optional Popen factory, used so the daemon can track (and later kill)
+             the child. Without it the child is untracked and a cancel cannot
+             reach it, so the daemon passes one for every dispatch.
 
     Returns
     -------
@@ -72,17 +90,35 @@ def run(
     preexec_fn = _make_preexec(mem_mb) if mem_mb is not None else None
 
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-            preexec_fn=preexec_fn,
-        )
-        output = result.stdout or ""
-    except subprocess.TimeoutExpired:
-        return f"[timed out after {timeout}s]"
+        if spawn is None:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                # Own group, so a cancel/timeout can kill a tree and not just the
+                # leader. Harmless when nothing kills it.
+                start_new_session=True,
+                preexec_fn=preexec_fn,
+            )
+            output = result.stdout or ""
+        else:
+            proc = spawn(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+                preexec_fn=preexec_fn,
+            )
+            try:
+                output, _ = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(proc)
+                output, _ = proc.communicate()
+                return f"[timed out after {timeout}s]"
+            output = output or ""
     except Exception as exc:
         return f"[error launching process: {exc}]"
 

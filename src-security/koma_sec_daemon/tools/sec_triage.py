@@ -12,6 +12,13 @@ so the registry loads cleanly even when the binaries are absent.
 
 from __future__ import annotations
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_triage",
     "description": (
@@ -39,9 +46,9 @@ def _handler(args: dict, sessions) -> str:
 
     binary = args["binary"]
 
-    file_out = sandbox.run(["file", binary], timeout=20)
-    checksec_out = sandbox.run(["checksec", "--file=" + binary], timeout=20)
-    one_gadget_out = sandbox.run(["one_gadget", binary], timeout=60)
+    file_out = sandbox.run(["file", binary], timeout=20, spawn=_spawn())
+    checksec_out = sandbox.run(["checksec", "--file=" + binary], timeout=20, spawn=_spawn())
+    one_gadget_out = sandbox.run(["one_gadget", binary], timeout=60, spawn=_spawn())
 
     return (
         f"== file ==\n{file_out}\n"

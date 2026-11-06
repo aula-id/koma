@@ -8,6 +8,7 @@ Malformed JSON raises ValueError — the caller must turn that into an error fra
 from __future__ import annotations
 
 import json
+import threading
 
 
 def read_frame(stream) -> dict | None:
@@ -62,11 +63,20 @@ def negotiate(hello: dict) -> str | None:
     return None
 
 
+# One frame is written by one thread at a time. Without this a slow flush lets a
+# second frame's bytes interleave between a JSON line and its newline, and the
+# parent's line reader then decodes a spliced line.
+_WRITE_LOCK = threading.Lock()
+
+
 def write_frame(stream, obj: dict) -> None:
     """
-    Serialise *obj* as a single JSON line and write it to *stream*, flushing
-    immediately so the parent process receives each frame as it is produced.
+    Serialise *obj* as one JSON line and flush it.
+
+    Thread-safe: concurrent handler threads may emit frames, and a spliced frame
+    is undecodable rather than merely out of order.
     """
     payload = json.dumps(obj, ensure_ascii=False) + "\n"
-    stream.write(payload)
-    stream.flush()
+    with _WRITE_LOCK:
+        stream.write(payload)
+        stream.flush()

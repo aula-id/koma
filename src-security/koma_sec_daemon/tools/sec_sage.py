@@ -11,6 +11,13 @@ registry loads cleanly even when SageMath is not installed.
 
 from __future__ import annotations
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_sage",
     "description": (
@@ -37,7 +44,7 @@ def _handler(args: dict, sessions) -> str:
     from koma_sec_daemon import sandbox  # noqa: PLC0415
 
     code = args["code"]
-    return sandbox.run(["sage", "-c", code], timeout=180, mem_mb=4096)
+    return sandbox.run(["sage", "-c", code], timeout=180, mem_mb=4096, spawn=_spawn())
 
 
 # Attach handler to descriptor for registry use

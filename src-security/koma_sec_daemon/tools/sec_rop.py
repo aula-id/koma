@@ -5,11 +5,18 @@ compute : instant-cpu
 risk    : False
 domain  : pwn
 
-ROPgadget is invoked via sandbox.run() so the registry loads cleanly even
+ROPgadget is invoked via sandbox.run(, spawn=_spawn()) so the registry loads cleanly even
 when the binary is not present (import-time safety for the smoke test).
 """
 
 from __future__ import annotations
+
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
 
 DESCRIPTOR = {
     "name": "sec_rop",
@@ -47,7 +54,7 @@ def _handler(args: dict, sessions) -> str:
     if pattern:
         cmd += ["--re", pattern]
 
-    return sandbox.run(cmd, timeout=120)
+    return sandbox.run(cmd, timeout=120, spawn=_spawn())
 
 
 # Attach handler to descriptor for registry use

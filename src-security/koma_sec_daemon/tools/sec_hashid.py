@@ -5,11 +5,18 @@ compute : instant-cpu
 risk    : False
 domain  : crypto
 
-No third-party imports at module level — handler uses sandbox.run() so the
+No third-party imports at module level — handler uses sandbox.run(, spawn=_spawn()) so the
 registry loads cleanly even when hashid / nth binaries are absent.
 """
 
 from __future__ import annotations
+
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
 
 DESCRIPTOR = {
     "name": "sec_hashid",
@@ -36,7 +43,7 @@ def _handler(args: dict, sessions) -> str:
     hash_val = args["hash"]
 
     # Primary: hashid with -m flag (Hashcat mode output)
-    primary = sandbox.run(["hashid", "-m", hash_val], timeout=20)
+    primary = sandbox.run(["hashid", "-m", hash_val], timeout=20, spawn=_spawn())
 
     # Check whether hashid produced real output vs a launch error
     # sandbox.run returns "[error launching process: ...]" or "[timed out ...]" on failure
@@ -44,7 +51,7 @@ def _handler(args: dict, sessions) -> str:
         return primary
 
     # Fallback: nth (Name-That-Hash)
-    fallback = sandbox.run(["nth", "-t", hash_val, "-a"], timeout=20)
+    fallback = sandbox.run(["nth", "-t", hash_val, "-a"], timeout=20, spawn=_spawn())
 
     if fallback and not fallback.startswith("["):
         return fallback
