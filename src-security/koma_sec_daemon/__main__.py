@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import sys
 import os
+from pathlib import Path
 import json
 import argparse
 import io
@@ -60,6 +61,45 @@ def _augment_path() -> None:
     if additions:
         os.environ["PATH"] = os.pathsep.join(existing + additions)
 
+
+
+def _route_of(tool: str, args: dict) -> str | None:
+    """The board route a call works on: `<verb> <host:port>`, or None.
+
+    Only network tools have a route worth claiming; a pure-compute tool competes
+    with nothing.
+    """
+    from koma_sec_daemon import effects
+
+    row = effects.MANIFEST.get(tool)
+    if row and row[1] != effects.NET:
+        return None
+    raw = next((args.get(k) for k in ("url", "host", "target") if args.get(k)), None)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(raw if "://" in raw else "//" + raw)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return None
+    return f"{tool} {host}:{parts.port or ''}"
+
+
+def _retain(store, route, tool, frame_id, result) -> None:
+    """Keep the call's output as evidence and carry its handle on the result."""
+    if not result:
+        return
+    try:
+        handle = store.put(
+            f"{tool}-{frame_id}",
+            result,
+            provenance=f"{tool} route={route or '-'} frame={frame_id}",
+        )
+    except Exception as exc:  # noqa: BLE001 - evidence must never fail a call
+        print(f"[koma_sec_daemon] evidence store failed: {exc}", flush=True)
+        return
+    print(f"[koma_sec_daemon] evidence {handle}", flush=True)
 
 def main() -> None:
     _augment_path()
@@ -168,6 +208,21 @@ def main() -> None:
     calls = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sec-call")
     installs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sec-install")
 
+    # The board and evidence store are OPT-IN: a parent that has not created them
+    # still gets a working daemon, just without duplicate protection or retained
+    # artifacts. Both root under KOMA_BOARD / KOMA_EVIDENCE.
+    board_ = None
+    store = None
+    board_root = os.environ.get("KOMA_BOARD")
+    if board_root:
+        from koma_sec_daemon import board as board_mod
+        from koma_sec_daemon import evidence as evidence_mod
+
+        board_ = board_mod.Board(Path(board_root))
+        store = evidence_mod.Store(
+            Path(os.environ.get("KOMA_EVIDENCE", str(Path(board_root) / "evidence")))
+        )
+
     def emit(payload: dict) -> None:
         """Write a progress frame from any thread. Never raises."""
         try:
@@ -176,6 +231,20 @@ def main() -> None:
             pass
 
     def run_call(frame_id, tool_name, tool_args) -> None:
+        # Duplicate-execution check BEFORE the tool runs: the board, not a prompt,
+        # is what stops two lanes firing at one route. The frame id is the owner,
+        # so a retry by the same call re-enters its own claim.
+        route = _route_of(tool_name, tool_args)
+        if board_ is not None and route:
+            refusal = board_mod.dispatch_gate(board_, route, str(frame_id))
+            if refusal:
+                emit({
+                    "id": frame_id,
+                    "ok": True,
+                    "result": verdict.typed(verdict.BLOCKED, refusal),
+                })
+                return
+        result = ""
         try:
             result = call(tool_name, tool_args, sessions, cancel_key=frame_id)
             emit({"id": frame_id, "ok": True, "result": verdict.as_typed(result)})
@@ -191,6 +260,10 @@ def main() -> None:
             emit({"id": frame_id, "ok": False, "error": str(exc)})
         finally:
             cancel_mod.release(frame_id)
+            # Record the outcome as evidence in its own right, so a report can cite
+            # the run rather than only the target's last words.
+            if store is not None:
+                _retain(store, route, tool_name, frame_id, result)
 
     def run_install(frame_id, key) -> None:
         try:
