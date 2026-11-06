@@ -1116,3 +1116,8 @@ pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "mod_test.rs"]
 mod tests;
+// Shared minimal `ToolCtx` for tests. Re-exported rather than declared a second
+// time: the file is already a `#[path]` module under `seqthink`, and a second
+// `mod` declaration makes clippy warn about a doubly-loaded file.
+#[cfg(test)]
+pub(crate) use seqthink::test_ctx;

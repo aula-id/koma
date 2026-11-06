@@ -561,7 +561,7 @@ mod tests {
             cyber_lane: None,
             session_dir: Some(dir.to_path_buf()),
             workspace: cwd.to_path_buf(),
-            ..crate::tool::seqthink::test_ctx()
+            ..crate::tool::test_ctx()
         }
     }
 
@@ -625,5 +625,66 @@ mod tests {
         // caught on both rather than forking every record silently.
         assert_eq!(digest("/work/repo"), "1cd4fc81c8");
         assert_eq!(digest(""), "cbf29ce484");
+    }
+}
+
+/// Phase 1: the gate must not depend on the model telling the truth.
+#[cfg(test)]
+mod forged {
+    use crate::app::sec::lane::Lane;
+    use crate::tool::ToolCtx;
+
+    fn ctx(lane: Option<Lane>) -> ToolCtx {
+        // `lane_refusal` reads only `cyber_lane`, so a bare context is enough and
+        // does not drag in the (undeclared) shared test helper.
+        let mut c = crate::tool::test_ctx();
+        c.cyber_lane = lane;
+        c
+    }
+
+    #[test]
+    fn a_forged_name_still_meets_the_lane_gate() {
+        // The model supplies the name; the lane is looked up from the session, so
+        // claiming a tool the lane forbids is refused even though the call parses.
+        let refusal = super::lane_refusal(&ctx(Some(Lane::Research)), "sec_ffuf");
+        assert!(refusal.expect("refused").contains("research"));
+    }
+
+    #[test]
+    fn a_tool_the_lane_allows_passes() {
+        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_decode").is_none());
+    }
+
+    #[test]
+    fn with_no_lane_nothing_is_gated() {
+        // Disabled sessions keep their baseline exactly: same tool, now admitted.
+        assert!(super::lane_refusal(&ctx(None), "sec_ffuf").is_none());
+    }
+
+    #[test]
+    fn blue_reaches_the_target_but_cannot_apply() {
+        // Blue verifies a fix, so the network is open to it — but a patch only ever
+        // leaves as a proposal, so `apply` is refused.
+        assert!(super::lane_refusal(&ctx(Some(Lane::Blue)), "sec_http").is_none());
+        let refusal = crate::app::sec::lane::Lane::Blue
+            .reason_for(crate::app::sec::lane::Cap::Apply);
+        assert!(refusal.contains("proposes a diff"));
+    }
+
+    #[test]
+    fn research_is_refused_the_network_but_allowed_local_compute() {
+        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_http").is_some());
+        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_hashid").is_none());
+    }
+
+    #[test]
+    fn every_tool_name_is_gated_consistently_across_calls() {
+        // Same input, same answer: the gate is a pure function of (lane, name).
+        let c = ctx(Some(Lane::Red));
+        for tool in ["sec_http", "sec_decode", "sec_ffuf"] {
+            let a = super::lane_refusal(&c, tool);
+            let b = super::lane_refusal(&c, tool);
+            assert_eq!(a, b, "{tool}");
+        }
     }
 }

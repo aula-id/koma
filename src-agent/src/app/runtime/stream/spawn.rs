@@ -138,11 +138,16 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         .filter_map(|s| s.skill_dir.clone())
         .collect();
     let search_engine = session_ref.map(|s| s.settings.search_engine.clone());
+    // The lane in force, resolved once here so every tool call in this context is
+    // gated on the SAME answer. Resolved from live state rather than stamped into
+    // the context earlier, because `security_enabled`, the agent mode and the role
+    // assignment can all change under a running session.
+    let cyber_lane = crate::app::sec::active::for_ctx(state, sess_idx);
     crate::tool::ToolCtx {
         plan_read_only: rt.plan_read_only.clone(),
         workspace,
         session_id,
-        cyber_lane: None,
+        cyber_lane,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,

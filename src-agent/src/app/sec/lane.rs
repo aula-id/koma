@@ -69,6 +69,20 @@ impl Lane {
         }
     }
 
+    /// The global role that picks this lane's model.
+    ///
+    /// One-way on purpose: [`Self::of_role`] is the inverse, and both are pinned
+    /// by a test so a swap cannot silently gate the wrong capability.
+    #[must_use]
+    pub fn role(self) -> crate::model::app_config::ModelRole {
+        use crate::model::app_config::ModelRole;
+        match self {
+            Self::Research => ModelRole::CyberResearch,
+            Self::Red => ModelRole::CyberRed,
+            Self::Blue => ModelRole::CyberBlue,
+        }
+    }
+
     /// May this lane perform `cap`?
     #[must_use]
     pub fn permits(self, cap: Cap) -> bool {

@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
+use crate::tool::seqthink::SeqThink;
+use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 /// A minimal `ToolCtx` for tests — `seqthink` never touches it.

@@ -377,3 +377,72 @@ mod security_baseline_tests {
         assert_eq!(state.rest.agent_mode(), AgentMode::Auto);
     }
 }
+
+/// What `apply_lane` did, for the status line and the IPC reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaneOutcome {
+    Set(crate::app::sec::lane::Lane),
+    Cleared,
+    /// Refused, with the reason a user can act on.
+    Refused(&'static str),
+}
+
+/// Set or clear this session's cyber lane.
+///
+/// The lane is per-session (`Settings::cyber_lane`) while the ROLE assignment stays
+/// global, so two windows can run different lanes at once. Persisted immediately:
+/// a lane that vanished on restart would leave a session silently ungated while
+/// still advertising the toolkit.
+///
+/// Fail-closed at set time: a lane whose role has no model is refused here rather
+/// than accepted and then refusing every call. That is the difference between a
+/// setting that looks applied and one that works.
+pub(crate) fn apply_lane(
+    state: &mut AppState,
+    sess_idx: usize,
+    lane: Option<crate::app::sec::lane::Lane>,
+) -> Result<LaneOutcome> {
+    let Some(mut session) = state.rest.sessions[sess_idx].session.take() else {
+        return Ok(LaneOutcome::Refused("no session"));
+    };
+    let outcome = match lane {
+        None => {
+            session.settings.cyber_lane = None;
+            LaneOutcome::Cleared
+        }
+        Some(l) => {
+            let resolves = crate::app::resolve::resolve_role(
+                &state.rest.config,
+                &session.settings,
+                l.role(),
+            )
+            .is_some();
+            if resolves {
+                session.settings.cyber_lane = Some(l);
+                LaneOutcome::Set(l)
+            } else {
+                LaneOutcome::Refused(crate::app::sec::active::Inactive::NoModel.reason())
+            }
+        }
+    };
+    if matches!(outcome, LaneOutcome::Set(_) | LaneOutcome::Cleared) {
+        session.save()?;
+    }
+    state.rest.sessions[sess_idx].session = Some(session);
+    Ok(outcome)
+}
+
+/// `l` in the `/security` panel: set or clear this session's lane.
+pub(super) fn handle_security_lane(
+    state: &mut AppState,
+    sess_idx: usize,
+    lane: Option<crate::app::sec::lane::Lane>,
+) -> Result<()> {
+    let status = match apply_lane(state, sess_idx, lane)? {
+        LaneOutcome::Set(l) => format!("security: lane = {}", l.label()),
+        LaneOutcome::Cleared => "security: lane cleared".to_string(),
+        LaneOutcome::Refused(why) => format!("security: lane not set — {why}"),
+    };
+    state.rest.fg_mut().status = status;
+    Ok(())
+}

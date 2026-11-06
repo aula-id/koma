@@ -27,10 +27,28 @@ use crate::model::store::base_dir;
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
-/// Security tools remain unavailable until the isolated runtime is implemented.
-/// The daemon can still run for lifecycle and YOLO management.
+/// Does an isolated execution runtime exist, so a `sec_` call could be contained?
+///
+/// `21` requires a container with no silent host fallback, so this is the gate
+/// that keeps a call from running uncontained. It reports whether Docker is
+/// reachable from THIS process, which is the same answer for every call and cheap
+/// enough to re-check at dispatch — a probe on the hot path would cost a syscall
+/// per tool call, so the result is memoised for the process lifetime.
+///
+/// A missing runtime is reported as `unavailable` by the caller, never as success
+/// and never as a host fallback.
 pub(crate) fn cyber_execution_available() -> bool {
-    false
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // Only detection, nothing clever: the boundary itself spawns containers.
+        std::process::Command::new("docker")
+            .arg("info")
+            .arg("--format")
+            .arg("{{.ServerVersion}}")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 /// Tools whose destination is fixed in the handler, so they carry no destination

@@ -283,6 +283,10 @@ pub enum Action {
     /// (a Tier-2 download can take seconds), then re-fetches install-health so the
     /// pane's present-flags update.
     SecurityInstall(String),
+    /// `l` in the `/security` panel — set this session's cyber lane. Inner is the
+    /// lane, or `None` to clear it. Refused with a reason when the chosen role has
+    /// no model assigned, so the gate is never left looking configured.
+    SecurityLane(Option<crate::app::sec::lane::Lane>),
     // --- Bash job panel actions ---
     /// Esc from the `/bash` panel — return to Chat.
     CloseBash,

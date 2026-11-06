@@ -67,6 +67,7 @@ use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 // The child-process wire protocol (spawn + handshake, writer/reader/stderr-drain
 // tasks) lives in the sibling `wire` module (file size); re-imported here so the
 // existing call sites in `SecDaemonManager::start` keep compiling unchanged.
+pub mod active;
 pub mod lane;
 pub mod run;
 pub mod prompt;
@@ -232,12 +233,22 @@ mod isolated_runtime_gate_tests {
             compute: "network".into(),
             domain: "web".into(),
         });
-        assert!(manager.tool_names().is_empty());
-        assert!(manager.tool_defs().is_empty());
+        // Gated on a real runtime probe, so the expectation follows the machine
+        // rather than a hardcoded `false`: with Docker present the discovered
+        // tools ARE advertised, and the dispatch gate below is what still stops
+        // them until the boundary is wired.
+        let available = crate::security::cyber_execution_available();
+        assert_eq!(manager.tool_names().is_empty(), !available);
+        assert_eq!(manager.tool_defs().is_empty(), !available);
+        // Without a live daemon the dispatch still refuses; the REASON differs by
+        // machine, so assert only that it refuses and names something actionable.
         let error = manager
             .execute_blocking("sec_http", &serde_json::json!({}))
             .unwrap_err();
-        assert!(error.contains("isolated runtime"), "{error}");
+        assert!(
+            error.contains("isolated runtime") || error.contains("not running"),
+            "{error}"
+        );
     }
 
     /// The boundary is consulted from OUTSIDE this manager (dispatch), so the
@@ -272,9 +283,18 @@ mod isolated_runtime_gate_tests {
             compute: "network".into(),
             domain: "web".into(),
         });
+        // A forged name is refused regardless of the runtime, which is the
+        // invariant worth pinning here.
         assert!(manager
-            .refusal("sec_http", true)
-            .is_some_and(|r| r.contains("isolated runtime")));
+            .refusal("sec_nope", true)
+            .is_some_and(|r| r.contains("not advertised")));
+        // And an advertised one is refused exactly when no runtime exists.
+        let refusal = manager.refusal("sec_http", true);
+        if crate::security::cyber_execution_available() {
+            assert!(refusal.is_none(), "{refusal:?}");
+        } else {
+            assert!(refusal.is_some_and(|r| r.contains("isolated runtime")));
+        }
     }
 }
 
