@@ -36,6 +36,7 @@ _WIRE_KEYS = ("name", "description", "parameters", "effect", "exec", "domain")
 # Old compute -> new exec, applied when a descriptor has not been migrated yet.
 _LEGACY_EXEC = {
     "instant-cpu": effects.CPU,
+    "light": effects.CPU,
     "long-cpu": effects.CPU,
     "gpu": effects.CPU,
     "network": effects.NET,
@@ -54,6 +55,8 @@ _REQUIRES: dict[str, str] = {
     "sec_rop": "pwn",
     "sec_crack": "requests",
     "sec_browser": "playwright",
+    "sec_decrypt": "cryptography",
+    "sec_xss": "requests",
 }
 
 # Actionable text, not a bare name: the model can act on this and the user can
@@ -63,6 +66,7 @@ _HINTS = {
     "pwn": "pip install pwntools",
     "z3": "pip install z3-solver",
     "playwright": "pip install playwright && playwright install chromium",
+    "cryptography": "pip install cryptography",
 }
 
 

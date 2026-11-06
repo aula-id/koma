@@ -47,7 +47,7 @@ pub fn role_token(r: ModelRole) -> &'static str {
         ModelRole::Planner => "planner",
         ModelRole::CyberRed => "cyber-red",
         ModelRole::CyberBlue => "cyber-blue",
-        ModelRole::CyberResearch => "cyber-research",
+        ModelRole::CyberResearch => "cyber-researcher",
     }
 }
 

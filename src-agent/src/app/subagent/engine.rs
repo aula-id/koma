@@ -563,10 +563,17 @@ pub async fn run_agent_loop(
             // gets there; this keeps the two reasons distinguishable and keeps a
             // stopped lane from reaching the daemon at all.
             if crate::security::is_sec_tool(&name) {
+                let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+                let mut sec_args: serde_json::Value =
+                    serde_json::from_str(&sanitized).unwrap_or(serde_json::json!({}));
+                if let Some(reason) = crate::tool::scope::lane_refusal(&ctx, &name, &mut sec_args) {
+                    convo.push_tool(call.id.clone(), format!("error: {reason}"));
+                    continue;
+                }
                 if let Some(reason) = ctx
                     .sec_manager
                     .as_ref()
-                    .and_then(|m| m.refusal(&name, true))
+                    .and_then(|m| m.refusal(&name, ctx.cyber_lane.is_some()))
                 {
                     convo.push_tool(call.id.clone(), format!("error: {reason}"));
                     continue;

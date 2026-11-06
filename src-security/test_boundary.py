@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from koma_sec_daemon import boundary  # noqa: E402
 
-IMAGE = os.environ.get("KOMA_SEC_IMAGE", "koma-cyber-guest:dev")
+IMAGE = os.environ.get("KOMA_SEC_IMAGE", "koma-safety:dev")
 # A name that is definitely not in the rules, resolvable only through the proxy's
 # forwarder. `example.com` is in scope below; wikipedia is not.
 OUT_OF_SCOPE = "wikipedia.org"
@@ -206,7 +206,7 @@ class EndToEndTest(BoundaryCase):
 
     def test_the_loop_holds_end_to_end(self) -> None:
         got = self._run()
-        self.assertEqual(got["handshake"], 24, "the daemon did not advertise its tools")
+        self.assertEqual(got["handshake"], 28, "the daemon did not advertise its tools")
         self.assertEqual(got["verdicts"].get(1), "confirmed", "an in-scope call failed")
         # The proxy's refusal must be distinguishable from the target answering.
         self.assertEqual(got["verdicts"].get(2), "blocked", "out-of-scope was not blocked")

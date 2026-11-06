@@ -266,12 +266,7 @@ impl Scope {
     ///
     /// `version` is the version the caller was admitted under. A mismatch is a
     /// stale call and is refused, never upgraded.
-    pub fn admit(
-        &self,
-        target: &str,
-        port: u16,
-        version: Option<u64>,
-    ) -> Result<(), Refusal> {
+    pub fn admit(&self, target: &str, port: u16, version: Option<u64>) -> Result<(), Refusal> {
         self.admit_at(target, port, version, now_epoch())
     }
 
@@ -311,7 +306,11 @@ impl Scope {
         if !self.targets.iter().any(|t| t.admits(&host, port)) {
             // Distinguish "wrong port" from "wrong host" so the reason is useful:
             // the host is declared, just not on this port.
-            if self.targets.iter().any(|t| t.admits_host_only(&host) && !t.ports.is_empty()) {
+            if self
+                .targets
+                .iter()
+                .any(|t| t.admits_host_only(&host) && !t.ports.is_empty())
+            {
                 return Err(Refusal::PortNotAllowed);
             }
             return Err(Refusal::OutOfScope);
@@ -340,7 +339,10 @@ impl Scope {
             Some("http") => Transport::Http,
             Some("https") => Transport::Https,
             Some("tcp") => Transport::Tcp,
-            _ => Transport::default_for(&Host { host: host.clone(), ports: Vec::new() }),
+            _ => Transport::default_for(&Host {
+                host: host.clone(),
+                ports: Vec::new(),
+            }),
         };
         Some(Endpoint {
             host,
@@ -415,9 +417,14 @@ fn split_host_port(raw: &str) -> Option<(String, Option<u16>)> {
         };
         return Some((host.to_string(), port));
     }
+    // A bare IPv6 literal has more than one colon. A port on it uses brackets.
+    if raw.matches(':').count() > 1 {
+        return Some((raw.to_string(), None));
+    }
     match raw.rsplit_once(':') {
-        // Only a numeric tail is a port; `fe80::1` has colons that are not.
-        Some((h, p)) if p.parse::<u16>().is_ok() => Some((h.to_string(), p.parse().ok())),
+        Some((h, p)) if !h.is_empty() && p.parse::<u16>().is_ok() => {
+            Some((h.to_string(), p.parse().ok()))
+        }
         _ => Some((raw.to_string(), None)),
     }
 }
@@ -429,7 +436,10 @@ fn split_host_port(raw: &str) -> Option<(String, Option<u16>)> {
 /// a trailing dot (the root label is not part of identity here).
 fn normalise(host: &str) -> Option<String> {
     let host = host.trim().trim_end_matches('.');
-    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     if host.is_empty() {
         return None;
     }
@@ -495,10 +505,26 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_ipv6_literal_is_not_a_port() {
+        assert_eq!(split_host_port("fe80::1"), Some(("fe80::1".into(), None)));
+        assert_eq!(
+            split_host_port("[fe80::1]:8080"),
+            Some(("fe80::1".into(), Some(8080)))
+        );
+        assert_eq!(
+            split_host_port("localhost:8080"),
+            Some(("localhost".into(), Some(8080)))
+        );
+    }
+
+    #[test]
     fn an_exclusion_beats_a_broader_target() {
         let mut s = scope();
         s.exclusions = vec![Host::parse("api.example.com").expect("valid")];
-        assert_eq!(s.admit("api.example.com", 443, None), Err(Refusal::Excluded));
+        assert_eq!(
+            s.admit("api.example.com", 443, None),
+            Err(Refusal::Excluded)
+        );
         assert_eq!(s.admit("example.com", 443, None), Ok(()));
     }
 
@@ -506,7 +532,10 @@ mod tests {
     fn a_port_narrowed_host_reports_the_port_not_the_host() {
         let mut s = scope();
         s.targets = vec![Host::parse("example.com:8080").expect("valid")];
-        assert_eq!(s.admit("example.com", 80, None), Err(Refusal::PortNotAllowed));
+        assert_eq!(
+            s.admit("example.com", 80, None),
+            Err(Refusal::PortNotAllowed)
+        );
         assert_eq!(s.admit("example.com", 8080, None), Ok(()));
     }
 
@@ -526,13 +555,19 @@ mod tests {
         assert_eq!(s.admit("example.com", 443, None), Err(Refusal::NotActive));
         let mut s = scope();
         s.confirmed_by = None;
-        assert_eq!(s.admit("example.com", 443, None), Err(Refusal::NotConfirmed));
+        assert_eq!(
+            s.admit("example.com", 443, None),
+            Err(Refusal::NotConfirmed)
+        );
     }
 
     #[test]
     fn a_stale_version_is_refused_rather_than_upgraded() {
         let s = scope();
-        assert_eq!(s.admit("example.com", 443, Some(2)), Err(Refusal::NotActive));
+        assert_eq!(
+            s.admit("example.com", 443, Some(2)),
+            Err(Refusal::NotActive)
+        );
         assert_eq!(s.admit("example.com", 443, Some(1)), Ok(()));
     }
 
@@ -540,8 +575,14 @@ mod tests {
     fn a_redirect_hop_is_re_admitted() {
         let mut s = scope();
         s.exclusions = vec![Host::parse("evil.example").expect("valid")];
-        assert_eq!(s.admit_after_hop("evil.example", 443), Err(Refusal::Excluded));
-        assert_eq!(s.admit_after_hop("other.example", 443), Err(Refusal::OutOfScope));
+        assert_eq!(
+            s.admit_after_hop("evil.example", 443),
+            Err(Refusal::Excluded)
+        );
+        assert_eq!(
+            s.admit_after_hop("other.example", 443),
+            Err(Refusal::OutOfScope)
+        );
     }
 
     #[test]
@@ -662,13 +703,19 @@ mod window {
     fn an_unset_window_admits_at_any_time() {
         let s = scoped(Window::default());
         for now in [0, 1_000_000, i64::MAX] {
-            assert!(s.admit_at("example.com", 443, Some(1), now).is_ok(), "{now}");
+            assert!(
+                s.admit_at("example.com", 443, Some(1), now).is_ok(),
+                "{now}"
+            );
         }
     }
 
     #[test]
     fn before_the_start_is_refused() {
-        let s = scoped(Window { from: Some(100), until: None });
+        let s = scoped(Window {
+            from: Some(100),
+            until: None,
+        });
         assert_eq!(
             s.admit_at("example.com", 443, Some(1), 99),
             Err(Refusal::OutsideWindow)
@@ -677,7 +724,10 @@ mod window {
 
     #[test]
     fn at_and_after_the_start_is_admitted() {
-        let s = scoped(Window { from: Some(100), until: None });
+        let s = scoped(Window {
+            from: Some(100),
+            until: None,
+        });
         assert!(s.admit_at("example.com", 443, Some(1), 100).is_ok());
         assert!(s.admit_at("example.com", 443, Some(1), 101).is_ok());
     }
@@ -686,7 +736,10 @@ mod window {
     fn the_end_is_exclusive() {
         // Half-open, so a window ending at 200 permits 199 and not 200. Pinned
         // because an off-by-one here silently extends every run by its last second.
-        let s = scoped(Window { from: None, until: Some(200) });
+        let s = scoped(Window {
+            from: None,
+            until: Some(200),
+        });
         assert!(s.admit_at("example.com", 443, Some(1), 199).is_ok());
         assert_eq!(
             s.admit_at("example.com", 443, Some(1), 200),
@@ -696,7 +749,10 @@ mod window {
 
     #[test]
     fn inside_a_closed_range_works() {
-        let s = scoped(Window { from: Some(100), until: Some(200) });
+        let s = scoped(Window {
+            from: Some(100),
+            until: Some(200),
+        });
         assert!(s.admit_at("example.com", 443, Some(1), 150).is_ok());
     }
 
@@ -704,7 +760,10 @@ mod window {
     fn the_window_refusal_wins_over_a_host_diagnosis() {
         // Outside the window every target is refused, so reporting "not in scope"
         // for an out-of-target host would blame the wrong thing.
-        let s = scoped(Window { from: Some(100), until: Some(200) });
+        let s = scoped(Window {
+            from: Some(100),
+            until: Some(200),
+        });
         assert_eq!(
             s.admit_at("elsewhere.test", 443, Some(1), 300),
             Err(Refusal::OutsideWindow)
@@ -715,7 +774,10 @@ mod window {
     fn the_window_is_checked_after_activation_and_confirmation() {
         // A closed window on a paused scope should read as "not active", not as
         // a window problem — the earlier condition is the real one.
-        let mut s = scoped(Window { from: Some(100), until: Some(200) });
+        let mut s = scoped(Window {
+            from: Some(100),
+            until: Some(200),
+        });
         s.state = State::Paused;
         assert_eq!(
             s.admit_at("example.com", 443, Some(1), 300),
@@ -726,7 +788,11 @@ mod window {
     #[test]
     fn an_empty_window_is_not_worth_checking() {
         assert!(!Window::default().is_set());
-        assert!(Window { from: Some(1), until: None }.is_set());
+        assert!(Window {
+            from: Some(1),
+            until: None
+        }
+        .is_set());
     }
 
     #[test]
@@ -736,7 +802,10 @@ mod window {
 
     #[test]
     fn a_window_survives_a_round_trip() {
-        let s = scoped(Window { from: Some(1), until: Some(2) });
+        let s = scoped(Window {
+            from: Some(1),
+            until: Some(2),
+        });
         let json = serde_json::to_string(&s).expect("serialise");
         let back: Scope = serde_json::from_str(&json).expect("deserialise");
         assert_eq!(back.window, s.window);

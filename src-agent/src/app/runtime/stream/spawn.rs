@@ -142,12 +142,18 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // gated on the SAME answer. Resolved from live state rather than stamped into
     // the context earlier, because `security_enabled`, the agent mode and the role
     // assignment can all change under a running session.
-    let cyber_lane = crate::app::sec::active::for_ctx(state, sess_idx);
+    let (cyber_lane, sec_block) = match crate::app::sec::active::effective(state, sess_idx) {
+        Ok(lane) => (Some(lane), None),
+        Err(why) => (None, Some(why.reason().to_string())),
+    };
+    let sec_inactive: Vec<String> = state.rest.sec_inactive.iter().cloned().collect();
     crate::tool::ToolCtx {
         plan_read_only: rt.plan_read_only.clone(),
         workspace,
         session_id,
         cyber_lane,
+        sec_block,
+        sec_inactive,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,

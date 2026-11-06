@@ -35,17 +35,17 @@ pub mod plan;
 mod plan_policy;
 pub mod pong;
 pub mod recovery;
+pub mod scope;
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
-pub mod scope;
 pub mod seqthink;
-pub mod verdict;
 pub mod shell;
 pub mod shell_filter;
 pub mod skill;
 pub mod task;
 pub mod todo;
+pub mod verdict;
 
 pub use dircache::DirCache;
 pub use output::CallTrack;
@@ -506,8 +506,13 @@ pub struct ToolCtx {
     /// `cd`, so this is the run's cwd, not an allow-list.
     pub workspace: PathBuf,
     /// The session's cyber lane, when security mode has one armed. `None` in a
-    /// plain coding session, which leaves every tool ungated as before.
+    /// plain coding session. A `sec_` call with no lane is refused.
     pub cyber_lane: Option<crate::app::sec::lane::Lane>,
+    /// Why `sec_` calls are refused. Set when [`crate::app::sec::active::effective`]
+    /// fails. `None` when a lane is in force.
+    pub sec_block: Option<String>,
+    /// Tool names the user turned off in the security panel.
+    pub sec_inactive: Vec<String>,
     /// Stable session identity. Every dynamic target traces back to this, so two
     /// sessions on one checkout cannot collide on a board, a scope record or a
     /// spilled artifact. Mirrors `SessionRuntime::id`.
@@ -971,7 +976,7 @@ fn partial_canonicalize(as_path: &Path) -> PathBuf {
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].
 pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String {
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
-    let args: serde_json::Value =
+    let mut args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     if ctx
         .plan_read_only
@@ -1024,7 +1029,21 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         // unadvertised/forged `sec_` name must not run even when the daemon is
         // live and armed.
         if let Some(mgr) = ctx.sec_manager.as_ref() {
-            if let Some(reason) = mgr.refusal(&call.function.name, true) {
+            let lane_refusal = scope::lane_refusal(ctx, &call.function.name, &mut args);
+            if let Some(reason) = lane_refusal {
+                let denied = verdict::TypedResult {
+                    verdict: verdict::Verdict::Blocked,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    denied.to_json(),
+                );
+            }
+            if let Some(reason) = mgr.refusal(&call.function.name, ctx.cyber_lane.is_some()) {
                 // A refusal is the tool's own `error` verdict, not a transport
                 // failure: it becomes typed so the model sees the same shape it
                 // sees from every other outcome.
@@ -1040,10 +1059,8 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     refusal.to_json(),
                 );
             }
-            // Lane first: a tool the lane forbids must not even be admitted, so
-            // the refusal names the lane rather than a scope miss.
-            let lane_refusal = scope::lane_refusal(ctx, &call.function.name)
-                .or_else(|| scope::admit_from_call(ctx, &call.function.name, &args));
+            // The lane gate already ran. Scope admission is the remaining check.
+            let lane_refusal = scope::admit_from_call(ctx, &call.function.name, &args);
             // Admit before anything else: a call whose target the scope does
             // not cover must not reach the container at all.
             if let Some(reason) = lane_refusal {
@@ -1059,11 +1076,6 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     denied.to_json(),
                 );
             }
-
-            // Bind the target BEFORE dispatch, so a call that is about to run
-            // against a dynamic endpoint always has a record even if the tool
-            // crashes. Best-effort: a binding failure must not block the call.
-            scope::bind_from_call(ctx, &call.function.name, &args);
 
             // Parse before the output caps run. The verdict is the result; the
             // excerpt is only its body, and `finish_tool_output` trims bodies.
@@ -1101,12 +1113,7 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                 excerpt: framed,
                 handle: typed.handle,
             };
-            return output::finish_tool_output(
-                ctx,
-                &call.function.name,
-                &args,
-                framed.to_json(),
-            );
+            return output::finish_tool_output(ctx, &call.function.name, &args, framed.to_json());
         }
     }
     output::finish_tool_output(

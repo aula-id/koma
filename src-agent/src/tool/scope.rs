@@ -100,7 +100,13 @@ impl ScopeBase {
     /// and `:8443` on one host are different targets, and so are `/api` and
     /// `/admin`.
     #[must_use]
-    pub fn record_path(&self, verb: &str, host: &str, port: Option<u16>, path: Option<&str>) -> PathBuf {
+    pub fn record_path(
+        &self,
+        verb: &str,
+        host: &str,
+        port: Option<u16>,
+        path: Option<&str>,
+    ) -> PathBuf {
         let mut name = format!("{verb}-{}", host.to_ascii_lowercase());
         if let Some(p) = port {
             name.push_str(&format!("-{p}"));
@@ -114,7 +120,13 @@ impl ScopeBase {
     /// Read a binding, or `None` when it is absent, unreadable or from another
     /// schema version.
     #[must_use]
-    pub fn read(&self, verb: &str, host: &str, port: Option<u16>, path: Option<&str>) -> Option<Binding> {
+    pub fn read(
+        &self,
+        verb: &str,
+        host: &str,
+        port: Option<u16>,
+        path: Option<&str>,
+    ) -> Option<Binding> {
         let raw = std::fs::read_to_string(self.record_path(verb, host, port, path)).ok()?;
         let binding: Binding = serde_json::from_str(&raw).ok()?;
         (binding.schema == SCHEMA).then_some(binding)
@@ -142,8 +154,12 @@ impl ScopeBase {
     /// call wrote anything, so a caller can report "new" versus "known" without
     /// re-reading.
     pub fn ensure(&self, binding: &Binding) -> std::io::Result<bool> {
-        if self.read(&binding.verb, &binding.host, binding.port, binding.path.as_deref())
-            == Some(binding.clone())
+        if self.read(
+            &binding.verb,
+            &binding.host,
+            binding.port,
+            binding.path.as_deref(),
+        ) == Some(binding.clone())
         {
             return Ok(false);
         }
@@ -232,7 +248,11 @@ pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> O
     // `?` here would return None, which the caller reads as "admitted". A missing
     // record must REFUSE instead, so it is matched rather than propagated.
     let Some(scope) = crate::app::sec::scope::load(base.dir()) else {
-        return Some(crate::app::sec::scope::Refusal::NoScope.reason().to_string());
+        return Some(
+            crate::app::sec::scope::Refusal::NoScope
+                .reason()
+                .to_string(),
+        );
     };
     let port = port.unwrap_or_else(|| {
         crate::app::sec::scope::Endpoint::default_port(crate::app::sec::scope::Transport::Http)
@@ -249,15 +269,86 @@ pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> O
 /// only the ones with a destination — a research run calling `sec_triage` is fine,
 /// the same run calling `sec_http` is not.
 ///
-/// `None` means the session is in a plain coding mode with no lane, and nothing
-/// is gated: ordinary coding must keep working untouched.
-pub fn lane_refusal(ctx: &ToolCtx, tool: &str) -> Option<String> {
-    let lane = ctx.cyber_lane?;
-    let cap = crate::app::sec::lane::Lane::cap_of_tool(tool);
-    if lane.permits(cap) {
-        return None;
+/// `None` means the call may proceed. A `sec_` call with no lane is refused.
+/// Ordinary tools stay ungated.
+pub fn lane_refusal(ctx: &ToolCtx, tool: &str, args: &mut serde_json::Value) -> Option<String> {
+    use crate::app::sec::lane::Lane;
+    if crate::security::is_sec_tool(tool) && ctx.cyber_lane.is_none() {
+        return Some(
+            ctx.sec_block
+                .clone()
+                .unwrap_or_else(|| "no cyber lane is selected for this session".to_string()),
+        );
     }
-    Some(format!("{} lane: {}", lane.label(), lane.reason_for(cap)))
+    if ctx.sec_inactive.iter().any(|n| n == tool) {
+        return Some(format!("{tool} is disabled for this session"));
+    }
+    let lane = ctx.cyber_lane?;
+    if crate::security::is_sec_tool(tool) && !crate::app::sec::lane::surface(lane).contains(&tool) {
+        return Some(format!("{} lane: {tool} is not on this lane", lane.label()));
+    }
+    if lane == Lane::Blue && Lane::blue_blocks(tool) {
+        return Some(format!("blue lane: {tool} is refused"));
+    }
+    let cap = Lane::cap_of_tool(tool);
+    if !lane.permits(cap) {
+        return Some(format!("{} lane: {}", lane.label(), lane.reason_for(cap)));
+    }
+    if lane == Lane::Blue && tool == "sec_http" {
+        return blue_http(args);
+    }
+    None
+}
+
+/// A Blue `sec_http` call is a bare `GET` or `HEAD`. Anything that can carry a
+/// payload is refused, and redirects are forced off before the call runs.
+fn blue_http(args: &mut serde_json::Value) -> Option<String> {
+    let Some(obj) = args.as_object() else {
+        return Some("blue lane: sec_http arguments must be an object".into());
+    };
+    for key in obj.keys() {
+        if !matches!(
+            key.as_str(),
+            "url" | "method" | "headers" | "body" | "follow_redirects"
+        ) {
+            return Some(format!("blue lane: sec_http refuses {key}"));
+        }
+    }
+    match obj.get("url").and_then(|v| v.as_str()) {
+        Some(url) if !url.is_empty() && !url.contains(['?', '#', '@']) => {}
+        _ => return Some("blue lane: sec_http requires a bare url".into()),
+    }
+    if let Some(method) = obj.get("method") {
+        match method.as_str() {
+            Some(method)
+                if method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD") => {}
+            _ => return Some("blue lane: sec_http method must be GET or HEAD".into()),
+        }
+    }
+    if let Some(headers) = obj.get("headers") {
+        if !headers.as_object().is_some_and(|h| h.is_empty()) {
+            return Some("blue lane: sec_http refuses headers".into());
+        }
+    }
+    if let Some(body) = obj.get("body") {
+        let empty = body.is_null() || body.as_str().is_some_and(|s| s.is_empty());
+        if !empty {
+            return Some("blue lane: sec_http refuses a body".into());
+        }
+    }
+    if obj
+        .get("follow_redirects")
+        .is_some_and(|v| v.as_bool() != Some(false))
+    {
+        return Some("blue lane: sec_http does not follow redirects".into());
+    }
+    if let Some(obj) = args.as_object_mut() {
+        obj.insert(
+            "follow_redirects".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    None
 }
 
 /// Settle a target's binding against the verdict the call returned.
@@ -265,8 +356,14 @@ pub fn lane_refusal(ctx: &ToolCtx, tool: &str) -> Option<String> {
 /// No timestamps: the verdict alone decides. A confirmation keeps the record
 /// addressable; anything else drops it, so a dead endpoint does not stay in scope
 /// and quietly re-admit a later call.
-pub fn settle(ctx: &ToolCtx, tool: &str, args: &serde_json::Value, verdict: crate::tool::verdict::Verdict) {
+pub fn settle(
+    ctx: &ToolCtx,
+    tool: &str,
+    args: &serde_json::Value,
+    verdict: crate::tool::verdict::Verdict,
+) {
     if verdict.establishes_finding() {
+        bind_from_call(ctx, tool, args);
         return;
     }
     let Some((host, port, path)) = destination_of(tool, args) else {
@@ -299,7 +396,10 @@ fn verb_of(tool: &str) -> Option<&'static str> {
 /// `(host, port, path)` named by the call, or `None` for a fixed-host/no-target
 /// tool. The host may carry a scheme and a port (`http://x:8080/a`), which is
 /// split rather than assumed.
-fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Option<u16>, Option<String>)> {
+fn destination_of(
+    tool: &str,
+    args: &serde_json::Value,
+) -> Option<(String, Option<u16>, Option<String>)> {
     let raw = ["url", "host", "target", "hostname", "endpoint"]
         .iter()
         .find_map(|k| args.get(*k).and_then(serde_json::Value::as_str))
@@ -311,7 +411,13 @@ fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Optio
     }
     use crate::app::sec::scope::{Endpoint, Transport};
 
-    let (scheme, without_scheme) = raw.split_once("://").map_or((None, raw), |(s, r)| (Some(s), r));
+    let (scheme, without_scheme) = raw
+        .split_once("://")
+        .map_or((None, raw), |(s, r)| (Some(s), r));
+    let without_scheme = without_scheme
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
     let (hostport, path) = match without_scheme.split_once('/') {
         // `https://h/` and `https://h` are the same target: a bare `/` is the
         // default path, so it must not fork the key.
@@ -320,9 +426,17 @@ fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Optio
         Some((h, p)) => (h, Some(format!("/{p}"))),
         None => (without_scheme, None),
     };
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse().ok()),
-        _ => (hostport, None),
+    let (host, port) = if hostport.matches(':').count() > 1 && !hostport.starts_with('[') {
+        (hostport, None)
+    } else if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = tail.strip_prefix(':').and_then(|p| p.parse().ok());
+        (host, port)
+    } else {
+        match hostport.rsplit_once(':') {
+            Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse().ok()),
+            _ => (hostport, None),
+        }
     };
     // Default the port the same way `Scope::endpoint` does, so the binding and
     // the admission cannot disagree about which port the same URL means.
@@ -330,6 +444,7 @@ fn destination_of(tool: &str, args: &serde_json::Value) -> Option<(String, Optio
         let transport = match scheme {
             Some("http") => Transport::Http,
             Some("tcp") => Transport::Tcp,
+            None if host.parse::<std::net::IpAddr>().is_ok() => Transport::Http,
             _ => Transport::Https,
         };
         Some(Endpoint::default_port(transport))
@@ -368,7 +483,10 @@ mod tests {
 
     #[test]
     fn the_path_carries_session_and_a_digested_cwd() {
-        let shown = base("sess-a", "/work/repo").dir().to_string_lossy().into_owned();
+        let shown = base("sess-a", "/work/repo")
+            .dir()
+            .to_string_lossy()
+            .into_owned();
         assert!(shown.contains("sec-scope"));
         assert!(shown.contains("sess-a"));
         assert!(shown.contains(&digest("/work/repo")));
@@ -458,26 +576,38 @@ mod tests {
 
     #[test]
     fn a_scheme_defaults_the_port_so_it_matches_the_admission() {
-        assert_eq!(dest(serde_json::json!({"url": "http://h"})).map(|d| d.1), Some(Some(80)));
-        assert_eq!(dest(serde_json::json!({"url": "https://h"})).map(|d| d.1), Some(Some(443)));
+        assert_eq!(
+            dest(serde_json::json!({"url": "http://h"})).map(|d| d.1),
+            Some(Some(80))
+        );
+        assert_eq!(
+            dest(serde_json::json!({"url": "https://h"})).map(|d| d.1),
+            Some(Some(443))
+        );
     }
 
     #[test]
     fn a_root_slash_does_not_fork_the_key() {
-        assert_eq!(dest(serde_json::json!({"url": "https://h/"})), dest(serde_json::json!({"url": "https://h"})));
+        assert_eq!(
+            dest(serde_json::json!({"url": "https://h/"})),
+            dest(serde_json::json!({"url": "https://h"}))
+        );
     }
 
     #[test]
     fn a_url_is_split_into_host_port_and_path() {
         assert_eq!(
             dest(serde_json::json!({"url": "http://Example.COM:8080/api/x?y=1"})),
-            Some(("example.com".into(), Some(8080), Some("/api/x?y=1".into())))
+            Some(("example.com".into(), Some(8080), Some("/api/x".into())))
         );
     }
 
     #[test]
     fn a_bare_host_has_no_port_or_path() {
-        assert_eq!(dest(serde_json::json!({"host": "box"})), Some(("box".into(), Some(443), None)));
+        assert_eq!(
+            dest(serde_json::json!({"host": "box"})),
+            Some(("box".into(), Some(443), None))
+        );
     }
 
     #[test]
@@ -491,17 +621,17 @@ mod tests {
     #[test]
     fn a_non_numeric_colon_tail_is_part_of_the_host() {
         // IPv6-ish or a scheme-y `host` must not lose its tail to the port split.
-        // `rsplit_once(':')` sees `:1` as a port and leaves `fe80:`. That is
-        // deliberate: a bare IPv6 literal is ambiguous with host:port, so the
-        // record keeps what the split produced. A bracketed `[fe80::1]` keeps it
-        // whole — that is the form to use when the address matters.
         assert_eq!(
-            dest(serde_json::json!({"host": "fe80::1"})).map(|d| d.0),
-            Some("fe80:".into())
+            dest(serde_json::json!({"host": "fe80::1"})).map(|d| (d.0, d.1)),
+            Some(("fe80::1".into(), Some(80)))
         );
         assert_eq!(
             dest(serde_json::json!({"host": "[fe80::1]"})).map(|d| d.0),
-            Some("[fe80::1]".into())
+            Some("fe80::1".into())
+        );
+        assert_eq!(
+            dest(serde_json::json!({"host": "127.0.0.1"})).map(|d| d.1),
+            Some(Some(80))
         );
     }
 
@@ -516,7 +646,10 @@ mod tests {
     fn a_fixed_host_tool_binds_nothing() {
         // sec_factor reaches factordb from inside the handler; there is no target
         // to key, even though it accepts other arguments.
-        assert_eq!(destination_of("sec_factor", &serde_json::json!({"n": "12"})), None);
+        assert_eq!(
+            destination_of("sec_factor", &serde_json::json!({"n": "12"})),
+            None
+        );
     }
 
     #[test]
@@ -560,6 +693,8 @@ mod tests {
         crate::tool::ToolCtx {
             session_id: "sess".into(),
             cyber_lane: None,
+            sec_block: None,
+            sec_inactive: Vec::new(),
             session_dir: Some(dir.to_path_buf()),
             workspace: cwd.to_path_buf(),
             ..crate::tool::test_ctx()
@@ -570,7 +705,10 @@ mod tests {
     fn a_call_with_no_destination_needs_no_scope() {
         let dir = tmp("nodest");
         let ctx = ctx_for(&dir, Path::new("/w"));
-        assert_eq!(admit_from_call(&ctx, "sec_decode", &serde_json::json!({"data": "x"})), None);
+        assert_eq!(
+            admit_from_call(&ctx, "sec_decode", &serde_json::json!({"data": "x"})),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -578,8 +716,16 @@ mod tests {
     fn a_destination_with_no_scope_is_refused() {
         let dir = tmp("noscope");
         let ctx = ctx_for(&dir, Path::new("/w"));
-        let got = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "http://a.example"}));
-        assert!(got.as_deref().is_some_and(|r| r.contains("no scope record")), "{got:?}");
+        let got = admit_from_call(
+            &ctx,
+            "sec_http",
+            &serde_json::json!({"url": "http://a.example"}),
+        );
+        assert!(
+            got.as_deref()
+                .is_some_and(|r| r.contains("no scope record")),
+            "{got:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -590,9 +736,18 @@ mod tests {
         let ctx = ctx_for(&dir, Path::new("/w"));
         let base = ScopeBase::of(&ctx).expect("base");
         sc::store(base.dir(), &active_scope("a.example")).expect("store");
-        let ok = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "https://a.example/x"}));
+        let ok = admit_from_call(
+            &ctx,
+            "sec_http",
+            &serde_json::json!({"url": "https://a.example/x"}),
+        );
         assert_eq!(ok, None);
-        let bad = admit_from_call(&ctx, "sec_http", &serde_json::json!({"url": "https://b.example/"})).expect("refused");
+        let bad = admit_from_call(
+            &ctx,
+            "sec_http",
+            &serde_json::json!({"url": "https://b.example/"}),
+        )
+        .expect("refused");
         assert!(bad.contains("not in scope"), "{bad}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -606,9 +761,19 @@ mod tests {
         sc::store(base.dir(), &active_scope("a.example")).expect("store");
         let args = serde_json::json!({"url": "https://b.example/"});
         assert!(admit_from_call(&ctx, "sec_http", &args).is_some());
-        bind_from_call(&ctx, "sec_http", &args);
-        // Admission is the gate; a refused target can still be recorded for
-        // visibility, but only after an explicit bind.
+        settle(
+            &ctx,
+            "sec_http",
+            &args,
+            crate::tool::verdict::Verdict::Error,
+        );
+        assert!(base.read("sec", "b.example", Some(443), None).is_none());
+        settle(
+            &ctx,
+            "sec_http",
+            &args,
+            crate::tool::verdict::Verdict::Confirmed,
+        );
         assert!(base.read("sec", "b.example", Some(443), None).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -643,39 +808,93 @@ mod forged {
         c
     }
 
+    fn refuse(lane: Option<Lane>, tool: &str, args: serde_json::Value) -> Option<String> {
+        let mut args = args;
+        super::lane_refusal(&ctx(lane), tool, &mut args)
+    }
+
     #[test]
     fn a_forged_name_still_meets_the_lane_gate() {
         // The model supplies the name; the lane is looked up from the session, so
         // claiming a tool the lane forbids is refused even though the call parses.
-        let refusal = super::lane_refusal(&ctx(Some(Lane::Research)), "sec_ffuf");
+        let refusal = refuse(Some(Lane::Research), "sec_ffuf", serde_json::json!({}));
         assert!(refusal.expect("refused").contains("research"));
     }
 
     #[test]
     fn a_tool_the_lane_allows_passes() {
-        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_decode").is_none());
+        assert!(refuse(Some(Lane::Research), "sec_decode", serde_json::json!({})).is_none());
     }
 
     #[test]
-    fn with_no_lane_nothing_is_gated() {
-        // Disabled sessions keep their baseline exactly: same tool, now admitted.
-        assert!(super::lane_refusal(&ctx(None), "sec_ffuf").is_none());
+    fn with_no_lane_a_sec_call_is_refused_and_read_is_not() {
+        let refusal = refuse(None, "sec_ffuf", serde_json::json!({}));
+        assert!(refusal.expect("refused").contains("no cyber lane"));
+        assert!(refuse(None, "sec_decode", serde_json::json!({})).is_some());
+        assert!(refuse(None, "read", serde_json::json!({})).is_none());
     }
 
     #[test]
-    fn blue_reaches_the_target_but_cannot_apply() {
-        // Blue verifies a fix, so the network is open to it — but a patch only ever
-        // leaves as a proposal, so `apply` is refused.
-        assert!(super::lane_refusal(&ctx(Some(Lane::Blue)), "sec_http").is_none());
-        let refusal = crate::app::sec::lane::Lane::Blue
-            .reason_for(crate::app::sec::lane::Cap::Apply);
-        assert!(refusal.contains("proposes a diff"));
+    fn a_panel_disabled_tool_is_refused() {
+        let mut c = ctx(Some(Lane::Red));
+        c.sec_inactive.push("sec_http".into());
+        let mut args = serde_json::json!({});
+        let refusal = super::lane_refusal(&c, "sec_http", &mut args);
+        assert!(refusal.expect("refused").contains("disabled"));
+    }
+
+    #[test]
+    fn an_inactive_reason_is_the_sec_refusal() {
+        let mut c = ctx(None);
+        c.sec_block = Some("security mode is off".into());
+        let mut args = serde_json::json!({});
+        let refusal = super::lane_refusal(&c, "sec_http", &mut args);
+        assert_eq!(refusal.as_deref(), Some("security mode is off"));
+    }
+
+    #[test]
+    fn blue_may_get_a_bare_url_and_nothing_else() {
+        let mut ok = serde_json::json!({"url": "https://a.example/path"});
+        assert!(super::lane_refusal(&ctx(Some(Lane::Blue)), "sec_http", &mut ok).is_none());
+        assert_eq!(ok["follow_redirects"], serde_json::json!(false));
+        assert!(refuse(Some(Lane::Blue), "edit", serde_json::json!({})).is_none());
+        for (tool, args) in [
+            (
+                "sec_http",
+                serde_json::json!({"url": "https://a.example/x?q=1"}),
+            ),
+            (
+                "sec_http",
+                serde_json::json!({"url": "https://a.example/x", "method": "POST"}),
+            ),
+            (
+                "sec_http",
+                serde_json::json!({"url": "https://a.example/x", "body": "p"}),
+            ),
+            (
+                "sec_http",
+                serde_json::json!({"url": "https://a.example/x", "headers": {"X": "1"}}),
+            ),
+            (
+                "sec_http",
+                serde_json::json!({"url": "https://a.example/x", "follow_redirects": true}),
+            ),
+            ("sec_sqlmap", serde_json::json!({})),
+            ("sec_browser", serde_json::json!({})),
+            ("sec_xss_confirm", serde_json::json!({})),
+            ("bash", serde_json::json!({})),
+        ] {
+            assert!(
+                refuse(Some(Lane::Blue), tool, args).is_some(),
+                "{tool} was admitted"
+            );
+        }
     }
 
     #[test]
     fn research_is_refused_the_network_but_allowed_local_compute() {
-        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_http").is_some());
-        assert!(super::lane_refusal(&ctx(Some(Lane::Research)), "sec_hashid").is_none());
+        assert!(refuse(Some(Lane::Research), "sec_http", serde_json::json!({})).is_some());
+        assert!(refuse(Some(Lane::Research), "sec_hashid", serde_json::json!({})).is_none());
     }
 
     #[test]
@@ -683,8 +902,10 @@ mod forged {
         // Same input, same answer: the gate is a pure function of (lane, name).
         let c = ctx(Some(Lane::Red));
         for tool in ["sec_http", "sec_decode", "sec_ffuf"] {
-            let a = super::lane_refusal(&c, tool);
-            let b = super::lane_refusal(&c, tool);
+            let mut a_args = serde_json::json!({});
+            let mut b_args = serde_json::json!({});
+            let a = super::lane_refusal(&c, tool, &mut a_args);
+            let b = super::lane_refusal(&c, tool, &mut b_args);
             assert_eq!(a, b, "{tool}");
         }
     }

@@ -80,6 +80,10 @@ MANIFEST: dict[str, tuple[str, str, str | None, str]] = {
     "sec_jsdeobf": (STATIC, CPU, None, "deobfuscation"),
     "sec_unmin": (STATIC, CPU, None, "unminify"),
     "sec_pwntmpl": (STATIC, CPU, None, "emit a pwntools template"),
+    "sec_decrypt": (STATIC, CPU, None, "local cipher over caller-supplied bytes"),
+    "sec_replay": (REMOTE, NET, "target", "re-send a recorded request"),
+    "sec_recording": (LOCAL, CPU, None, "read/write a recording file"),
+    "sec_xss": (REMOTE, NET, "url", "reflected-XSS probe"),
 }
 
 # Tools that only ever reach a fixed host, so they carry no destination argument

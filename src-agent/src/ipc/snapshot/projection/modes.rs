@@ -569,7 +569,7 @@ pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapsh
                 crate::model::app_config::ModelRole::Safeguard => "safeguard",
                 crate::model::app_config::ModelRole::CyberRed => "cyber-red",
                 crate::model::app_config::ModelRole::CyberBlue => "cyber-blue",
-                crate::model::app_config::ModelRole::CyberResearch => "cyber-research",
+                crate::model::app_config::ModelRole::CyberResearch => "cyber-researcher",
             };
             ("role_pick".to_string(), Some(r.to_string()), None, vec![])
         }

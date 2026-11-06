@@ -275,6 +275,8 @@ mod tests {
             workspace: std::path::PathBuf::from("."),
             session_id: "sess-test".into(),
             cyber_lane: None,
+            sec_block: None,
+            sec_inactive: Vec::new(),
             workspaces: vec![std::path::PathBuf::from(".")],
             dir_cache: std::sync::Arc::new(
                 std::sync::RwLock::new(crate::tool::DirCache::default()),

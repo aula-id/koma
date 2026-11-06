@@ -184,7 +184,7 @@ fn role_token(r: crate::model::app_config::ModelRole) -> &'static str {
         ModelRole::Planner => "planner",
         ModelRole::CyberRed => "cyber-red",
         ModelRole::CyberBlue => "cyber-blue",
-        ModelRole::CyberResearch => "cyber-research",
+        ModelRole::CyberResearch => "cyber-researcher",
     }
 }
 

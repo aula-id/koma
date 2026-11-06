@@ -398,7 +398,9 @@ fn parse_role(name: &str) -> Option<ModelRole> {
         "planner" => ModelRole::Planner,
         "cyber-red" | "cyber_red" => ModelRole::CyberRed,
         "cyber-blue" | "cyber_blue" => ModelRole::CyberBlue,
-        "cyber-research" | "cyber_research" => ModelRole::CyberResearch,
+        "cyber-research" | "cyber_research" | "cyber-researcher" | "cyber_researcher" => {
+            ModelRole::CyberResearch
+        }
         _ => return None,
     })
 }
@@ -412,7 +414,7 @@ fn role_name(role: ModelRole) -> &'static str {
         ModelRole::Planner => "planner",
         ModelRole::CyberRed => "cyber-red",
         ModelRole::CyberBlue => "cyber-blue",
-        ModelRole::CyberResearch => "cyber-research",
+        ModelRole::CyberResearch => "cyber-researcher",
     }
 }
 

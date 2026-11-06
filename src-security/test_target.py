@@ -38,6 +38,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "unavailable")
         elif path == "/secret":
             self._send(200, "ok", {"Set-Cookie": "sid=abc123", "Authorization": "Bearer s3cr3t"})
+        elif path == "/reflect":
+            # Echoes the query back VERBATIM — would execute a payload.
+            from urllib.parse import parse_qsl, urlsplit  # noqa: PLC0415
+
+            q = dict(parse_qsl(urlsplit(self.path).query))
+            self._send(200, f"<p>{q.get('q', '')}</p>")
+        elif path == "/reflect-enc":
+            # Echoes it HTML-escaped: reflected but inert. The distinction a
+            # version-only detector misses.
+            import html  # noqa: PLC0415
+            from urllib.parse import parse_qsl, urlsplit  # noqa: PLC0415
+
+            q = dict(parse_qsl(urlsplit(self.path).query))
+            self._send(200, f"<p>{html.escape(q.get('q', ''))}</p>")
         elif path == "/big":
             self._send(200, "<p>" + "x" * 200_000 + "</p>")
         else:

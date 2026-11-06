@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Koma cyber guest. Everything a security run gets, and nothing it does not.
+# Koma safety image. Everything a security run gets, and nothing it does not.
 #
 # The boundary is the reason this image exists. It is not a convenience wrapper:
 # the guest has an isolated network with a single route out (the proxy), a

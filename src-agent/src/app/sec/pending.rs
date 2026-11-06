@@ -30,11 +30,6 @@ pub const PENDING: &[Pending] = &[
     },
     Pending {
         phase: 3,
-        case: "scope time window",
-        why: "Scope carries rate and total caps but no window",
-    },
-    Pending {
-        phase: 3,
         case: "browser control channel authentication and lifecycle",
         why: "the browser runs host-side against the proxy; no control channel yet",
     },
@@ -42,11 +37,6 @@ pub const PENDING: &[Pending] = &[
         phase: 6,
         case: "board verdict and scope/radius records",
         why: "board kinds stop at claim/coverage; verdicts live only on evidence",
-    },
-    Pending {
-        phase: 7,
-        case: "sec_decrypt, sec_replay, sec_recording, sec_xss",
-        why: "four of the eight phase-7 operations are not implemented",
     },
     Pending {
         phase: 8,

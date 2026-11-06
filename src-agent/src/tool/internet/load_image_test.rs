@@ -15,6 +15,8 @@ fn ctx(
     ToolCtx {
         session_id,
         cyber_lane: None,
+        sec_block: None,
+        sec_inactive: Vec::new(),
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace,
         workspaces,
@@ -147,7 +149,13 @@ fn image_marker_label_in_path_resolves_and_a_real_path_still_loads() {
         serde_json::to_string(&messages).unwrap(),
     )
     .unwrap();
-    let ctx = ctx(ws.clone(), "sess-test".into(), vec![ws.clone()], scratch, Some(session));
+    let ctx = ctx(
+        ws.clone(),
+        "sess-test".into(),
+        vec![ws.clone()],
+        scratch,
+        Some(session),
+    );
 
     let (from_label, _) = read_validated_image(&ctx, "Image #1").unwrap();
     assert_eq!(from_label, img.canonicalize().unwrap());
@@ -223,7 +231,13 @@ fn rejects_disallowed_and_invalid_sources() {
     put(&ws.join("nested/a.png"), PNG);
     let session_a = base.join("sessions/session-a");
     std::fs::create_dir_all(session_a.join("images")).unwrap();
-    let ctx = ctx(ws.clone(), "sess-test".into(), vec![ws.clone()], scratch, Some(session_a));
+    let ctx = ctx(
+        ws.clone(),
+        "sess-test".into(),
+        vec![ws.clone()],
+        scratch,
+        Some(session_a),
+    );
     for p in [
         &other,
         &persistent_root,

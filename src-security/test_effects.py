@@ -58,6 +58,7 @@ class ManifestTest(unittest.TestCase):
             "sec_sourcemap", "sec_wasm", "sec_rop", "sec_crack", "sec_z3",
             "sec_sage", "sec_rsa", "sec_factor", "sec_lattice", "sec_hashid",
             "sec_decode", "sec_jsdeobf", "sec_unmin", "sec_pwntmpl", "sec_browser",
+            "sec_decrypt", "sec_replay", "sec_recording", "sec_xss",
         }
         self.assertEqual(set(effects.MANIFEST), expected)
 
