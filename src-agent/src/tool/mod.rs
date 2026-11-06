@@ -509,9 +509,7 @@ pub struct ToolCtx {
     /// sessions on one checkout cannot collide on a board, a scope record or a
     /// spilled artifact. Mirrors `SessionRuntime::id`.
     ///
-    /// Read by [`scope::ScopeBase::of`]; unread by the tools themselves until the
-    /// phase-3 dispatch boundary lands.
-    #[allow(dead_code)]
+    /// Read by [`scope::ScopeBase::of`].
     pub session_id: String,
     /// All configured workspace roots (may be >1).
     pub workspaces: Vec<PathBuf>,
@@ -1039,6 +1037,11 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     refusal.to_json(),
                 );
             }
+            // Bind the target BEFORE dispatch, so a call that is about to run
+            // against a dynamic endpoint always has a record even if the tool
+            // crashes. Best-effort: a binding failure must not block the call.
+            scope::bind_from_call(ctx, &call.function.name, &args);
+
             // Parse before the output caps run. The verdict is the result; the
             // excerpt is only its body, and `finish_tool_output` trims bodies.
             // Untyped results (no verdict) go through the unchanged path below.
@@ -1055,6 +1058,11 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     handle: None,
                 },
             };
+            // A verdict clears or fails the binding: only a confirmation keeps
+            // an addressable target. A `not_found` or a crash leaves nothing to
+            // revisit, so the record goes rather than lingering as a dead link
+            // that a later call would happily re-admit.
+            scope::settle(ctx, &call.function.name, &args, typed.verdict);
             return output::finish_tool_output(
                 ctx,
                 &call.function.name,

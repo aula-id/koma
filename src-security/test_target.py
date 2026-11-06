@@ -67,6 +67,10 @@ class FingerprintTest(unittest.TestCase):
                          "localhost-8080.json")
         self.assertEqual(target.record_filename(host="h:1/a", port=None), "h-1-a.json")
 
+    def test_record_filename_separates_paths_on_one_port(self):
+        self.assertNotEqual(target.record_filename(host="h", port=80, path="/api"),
+                            target.record_filename(host="h", port=80, path="/admin"))
+
     def test_store_name_keys_on_the_same_identity(self):
         a = target.store_name(**BASE, port=8080)
         b = target.store_name(**BASE, port=8080)

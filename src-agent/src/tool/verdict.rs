@@ -49,11 +49,10 @@ pub enum Verdict {
 
 impl Verdict {
     /// May this verdict stand as evidence for a finding? Only a confirmation, and
-    /// a confirmation that actually arrived typed. Unreferenced until the board
-    /// and finding state machine land (phase 6), hence the scoped allow rather
-    /// than a stub caller.
+    /// a confirmation that actually arrived typed — `untyped` deliberately cannot.
+    ///
+    /// Read by the scope binding: only a confirmation keeps a target addressable.
     #[must_use]
-    #[allow(dead_code)]
     pub fn establishes_finding(self) -> bool {
         matches!(self, Self::Confirmed)
     }

@@ -42,6 +42,13 @@ class ManifestTest(unittest.TestCase):
                 with self.subTest(tool=name):
                     self.assertNotEqual(exec_, effects.CPU)
 
+    def test_fixed_host_set_is_pinned(self):
+        # Mirrored by security::fixed_host in Rust; the two must agree or a call
+        # binds a record for a target that has no destination parameter.
+        self.assertEqual(effects.FIXED_HOST, frozenset({"sec_factor"}))
+        for name in effects.FIXED_HOST:
+            self.assertIn(name, effects.MANIFEST)
+
     def test_no_unclassified_tool_ships(self):
         # Every tool the restored registry knows must have a row, so a new tool
         # cannot default into an unlabelled state.

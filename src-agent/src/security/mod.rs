@@ -33,6 +33,13 @@ pub(crate) fn cyber_execution_available() -> bool {
     false
 }
 
+/// Tools whose destination is fixed in the handler, so they carry no destination
+/// argument and there is nothing to bind. Mirrors `effects.FIXED_HOST`, pinned by
+/// a test on each side.
+pub(crate) fn fixed_host(name: &str) -> bool {
+    matches!(name, "sec_factor")
+}
+
 /// True when `name` belongs to the security daemon's `sec_` namespace.
 ///
 /// Kept here rather than at the call sites because [`execute_tool`] and the

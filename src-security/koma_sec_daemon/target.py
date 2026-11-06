@@ -92,16 +92,19 @@ def fingerprint(
     return f"{_slug(head, 60)}@{_digest(material)}"
 
 
-def record_filename(*, host: str, port: int | None = None) -> str:
+def record_filename(*, host: str, port: int | None = None, path: str | None = None) -> str:
     """
     The file name `tool/scope.rs::record_path` produces for the same target.
 
     Kept here so the two halves can be asserted equal in one place instead of the
-    Rust test re-deriving the slug rule.
+    Rust test re-deriving the slug rule. `path` is part of identity: `/api` and
+    `/admin` on one port are different targets.
     """
     name = host.strip().lower()
     if port is not None:
         name += f"-{port}"
+    if path:
+        name += f"-{path}"
     return _slug(name, 60) + ".json"
 
 
