@@ -1,20 +1,16 @@
 # syntax=docker/dockerfile:1
-# Koma safety image. Everything a security run gets, and nothing it does not.
+# koma-safety guest image (ghcr.io/aula-id/koma-safety).
 #
-# The boundary is the reason this image exists. It is not a convenience wrapper:
-# the guest has an isolated network with a single route out (the proxy), a
-# read-only root, a non-root user, and no Docker socket. Losing any of those
-# makes a call "run on the host", which is what the gate checks for.
+# Build:
+#   docker build --build-arg KOMA_COMPOSITION=minimal|standard|extended -t koma-safety:local .
 #
-# Build-time pinning: the tag carries the content digest at publish time (see
-# `image-digest.txt` produced by the release step), and the runtime records the
-# resolved digest on every run so a drifted image is visible rather than silent.
+# Tags: :version (standard), :version-minimal, :version-extended — not :web/:red/:full.
 
 FROM python:3.11-slim-bookworm
 
-# Pinned: `lief`/`unicorn` are load-bearing for the RE tools and their wheels are
-# version-sensitive, so they are not floated.
-# curl is the transport every HTTP tool drives; the image is useless without it.
+ARG KOMA_COMPOSITION=standard
+
+# Base always-on: transport + RE python deps used by smoke handlers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates jq \
     && rm -rf /var/lib/apt/lists/*
@@ -25,29 +21,40 @@ RUN pip install --no-cache-dir \
         lief==0.16.6 \
         unicorn==2.1.1
 
-# Unprivileged at runtime, fixed uid so a mounted artifact dir has one owner.
+# Composition packages (fail soft on missing package names across distro builds).
+RUN set -eux; \
+    apt-get update; \
+    if [ "$KOMA_COMPOSITION" = "standard" ] || [ "$KOMA_COMPOSITION" = "extended" ]; then \
+      apt-get install -y --no-install-recommends \
+        nmap sqlmap file gdb binutils \
+        || true; \
+      apt-get install -y --no-install-recommends radare2 binwalk \
+        || true; \
+    fi; \
+    if [ "$KOMA_COMPOSITION" = "extended" ]; then \
+      apt-get install -y --no-install-recommends \
+        hashcat john hydra yara libimage-exiftool-perl \
+        || true; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 10001 koma && \
-    mkdir -p /work /artifacts && \
-    chown koma:koma /work /artifacts
+    mkdir -p /work /artifacts /opt/koma/bin && \
+    chown koma:koma /work /artifacts /opt/koma/bin
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY koma_proxy.py /opt/koma/koma_proxy.py
-# The daemon runs IN the guest, so its package ships here. The per-tool CLIs
-# (nuclei, ffuf, sqlmap …) are separate: they are probed at handshake and their
-# absence only marks those tools unavailable.
 COPY koma_sec_daemon /opt/koma/koma_sec_daemon
-ENV PYTHONPATH=/opt/koma
-# The root is read-only and $HOME is not writable, so state lives in /tmp.
-ENV KOMA_STATE=/tmp/koma-state
+COPY catalog /opt/koma/catalog
+ENV PYTHONPATH=/opt/koma \
+    PATH="/opt/koma/bin:${PATH}" \
+    KOMA_STATE=/tmp/koma-state \
+    KOMA_SEC_COMPOSITION=${KOMA_COMPOSITION}
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 USER koma
 WORKDIR /work
 
-# The guest reaches nothing directly: the isolated network has no gateway. The
-# proxy is reachable as a peer, and every tool is pointed at it explicitly —
-# proxy env vars alone are not the boundary, they are only how the client learns
-# where to go.
 ENV HTTP_PROXY=http://proxy:3128 \
     HTTPS_PROXY=http://proxy:3128 \
     NO_PROXY= \

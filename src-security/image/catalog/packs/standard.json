@@ -1,0 +1,168 @@
+{
+  "version": 1,
+  "pack": "standard",
+  "tools": [
+    {
+      "id": "curl",
+      "name": "curl",
+      "summary": "curl (apt)",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "minimal,standard,extended",
+      "how_to": "detect=curl; method=apt; source=curl"
+    },
+    {
+      "id": "nuclei",
+      "name": "nuclei",
+      "summary": "nuclei (go_release)",
+      "categories": [
+        "web-application-exploitation",
+        "vulnerabilities"
+      ],
+      "effect": "remote",
+      "exec": "binary",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=nuclei; method=go_release; source=projectdiscovery/nuclei"
+    },
+    {
+      "id": "ffuf",
+      "name": "ffuf",
+      "summary": "ffuf (go_release)",
+      "categories": [
+        "fuzzing",
+        "web-application-exploitation"
+      ],
+      "effect": "remote",
+      "exec": "binary",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=ffuf; method=go_release; source=ffuf/ffuf"
+    },
+    {
+      "id": "sqlmap",
+      "name": "sqlmap",
+      "summary": "sqlmap (apt)",
+      "categories": [
+        "web-application-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "binary",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=sqlmap; method=apt; source=sqlmap"
+    },
+    {
+      "id": "nmap",
+      "name": "nmap",
+      "summary": "nmap (apt)",
+      "categories": [
+        "network",
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "binary",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=nmap; method=apt; source=nmap"
+    },
+    {
+      "id": "radare2",
+      "name": "r2",
+      "summary": "radare2 (apt)",
+      "categories": [
+        "reverse-engineering"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": false,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=r2; method=apt; source=radare2"
+    },
+    {
+      "id": "gdb",
+      "name": "gdb",
+      "summary": "gdb (apt)",
+      "categories": [
+        "binary-exploitation"
+      ],
+      "effect": "local",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": false,
+      "image_or_pack": "standard,extended",
+      "how_to": "detect=gdb; method=apt; source=gdb"
+    },
+    {
+      "id": "jq",
+      "name": "jq",
+      "summary": "jq (apt)",
+      "categories": [
+        "development"
+      ],
+      "effect": "static",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": false,
+      "image_or_pack": "minimal,standard,extended",
+      "how_to": "detect=jq; method=apt; source=jq"
+    }
+  ]
+}
