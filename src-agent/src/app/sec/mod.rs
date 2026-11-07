@@ -632,11 +632,11 @@ impl SecDaemonManager {
 
     /// A serializable snapshot for the `/security` cockpit: running/installed flags
     /// plus the per-tool metadata. Cheap — locks the inner state and copies the small
-    /// tool list. Also probes the container runtime so the panel can show why tools
-    /// would refuse even when the daemon is up.
+    /// tool list. Runtime fields come from the **non-blocking** probe cache (may kick a
+    /// background refresh when stale); this never runs `docker info` on the caller.
     pub fn status(&self) -> SecStatus {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        let runtime_ok = crate::security::cyber_execution_available();
+        let (runtime_ok, runtime) = crate::security::runtime_status_cached();
         SecStatus {
             running: inner.running,
             installed: crate::security::is_installed(),
@@ -660,7 +660,7 @@ impl SecDaemonManager {
                 })
                 .collect(),
             runtime_ok,
-            runtime: crate::security::runtime_status_label(),
+            runtime,
         }
     }
 }
@@ -689,9 +689,12 @@ pub struct SecStatus {
     #[serde(default)]
     pub refused: Vec<SecRefusedInfo>,
     /// Live `docker info` probe — independent of daemon running.
+    /// Served from the process runtime-probe cache (see `runtime_status_cached`);
+    /// not re-probed on every snapshot frame.
     #[serde(default)]
     pub runtime_ok: bool,
     /// Human label for the container runtime (`docker ready (colima)`, …).
+    /// Same cache as [`Self::runtime_ok`].
     #[serde(default)]
     pub runtime: String,
 }

@@ -17,6 +17,9 @@
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::model::store::base_dir;
 
@@ -27,21 +30,162 @@ use crate::model::store::base_dir;
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
+/// How long a runtime probe answer is served before a refresh is allowed.
+///
+/// Mirrors the `/mcp` status cache idea: short enough that starting Docker/Colima
+/// shows up on the `/security` panel within a few seconds, long enough that the
+/// ~10Hz snapshot projection and per-key panel handlers never spawn `docker info`
+/// (plus colima/podman) on the hot path.
+const RUNTIME_PROBE_TTL: Duration = Duration::from_secs(3);
+
+/// Last known container-runtime probe. `at = None` means "never probed".
+struct RuntimeProbeCache {
+    at: Option<Instant>,
+    ok: bool,
+    label: String,
+}
+
+static RUNTIME_PROBE_CACHE: OnceLock<Mutex<RuntimeProbeCache>> = OnceLock::new();
+/// Single-flight guard so N ~10Hz callers past a stale TTL don't each spawn
+/// their own `docker`/`colima`/`podman` subprocess storm.
+static RUNTIME_PROBE_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+fn runtime_probe_cache() -> &'static Mutex<RuntimeProbeCache> {
+    RUNTIME_PROBE_CACHE.get_or_init(|| {
+        Mutex::new(RuntimeProbeCache {
+            at: None,
+            ok: false,
+            label: "checking runtime…".into(),
+        })
+    })
+}
+
+fn runtime_probe_stale(cache: &RuntimeProbeCache) -> bool {
+    match cache.at {
+        Some(at) => at.elapsed() >= RUNTIME_PROBE_TTL,
+        None => true,
+    }
+}
+
+fn store_runtime_probe(ok: bool, label: String) {
+    let mut guard = runtime_probe_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard.at = Some(Instant::now());
+    guard.ok = ok;
+    guard.label = label;
+}
+
+fn read_runtime_probe() -> (bool, String) {
+    let guard = runtime_probe_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    (guard.ok, guard.label.clone())
+}
+
+/// Run the real docker/colima/podman probes once. No cache. Detection only —
+/// never starts an engine.
+fn probe_runtime_now() -> (bool, String) {
+    let docker = docker_daemon_reachable_uncached();
+    let colima = command_ok("colima", &["version"]);
+    let podman = command_ok("podman", &["info"]);
+    let docker_cli = !docker && !colima && !podman && command_ok("docker", &["--version"]);
+    let label = runtime_label(docker, colima, podman, docker_cli);
+    (docker, label)
+}
+
+/// Pure label builder for the `/security` runtime strip (and tests).
+fn runtime_label(docker: bool, colima: bool, podman: bool, docker_cli: bool) -> String {
+    match (docker, colima, podman) {
+        (true, true, _) => "docker ready (colima)".into(),
+        (true, _, true) => "docker ready (podman)".into(),
+        (true, _, _) => "docker ready".into(),
+        (false, true, _) => "docker down — colima installed".into(),
+        (false, _, true) => "docker down — podman present".into(),
+        (false, false, false) if docker_cli => "docker installed but not running".into(),
+        _ => "no container runtime".into(),
+    }
+}
+
+/// Kick a background runtime probe if `force` or the cache is empty/stale.
+/// Single-flight. Returns immediately; callers read [`runtime_status_cached`].
+pub fn runtime_status_kick(force: bool) {
+    let stale = {
+        let guard = runtime_probe_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        force || runtime_probe_stale(&guard)
+    };
+    if !stale {
+        return;
+    }
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    std::thread::spawn(|| {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label);
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+    });
+}
+
+/// Non-blocking read for the `/security` panel + snapshot projection.
+///
+/// Returns the last known `(runtime_ok, label)` immediately. If the cache is
+/// empty or older than [`RUNTIME_PROBE_TTL`], also kicks a background refresh
+/// (single-flight). Never spawns subprocesses on the calling thread.
+pub fn runtime_status_cached() -> (bool, String) {
+    runtime_status_kick(false);
+    read_runtime_probe()
+}
+
+/// Blocking refresh for user actions / open / tool gate when a fresh answer is
+/// required. Honours TTL unless `force` is set. Coalesces with an in-flight
+/// background probe instead of stacking another `docker info`.
+pub fn runtime_status_refresh(force: bool) -> (bool, String) {
+    if !force {
+        let guard = runtime_probe_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if !runtime_probe_stale(&guard) {
+            return (guard.ok, guard.label.clone());
+        }
+    }
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label.clone());
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+        return (ok, label);
+    }
+    // Another probe owns the lock — wait briefly for it rather than stacking.
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(20));
+        if !RUNTIME_PROBE_REFRESHING.load(Ordering::Acquire) {
+            break;
+        }
+    }
+    read_runtime_probe()
+}
+
 /// Does an isolated execution runtime exist, so a `sec_` call could be contained?
 ///
-/// Requires a container with no silent host fallback. Reports whether Docker is
-/// reachable from THIS process. Re-probed on each call (not process-memoised): a
-/// sticky `false` from boot (Docker/Colima started later) used to leave every
-/// `sec_` tool refused until koma itself restarted.
+/// Requires a container with no silent host fallback. Answers from the TTL cache
+/// (refreshing synchronously when stale) so a Docker/Colima start after boot is
+/// noticed within [`RUNTIME_PROBE_TTL`] without re-probing on every model call.
 ///
 /// A missing runtime is reported as `unavailable` by the caller, never as success
 /// and never as a host fallback.
 pub(crate) fn cyber_execution_available() -> bool {
-    docker_daemon_reachable()
+    runtime_status_refresh(false).0
 }
 
-/// Probe `docker info`. Used by the runtime gate and the `/security` panel status.
-pub(crate) fn docker_daemon_reachable() -> bool {
+fn docker_daemon_reachable_uncached() -> bool {
     std::process::Command::new("docker")
         .arg("info")
         .arg("--format")
@@ -49,25 +193,6 @@ pub(crate) fn docker_daemon_reachable() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-/// Short label for the `/security` panel: what the container runtime looks like
-/// right now. Detection only — never starts an engine.
-pub fn runtime_status_label() -> String {
-    let docker = docker_daemon_reachable();
-    let colima = command_ok("colima", &["version"]);
-    let podman = command_ok("podman", &["info"]);
-    match (docker, colima, podman) {
-        (true, true, _) => "docker ready (colima)".into(),
-        (true, _, true) => "docker ready (podman)".into(),
-        (true, _, _) => "docker ready".into(),
-        (false, true, _) => "docker down — colima installed".into(),
-        (false, _, true) => "docker down — podman present".into(),
-        (false, false, false) if command_ok("docker", &["--version"]) => {
-            "docker installed but not running".into()
-        }
-        _ => "no container runtime".into(),
-    }
 }
 
 /// Re-extract the embedded `src-security` tree into `~/.koma/security/` without

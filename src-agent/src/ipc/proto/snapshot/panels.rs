@@ -154,10 +154,10 @@ pub struct HelpSnapshot {
 ///
 /// Carries a full [`crate::app::sec::SecStatus`] (which already derives
 /// Serialize + Deserialize) plus the tool-list cursor. The projection re-reads
-/// LIVE status from the daemon manager at snapshot time (see
-/// `ipc::snapshot::projection::modes::security_snapshot`) so the panel always
-/// reflects current daemon state after start/stop/restart, rather than the
-/// potentially-stale snapshot that was open when the mode was entered.
+/// daemon memory status at snapshot time (see
+/// `ipc::snapshot::projection::modes::security_snapshot`); runtime fields come
+/// from the non-blocking probe cache so the panel stays live without spawning
+/// `docker info` every frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SecuritySnapshot {

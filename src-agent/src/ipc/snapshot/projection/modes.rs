@@ -1137,10 +1137,11 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
 
 /// Project the `/security` control panel.
 ///
-/// Re-reads LIVE status from the daemon manager every snapshot — the panel always
-/// reflects current daemon state after start/stop/restart, not just the state when
-/// the mode was opened. Falls back to `s.status` (the in-mode snapshot) when there
-/// is no manager (thin client path, which has no manager of its own).
+/// Re-reads daemon memory status every snapshot so start/stop/restart show up
+/// immediately. Runtime fields ride the non-blocking probe cache inside
+/// `status()` (background refresh when stale) — this projection never runs
+/// `docker info` itself. Falls back to `s.status` when there is no manager
+/// (thin client path).
 pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapshot {
     let status = state
         .rest

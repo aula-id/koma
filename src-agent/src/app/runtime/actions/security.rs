@@ -489,6 +489,8 @@ pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()
             state.rest.fg_mut().status = "security: toolkit sources refreshed — restarting…".into();
             // Keep security_enabled; restart disarms YOLO by design.
             handle_security_restart(state)?;
+            // Toolkit refresh can change what the host runtime looks like to the panel.
+            crate::security::runtime_status_kick(true);
         }
         Err(e) => {
             state.rest.fg_mut().status = format!("security: refresh failed: {e}");
@@ -499,11 +501,10 @@ pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()
 
 /// `c` — try to bring Docker up via Colima when present; otherwise surface a hint.
 pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()> {
-    if crate::security::cyber_execution_available() {
-        state.rest.fg_mut().status = format!(
-            "security: runtime ok — {}",
-            crate::security::runtime_status_label()
-        );
+    // Force a blocking probe: the user asked for a runtime check/start.
+    let (ok, label) = crate::security::runtime_status_refresh(true);
+    if ok {
+        state.rest.fg_mut().status = format!("security: runtime ok — {label}");
         refresh_security_state(state, None);
         return Ok(());
     }
@@ -517,7 +518,7 @@ pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()>
         state.rest.fg_mut().status = "security: starting colima…".into();
         match std::process::Command::new("colima").arg("start").output() {
             Ok(out) if out.status.success() => {
-                let label = crate::security::runtime_status_label();
+                let (_, label) = crate::security::runtime_status_refresh(true);
                 state.rest.fg_mut().status = format!("security: colima started — {label}");
             }
             Ok(out) => {
@@ -531,16 +532,17 @@ pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()>
                         format!(": {tail}")
                     }
                 );
+                crate::security::runtime_status_kick(true);
             }
             Err(e) => {
                 state.rest.fg_mut().status = format!("security: colima start failed: {e}");
+                crate::security::runtime_status_kick(true);
             }
         }
     } else {
-        state.rest.fg_mut().status = format!(
-            "security: {} — open Docker / run koma --security-install",
-            crate::security::runtime_status_label()
-        );
+        let (_, label) = crate::security::runtime_status_refresh(true);
+        state.rest.fg_mut().status =
+            format!("security: {label} — open Docker / run koma --security-install");
     }
     refresh_security_state(state, None);
     Ok(())

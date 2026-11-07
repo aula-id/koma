@@ -41,6 +41,9 @@ pub(crate) fn kick_off_health_probe(rest: &mut AppStateRest) -> bool {
 /// a panel is always safe mid-stream (read-only view; the turn keeps streaming),
 /// so there is no busy guard here.
 pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
+    // Force a fresh container-runtime probe off the UI thread (single-flight cache).
+    // `status()` below only *reads* the cache — never blocks on `docker info`.
+    crate::security::runtime_status_kick(true);
     // Read live status from the manager; fall back to Default (not installed,
     // not running, no tools) when there is no manager.
     let status = state
@@ -48,7 +51,14 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         .sec_manager
         .as_ref()
         .map(|m| m.status())
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            let (runtime_ok, runtime) = crate::security::runtime_status_cached();
+            crate::app::sec::SecStatus {
+                runtime_ok,
+                runtime,
+                ..Default::default()
+            }
+        });
     // Per-dependency install-health is fetched NON-BLOCKING. `health()` is a cold ~1-2s
     // IPC round-trip; running it here on the UI thread froze the panel on first open.
     // Instead open with an EMPTY list and kick off the async probe (when the daemon is

@@ -1114,6 +1114,34 @@ pub(super) fn fetch_catalogue_debounced(
     dirty
 }
 
+/// While `/security` is open: keep mode-state runtime fields in sync with the
+/// non-blocking probe cache, and let the cache kick a background refresh when
+/// its TTL expires. Daemon owns the async probe; the panel only consumes the
+/// cached answer (FE/BE). Returns dirty when any open panel's runtime strip changed.
+pub(super) fn sync_security_runtime_cache(state: &mut AppState) -> bool {
+    let mut any_open = false;
+    // Peek without holding mut borrows across the cache call.
+    for s in state.rest.sessions.iter() {
+        if matches!(s.mode, Mode::Security(_)) {
+            any_open = true;
+            break;
+        }
+    }
+    if !any_open {
+        return false;
+    }
+    let (ok, label) = crate::security::runtime_status_cached();
+    let mut dirty = false;
+    for s in security_states(state) {
+        if s.status.runtime_ok != ok || s.status.runtime != label {
+            s.status.runtime_ok = ok;
+            s.status.runtime = label.clone();
+            dirty = true;
+        }
+    }
+    dirty
+}
+
 /// ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
 /// loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
 /// the braille frames actually cycle, paired with the force-dirty check so the loop

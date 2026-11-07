@@ -159,3 +159,40 @@ fn the_dockerfile_is_not_shipped_to_the_user() {
     assert!(ships_to_the_user(std::path::Path::new("koma_sec_daemon")));
     assert!(ships_to_the_user(std::path::Path::new("requirements.txt")));
 }
+
+#[test]
+fn runtime_label_prefers_colima_then_podman_when_docker_is_up() {
+    assert_eq!(
+        runtime_label(true, true, true, false),
+        "docker ready (colima)"
+    );
+    assert_eq!(
+        runtime_label(true, false, true, false),
+        "docker ready (podman)"
+    );
+    assert_eq!(runtime_label(true, false, false, false), "docker ready");
+}
+
+#[test]
+fn runtime_label_describes_down_and_missing_engines() {
+    assert_eq!(
+        runtime_label(false, true, false, false),
+        "docker down — colima installed"
+    );
+    assert_eq!(
+        runtime_label(false, false, true, false),
+        "docker down — podman present"
+    );
+    assert_eq!(
+        runtime_label(false, false, false, false),
+        "no container runtime"
+    );
+}
+
+#[test]
+fn runtime_label_notes_installed_but_stopped_docker_cli() {
+    assert_eq!(
+        runtime_label(false, false, false, true),
+        "docker installed but not running"
+    );
+}
