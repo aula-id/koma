@@ -60,6 +60,13 @@ export function pressureNotice(state: Pressure): string | null {
   return null
 }
 
+/** Footer color for this client's RSS. The restart case wins over a short window. */
+export function ramTone(state: Pressure): "dim" | "warn" | "error" {
+  if (state.warned) return "error"
+  if (state.reduced || state.hint) return "warn"
+  return "dim"
+}
+
 /**
  * Shrink the history window under memory pressure and restore it once RSS drops.
  * State resets per session; GC usefulness and the high-memory warning carry over.

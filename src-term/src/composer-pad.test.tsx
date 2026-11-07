@@ -3,9 +3,17 @@ import { act, useMemo } from "react"
 import { SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/react"
 import { testRender } from "@opentui/react/test-utils"
-import { Chat, modelLabel, promptMark } from "./chat.tsx"
+import { Chat, drssHead, modelLabel, promptMark } from "./chat.tsx"
+
 import { fold } from "./protocol.ts"
 import { themeFor } from "./theme.ts"
+
+test("the DRSS comet rests after it leaves the label", () => {
+  expect(drssHead(0)).toBe(0)
+  expect(drssHead(80 * 5)).toBe(5)
+  expect(drssHead(80 * 6)).toBe(6)
+  expect(drssHead(80 * 10)).toBe(0)
+})
 
 test("a selected effort sits beside the model name", () => {
   expect(modelLabel("grok-4.7", "medium")).toBe("grok-4.7 · medium")
@@ -27,7 +35,7 @@ test("the prompt mark sits against the composer border", async () => {
   const snapshot = fold(null, { Snapshot: {
     foreground_id: "pad",
     sessions: [{ id: "pad", name: "Pad", cwd: "/tmp", messages: [] }],
-    global: { mode: "Chat", palette: "dark", input: "asd\nalk" },
+    global: { mode: "Chat", palette: "dark", status: "ready", input: "asd\nalk" },
   } })!
   function Harness() {
     const renderer = useRenderer()
@@ -38,9 +46,23 @@ test("the prompt mark sits against the composer border", async () => {
   try {
     await act(async () => { await view.waitForVisualIdle() })
     const frame = view.captureCharFrame()
-    const line = frame.split("\n").find((row) => row.includes("[$]"))
+    const lines = frame.split("\n")
+    const line = lines.find((row) => row.includes("[$]"))
     expect(line).toBeDefined()
     expect(line).toContain("│[$]")
+    const koma = lines.findIndex((row) => row.includes("Koma"))
+    const tips = lines.findIndex((row) => row.includes("Tips:"))
+    const top = lines.findIndex((row) => row.includes("╭"))
+    const prompt = lines.findIndex((row) => row.includes("[$]"))
+    const bottom = lines.findIndex((row, index) => index > prompt && row.includes("╰"))
+    const ram = lines.findIndex((row) => row.includes("RAM["))
+    expect(tips).toBe(koma + 1)
+    expect(top).toBe(tips + 1)
+    expect(bottom).toBeGreaterThan(prompt)
+    expect(lines[bottom]).toContain("ready")
+    expect(ram).toBe(bottom + 1)
+    expect(lines[ram]).toContain("[!]")
+    expect(frame).not.toContain("Latest")
   } finally {
     await act(async () => { await view.dispose() })
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { afterGc, CALM, CLEANUP_INTERVAL_MS, GC_USEFUL_BYTES, pressureLimits, pressureNotice, pressureTick } from "./pressure.ts"
+import { afterGc, CALM, CLEANUP_INTERVAL_MS, GC_USEFUL_BYTES, pressureLimits, pressureNotice, pressureTick, ramTone } from "./pressure.ts"
 
 const MIB = 1024 * 1024
 const limits = { high: 768 * MIB, low: 512 * MIB, warn: 2048 * MIB }
@@ -49,5 +49,12 @@ describe("pressure valve", () => {
     expect(pressureNotice(warned)).toContain("Restarting the terminal keeps your session")
     expect(pressureTick(warned, 600 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
     expect(pressureTick(warned, 500 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(false)
+  })
+
+  test("the RAM row stays dim until the window shrinks, and turns error at the restart mark", () => {
+    expect(ramTone(CALM)).toBe("dim")
+    const hot = pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits)
+    expect(ramTone(hot)).toBe("warn")
+    expect(ramTone(pressureTick(CALM, 2100 * MIB, CLEANUP_INTERVAL_MS, limits))).toBe("error")
   })
 })
