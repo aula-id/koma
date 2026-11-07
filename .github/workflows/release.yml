@@ -339,6 +339,10 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        env:
+          # The action otherwise uploads a *.dockerbuild record. publish
+          # downloads every artifact, and that record failed five times.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: src-security/image
           push: true
@@ -360,6 +364,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          pattern: koma-*
           path: release-assets
           merge-multiple: true
       - name: Hammer the release identity
