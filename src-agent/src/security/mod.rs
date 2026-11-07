@@ -453,10 +453,8 @@ fn quiet(program: &str, args: &[&str]) -> Result<()> {
 
 fn pull_safety_image(dest: &std::path::Path, force: bool) -> Result<()> {
     let version = env!("CARGO_PKG_VERSION");
-    if !force {
-        if pinned_safety_image().is_some() {
-            return Ok(());
-        }
+    if !force && pinned_safety_image().is_some() {
+        return Ok(());
     }
     let docker = std::process::Command::new("docker")
         .args(["info", "--format", "{{.ServerVersion}}"])
