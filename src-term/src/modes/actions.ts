@@ -46,7 +46,22 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "Extensions") return mode === "detail" ? [enter("Open screen"), char("Global activation", "g"), char("On demand", "o"), char("Uninstall", "u"), back] : [enter("Details"), back]
   if (name === "ExtStore") return mode === "install_confirm" ? [ { ...char("Install", "y"), disabled: !!b.installing }, back ] : mode === "detail" ? [char("Install", "i"), back] : [enter("Details"), char("Refresh", "r"), back]
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
-  if (name === "Security") return [enter("Toggle"), char("Domain", "d"), char(b.health_view ? "Tools" : "Dependencies", "h"), char("Install", "i"), char("Restart", "r"), back]
+  if (name === "Security") {
+    const pane = String(b.pane || (b.health_view ? "deps" : "tools"))
+    const paneLabel = pane === "deps" ? "Deps" : pane === "refused" ? "Refused" : "Tools"
+    return [
+      enter("Toggle"),
+      char("Domain", "d"),
+      char("All on", "a"),
+      char("All off", "n"),
+      char("Refresh", "u"),
+      char("Runtime", "c"),
+      char(`Pane (${paneLabel})`, "h"),
+      char("Install", "i"),
+      char("Restart", "r"),
+      back,
+    ]
+  }
   if (name === "Remote") {
     const sub = String(b.sub)
     if (sub.endsWith(":edit")) return [enter("Edit"), { label: "Save (s)", action: "Save", primary: true }, back]

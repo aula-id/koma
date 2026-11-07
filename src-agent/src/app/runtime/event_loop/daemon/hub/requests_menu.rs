@@ -576,10 +576,16 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
             }
         }
         Mode::Security(s) => {
-            if s.health_view {
-                s.health_selected = index;
-            } else {
-                s.selected = index;
+            match s.pane {
+                crate::app::mode::SecPane::Deps => {
+                    s.health_selected = index;
+                }
+                crate::app::mode::SecPane::Refused => {
+                    s.refused_selected = index;
+                }
+                crate::app::mode::SecPane::Tools => {
+                    s.selected = index;
+                }
             }
         }
         Mode::SessionPicker(s) => {

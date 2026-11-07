@@ -331,12 +331,21 @@ fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<Install
         .unwrap_or_default();
     let inactive = state.rest.sec_inactive.clone();
     let yolo_armed = state.rest.yolo_armed;
+    let lane_label = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
     if let Mode::Security(s) = state.mode_mut() {
         // `refresh` preserves `install_health`; overwrite it only when the install path
         // handed us a fresh probe. `refresh` re-clamps both cursors afterwards.
         if let Some(health) = fresh_health {
             s.install_health = health;
         }
+        s.lane_label = lane_label;
         s.refresh(status, inactive, yolo_armed);
     }
 }
@@ -444,5 +453,95 @@ pub(super) fn handle_security_lane(
         LaneOutcome::Refused(why) => format!("security: lane not set — {why}"),
     };
     state.rest.fg_mut().status = status;
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// `a` — enable every advertised tool (clear the inactive set).
+pub(super) fn handle_security_enable_all(state: &mut AppState) -> Result<()> {
+    state.rest.sec_inactive.clear();
+    state.rest.fg_mut().status = "security: all tools enabled".into();
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// `n` — disable every currently advertised tool.
+pub(super) fn handle_security_disable_all(state: &mut AppState) -> Result<()> {
+    let names: Vec<String> = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status().tools.into_iter().map(|t| t.name).collect())
+        .unwrap_or_default();
+    for n in &names {
+        state.rest.sec_inactive.insert(n.clone());
+    }
+    state.rest.fg_mut().status = format!("security: {} tools disabled", names.len());
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// `u` — re-extract the embedded daemon package and restart so a stale wire
+/// vocabulary (bool `risk`) is replaced without a full `--force` pip rebuild.
+pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()> {
+    match crate::security::refresh_daemon_sources() {
+        Ok(()) => {
+            state.rest.fg_mut().status = "security: toolkit sources refreshed — restarting…".into();
+            // Keep security_enabled; restart disarms YOLO by design.
+            handle_security_restart(state)?;
+        }
+        Err(e) => {
+            state.rest.fg_mut().status = format!("security: refresh failed: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// `c` — try to bring Docker up via Colima when present; otherwise surface a hint.
+pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()> {
+    if crate::security::cyber_execution_available() {
+        state.rest.fg_mut().status = format!(
+            "security: runtime ok — {}",
+            crate::security::runtime_status_label()
+        );
+        refresh_security_state(state, None);
+        return Ok(());
+    }
+    // Prefer Colima when installed (mac path). Non-interactive: just run it.
+    let colima = std::process::Command::new("colima")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if colima {
+        state.rest.fg_mut().status = "security: starting colima…".into();
+        match std::process::Command::new("colima").arg("start").output() {
+            Ok(out) if out.status.success() => {
+                let label = crate::security::runtime_status_label();
+                state.rest.fg_mut().status = format!("security: colima started — {label}");
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let tail = err.trim();
+                state.rest.fg_mut().status = format!(
+                    "security: colima start failed{}",
+                    if tail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {tail}")
+                    }
+                );
+            }
+            Err(e) => {
+                state.rest.fg_mut().status = format!("security: colima start failed: {e}");
+            }
+        }
+    } else {
+        state.rest.fg_mut().status = format!(
+            "security: {} — open Docker / run koma --security-install",
+            crate::security::runtime_status_label()
+        );
+    }
+    refresh_security_state(state, None);
     Ok(())
 }

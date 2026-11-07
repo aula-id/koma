@@ -182,11 +182,21 @@ pub struct SecuritySnapshot {
     #[serde(default)]
     pub install_health: Vec<crate::app::sec::InstallHealthEntry>,
     /// Which body pane is showing: `false` = tools (default), `true` = dependencies.
+    /// Kept for older clients; prefer [`Self::pane`] when present.
     #[serde(default)]
     pub health_view: bool,
+    /// Active pane token: `"tools"` | `"deps"` | `"refused"`. Default tools.
+    #[serde(default)]
+    pub pane: String,
     /// Selected index into `install_health` (the dependency-pane cursor).
     #[serde(default)]
     pub health_selected: usize,
+    /// Selected index into `status.refused` (the refused-pane cursor).
+    #[serde(default)]
+    pub refused_selected: usize,
+    /// Session cyber-lane label for the status strip.
+    #[serde(default)]
+    pub lane_label: String,
     /// `true` while a non-blocking health probe is in flight on the daemon. Projected so
     /// the thin client renders the same "checking dependencies…" spinner state on the
     /// daemon info line. `#[serde(default)]` keeps version-skewed peers safe (false).

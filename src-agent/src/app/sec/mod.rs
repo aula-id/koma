@@ -632,9 +632,11 @@ impl SecDaemonManager {
 
     /// A serializable snapshot for the `/security` cockpit: running/installed flags
     /// plus the per-tool metadata. Cheap — locks the inner state and copies the small
-    /// tool list.
+    /// tool list. Also probes the container runtime so the panel can show why tools
+    /// would refuse even when the daemon is up.
     pub fn status(&self) -> SecStatus {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let runtime_ok = crate::security::cyber_execution_available();
         SecStatus {
             running: inner.running,
             installed: crate::security::is_installed(),
@@ -645,10 +647,30 @@ impl SecDaemonManager {
                     name: t.name.clone(),
                     domain: t.domain.clone(),
                     risk: t.risk > SecRisk::Static,
+                    effect: risk_label(t.risk).into(),
                     compute: t.compute.clone(),
                 })
                 .collect(),
+            refused: inner
+                .refused_tools
+                .iter()
+                .map(|(name, reason)| SecRefusedInfo {
+                    name: name.clone(),
+                    reason: reason.clone(),
+                })
+                .collect(),
+            runtime_ok,
+            runtime: crate::security::runtime_status_label(),
         }
+    }
+}
+
+fn risk_label(r: SecRisk) -> &'static str {
+    match r {
+        SecRisk::Static => "static",
+        SecRisk::Local => "local",
+        SecRisk::Remote => "remote",
+        SecRisk::Exploit => "exploit",
     }
 }
 
@@ -661,6 +683,17 @@ pub struct SecStatus {
     pub installed: bool,
     /// One entry per advertised tool.
     pub tools: Vec<SecToolInfo>,
+    /// Descriptors the last handshake refused (name + reason). Empty when the
+    /// daemon is stopped or every tool passed. `#[serde(default)]` keeps older
+    /// snapshots decoding.
+    #[serde(default)]
+    pub refused: Vec<SecRefusedInfo>,
+    /// Live `docker info` probe — independent of daemon running.
+    #[serde(default)]
+    pub runtime_ok: bool,
+    /// Human label for the container runtime (`docker ready (colima)`, …).
+    #[serde(default)]
+    pub runtime: String,
 }
 
 /// Per-tool metadata surfaced in [`SecStatus`].
@@ -673,8 +706,18 @@ pub struct SecToolInfo {
     /// Whether the tool's effects go beyond pure computation. Derived from
     /// [`SecRisk`] so the panel's advisory marker does not need the enum.
     pub risk: bool,
-    /// Free-form compute-class hint.
+    /// Reach tier label (`static` / `local` / `remote` / `exploit`).
+    #[serde(default)]
+    pub effect: String,
+    /// Runtime class (`cpu` / `binary` / `net` / `browser`, or legacy compute).
     pub compute: String,
+}
+
+/// One handshake refusal, for the cockpit's refused list.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SecRefusedInfo {
+    pub name: String,
+    pub reason: String,
 }
 
 /// One dependency's install-health entry, as reported by the daemon's `health` op.

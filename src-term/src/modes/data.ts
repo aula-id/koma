@@ -160,7 +160,10 @@ export interface SecuritySnapshot {
   yolo_armed: boolean
   install_health: Array<InstallHealthEntry>
   health_view: boolean
+  pane?: string
   health_selected: number
+  refused_selected?: number
+  lane_label?: string
   health_fetching: boolean
   health_frame: number
 }
@@ -584,6 +587,9 @@ export interface SecStatus {
   running: boolean
   installed: boolean
   tools: Array<SecToolInfo>
+  refused?: Array<{ name: string; reason: string }>
+  runtime_ok?: boolean
+  runtime?: string
 }
 
 export interface InstallHealthEntry {
@@ -782,6 +788,7 @@ export interface SecToolInfo {
   name: string
   domain: string
   risk: boolean
+  effect?: string
   compute: string
 }
 

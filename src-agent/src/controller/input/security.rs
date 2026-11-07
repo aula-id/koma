@@ -1,29 +1,22 @@
 //! Key handler for the `/security` daemon control panel (`Mode::Security`).
 //!
-//! A read-only control panel — no sub-modes and no editing, so the dispatch is
-//! simple: escape/quit, cursor navigation, and daemon lifecycle keys.
-//!
 //! Key map:
-//! - `Esc`      → `Action::CloseSecurity` (return to Chat)
-//! - `Up`       → move cursor up in the ACTIVE pane (tools or deps)
-//! - `Down`     → move cursor down in the ACTIVE pane (tools or deps)
-//! - `h`/`H`    → toggle the body pane (tools ⇄ dependencies); mode-state only
-//! - `i`/`I`    → (deps pane only) `Action::SecurityInstall` the selected dependency
-//! - `r`        → `Action::SecurityRestart`
-//! - `Enter`/`Space` → `Action::SecurityToggleTool` (toggle the SELECTED row: the daemon
-//!   checkbox starts/stops the daemon; the YOLO checkbox arms/disarms Layer-1 YOLO (only
-//!   when the daemon is running); a tool row flips that tool's active state)
-//! - `d`        → `Action::SecurityToggleDomain` (toggle every tool in the selected tool's domain)
-//! - `l`        → `Action::SecurityLane` — cycle this session's cyber lane
-//!   (none → research → red → blue → none). Refused with a status reason when the
-//!   chosen lane's role has no model, so the lane never looks set while ungated.
-//!
-//! Daemon start/stop/toggle no longer have dedicated keys (s/x/t removed) — the daemon is
-//! now the top `[x] Daemon running` checkbox, toggled with Space like any other row.
+//! - `Esc`      → `Action::CloseSecurity`
+//! - `Up`/`Down` → move cursor in the active pane
+//! - `h`/`H`    → cycle body panes (tools → deps → refused)
+//! - `i`/`I`    → (deps pane) install selected dependency
+//! - `r`        → restart daemon
+//! - `Enter`/`Space` → toggle selected row (daemon / YOLO / tool)
+//! - `d`        → toggle selected tool's domain
+//! - `a`        → enable all tools
+//! - `n`        → disable all tools
+//! - `u`        → refresh embedded daemon sources + restart
+//! - `c`        → try start container runtime (colima when present)
+//! - `l`        → cycle cyber lane
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::mode::SecurityState;
+use crate::app::mode::{SecPane, SecurityState};
 use crate::app::state::AppStateRest;
 
 use super::Action;
@@ -36,30 +29,23 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
     if let Some(m) = rest.sec_manager.as_ref() {
         s.status = m.status();
     }
-    // Self-heal install-health: it is normally seeded once on panel open, but the daemon
-    // starts ASYNCHRONOUSLY — if the panel opened before the daemon was ready (or the
-    // daemon was started from inside the panel), the open-time probe never ran and no
-    // other path re-probes. Kick off a NON-BLOCKING probe here once the daemon is up.
-    // Gated on `is_empty()` (health() returns the full manifest, never an empty list, so a
-    // delivered result sticks) and on `sec_health_rx.is_none()` inside the helper, so the
-    // probe fires exactly once. NO blocking `health()` runs on the input path any more —
-    // `service_global` drains the receiver and clears `health_fetching`.
-    // Short-circuit `&&`: the side-effecting kick-off only fires when the panel actually
-    // needs a probe (empty health, daemon up) — and the helper itself no-ops when one is
-    // already in flight, so this stays exactly-once.
+    // Self-heal install-health once the daemon is up.
     if s.install_health.is_empty()
         && s.status.running
         && crate::app::runtime::commands::security::kick_off_health_probe(rest)
     {
         s.health_fetching = true;
     }
-    // Keep the mode-state's inactive mirror in step with the authoritative set on
-    // `rest` (the action handlers mutate `rest.sec_inactive` then refresh, but a
-    // re-entry into the panel reads this on each key).
     s.inactive = rest.sec_inactive.clone();
-    // Same for the YOLO arm flag — mirror the authoritative `rest.yolo_armed` so the
-    // checkbox row reflects the live state on every key.
     s.yolo_armed = rest.yolo_armed;
+    // Lane label for the status strip.
+    s.lane_label = rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
 
     match key.code {
         KeyCode::Esc => Action::CloseSecurity,
@@ -73,8 +59,10 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
         }
         KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
-        // Cycle the lane. The cycle order follows the escalation the lanes describe:
-        // off → read-only research → red → blue → off.
+        KeyCode::Char('a') | KeyCode::Char('A') => Action::SecurityEnableAllTools,
+        KeyCode::Char('n') | KeyCode::Char('N') => Action::SecurityDisableAllTools,
+        KeyCode::Char('u') | KeyCode::Char('U') => Action::SecurityRefreshToolkit,
+        KeyCode::Char('c') | KeyCode::Char('C') => Action::SecurityEnsureRuntime,
         KeyCode::Char('l') | KeyCode::Char('L') => {
             use crate::app::sec::lane::Lane;
             let next = match rest.fg().session.as_ref().and_then(|x| x.settings.cyber_lane) {
@@ -85,17 +73,12 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
             };
             Action::SecurityLane(next)
         }
-        // Toggle the body pane (tools ⇄ dependencies). Pure mode-state mutation, like
-        // the cursor moves — no runtime round-trip needed.
         KeyCode::Char('h') | KeyCode::Char('H') => {
-            s.toggle_health_view();
+            s.cycle_pane();
             Action::None
         }
-        // Install/repair the selected dependency — ONLY in the dependency pane, and only
-        // when a row is actually selected. `health_selected` indexes `health_items()`
-        // (render order), so resolve through it to find the underlying entry.
         KeyCode::Char('i') | KeyCode::Char('I') => {
-            if s.health_view {
+            if s.pane == SecPane::Deps {
                 match s
                     .health_items()
                     .get(s.health_selected)

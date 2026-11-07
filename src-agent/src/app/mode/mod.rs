@@ -40,7 +40,7 @@ pub use ext_screen::ExtScreenState;
 pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
 pub use remote::RemoteState;
-pub use security::{SecSel, SecurityState};
+pub use security::{SecPane, SecSel, SecurityState};
 pub use store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 pub use todo::{parse_todo_file, TodoState};
 // `HelpEntry` is part of the module's public surface and will be consumed by the

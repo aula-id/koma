@@ -1,8 +1,8 @@
 //! Security mode state: the working state for the `/security` daemon control panel.
 //!
-//! A read-only status view (no sub-modes, no editor) with TWO toggleable body panes:
-//! the Tool inventory (default) and a Dependency install-health list. Navigation moves
-//! the cursor over whichever pane is active.
+//! A control view (no editor) with THREE toggleable body panes: the Tool inventory
+//! (default), a Dependency install-health list, and a Refused-descriptors list.
+//! Navigation moves the cursor over whichever pane is active.
 
 use crate::app::sec::{InstallHealthEntry, SecStatus};
 
@@ -24,6 +24,29 @@ pub enum SecSel {
     Yolo,
     /// A tool row; the `usize` indexes into `status.tools`.
     Tool(usize),
+}
+
+/// Which body pane the `/security` panel is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SecPane {
+    /// Tool inventory (default).
+    #[default]
+    Tools,
+    /// Dependency install-health.
+    Deps,
+    /// Handshake refusals (malformed / ungated descriptors).
+    Refused,
+}
+
+impl SecPane {
+    /// Cycle Tools → Deps → Refused → Tools.
+    pub fn next(self) -> Self {
+        match self {
+            SecPane::Tools => SecPane::Deps,
+            SecPane::Deps => SecPane::Refused,
+            SecPane::Refused => SecPane::Tools,
+        }
+    }
 }
 
 /// Working state for the `/security` daemon control panel.
@@ -55,12 +78,14 @@ pub struct SecurityState {
     /// Per-dependency install-health, fetched once on panel open (and re-fetched after
     /// an install). Empty when the daemon is stopped / no health data is available.
     pub install_health: Vec<InstallHealthEntry>,
-    /// Which body pane is showing: `false` = tools (default), `true` = dependencies.
-    pub health_view: bool,
+    /// Active body pane.
+    pub pane: SecPane,
     /// Dependency-pane cursor: an index into [`SecurityState::health_items`] (the
     /// install-health rows in tier-grouped RENDER order), NOT into the flat
     /// `install_health` vector — same nav/render-sync trick as `selected`.
     pub health_selected: usize,
+    /// Refused-pane cursor: index into `status.refused`.
+    pub refused_selected: usize,
     /// `true` while a NON-BLOCKING health probe is in flight (the receiver lives in
     /// `state.rest.sec_health_rx`). Drives the loading spinner on the daemon info line;
     /// cleared by `service_global` when the probe lands. Projected to the thin client so
@@ -71,6 +96,8 @@ pub struct SecurityState {
     /// client animates the spinner from this counter (it owns no manager / receiver of
     /// its own).
     pub health_frame: u64,
+    /// Session cyber-lane label for the status strip (`research` / `red` / `blue` / `none`).
+    pub lane_label: String,
 }
 
 impl SecurityState {
@@ -89,11 +116,18 @@ impl SecurityState {
             inactive,
             yolo_armed,
             install_health,
-            health_view: false,
+            pane: SecPane::Tools,
             health_selected: 0,
+            refused_selected: 0,
             health_fetching: false,
             health_frame: 0,
+            lane_label: "none".into(),
         }
+    }
+
+    /// Compatibility: true when the deps pane is showing (old `health_view` bool).
+    pub fn health_view(&self) -> bool {
+        self.pane == SecPane::Deps
     }
 
     /// The navigable rows of the TOOLS pane, IN RENDER ORDER — the single source of truth
@@ -155,38 +189,55 @@ impl SecurityState {
         self.tool_items().get(self.selected).copied()
     }
 
-    /// Move the cursor up by one (saturating at 0) in the ACTIVE pane. `selected` /
-    /// `health_selected` are positions in the respective `*_items()` list, so plain
-    /// saturating decrement walks the rendered rows.
+    /// Move the cursor up by one (saturating at 0) in the ACTIVE pane.
     pub fn move_up(&mut self) {
-        if self.health_view {
-            self.health_selected = self.health_selected.saturating_sub(1);
-        } else {
-            self.selected = self.selected.saturating_sub(1);
+        match self.pane {
+            SecPane::Deps => {
+                self.health_selected = self.health_selected.saturating_sub(1);
+            }
+            SecPane::Refused => {
+                self.refused_selected = self.refused_selected.saturating_sub(1);
+            }
+            SecPane::Tools => {
+                self.selected = self.selected.saturating_sub(1);
+            }
         }
     }
 
-    /// Move the cursor down by one in the ACTIVE pane, clamped to that pane's last
-    /// navigable row (the last index into the active `*_items()` list).
+    /// Move the cursor down by one in the ACTIVE pane, clamped to that pane's last row.
     pub fn move_down(&mut self) {
-        if self.health_view {
-            let max = self.health_items().len().saturating_sub(1);
-            if self.health_selected < max {
-                self.health_selected += 1;
+        match self.pane {
+            SecPane::Deps => {
+                let max = self.health_items().len().saturating_sub(1);
+                if self.health_selected < max {
+                    self.health_selected += 1;
+                }
             }
-        } else {
-            let max = self.tool_items().len().saturating_sub(1);
-            if self.selected < max {
-                self.selected += 1;
+            SecPane::Refused => {
+                let max = self.status.refused.len().saturating_sub(1);
+                if self.refused_selected < max {
+                    self.refused_selected += 1;
+                }
+            }
+            SecPane::Tools => {
+                let max = self.tool_items().len().saturating_sub(1);
+                if self.selected < max {
+                    self.selected += 1;
+                }
             }
         }
     }
 
-    /// Flip between the tools pane and the dependency pane, re-clamping the cursor of
-    /// the pane that just became active so it points at a valid row.
-    pub fn toggle_health_view(&mut self) {
-        self.health_view = !self.health_view;
+    /// Cycle Tools → Deps → Refused → Tools, re-clamping the newly active cursor.
+    pub fn cycle_pane(&mut self) {
+        self.pane = self.pane.next();
         self.clamp_cursors();
+    }
+
+    /// Back-compat alias for [`Self::cycle_pane`].
+    #[allow(dead_code)]
+    pub fn toggle_health_view(&mut self) {
+        self.cycle_pane();
     }
 
     /// Replace the status snapshot + disabled-tool set + YOLO arm flag (called after
@@ -209,10 +260,7 @@ impl SecurityState {
         self.clamp_cursors();
     }
 
-    /// Clamp BOTH pane cursors against their current navigable-row counts (called after
-    /// any change that could shrink a list — daemon stopped → tools vanish, or a refreshed
-    /// health list). Cursors index the `*_items()` lists, so clamp against those, not the
-    /// raw vectors.
+    /// Clamp ALL pane cursors against their current navigable-row counts.
     fn clamp_cursors(&mut self) {
         let tool_len = self.tool_items().len();
         if tool_len == 0 {
@@ -225,6 +273,12 @@ impl SecurityState {
             self.health_selected = 0;
         } else if self.health_selected >= health_len {
             self.health_selected = health_len - 1;
+        }
+        let refused_len = self.status.refused.len();
+        if refused_len == 0 {
+            self.refused_selected = 0;
+        } else if self.refused_selected >= refused_len {
+            self.refused_selected = refused_len - 1;
         }
     }
 }
