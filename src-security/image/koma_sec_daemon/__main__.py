@@ -10,6 +10,9 @@ Protocol (newline-delimited JSON, parent speaks first):
   `protocol.negotiate`. Bump MAJOR when an older peer would mis-read a frame.
 
   Call (parent → daemon):       {"id": N, "op": "call", "tool": T, "args": {...}}
+  Catalog:                      {"id": N, "op": "catalog", "sub": "categories|list|get", "args": {...}}
+  Runtime:                      {"id": N, "op": "runtime", "sub": "status|up|down|health", "args": {...}}
+  Fs:                           {"id": N, "op": "fs", "sub": "copy_in|copy_out|ls", "args": {...}}
   Result (daemon → parent):     {"id": N, "ok": true, "result": "<str>"}
                             or  {"id": N, "ok": false, "error": "<str>"}
 
@@ -230,6 +233,46 @@ def main() -> None:
         except (ValueError, OSError):
             pass
 
+    def _exec_class(tool_name: str):
+        from koma_sec_daemon import effects
+
+        row = effects.MANIFEST.get(tool_name)
+        if row:
+            return row[1]
+        desc = registry.REGISTRY.get(tool_name) or {}
+        return desc.get("exec")
+
+    def _call_in_guest(tool_name: str, tool_args: dict, frame_id) -> str:
+        """Run the tool inside the Boundary guest when up; else host bridge.
+
+        Browser-class tools stay on the host (no browser stack in slim guest yet).
+        """
+        import json as _json
+
+        from koma_sec_daemon import effects
+        from koma_sec_daemon import runtime_ops
+
+        if _exec_class(tool_name) == effects.BROWSER:
+            return call(tool_name, tool_args, sessions, cancel_key=frame_id)
+
+        try:
+            b = runtime_ops.ensure_up()
+        except Exception:
+            # Phase bridge: if the guest cannot start, keep host execution so
+            # catalog/meta paths still work offline; runtime ops themselves never
+            # degrade.
+            return call(tool_name, tool_args, sessions, cancel_key=frame_id)
+
+        payload = _json.dumps(tool_args or {}, ensure_ascii=False)
+        res = b.exec(
+            ["python3", "-m", "koma_sec_daemon.guest_run", tool_name, payload],
+            timeout=300,
+        )
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or f"guest exit {res.returncode}").strip()
+            raise RuntimeError(err or f"guest_run failed for {tool_name}")
+        return res.stdout or ""
+
     def run_call(frame_id, tool_name, tool_args) -> None:
         # Duplicate-execution check BEFORE the tool runs: the board, not a prompt,
         # is what stops two lanes firing at one route. The frame id is the owner,
@@ -246,7 +289,7 @@ def main() -> None:
                 return
         result = ""
         try:
-            result = call(tool_name, tool_args, sessions, cancel_key=frame_id)
+            result = _call_in_guest(tool_name, tool_args, frame_id)
             emit({"id": frame_id, "ok": True, "result": verdict.as_typed(result)})
         except registry.Unavailable as exc:
             # A missing dependency is a typed outcome, not a crash: the model sees
@@ -315,6 +358,54 @@ def main() -> None:
 
             elif op == "install":
                 installs.submit(run_install, frame_id, frame.get("key", ""))
+
+            elif op == "catalog":
+                try:
+                    from koma_sec_daemon import catalog as catalog_mod
+                    sub = frame.get("sub") or frame.get("action") or ""
+                    payload = frame.get("args") or {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    result = catalog_mod.handle(str(sub), payload)
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": json.dumps(result),
+                    })
+                except Exception as exc:
+                    write_frame(real_stdout, {"id": frame_id, "ok": False, "error": str(exc)})
+
+            elif op == "runtime":
+                try:
+                    from koma_sec_daemon import runtime_ops
+                    sub = frame.get("sub") or frame.get("action") or ""
+                    payload = frame.get("args") or {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    result = runtime_ops.handle(str(sub), payload)
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": json.dumps(result),
+                    })
+                except Exception as exc:
+                    write_frame(real_stdout, {"id": frame_id, "ok": False, "error": str(exc)})
+
+            elif op == "fs":
+                try:
+                    from koma_sec_daemon import fs_ops
+                    sub = frame.get("sub") or frame.get("action") or ""
+                    payload = frame.get("args") or {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    result = fs_ops.handle(str(sub), payload)
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": json.dumps(result),
+                    })
+                except Exception as exc:
+                    write_frame(real_stdout, {"id": frame_id, "ok": False, "error": str(exc)})
 
             else:
                 write_frame(real_stdout, {"id": frame_id, "ok": False, "error": "unknown op"})

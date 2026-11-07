@@ -74,14 +74,50 @@ pub const BLUE_SURFACE: &[&str] = &[
     "edit", "write",
 ];
 
-/// The surface for a lane.
+/// Meta control-plane tools available on every lane when security mode is on.
+pub const META_SURFACE: &[&str] = &["sec_catalog", "sec_run", "sec_fs", "sec_runtime"];
+
+/// The surface for a lane (includes [`META_SURFACE`]).
 #[must_use]
 pub fn surface(lane: Lane) -> &'static [&'static str] {
     match lane {
-        Lane::Research => RESEARCH_SURFACE,
-        Lane::Red => RED_SURFACE,
-        Lane::Blue => BLUE_SURFACE,
+        Lane::Research => research_surface(),
+        Lane::Red => red_surface(),
+        Lane::Blue => blue_surface(),
     }
+}
+
+fn research_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + RESEARCH_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(RESEARCH_SURFACE);
+        v
+    }).as_slice()
+}
+
+fn red_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + RED_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(RED_SURFACE);
+        v
+    }).as_slice()
+}
+
+fn blue_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + BLUE_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(BLUE_SURFACE);
+        v
+    }).as_slice()
 }
 
 /// A capability a tool can require.
@@ -180,6 +216,8 @@ impl Lane {
     #[must_use]
     pub fn cap_of_tool(tool: &str) -> Cap {
         match tool {
+            // Control-plane meta tools: discovery + jail lifecycle, not network.
+            "sec_catalog" | "sec_runtime" | "sec_fs" | "sec_run" => Cap::Read,
             // Pure compute / local file inspection: no socket.
             "edit" | "write" => Cap::Edit,
             "sec_http" => Cap::Observe,

@@ -1029,6 +1029,10 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         // unadvertised/forged `sec_` name must not run even when the daemon is
         // live and armed.
         if let Some(mgr) = ctx.sec_manager.as_ref() {
+            // Meta control plane: catalog / runtime / fs / run.
+            if crate::app::sec::meta::is_meta_tool(&call.function.name) {
+                return dispatch_sec_meta(ctx, mgr, &call.function.name, &mut args);
+            }
             let lane_refusal = scope::lane_refusal(ctx, &call.function.name, &mut args);
             if let Some(reason) = lane_refusal {
                 let denied = verdict::TypedResult {
@@ -1121,6 +1125,217 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
         &call.function.name,
         &args,
         format!("error: unknown tool '{}'", call.function.name),
+    )
+}
+
+/// Dispatch one of the four security meta-tools.
+fn dispatch_sec_meta(
+    ctx: &ToolCtx,
+    mgr: &std::sync::Arc<crate::app::sec::SecDaemonManager>,
+    name: &str,
+    args: &mut serde_json::Value,
+) -> String {
+    // Meta tools still need a cyber lane selected (security mode on).
+    if let Some(reason) = scope::lane_refusal(ctx, name, args) {
+        let denied = verdict::TypedResult {
+            verdict: verdict::Verdict::Blocked,
+            excerpt: reason,
+            handle: None,
+        };
+        return output::finish_tool_output(ctx, name, args, denied.to_json());
+    }
+    if let Some(reason) = mgr.refusal(name, ctx.cyber_lane.is_some()) {
+        let refusal = verdict::TypedResult {
+            verdict: verdict::Verdict::Error,
+            excerpt: reason,
+            handle: None,
+        };
+        return output::finish_tool_output(ctx, name, args, refusal.to_json());
+    }
+
+    let typed = match name {
+        "sec_catalog" => {
+            let op = args
+                .get("op")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut payload = args.clone();
+            if let Some(obj) = payload.as_object_mut() {
+                obj.remove("op");
+            }
+            match mgr.catalog_op(op, &payload) {
+                Ok(raw) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Untyped,
+                    excerpt: raw,
+                    handle: None,
+                },
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            }
+        }
+        "sec_runtime" => {
+            let op = args
+                .get("op")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut payload = serde_json::json!({});
+            if let Some(obj) = args.as_object() {
+                let mut map = serde_json::Map::new();
+                for (k, v) in obj {
+                    if k != "op" {
+                        map.insert(k.clone(), v.clone());
+                    }
+                }
+                payload = serde_json::Value::Object(map);
+            }
+            match mgr.runtime_op(op, &payload) {
+                Ok(raw) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Untyped,
+                    excerpt: raw,
+                    handle: None,
+                },
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            }
+        }
+        "sec_fs" => {
+            let op = args
+                .get("op")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut payload = args.clone();
+            if let Some(obj) = payload.as_object_mut() {
+                obj.remove("op");
+                // Workspace roots become allow_roots for copy_in.
+                if op == "copy_in" && !obj.contains_key("allow_roots") {
+                    let roots: Vec<String> = ctx
+                        .workspaces
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect();
+                    obj.insert("allow_roots".into(), serde_json::json!(roots));
+                }
+            }
+            match mgr.fs_op(op, &payload) {
+                Ok(raw) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Untyped,
+                    excerpt: raw,
+                    handle: None,
+                },
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            }
+        }
+        "sec_run" => {
+            let inner = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if inner.is_empty() || crate::app::sec::meta::is_meta_tool(&inner) {
+                verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: "sec_run requires a concrete tool name (see sec_catalog)".into(),
+                    handle: None,
+                }
+            } else {
+                let mut inner_args = args
+                    .get("args")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if !inner_args.is_object() {
+                    inner_args = serde_json::json!({});
+                }
+                // Admit path on the INNER tool name — meta must not bypass lane/scope.
+                if let Some(reason) = scope::lane_refusal(ctx, &inner, &mut inner_args) {
+                    verdict::TypedResult {
+                        verdict: verdict::Verdict::Blocked,
+                        excerpt: reason,
+                        handle: None,
+                    }
+                } else if let Some(reason) = mgr.refusal(&inner, ctx.cyber_lane.is_some()) {
+                    verdict::TypedResult {
+                        verdict: verdict::Verdict::Error,
+                        excerpt: reason,
+                        handle: None,
+                    }
+                } else if let Some(reason) = scope::admit_from_call(ctx, &inner, &inner_args) {
+                    verdict::TypedResult {
+                        verdict: verdict::Verdict::Blocked,
+                        excerpt: reason,
+                        handle: None,
+                    }
+                } else {
+                    let typed = match mgr.execute_blocking(&inner, &inner_args) {
+                        Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
+                            output::spill_foreign(ctx.session_dir.as_deref(), &inner, body)
+                        }),
+                        Err(e) => verdict::TypedResult {
+                            verdict: verdict::Verdict::Error,
+                            excerpt: e,
+                            handle: None,
+                        },
+                    };
+                    scope::settle(ctx, &inner, &inner_args, typed.verdict);
+                    let framed = crate::app::sec::untrusted::frame_result(
+                        &typed.excerpt,
+                        typed.verdict.as_str(),
+                        typed.handle.as_deref(),
+                        crate::app::sec::untrusted::Origin::ToolOutput,
+                    );
+                    return output::finish_tool_output(
+                        ctx,
+                        name,
+                        args,
+                        verdict::TypedResult {
+                            verdict: typed.verdict,
+                            excerpt: framed,
+                            handle: typed.handle,
+                        }
+                        .to_json(),
+                    );
+                }
+            }
+        }
+        other => verdict::TypedResult {
+            verdict: verdict::Verdict::Error,
+            excerpt: format!("unknown sec meta tool: {other}"),
+            handle: None,
+        },
+    };
+
+    // Catalog/runtime/fs results are control-plane JSON (not target-controlled
+    // bodies); still frame lightly for consistency when Ok from a run path.
+    let excerpt = typed.excerpt;
+    let framed = if name == "sec_run" {
+        crate::app::sec::untrusted::frame_result(
+            &excerpt,
+            typed.verdict.as_str(),
+            typed.handle.as_deref(),
+            crate::app::sec::untrusted::Origin::ToolOutput,
+        )
+    } else {
+        excerpt
+    };
+    output::finish_tool_output(
+        ctx,
+        name,
+        args,
+        verdict::TypedResult {
+            verdict: typed.verdict,
+            excerpt: framed,
+            handle: typed.handle,
+        }
+        .to_json(),
     )
 }
 

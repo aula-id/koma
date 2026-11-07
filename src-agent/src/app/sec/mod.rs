@@ -76,6 +76,7 @@ mod baseline;
 #[cfg(test)]
 pub(crate) mod fake_daemon;
 pub mod lane;
+pub mod meta;
 pub mod run;
 pub mod prompt;
 pub mod scope;
@@ -563,8 +564,41 @@ impl SecDaemonManager {
         self.request(serde_json::json!({ "op": "install", "key": key }))
     }
 
-    /// Wire [`ToolDef`]s for every advertised tool, ready to extend the request
-    /// `tools` array. Empty when the daemon is not running.
+    /// Catalog meta-op (`categories` / `list` / `get`). Result is a JSON object string.
+    pub fn catalog_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "catalog",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// Runtime boundary meta-op (`status` / `up` / `down` / `health`).
+    pub fn runtime_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "runtime",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// Guest filesystem meta-op (`copy_in` / `copy_out` / `ls`).
+    pub fn fs_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "fs",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// The four model-facing meta [`ToolDef`]s. Independent of Docker reachability so
+    /// `sec_catalog` / `sec_runtime status` stay usable when the guest is down.
+    pub fn meta_tool_defs() -> Vec<ToolDef> {
+        meta::meta_tool_defs()
+    }
+
+    /// Wire [`ToolDef`]s for every concrete toolkit tool (cockpit / legacy). Empty when
+    /// the daemon is not running. Model turns use [`Self::meta_tool_defs`] instead.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
         if !crate::security::cyber_execution_available() {
             return Vec::new();
@@ -604,6 +638,9 @@ impl SecDaemonManager {
     /// separable — a forged name and an unconfigured runtime are different
     /// diagnoses, and the boundary reports whichever applies first.
     pub fn is_advertised(&self, name: &str) -> bool {
+        if meta::is_meta_tool(name) {
+            return self.is_running();
+        }
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.tools.iter().any(|t| t.name == name)
     }
