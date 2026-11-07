@@ -70,6 +70,22 @@ op=get returns one tool's full schema and how-to (requires name).",
                         "type": "string",
                         "enum": ["all", "ready"],
                         "description": "list filter: all tools or only dependency-ready"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "page size for list (default 40, max 200)"
+                    },
+                    "cursor": {
+                        "type": "integer",
+                        "description": "list offset for pagination"
+                    },
+                    "q": {
+                        "type": "string",
+                        "description": "optional substring search over name/blurb/categories"
+                    },
+                    "lane": {
+                        "type": "string",
+                        "description": "optional lane filter (research|red|blue); default session lane"
                     }
                 }),
                 &["op"],
@@ -123,7 +139,7 @@ op=down tear down. Prefer sec_runtime up before heavy runs; sec_run may lazy-sta
                 serde_json::json!({
                     "op": {
                         "type": "string",
-                        "enum": ["status", "up", "down", "health"],
+                        "enum": ["status", "up", "down", "health", "net", "rules"],
                         "description": "Runtime sub-operation"
                     },
                     "targets": {
@@ -134,7 +150,12 @@ op=down tear down. Prefer sec_runtime up before heavy runs; sec_run may lazy-sta
                     "exclusions": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Optional exclusion cells for up"
+                        "description": "Optional exclusion cells for up/net"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["off", "scope"],
+                        "description": "For op=net: off=deny-all egress, scope=use targets"
                     }
                 }),
                 &["op"],

@@ -77,6 +77,7 @@ mod baseline;
 pub(crate) mod fake_daemon;
 pub mod lane;
 pub mod meta;
+pub mod working_set;
 pub mod run;
 pub mod prompt;
 pub mod scope;

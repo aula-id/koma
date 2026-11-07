@@ -1131,6 +1131,77 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 }
 
 /// Dispatch one of the four security meta-tools.
+
+/// Update the session security working set after a successful catalog/run touch.
+fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str) {
+    let Some(dir) = ctx.session_dir.as_ref() else {
+        return;
+    };
+    let mut ws = crate::app::sec::working_set::load(dir);
+    if let Some(lane) = ctx.cyber_lane {
+        ws.set_lane(lane.label());
+    }
+    match op {
+        "pin" => {
+            ws.pin(raw_or_name, extra, "");
+        }
+        "run" => {
+            ws.pin(raw_or_name, "", "");
+            ws.set_last_run(raw_or_name, extra);
+        }
+        "categories" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
+                if let Some(arr) = v.get("categories").and_then(|c| c.as_array()) {
+                    let cats: Vec<String> = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect();
+                    ws.remember_categories(&cats);
+                }
+            }
+        }
+        "get" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
+                if let Some(tool) = v.get("tool") {
+                    let name = tool
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    let blurb = tool
+                        .get("description")
+                        .or_else(|| tool.get("blurb"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    let effect = tool
+                        .get("effect")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    if !name.is_empty() {
+                        ws.pin(name, blurb, effect);
+                    }
+                }
+            }
+        }
+        "list" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
+                if let Some(arr) = v.get("tools").and_then(|c| c.as_array()) {
+                    // Pin first few list hits lightly (name only) so a page is not lost entirely.
+                    for tool in arr.iter().take(5) {
+                        let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let blurb = tool.get("blurb").and_then(|n| n.as_str()).unwrap_or("");
+                        let effect = tool.get("effect").and_then(|n| n.as_str()).unwrap_or("");
+                        if !name.is_empty() {
+                            ws.pin(name, blurb, effect);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let _ = crate::app::sec::working_set::store(dir, &ws);
+}
+
 fn dispatch_sec_meta(
     ctx: &ToolCtx,
     mgr: &std::sync::Arc<crate::app::sec::SecDaemonManager>,
@@ -1175,11 +1246,19 @@ fn dispatch_sec_meta(
                 }
             }
             match mgr.catalog_op(op, &payload) {
-                Ok(raw) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Untyped,
-                    excerpt: raw,
-                    handle: None,
-                },
+                Ok(raw) => {
+                    match op {
+                        "get" => touch_sec_working_set(ctx, "get", &raw, ""),
+                        "list" => touch_sec_working_set(ctx, "list", &raw, ""),
+                        "categories" => touch_sec_working_set(ctx, "categories", &raw, ""),
+                        _ => {}
+                    }
+                    verdict::TypedResult {
+                        verdict: verdict::Verdict::Untyped,
+                        excerpt: raw,
+                        handle: None,
+                    }
+                }
                 Err(e) => verdict::TypedResult {
                     verdict: verdict::Verdict::Error,
                     excerpt: e,
@@ -1201,6 +1280,43 @@ fn dispatch_sec_meta(
                     }
                 }
                 payload = serde_json::Value::Object(map);
+            }
+            // Lane net policy: Research never carries egress allowlist; Red may use
+            // scope targets only when provided (empty up = deny-all offline guest).
+            if let Some(obj) = payload.as_object_mut() {
+                use crate::app::sec::lane::Lane;
+                match ctx.cyber_lane {
+                    Some(Lane::Research) => {
+                        obj.insert("targets".into(), serde_json::json!([]));
+                        obj.insert("exclusions".into(), serde_json::json!([]));
+                        if op == "net" {
+                            obj.insert("mode".into(), serde_json::Value::String("off".into()));
+                        }
+                    }
+                    Some(Lane::Red) if op == "net" => {
+                        let mode = obj.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
+                        let targets_empty = obj
+                            .get("targets")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.is_empty())
+                            .unwrap_or(true);
+                        if mode == "scope" && targets_empty {
+                            return output::finish_tool_output(
+                                ctx,
+                                name,
+                                args,
+                                verdict::TypedResult {
+                                    verdict: verdict::Verdict::Blocked,
+                                    excerpt: "red lane: sec_runtime net mode=scope requires targets (host/IP allowlist from confirmed scope)"
+                                        .into(),
+                                    handle: None,
+                                }
+                                .to_json(),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
             }
             match mgr.runtime_op(op, &payload) {
                 Ok(raw) => verdict::TypedResult {
@@ -1297,6 +1413,7 @@ fn dispatch_sec_meta(
                         },
                     };
                     scope::settle(ctx, &inner, &inner_args, typed.verdict);
+                    touch_sec_working_set(ctx, "run", &inner, typed.verdict.as_str());
                     let framed = crate::app::sec::untrusted::frame_result(
                         &typed.excerpt,
                         typed.verdict.as_str(),

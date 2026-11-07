@@ -367,6 +367,16 @@ first when needed.\n",
                 first.content.push_str(&block);
             }
         }
+        // Security working set: small pin list rewritten every turn from session disk so
+        // compaction of fat sec_catalog payloads does not erase rediscovery memory.
+        if state.rest.security_enabled {
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_ref() {
+                if let Some(block) = crate::app::sec::working_set::context_block(&sess.path) {
+                    first.content.push_str("\n\n");
+                    first.content.push_str(&block);
+                }
+            }
+        }
     }
 
     // Current mode is request-local system context, outside the stable cache

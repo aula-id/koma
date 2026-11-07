@@ -435,6 +435,15 @@ pub(crate) fn apply_lane(
         }
     };
     if matches!(outcome, LaneOutcome::Set(_) | LaneOutcome::Cleared) {
+        // Lane change invalidates pins that may not be legal on the new surface.
+        let mut ws = crate::app::sec::working_set::load(&session.path);
+        ws.clear_pins();
+        if let Some(l) = lane {
+            ws.set_lane(l.label());
+        } else {
+            ws.set_lane("");
+        }
+        let _ = crate::app::sec::working_set::store(&session.path, &ws);
         session.save()?;
     }
     state.rest.sessions[sess_idx].session = Some(session);

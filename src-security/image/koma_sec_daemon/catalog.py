@@ -157,12 +157,16 @@ def list_tools(
     category: str | None = None,
     filter_mode: str = "all",
     lane: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+    q: str | None = None,
 ) -> list[dict]:
     cat = (category or "").strip().lower() or None
     want_ready = (filter_mode or "all").strip().lower() == "ready"
     lane_n = (lane or "").strip().lower() or None
     if lane_n and lane_n not in _LANES:
         lane_n = None
+    query = (q or "").strip().lower() or None
     out: list[dict] = []
     for r in _merged_rows():
         if lane_n and lane_n not in (r.get("lanes") or []):
@@ -172,6 +176,16 @@ def list_tools(
             continue
         if want_ready and not r.get("ready", True):
             continue
+        if query:
+            blob = " ".join(
+                [
+                    str(r.get("name") or ""),
+                    str(r.get("blurb") or ""),
+                    " ".join(domains),
+                ]
+            ).lower()
+            if query not in blob:
+                continue
         out.append(
             {
                 "name": r["name"],
@@ -190,7 +204,69 @@ def list_tools(
                 ),
             }
         )
-    return out
+    start = max(0, int(cursor or 0))
+    if limit is None:
+        # Default page size keeps model context small at 2k scale.
+        limit_n = 40
+    else:
+        limit_n = max(1, min(int(limit), 200))
+    return out[start : start + limit_n]
+
+
+def list_tools_page(
+    category: str | None = None,
+    filter_mode: str = "all",
+    lane: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+    q: str | None = None,
+) -> dict:
+    """Paged list with next_cursor for catalog protocol."""
+    cat = (category or "").strip().lower() or None
+    want_ready = (filter_mode or "all").strip().lower() == "ready"
+    lane_n = (lane or "").strip().lower() or None
+    if lane_n and lane_n not in _LANES:
+        lane_n = None
+    query = (q or "").strip().lower() or None
+    full: list[dict] = []
+    for r in _merged_rows():
+        if lane_n and lane_n not in (r.get("lanes") or []):
+            continue
+        domains = [str(c).lower() for c in (r.get("categories") or [r.get("domain")])]
+        if cat is not None and cat not in domains and (r.get("domain") or "").lower() != cat:
+            continue
+        if want_ready and not r.get("ready", True):
+            continue
+        if query:
+            blob = " ".join(
+                [str(r.get("name") or ""), str(r.get("blurb") or ""), " ".join(domains)]
+            ).lower()
+            if query not in blob:
+                continue
+        full.append(
+            {
+                "name": r["name"],
+                "domain": r.get("domain") or domains[0],
+                "categories": r.get("categories") or domains,
+                "blurb": r.get("blurb") or "",
+                "effect": r.get("effect"),
+                "exec": r.get("exec"),
+                "lanes": r.get("lanes") or [],
+                "ready": bool(r.get("ready", True)),
+                "scope_needed": bool(r.get("scope_needed", False)),
+            }
+        )
+    start = max(0, int(cursor or 0))
+    limit_n = 40 if limit is None else max(1, min(int(limit), 200))
+    page = full[start : start + limit_n]
+    next_c = start + len(page)
+    return {
+        "tools": page,
+        "total": len(full),
+        "cursor": start,
+        "next_cursor": next_c if next_c < len(full) else None,
+        "limit": limit_n,
+    }
 
 
 def get_tool(name: str, lane: str | None = None) -> dict | None:
@@ -251,13 +327,25 @@ def handle(op: str, args: dict | None = None) -> dict:
     if op == "categories":
         return {"categories": categories(lane=lane)}
     if op == "list":
-        return {
-            "tools": list_tools(
-                category=args.get("category") if isinstance(args.get("category"), str) else None,
-                filter_mode=str(args.get("filter") or "all"),
-                lane=lane,
-            )
-        }
+        lim = args.get("limit")
+        cur = args.get("cursor") or 0
+        try:
+            lim_i = int(lim) if lim is not None else None
+        except (TypeError, ValueError):
+            lim_i = None
+        try:
+            cur_i = int(cur)
+        except (TypeError, ValueError):
+            cur_i = 0
+        q = args.get("q") if isinstance(args.get("q"), str) else None
+        return list_tools_page(
+            category=args.get("category") if isinstance(args.get("category"), str) else None,
+            filter_mode=str(args.get("filter") or "all"),
+            lane=lane,
+            limit=lim_i,
+            cursor=cur_i,
+            q=q,
+        )
     if op == "get":
         name = args.get("name")
         if not isinstance(name, str) or not name.strip():
