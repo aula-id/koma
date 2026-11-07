@@ -64,10 +64,9 @@ pub(super) fn render_header(
     // Version badge — uses semantic palette roles:
     // success when up-to-date, error current + success "[latest]" when an update is known.
     let cur = crate::model::store::current_version();
-    let update = rest
-        .latest_version
-        .as_ref()
-        .filter(|v| crate::app::version::is_newer(&v.version, cur));
+    let update = rest.latest_version.as_ref().filter(|v| {
+        crate::app::version::release_supersedes(v, cur, crate::model::store::current_sha())
+    });
 
     // Build the badge spans (brand stays dim; only the version part is coloured) and
     // measure their TOTAL char width so the gap keeps the mode icon/label right-aligned.

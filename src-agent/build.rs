@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn main() {
+    embed_git_sha();
     println!("cargo:rerun-if-changed=../src-misc/help");
     prepare_terminal();
     embed_windows_resource();
@@ -155,6 +156,18 @@ fn embed_windows_resource() {
             );
         }
     }
+}
+
+/// Release CI sets `KOMA_GIT_SHA` to the commit it publishes. A local build
+/// stays `unknown`, so a developer tree is not compared with that commit.
+fn embed_git_sha() {
+    println!("cargo:rerun-if-env-changed=KOMA_GIT_SHA");
+    let sha = std::env::var("KOMA_GIT_SHA")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=KOMA_GIT_SHA={sha}");
 }
 
 fn prepare_terminal() {

@@ -24,7 +24,7 @@ use crate::model::store;
 /// How long the `koma doctor` update check waits for `koma.run` before giving
 /// up and reporting "skipped — offline?" instead. Bounded so a dead network
 /// never hangs the command.
-const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// Severity of one category's outcome — drives both the marker glyph/colour and
 /// the overall exit code (only [`Status::Fail`] flips it to `1`).
@@ -966,36 +966,24 @@ fn check_mcp_servers(config_ok: bool) -> CheckResult {
 // ─── 9. Update ──────────────────────────────────────────────────────────────
 
 fn check_update() -> CheckResult {
-    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let (tx, rx) = std::sync::mpsc::channel::<Option<crate::app::version::VersionInfo>>();
     std::thread::spawn(move || {
-        let fetched = (|| -> Result<String, ()> {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(UPDATE_CHECK_TIMEOUT)
-                .user_agent(concat!("koma/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .map_err(|_| ())?;
-            let resp = client
-                .get(crate::app::version::VERSION_URL)
-                .send()
-                .map_err(|_| ())?;
-            if !resp.status().is_success() {
-                return Err(());
-            }
-            let body = resp.text().map_err(|_| ())?;
-            let info: crate::app::version::VersionInfo =
-                serde_json::from_str(&body).map_err(|_| ())?;
-            Ok(info.version)
-        })();
-        let _ = tx.send(fetched.ok());
+        let _ = tx.send(crate::app::version::fetch_latest().ok());
     });
 
     match rx.recv_timeout(UPDATE_CHECK_TIMEOUT) {
         Ok(Some(latest)) => {
             let current = store::current_version();
-            if crate::app::version::is_newer(&latest, current) {
+            let sha = store::current_sha();
+            if crate::app::version::release_supersedes(&latest, current, sha) {
+                let detail = if crate::app::version::is_newer(&latest.version, current) {
+                    "run: koma update".to_string()
+                } else {
+                    "published commit changed — run: koma update".to_string()
+                };
                 CheckResult::warn(
-                    format!("Update ({latest} available)"),
-                    vec!["run: koma update".to_string()],
+                    format!("Update ({} available)", latest.version),
+                    vec![detail],
                 )
             } else {
                 CheckResult::ok(format!("Update (up to date, {current})"))

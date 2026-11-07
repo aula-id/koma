@@ -149,7 +149,7 @@ pub(super) fn handle_help(state: &mut AppState) -> Result<()> {
         .rest
         .latest_version
         .as_ref()
-        .filter(|v| version::is_newer(&v.version, current))
+        .filter(|v| version::release_supersedes(v, current, store::current_sha()))
         .map(|v| (v.version.clone(), v.message.clone()));
     let st = HelpState::new().with_version(current.to_string(), update);
     *state.mode_mut() = Mode::Help(Box::new(st));

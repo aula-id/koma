@@ -339,7 +339,12 @@ pub(crate) fn parse_on_off(raw: &str) -> Option<bool> {
 /// Handles `--version`/`-V` (#75). Unlike [`crate::app::print_daemon_usage`] this is
 /// requested output, not error usage, so it goes to STDOUT with a zero exit code.
 pub fn print_version() -> i32 {
-    println!("koma {}", env!("CARGO_PKG_VERSION"));
+    let sha = crate::model::store::current_sha();
+    if sha == "unknown" {
+        println!("koma {}", env!("CARGO_PKG_VERSION"));
+    } else {
+        println!("koma {} {sha}", env!("CARGO_PKG_VERSION"));
+    }
     0
 }
 
