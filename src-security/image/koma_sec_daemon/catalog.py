@@ -162,7 +162,7 @@ def list_tools(
     q: str | None = None,
 ) -> list[dict]:
     cat = (category or "").strip().lower() or None
-    want_ready = (filter_mode or "all").strip().lower() == "ready"
+    want_ready = (filter_mode or "ready").strip().lower() == "ready"
     lane_n = (lane or "").strip().lower() or None
     if lane_n and lane_n not in _LANES:
         lane_n = None
@@ -223,7 +223,7 @@ def list_tools_page(
 ) -> dict:
     """Paged list with next_cursor for catalog protocol."""
     cat = (category or "").strip().lower() or None
-    want_ready = (filter_mode or "all").strip().lower() == "ready"
+    want_ready = (filter_mode or "ready").strip().lower() == "ready"
     lane_n = (lane or "").strip().lower() or None
     if lane_n and lane_n not in _LANES:
         lane_n = None
@@ -306,6 +306,32 @@ def get_tool(name: str, lane: str | None = None) -> dict | None:
     return None
 
 
+
+def gate_run(name: str, lane: str | None = None) -> str | None:
+    """Refuse a concrete run when pack policy or readiness fails. None = admit.
+
+    Complements parent surfaces: pack `lanes` + `ready` are the scale-out contract.
+    """
+    n = (name or "").strip()
+    if not n:
+        return "sec_run requires a tool name"
+    row = get_tool(n, lane=None)  # fetch row even if lane would hide it, then check
+    if row is None:
+        # Unknown to catalog: allow only if still in legacy registry without pack row.
+        # Fail closed for named pack tools; unknown bare names get a soft admit so
+        # smoke handlers without pack rows keep working until fully catalogued.
+        return None
+    lane_n = (lane or "").strip().lower() or None
+    if lane_n and lane_n in _LANES:
+        lanes = row.get("lanes") or []
+        if lanes and lane_n not in lanes:
+            return f"{n} not allowed on {lane_n} lane (pack lanes={lanes})"
+    if not row.get("ready", True):
+        miss = row.get("missing") or "dependency"
+        hint = row.get("hint") or ""
+        return f"{n} not ready ({miss})" + (f": {hint}" if hint else "")
+    return None
+
 def lane_allows(name: str, lane: str) -> bool:
     """True when concrete tool `name` may run on `lane` per pack/defaults."""
     lane = (lane or "").strip().lower()
@@ -340,7 +366,7 @@ def handle(op: str, args: dict | None = None) -> dict:
         q = args.get("q") if isinstance(args.get("q"), str) else None
         return list_tools_page(
             category=args.get("category") if isinstance(args.get("category"), str) else None,
-            filter_mode=str(args.get("filter") or "all"),
+            filter_mode=str(args.get("filter") or "ready"),
             lane=lane,
             limit=lim_i,
             cursor=cur_i,
@@ -354,6 +380,22 @@ def handle(op: str, args: dict | None = None) -> dict:
         if tool is None:
             raise KeyError(f"unknown or lane-denied tool: {name}")
         return {"tool": tool}
+    if op == "summary":
+        rows = _merged_rows()
+        ready_n = sum(1 for r in rows if r.get("ready", True))
+        by_dom: dict[str, dict] = {}
+        for r in rows:
+            d = (r.get("domain") or "other").lower()
+            slot = by_dom.setdefault(d, {"total": 0, "ready": 0})
+            slot["total"] += 1
+            if r.get("ready", True):
+                slot["ready"] += 1
+        return {
+            "tools": len(rows),
+            "ready": ready_n,
+            "not_ready": len(rows) - ready_n,
+            "domains": by_dom,
+        }
     if op == "packs":
         root = _catalog_root() / "packs"
         names = sorted(p.stem for p in root.glob("*.json")) if root.is_dir() else []

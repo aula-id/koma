@@ -142,15 +142,29 @@ def health() -> dict:
     return st
 
 
-def ensure_up() -> boundary_mod.Boundary:
-    """Lazy bring-up for sec_run. Raises BoundaryError on failure."""
+def ensure_up(*, net_off: bool = False) -> boundary_mod.Boundary:
+    """Lazy bring-up for sec_run. Raises BoundaryError on failure.
+
+    net_off=True (research / offline): force empty proxy rules even if a prior
+    red session left an allowlist on this daemon process.
+    """
     with _LOCK:
         if _BOUNDARY is not None and _guest_running(_BOUNDARY):
+            if net_off:
+                try:
+                    boundary_mod.write_rules(_BOUNDARY.rules_path, [])
+                except OSError as exc:
+                    raise boundary_mod.BoundaryError(f"could not clear egress rules: {exc}") from exc
             return _BOUNDARY
-    up()
+    up(targets=[] if net_off else None, exclusions=[] if net_off else None)
     with _LOCK:
         if _BOUNDARY is None or not _guest_running(_BOUNDARY):
             raise boundary_mod.BoundaryError("boundary failed to start")
+        if net_off:
+            try:
+                boundary_mod.write_rules(_BOUNDARY.rules_path, [])
+            except OSError as exc:
+                raise boundary_mod.BoundaryError(f"could not clear egress rules: {exc}") from exc
         return _BOUNDARY
 
 

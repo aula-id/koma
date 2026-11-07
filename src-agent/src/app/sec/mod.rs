@@ -410,6 +410,17 @@ impl SecDaemonManager {
     /// timeout removes the pending entry and returns `Err("sec tool '<name>' timed
     /// out")`.
     pub fn execute_blocking(&self, tool: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.execute_blocking_in_lane(tool, args, None)
+    }
+
+    /// Like [`Self::execute_blocking`], tagging the daemon call with the session
+    /// cyber lane so pack `lanes` / research net-off apply on the guest path.
+    pub fn execute_blocking_in_lane(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        lane: Option<&str>,
+    ) -> Result<String, String> {
         // Namespace guard only. The lane flag and the per-session advertise
         // check need a `SessionRuntime`, so they run at the boundary
         // (`crate::tool::execute_tool`, `subagent::engine`) where both are in
@@ -417,7 +428,13 @@ impl SecDaemonManager {
         if let Some(reason) = crate::security::sec_refusal(tool, true, |n| self.is_advertised(n)) {
             return Err(reason);
         }
-        self.request(serde_json::json!({ "op": "call", "tool": tool, "args": args }))
+        let mut frame = serde_json::json!({ "op": "call", "tool": tool, "args": args });
+        if let Some(l) = lane {
+            if let Some(obj) = frame.as_object_mut() {
+                obj.insert("lane".into(), serde_json::Value::String(l.to_string()));
+            }
+        }
+        self.request(frame)
     }
 
     /// The same guard as [`Self::execute_blocking`]'s prelude, for callers that
@@ -699,7 +716,42 @@ impl SecDaemonManager {
                 .collect(),
             runtime_ok,
             runtime,
+            boundary_up: false,
+            net: String::new(),
+            rules: Vec::new(),
+            catalog_ready: 0,
+            catalog_total: 0,
         }
+    }
+
+    /// Fill boundary net/rules + catalog ready counts (IPC; call on panel refresh only).
+    pub fn enrich_status(&self, mut status: SecStatus) -> SecStatus {
+        if !status.running {
+            return status;
+        }
+        if let Ok(raw) = self.runtime_op("status", &serde_json::json!({})) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                status.boundary_up = v.get("up").and_then(|x| x.as_bool()).unwrap_or(false);
+                status.net = v
+                    .get("net")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(if status.boundary_up { "unknown" } else { "down" })
+                    .to_string();
+                if let Some(arr) = v.get("rules").and_then(|x| x.as_array()) {
+                    status.rules = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+        }
+        if let Ok(raw) = self.catalog_op("summary", &serde_json::json!({})) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                status.catalog_total = v.get("tools").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                status.catalog_ready = v.get("ready").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            }
+        }
+        status
     }
 }
 
@@ -735,6 +787,21 @@ pub struct SecStatus {
     /// Same cache as [`Self::runtime_ok`].
     #[serde(default)]
     pub runtime: String,
+    /// Boundary guest up (from `sec_runtime status`). Default false when unknown.
+    #[serde(default)]
+    pub boundary_up: bool,
+    /// Egress mode: `off` | `scope` | `down` | `unknown`.
+    #[serde(default)]
+    pub net: String,
+    /// Live proxy allowlist lines (host ports).
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// Catalog tools marked ready (from catalog summary when daemon up).
+    #[serde(default)]
+    pub catalog_ready: u32,
+    /// Catalog tools total known to packs+registry.
+    #[serde(default)]
+    pub catalog_total: u32,
 }
 
 /// Per-tool metadata surfaced in [`SecStatus`].

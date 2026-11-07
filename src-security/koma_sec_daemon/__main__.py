@@ -242,7 +242,7 @@ def main() -> None:
         desc = registry.REGISTRY.get(tool_name) or {}
         return desc.get("exec")
 
-    def _call_in_guest(tool_name: str, tool_args: dict, frame_id) -> str:
+    def _call_in_guest(tool_name: str, tool_args: dict, frame_id, *, lane: str | None = None) -> str:
         """Run the tool inside the Boundary guest when up.
 
         Browser-class tools stay on the host (no browser stack in slim guest yet).
@@ -252,7 +252,8 @@ def main() -> None:
         if _exec_class(tool_name) == effects.BROWSER:
             return call(tool_name, tool_args, sessions, cancel_key=frame_id)
         try:
-            b = runtime_ops.ensure_up()
+            net_off = (lane or "").strip().lower() in ("research", "blue")
+            b = runtime_ops.ensure_up(net_off=net_off)
         except Exception as exc:
             if os.environ.get("KOMA_SEC_ALLOW_HOST_BRIDGE", "").strip() in ("1", "true", "yes"):
                 return call(tool_name, tool_args, sessions, cancel_key=frame_id)
@@ -274,7 +275,7 @@ def main() -> None:
             raise RuntimeError(err or f"guest_run failed for {tool_name}")
         return res.stdout or ""
 
-    def run_call(frame_id, tool_name, tool_args) -> None:
+    def run_call(frame_id, tool_name, tool_args, lane=None) -> None:
         # Duplicate-execution check BEFORE the tool runs: the board, not a prompt,
         # is what stops two lanes firing at one route. The frame id is the owner,
         # so a retry by the same call re-enters its own claim.
@@ -290,7 +291,7 @@ def main() -> None:
                 return
         result = ""
         try:
-            result = _call_in_guest(tool_name, tool_args, frame_id)
+            result = _call_in_guest(tool_name, tool_args, frame_id, lane=lane)
             emit({"id": frame_id, "ok": True, "result": verdict.as_typed(result)})
         except registry.Unavailable as exc:
             # A missing dependency is a typed outcome, not a crash: the model sees
@@ -334,6 +335,9 @@ def main() -> None:
             if op == "call":
                 tool_name = frame.get("tool", "")
                 tool_args = frame.get("args") or {}
+                lane = frame.get("lane") if isinstance(frame.get("lane"), str) else None
+                if not lane:
+                    lane = os.environ.get("KOMA_SEC_LANE") or None
                 if tool_name not in registry.REGISTRY:
                     write_frame(real_stdout, {
                         "id": frame_id,
@@ -341,7 +345,19 @@ def main() -> None:
                         "error": f"unknown tool: {tool_name}",
                     })
                     continue
-                calls.submit(run_call, frame_id, tool_name, tool_args)
+                try:
+                    from koma_sec_daemon import catalog as catalog_mod
+                    gate = catalog_mod.gate_run(tool_name, lane)
+                except Exception:
+                    gate = None
+                if gate:
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": verdict.typed(verdict.BLOCKED, gate),
+                    })
+                    continue
+                calls.submit(run_call, frame_id, tool_name, tool_args, lane)
 
             elif op == "cancel":
                 # Kills this id's child work and answers immediately, so the

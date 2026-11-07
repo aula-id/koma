@@ -327,7 +327,10 @@ fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<Install
         .rest
         .sec_manager
         .as_ref()
-        .map(|m| m.status())
+        .map(|m| {
+            let base = m.status();
+            m.enrich_status(base)
+        })
         .unwrap_or_default();
     let inactive = state.rest.sec_inactive.clone();
     let yolo_armed = state.rest.yolo_armed;

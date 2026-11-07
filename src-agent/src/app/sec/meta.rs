@@ -49,7 +49,7 @@ pub fn meta_tool_defs() -> Vec<ToolDef> {
         def(
             "sec_catalog",
             "Browse the security toolkit without dumping every schema into the prompt. \
-op=categories lists domains; op=list lists tools (optional category, filter=ready|all); \
+op=categories lists domains; op=list lists tools (optional category; filter defaults to ready); \
 op=get returns one tool's full schema and how-to (requires name).",
             object_schema(
                 serde_json::json!({
@@ -69,7 +69,7 @@ op=get returns one tool's full schema and how-to (requires name).",
                     "filter": {
                         "type": "string",
                         "enum": ["all", "ready"],
-                        "description": "list filter: all tools or only dependency-ready"
+                        "description": "list filter: default ready; pass all to include not-ready"
                     },
                     "limit": {
                         "type": "integer",

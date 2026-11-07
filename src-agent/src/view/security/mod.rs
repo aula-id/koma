@@ -247,46 +247,51 @@ fn render_tools(
         }
     }
 
-    // Catalog summary — tools load dynamically via sec_catalog / sec_run.
-    lines.push(Line::from(Span::styled("catalog (dynamic)", dim_style)));
-    if st.status.tools.is_empty() {
+    // Catalog + boundary summary — live fields from enrich_status on panel refresh.
+    lines.push(Line::from(Span::styled("catalog + boundary", dim_style)));
+    if st.status.running {
+        let cat = if st.status.catalog_total > 0 {
+            format!(
+                "  catalog ready {}/{} · handshake {}",
+                st.status.catalog_ready, st.status.catalog_total, st.status.tools.len()
+            )
+        } else {
+            format!("  handshake {} tools · agent: sec_catalog → sec_run", st.status.tools.len())
+        };
         lines.push(Line::from(Span::styled(
-            if st.status.running {
-                "  (no toolkit rows yet)"
-            } else {
-                "  start daemon to load smoke pack inventory"
-            },
-            dim_style,
+            cat,
+            if active { tool_style } else { dim_style },
         )));
-    } else {
-        use std::collections::BTreeMap;
-        let mut by_domain: BTreeMap<&str, usize> = BTreeMap::new();
-        for tool in &st.status.tools {
-            let d = if tool.domain.is_empty() {
-                "other"
-            } else {
-                tool.domain.as_str()
-            };
-            *by_domain.entry(d).or_insert(0) += 1;
-        }
-        let parts: Vec<String> = by_domain
-            .into_iter()
-            .map(|(d, n)| format!("{d}:{n}"))
-            .collect();
+        let net = if st.status.net.is_empty() {
+            if st.status.boundary_up { "unknown" } else { "down" }
+        } else {
+            st.status.net.as_str()
+        };
+        let rules_n = st.status.rules.len();
+        let rules_preview = if rules_n == 0 {
+            "deny-all".to_string()
+        } else if rules_n <= 3 {
+            st.status.rules.join(", ")
+        } else {
+            format!("{}, … (+{})", st.status.rules[..2].join(", "), rules_n - 2)
+        };
         lines.push(Line::from(Span::styled(
             format!(
-                "  {} tools · {} · agent uses sec_catalog → sec_run",
-                st.status.tools.len(),
-                parts.join(" · ")
+                "  boundary {} · net={} · rules[{}]: {}",
+                if st.status.boundary_up { "up" } else { "down" },
+                net,
+                rules_n,
+                rules_preview
             ),
             if active { tool_style } else { dim_style },
         )));
         lines.push(Line::from(Span::styled(
-            "  boundary: sec_runtime status|up|down|net|rules · files: sec_fs · plan: catalog only",
+            "  working set pins survive compact · plan: catalog only",
             dim_style,
         )));
+    } else {
         lines.push(Line::from(Span::styled(
-            "  working set: pins survive compact · rediscover via sec_catalog",
+            "  start daemon to load catalog + boundary status",
             dim_style,
         )));
     }

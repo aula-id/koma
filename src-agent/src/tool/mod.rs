@@ -1244,6 +1244,10 @@ fn dispatch_sec_meta(
                         );
                     }
                 }
+                // Default list filter=ready so the agent does not drown in not-ready rows.
+                if op == "list" && !obj.contains_key("filter") {
+                    obj.insert("filter".into(), serde_json::Value::String("ready".into()));
+                }
             }
             match mgr.catalog_op(op, &payload) {
                 Ok(raw) => {
@@ -1402,7 +1406,12 @@ fn dispatch_sec_meta(
                         handle: None,
                     }
                 } else {
-                    let typed = match mgr.execute_blocking(&inner, &inner_args) {
+                    let lane_s = ctx.cyber_lane.map(|l| l.label().to_string());
+                    let typed = match mgr.execute_blocking_in_lane(
+                        &inner,
+                        &inner_args,
+                        lane_s.as_deref(),
+                    ) {
                         Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
                             output::spill_foreign(ctx.session_dir.as_deref(), &inner, body)
                         }),

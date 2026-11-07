@@ -22,8 +22,10 @@ Rediscovery is always available via `sec_catalog`.
 
 ## Enforcement on `sec_run`
 
-name → catalog row → lanes → effect/lane matrix → scope if needed → ready → **guest only**
-(browser may stay host until guest browser exists). Unknown → refuse.
+name → catalog row → pack `lanes` (`gate_run`) → effect/lane matrix → scope if needed → ready → **guest only**
+(browser may stay host until guest browser exists). Unknown pack row without lanes soft-admits legacy handlers.
+Research/blue lazy `ensure_up` forces deny-all egress even if a prior red allowlist was open.
+`sec_catalog list` defaults to `filter=ready`.
 
 ## Network
 
