@@ -47,14 +47,15 @@ separate collect runs `gcAndSweep()` and then `Bun.gc(true)` every 30 seconds.
 That returns JavaScript heap pages only. Two weak sweeps pause it until RSS
 climbs again. It does not shrink the window and does not change the RAM color.
 Mounted turns keep a stable slot, so a page updates the native widget in place
-instead of destroying it. Above 2 GiB the footer still says restarting keeps
-the session. If the window is already reduced, the sweep has stopped helping,
-and RSS is still above 768 MiB, the view exits and the launcher opens a fresh
-one on the same session. The daemon stays. A second recycle waits ten minutes.
-Set the thresholds with `KOMA_TERM_MEM=high,low,warn` in MiB. `SIGUSR2` requests
-the same cleanup for diagnostics. Windows receives the moving window, the slot
-reuse, and the quiet collect, and the launcher respawns the view the same way.
-Windows has no pressure signal handler.
+instead of destroying it. View recycle is disabled: the process stays up and
+cleans in place instead of exiting for a launcher respawn. During a pressure
+cleanup or quiet collect, the ready status line briefly shows a braille spinner
+and the word `cleanup`. Above 2 GiB the footer still warns that memory is high
+and the history window was reduced. Set the thresholds with
+`KOMA_TERM_MEM=high,low,warn` in MiB. `SIGUSR2` requests the same cleanup for
+diagnostics. Windows receives the moving window, the slot reuse, the quiet
+collect, and the same in-place cleanup flash. Windows has no pressure signal
+handler.
 
 ## Regression tests
 
