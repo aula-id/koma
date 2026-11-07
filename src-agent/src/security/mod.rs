@@ -202,7 +202,7 @@ pub fn install(force: bool) -> Result<()> {
     let mut bar = Bar::new(5);
     bar.tick("checking requirements");
     ensure_requirement("python3")?;
-    ensure_requirement("docker")?;
+    ensure_container_runtime()?;
 
     let venv_ready = dest.exists() && is_installed() && !force;
     if venv_ready {
@@ -323,12 +323,7 @@ impl Bar {
     }
 }
 
-fn tool_ok(name: &str) -> bool {
-    let args: &[&str] = if name == "docker" {
-        &["info", "--format", "{{.ServerVersion}}"]
-    } else {
-        &["--version"]
-    };
+fn command_ok(name: &str, args: &[&str]) -> bool {
     std::process::Command::new(name)
         .args(args)
         .stdout(std::process::Stdio::null())
@@ -336,6 +331,87 @@ fn tool_ok(name: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn tool_ok(name: &str) -> bool {
+    let args: &[&str] = if name == "docker" {
+        &["info", "--format", "{{.ServerVersion}}"]
+    } else {
+        &["--version"]
+    };
+    command_ok(name, args)
+}
+
+/// What the install probe saw. The guest itself only speaks the `docker` client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeSeen {
+    docker_cli: bool,
+    docker_daemon: bool,
+    colima: bool,
+    podman_cli: bool,
+    podman_engine: bool,
+    kubernetes: bool,
+}
+
+/// What to do when `docker info` is not already succeeding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeChoice {
+    Ready,
+    StartColima {
+        need_client: bool,
+    },
+    UsePodman {
+        need_client: bool,
+        need_machine: bool,
+    },
+    KubernetesOnly,
+    DockerStopped,
+    InstallDocker,
+}
+
+fn runtime_choice(seen: RuntimeSeen) -> RuntimeChoice {
+    if seen.docker_daemon {
+        return RuntimeChoice::Ready;
+    }
+    if seen.colima {
+        return RuntimeChoice::StartColima {
+            need_client: !seen.docker_cli,
+        };
+    }
+    if seen.podman_cli {
+        return RuntimeChoice::UsePodman {
+            need_client: !seen.docker_cli,
+            need_machine: !seen.podman_engine,
+        };
+    }
+    if seen.kubernetes {
+        return RuntimeChoice::KubernetesOnly;
+    }
+    if seen.docker_cli {
+        return RuntimeChoice::DockerStopped;
+    }
+    RuntimeChoice::InstallDocker
+}
+
+fn probe_runtime() -> RuntimeSeen {
+    RuntimeSeen {
+        docker_cli: command_ok("docker", &["--version"]),
+        docker_daemon: command_ok("docker", &["info", "--format", "{{.ServerVersion}}"]),
+        colima: command_ok("colima", &["version"]),
+        podman_cli: command_ok("podman", &["--version"]),
+        podman_engine: command_ok("podman", &["info"]),
+        kubernetes: command_ok("kubectl", &["config", "current-context"]),
+    }
+}
+
+fn docker_client_argv(os: &str, manager: &str) -> Option<Vec<&'static str>> {
+    match (os, manager) {
+        ("macos", "brew") => Some(vec!["brew", "install", "docker"]),
+        ("linux", "apt") => Some(vec!["sudo", "apt-get", "install", "-y", "docker.io"]),
+        ("linux", "dnf") => Some(vec!["sudo", "dnf", "install", "-y", "docker"]),
+        ("linux", "pacman") => Some(vec!["sudo", "pacman", "-S", "--noconfirm", "docker"]),
+        _ => None,
+    }
 }
 
 fn accepts_yes(answer: &str) -> bool {
@@ -434,6 +510,157 @@ fn ensure_requirement(tool: &str) -> Result<()> {
     Ok(())
 }
 
+fn confirm(prompt: &str) -> Result<bool> {
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    if !tty {
+        return Ok(false);
+    }
+    println!();
+    print!("{prompt} [y/N] ");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(accepts_yes(&line))
+}
+
+fn install_docker_client() -> Result<()> {
+    let argv = docker_client_argv(host_os(), package_manager());
+    let shown = argv
+        .as_ref()
+        .map(|a| a.join(" "))
+        .unwrap_or_else(|| "install docker".to_string());
+    if !confirm(&format!(
+        "The docker client is missing. Install it with `{shown}`?"
+    ))? {
+        return Err(anyhow!(
+            "the docker client is required. Install was declined.\n  {shown}"
+        ));
+    }
+    let Some(argv) = argv else {
+        return Err(anyhow!("no package manager can install the docker client"));
+    };
+    quiet(argv[0], &argv[1..])?;
+    if !command_ok("docker", &["--version"]) {
+        return Err(anyhow!(
+            "the docker client was installed but is not on PATH"
+        ));
+    }
+    Ok(())
+}
+
+fn podman_socket() -> Option<String> {
+    let out = std::process::Command::new("podman")
+        .args(["info", "--format", "{{.Host.RemoteSocket.Path}}"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
+}
+
+fn point_docker_at_podman(socket: &str) -> Result<()> {
+    let host = format!("host=unix://{socket}");
+    let _ = std::process::Command::new("docker")
+        .args(["context", "create", "koma-podman", "--docker", &host])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    quiet("docker", &["context", "use", "koma-podman"])
+}
+
+/// The security guest is started with the `docker` client. Colima and Podman
+/// count when they can make that client reach a local engine. A Kubernetes
+/// context does not.
+fn ensure_container_runtime() -> Result<()> {
+    let seen = probe_runtime();
+    println!(
+        "runtime: docker={} colima={} podman={} kubernetes={}",
+        if seen.docker_daemon {
+            "ready"
+        } else if seen.docker_cli {
+            "down"
+        } else {
+            "absent"
+        },
+        if seen.colima { "installed" } else { "absent" },
+        if seen.podman_engine {
+            "ready"
+        } else if seen.podman_cli {
+            "down"
+        } else {
+            "absent"
+        },
+        if seen.kubernetes {
+            "configured"
+        } else {
+            "absent"
+        },
+    );
+    match runtime_choice(seen) {
+        RuntimeChoice::Ready => Ok(()),
+        RuntimeChoice::StartColima { need_client } => {
+            if need_client {
+                install_docker_client()?;
+            }
+            if !confirm("Colima is installed but Docker is not running. Start it with `colima start`?")? {
+                return Err(anyhow!(
+                    "Colima is installed but not running. Start it with `colima start`, then rerun koma --security-install."
+                ));
+            }
+            quiet("colima", &["start"])?;
+            if tool_ok("docker") {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "Colima started but `docker info` still fails. Check `colima status`, then rerun koma --security-install."
+                ))
+            }
+        }
+        RuntimeChoice::UsePodman { need_client, need_machine } => {
+            if need_client {
+                install_docker_client()?;
+            }
+            if need_machine {
+                if !confirm("Podman is installed but not running. Start it with `podman machine start`?")? {
+                    return Err(anyhow!(
+                        "Podman is installed but not running. Start it with `podman machine start`, then rerun koma --security-install."
+                    ));
+                }
+                quiet("podman", &["machine", "start"])?;
+            } else if !confirm("Podman is running but Docker is not. Use Podman's socket for the security guest?")? {
+                return Err(anyhow!(
+                    "Podman is running, but the docker client is not pointed at it. Rerun koma --security-install and accept the prompt."
+                ));
+            }
+            let socket = podman_socket().ok_or_else(|| {
+                anyhow!("Podman did not report a socket. `docker` cannot reach it.")
+            })?;
+            point_docker_at_podman(&socket)?;
+            if tool_ok("docker") {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "Podman is up, but `docker info` still fails through context koma-podman."
+                ))
+            }
+        }
+        RuntimeChoice::KubernetesOnly => Err(anyhow!(
+            "Kubernetes is configured, but the security guest runs on a local Docker engine. Start Docker, Colima, or Podman, then rerun koma --security-install."
+        )),
+        RuntimeChoice::DockerStopped => Err(anyhow!(
+            "Docker is installed but not running. Open it, then rerun koma --security-install."
+        )),
+        RuntimeChoice::InstallDocker => ensure_requirement("docker"),
+    }
+}
+
 fn quiet(program: &str, args: &[&str]) -> Result<()> {
     let out = std::process::Command::new(program)
         .args(args)
@@ -497,4 +724,3 @@ fn pull_safety_image(dest: &std::path::Path, force: bool) -> Result<()> {
 #[cfg(test)]
 #[path = "mod_test.rs"]
 mod tests;
-
