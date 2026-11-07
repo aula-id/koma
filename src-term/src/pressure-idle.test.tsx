@@ -7,7 +7,7 @@ test("idle collect sweeps only while the turn is quiet", async () => {
   const gc = spyOn(Bun, "gc").mockImplementation(() => {})
   const idle = { current: false }
   function Probe() {
-    useIdleCollect(() => idle.current, 30)
+    useIdleCollect(() => idle.current, 30, () => 200 * 1024 * 1024)
     return <box />
   }
   const view = await testRender(<Probe />, { width: 20, height: 6 })

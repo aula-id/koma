@@ -1,3 +1,4 @@
+import { gcAndSweep } from "bun:jsc"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 const MIB = 1024 * 1024
@@ -5,6 +6,10 @@ export const PRESSURE_CHECK_MS = 5000
 export const CLEANUP_INTERVAL_MS = 30_000
 /** Quiet-turn collection. A live turn is left alone so a full GC does not stall a paint. */
 export const IDLE_COLLECT_MS = 30_000
+/** Below this, a quiet collect only pauses. The idle client is already small. */
+export const IDLE_COLLECT_FLOOR = 128 * MIB
+/** After a view recycle, wait this long before asking for another. */
+export const RECYCLE_GAP_MS = 10 * 60 * 1000
 /** Forced GC stops after this many cleanups in a row free less than `GC_USEFUL_BYTES`. */
 export const GC_USEFUL_BYTES = 32 * MIB
 export const GC_MISSES = 2
@@ -72,20 +77,73 @@ export function idleCollectDue(lastAt: number, now: number, idle: boolean, inter
   return now - lastAt >= interval - slack
 }
 
+export type IdleCollect = { lastAt: number; misses: number; paused: boolean; lastRss: number }
+
+export const IDLE_COLLECT: IdleCollect = { lastAt: 0, misses: 0, paused: false, lastRss: 0 }
+
+/**
+ * One quiet tick. A live turn, a small process, and a paused sweep do not collect.
+ * A paused sweep resumes after RSS climbs by `GC_USEFUL_BYTES`.
+ */
+export function idleCollectStep(state: IdleCollect, now: number, idle: boolean, rss: number, interval = IDLE_COLLECT_MS): { state: IdleCollect; collect: boolean } {
+  if (!idle || rss < IDLE_COLLECT_FLOOR) return { state, collect: false }
+  let current = state
+  if (current.paused) {
+    if (rss < current.lastRss + GC_USEFUL_BYTES) return { state: current, collect: false }
+    current = { ...current, paused: false, misses: 0 }
+  }
+  if (!idleCollectDue(current.lastAt, now, true, interval)) return { state: current, collect: false }
+  return { state: { ...current, lastAt: now, lastRss: rss }, collect: true }
+}
+
+/** Two weak sweeps pause collection until RSS climbs. A useful sweep clears the misses. */
+export function idleCollectResult(state: IdleCollect, before: number, after: number): IdleCollect {
+  if (before - after >= GC_USEFUL_BYTES) return state.misses ? { ...state, misses: 0, lastRss: after } : { ...state, lastRss: after }
+  const misses = state.misses + 1
+  if (misses < GC_MISSES) return { ...state, misses, lastRss: after }
+  return { ...state, misses, paused: true, lastRss: after }
+}
+
+/**
+ * A fresh launch may recycle. A process spawned to replace a hot view waits out the gap.
+ */
+export function recycleArmed(now: number, recycledAt = Number(process.env.KOMA_RECYCLED_AT)): boolean {
+  if (!Number.isFinite(recycledAt) || recycledAt <= 0) return true
+  return now - recycledAt >= RECYCLE_GAP_MS
+}
+
+/**
+ * Restart the view only when the window is already short, the sweep stopped helping,
+ * and this process is still above the high mark. A live turn is left alone.
+ */
+export function viewRecycleDue(state: Pressure, rss: number, high: number, idle: boolean, armed: boolean): boolean {
+  return armed && idle && state.reduced && !state.gcUseful && rss >= high
+}
+
 /**
  * Sweep the JavaScript heap while the turn is quiet.
  * This does not shrink the history window and does not change the RAM color.
+ * Native widget and wasm pages stay; only memory the JS heap just freed can return.
  */
-export function useIdleCollect(idle: () => boolean, intervalMs = IDLE_COLLECT_MS): void {
+export function useIdleCollect(
+  idle: () => boolean,
+  intervalMs = IDLE_COLLECT_MS,
+  readRss: () => number = () => process.memoryUsage().rss,
+): void {
   const idleRef = useRef(idle)
+  const readRef = useRef(readRss)
   idleRef.current = idle
-  const lastAt = useRef(0)
+  readRef.current = readRss
+  const state = useRef(IDLE_COLLECT)
   useEffect(() => {
     const timer = setInterval(() => {
-      const now = Date.now()
-      if (!idleCollectDue(lastAt.current, now, idleRef.current(), intervalMs)) return
-      lastAt.current = now
+      const rss = readRef.current()
+      const step = idleCollectStep(state.current, Date.now(), idleRef.current(), rss, intervalMs)
+      state.current = step.state
+      if (!step.collect) return
+      gcAndSweep()
       Bun.gc(true)
+      state.current = idleCollectResult(state.current, rss, readRef.current())
     }, intervalMs)
     return () => clearInterval(timer)
   }, [intervalMs])
@@ -129,7 +187,6 @@ export function usePressureValve(
   }, [sessionId])
 
   useEffect(() => {
-    if (process.platform === "win32") return
     const check = (forced: boolean) => {
       const rss = process.memoryUsage().rss
       const prev = ref.current
@@ -141,6 +198,8 @@ export function usePressureValve(
       update(next)
     }
     const timer = setInterval(() => check(false), PRESSURE_CHECK_MS)
+    // Windows has no SIGUSR2. The RSS timer still shrinks the window and can recycle the view.
+    if (process.platform === "win32") return () => clearInterval(timer)
     const signal = () => check(true)
     process.on("SIGUSR2", signal)
     return () => { clearInterval(timer); process.off("SIGUSR2", signal) }

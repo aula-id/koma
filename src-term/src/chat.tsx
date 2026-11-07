@@ -8,6 +8,7 @@ import {
   CHAT_TURNS_DEFAULT,
   CHAT_MOUNT_TURNS,
   CHAT_WINDOW_BYTES,
+  assignSlots,
   countTurns,
   historyRows,
   messageSize,
@@ -33,7 +34,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
-import { CALM, ramTone, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
+import { CALM, pressureLimits, ramTone, recycleArmed, useIdleCollect, usePressureValve, viewRecycleDue, type Pressure } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -94,16 +95,30 @@ export function Chat({
   send: (request: unknown) => void
   sendTracked: (request: unknown) => Promise<string>
   onFlushError: (text: string) => void
+  /** Ask the launcher to replace this view and keep the daemon. Local sessions only. */
+  onRecycle?: (id: string) => void
 }) {
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
   const [pressure, setPressure] = useState(CALM)
   const session = snap.sessions.find((row) => row.id === snap.foreground_id) ?? snap.sessions[0]
   const turnRef = useRef({ session, status: snap.global.status })
   turnRef.current = { session, status: snap.global.status }
+  const recycleRef = useRef(onRecycle)
+  recycleRef.current = onRecycle
+  const askedRecycle = useRef(false)
   useIdleCollect(() => {
     const turn = turnRef.current
     return !turn.session || !isThinking(turn.status, turn.session)
   })
+  useEffect(() => {
+    const recycle = recycleRef.current
+    const turn = turnRef.current
+    if (askedRecycle.current || !recycle || !turn.session) return
+    const idle = !isThinking(turn.status, turn.session)
+    if (!viewRecycleDue(pressure, process.memoryUsage().rss, pressureLimits().high, idle, recycleArmed(Date.now()))) return
+    askedRecycle.current = true
+    recycle(turn.session.id)
+  }, [pressure])
   if (!session) {
     return (
       <box flexGrow={1}>
@@ -439,10 +454,17 @@ function Transcript({
   const live = Boolean(session.streaming || session.stream_reasoning)
   const pending = session.pending_tool_calls.filter((call) => !used.has(call.id))
   const turns = groupTurns(session.messages, sourceOffset)
+  const slots = useRef(new Map<number, number>())
+  const rev = useRef(session.history_rev)
+  if (rev.current !== session.history_rev) {
+    rev.current = session.history_rev
+    slots.current = new Map()
+  }
+  slots.current = assignSlots(slots.current, turns.map((turn) => turn.at))
   return (
     <box flexDirection="column" gap={1} paddingLeft={1} paddingRight={1}>
       {turns.map((turn) => (
-        <box key={`turn-${session.history_rev}-${turn.at}`} id={`turn-${turn.at}`} flexDirection="column" gap={1}>
+        <box key={slots.current.get(turn.at)} id={`turn-${turn.at}`} flexDirection="column" gap={1}>
           {turn.user ? (
             <box id={`user-${turn.at}`}>
               <HistoryTurn
@@ -453,9 +475,9 @@ function Transcript({
               />
             </box>
           ) : null}
-          {turn.rest.map(({ message, at }) => (
+          {turn.rest.map(({ message }, index) => (
             <HistoryTurn
-              key={`m-${at}`}
+              key={index}
               message={message}
               theme={theme}
               syntaxStyle={syntaxStyle}

@@ -17,6 +17,30 @@ export function windowEnd(rows: readonly HistoryRow[], from: number, turns = CHA
   return rows.length
 }
 
+/**
+ * Slot for each mounted turn. A turn that was already on screen keeps its slot,
+ * so the native widget is updated in place. A turn that enters takes a free slot.
+ */
+export function assignSlots(previous: ReadonlyMap<number, number>, indexes: readonly number[]): Map<number, number> {
+  const next = new Map<number, number>()
+  const used = new Set<number>()
+  for (const index of indexes) {
+    const slot = previous.get(index)
+    if (slot === undefined || used.has(slot)) continue
+    next.set(index, slot)
+    used.add(slot)
+  }
+  let slot = 0
+  for (const index of indexes) {
+    if (next.has(index)) continue
+    while (used.has(slot)) slot++
+    next.set(index, slot)
+    used.add(slot)
+    slot++
+  }
+  return next
+}
+
 /** Move the window start by up to `step` turns, crossing at most half the byte budget. */
 export function shiftWindow(rows: readonly HistoryRow[], from: number, direction: -1 | 1, step = CHAT_TURNS_DEFAULT, bytes = Infinity): number {
   const starts = turnStarts(rows)

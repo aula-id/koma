@@ -42,12 +42,19 @@ below 512 MiB. Reduced mode shrinks the window to 30 turns and half the byte
 budget around the current reading position, then requests synchronous Bun GC
 after layout commits, at most once per 30 seconds. If two cleanups in a row free
 less than 32 MiB each, later cleanups skip GC and the footer says the history
-window was reduced. Above 2 GiB the footer suggests restarting the terminal,
-which keeps the session, until RSS falls below the low mark; the client is never
-killed or restarted. Set the thresholds with
-`KOMA_TERM_MEM=high,low,warn` in MiB. `SIGUSR2` requests the same cleanup for
-diagnostics. Windows receives the moving window and allocation fixes but has no
-pressure signal handler.
+window was reduced. While the turn is quiet and RSS is at least 128 MiB, a
+separate collect runs `gcAndSweep()` and then `Bun.gc(true)` every 30 seconds.
+That returns JavaScript heap pages only. Two weak sweeps pause it until RSS
+climbs again. It does not shrink the window and does not change the RAM color.
+Mounted turns keep a stable slot, so a page updates the native widget in place
+instead of destroying it. Above 2 GiB the footer still says restarting keeps
+the session. If the window is already reduced, the sweep has stopped helping,
+and RSS is still above 768 MiB, the view exits and the launcher opens a fresh
+one on the same session. The daemon stays. A second recycle waits ten minutes.
+Set the thresholds with `KOMA_TERM_MEM=high,low,warn` in MiB. `SIGUSR2` requests
+the same cleanup for diagnostics. Windows receives the moving window, the slot
+reuse, and the quiet collect, and the launcher respawns the view the same way.
+Windows has no pressure signal handler.
 
 ## Regression tests
 

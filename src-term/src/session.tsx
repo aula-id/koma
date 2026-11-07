@@ -33,6 +33,7 @@ export function SessionScreen({
   onSuspendedExit,
   onRemote,
   onUpdate,
+  onRecycle,
   onPalette,
   ctrlC,
   transport,
@@ -49,6 +50,8 @@ export function SessionScreen({
   onRemote: (remote: RemoteHandoff) => void
   /** Hands the terminal to the launcher to install and reopen `id`. Local sessions only. */
   onUpdate?: (id: string) => void
+  /** Hands the terminal to the launcher to reopen `id` without installing. Local sessions only. */
+  onRecycle?: (id: string) => void
   onPalette: (name: string) => void
   ctrlC?: { current: () => void }
 }) {
@@ -447,6 +450,7 @@ export function SessionScreen({
         send={send}
         sendTracked={sendTracked}
         onFlushError={report}
+        onRecycle={onRecycle && !transport?.remote ? (sessionId) => { linkRef.current?.detach(); onRecycle(sessionId) } : undefined}
       />
     </box>
   )
