@@ -282,7 +282,11 @@ fn render_tools(
             if active { tool_style } else { dim_style },
         )));
         lines.push(Line::from(Span::styled(
-            "  boundary: sec_runtime status|up|down · files: sec_fs · plan: catalog only",
+            "  boundary: sec_runtime status|up|down|net|rules · files: sec_fs · plan: catalog only",
+            dim_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "  working set: pins survive compact · rediscover via sec_catalog",
             dim_style,
         )));
     }

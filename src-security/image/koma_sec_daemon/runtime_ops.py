@@ -72,6 +72,20 @@ def status() -> dict:
             "artifacts": str(b.artifacts),
             "preflight": None,
         }
+        try:
+            rpath = b.rules_path
+            rlines = [
+                ln.strip()
+                for ln in rpath.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            out["net"] = "off" if not rlines else "scope"
+            out["rules"] = rlines
+            out["rules_count"] = len(rlines)
+        except OSError:
+            out["net"] = "unknown"
+            out["rules"] = []
+            out["rules_count"] = 0
         if up:
             try:
                 out["record"] = b.record()
@@ -140,6 +154,59 @@ def ensure_up() -> boundary_mod.Boundary:
         return _BOUNDARY
 
 
+
+
+def set_net(mode: str, targets: list[str] | None = None, exclusions: list[str] | None = None) -> dict:
+    """Rewrite egress rules while the boundary is up (or prepare rules path).
+
+    mode=off  → empty rules (deny all)
+    mode=scope → rules from targets/exclusions
+    """
+    mode = (mode or "").strip().lower()
+    with _LOCK:
+        b = _BOUNDARY
+        if b is None:
+            raise boundary_mod.BoundaryError("boundary is down — sec_runtime up first")
+        if mode in ("off", "none", "deny"):
+            lines: list[str] = []
+            mode_out = "off"
+        elif mode in ("scope", "on", "allow"):
+            lines = boundary_mod.rules_for(targets or [], exclusions or [])
+            mode_out = "scope"
+        else:
+            raise ValueError(f"unknown net mode: {mode!r} (use off|scope)")
+        boundary_mod.write_rules(b.rules_path, lines)
+        return {
+            "up": _guest_running(b),
+            "net": mode_out,
+            "rules": len(lines),
+            "rules_path": str(b.rules_path),
+        }
+
+
+def rules_snapshot() -> dict:
+    with _LOCK:
+        b = _BOUNDARY
+        if b is None:
+            return {"up": False, "rules": [], "net": "down"}
+        path = b.rules_path
+        lines = []
+        try:
+            text = path.read_text(encoding="utf-8")
+            lines = [
+                ln.strip()
+                for ln in text.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+        except OSError:
+            pass
+        return {
+            "up": _guest_running(b),
+            "rules": lines,
+            "net": "off" if not lines else "scope",
+            "rules_path": str(path),
+        }
+
 def current() -> boundary_mod.Boundary | None:
     with _LOCK:
         return _BOUNDARY
@@ -158,4 +225,11 @@ def handle(op: str, args: dict | None = None) -> dict:
         return down()
     if op == "health":
         return health()
+    if op in ("net", "net_set"):
+        mode = args.get("mode") if isinstance(args.get("mode"), str) else "off"
+        targets = args.get("targets") if isinstance(args.get("targets"), list) else None
+        exclusions = args.get("exclusions") if isinstance(args.get("exclusions"), list) else None
+        return set_net(mode, targets=targets, exclusions=exclusions)
+    if op in ("rules", "net_status"):
+        return rules_snapshot()
     raise ValueError(f"unknown runtime op: {op!r}")

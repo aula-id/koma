@@ -243,25 +243,26 @@ def main() -> None:
         return desc.get("exec")
 
     def _call_in_guest(tool_name: str, tool_args: dict, frame_id) -> str:
-        """Run the tool inside the Boundary guest when up; else host bridge.
+        """Run the tool inside the Boundary guest when up.
 
         Browser-class tools stay on the host (no browser stack in slim guest yet).
+        Host fallback for other tools is OFF unless KOMA_SEC_ALLOW_HOST_BRIDGE=1
+        (dev escape hatch only — production contract is guest-or-refuse).
         """
-        import json as _json
-
-        from koma_sec_daemon import effects
-        from koma_sec_daemon import runtime_ops
-
         if _exec_class(tool_name) == effects.BROWSER:
             return call(tool_name, tool_args, sessions, cancel_key=frame_id)
-
         try:
             b = runtime_ops.ensure_up()
-        except Exception:
-            # Phase bridge: if the guest cannot start, keep host execution so
-            # catalog/meta paths still work offline; runtime ops themselves never
-            # degrade.
-            return call(tool_name, tool_args, sessions, cancel_key=frame_id)
+        except Exception as exc:
+            if os.environ.get("KOMA_SEC_ALLOW_HOST_BRIDGE", "").strip() in ("1", "true", "yes"):
+                return call(tool_name, tool_args, sessions, cancel_key=frame_id)
+            return json.dumps({
+                "verdict": "error",
+                "excerpt": (
+                    f"isolation boundary unavailable ({exc}); refused host fallback. "
+                    "sec_runtime up, or set KOMA_SEC_ALLOW_HOST_BRIDGE=1 for dev only."
+                ),
+            })
 
         payload = _json.dumps(tool_args or {}, ensure_ascii=False)
         res = b.exec(
