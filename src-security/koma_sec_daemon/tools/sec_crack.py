@@ -5,7 +5,7 @@ compute : gpu
 risk    : False
 domain  : crypto
 
-All hashcat invocation is done through sandbox.run() so the registry loads
+All hashcat invocation is done through sandbox.run(, spawn=_spawn()) so the registry loads
 cleanly even when hashcat is absent (import-time safety for the smoke test).
 """
 
@@ -14,6 +14,13 @@ from __future__ import annotations
 import os
 import shlex
 import tempfile
+
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
 
 DESCRIPTOR = {
     "name": "sec_crack",
@@ -79,7 +86,7 @@ def _handler(args: dict, sessions) -> str:
         if extra_args:
             cmd.extend(shlex.split(extra_args))
 
-        out = sandbox.run(cmd, timeout=600)
+        out = sandbox.run(cmd, timeout=600, spawn=_spawn())
     finally:
         if hp is not None:
             try:

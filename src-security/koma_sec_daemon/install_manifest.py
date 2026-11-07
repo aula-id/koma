@@ -53,7 +53,15 @@ def arch_tag() -> str:
 
 
 def bin_dir() -> str:
-    """Absolute path to the persisted binary dir: ~/.koma/security/bin."""
+    """Absolute path to the persisted binary dir.
+
+    `KOMA_STATE` overrides the `~/.koma` root. That matters in the guest, where the
+    container root is READ-ONLY and `$HOME` is not writable — creating the state
+    dir there fails the whole daemon at startup.
+    """
+    root = os.environ.get("KOMA_STATE")
+    if root:
+        return os.path.join(root, "security", "bin")
     return os.path.expanduser("~/.koma/security/bin")
 
 

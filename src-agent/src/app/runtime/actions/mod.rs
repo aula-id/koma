@@ -397,6 +397,11 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_install(key, state)?;
         }
 
+        Action::SecurityLane(lane) => {
+            let idx = state.rest.foreground;
+            security::handle_security_lane(state, idx, lane)?;
+        }
+
         Action::CloseBash => {
             bash::handle_close_bash(state)?;
         }

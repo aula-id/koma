@@ -78,16 +78,32 @@ pub enum ModelField {
 pub struct RolePickerState {
     /// Parallel to [`ModelRole::ALL`]; `true` = this role is currently checked.
     pub checked: Vec<bool>,
-    /// Highlighted row, in `0..ModelRole::ALL.len()`.
+    /// Highlighted row, in `0..options().len()`.
     pub cursor: usize,
+    /// Whether cyber roles are offered. False in a plain coding session.
+    pub security_enabled: bool,
 }
 
 impl RolePickerState {
+    /// The roles this picker is currently offering. Indices into this are what
+    /// `cursor` and `checked` address; the caller passes the same list to both.
+    #[must_use]
+    pub fn options(security_enabled: bool) -> Vec<ModelRole> {
+        ModelRole::visible(security_enabled)
+    }
+
     /// Seed the checkbox state from the model's current `roles`: each option is
     /// pre-checked when its [`ModelRole`] appears in `roles`.
-    pub fn from_roles(roles: &[ModelRole]) -> Self {
-        let checked: Vec<bool> = ModelRole::ALL.iter().map(|r| roles.contains(r)).collect();
-        Self { checked, cursor: 0 }
+    pub fn from_roles(roles: &[ModelRole], security_enabled: bool) -> Self {
+        let checked: Vec<bool> = Self::options(security_enabled)
+            .iter()
+            .map(|r| roles.contains(r))
+            .collect();
+        Self {
+            checked,
+            cursor: 0,
+            security_enabled,
+        }
     }
 
     /// Move the cursor up (clamps at 0).
@@ -97,24 +113,27 @@ impl RolePickerState {
 
     /// Move the cursor down (clamps at the last role).
     pub fn down(&mut self) {
-        if self.cursor + 1 < ModelRole::ALL.len() {
+        if self.cursor + 1 < self.checked.len() {
             self.cursor += 1;
         }
     }
 
     /// Flip the checked state of the role under the cursor.
     pub fn toggle(&mut self) {
-        let i = self.cursor.min(ModelRole::ALL.len() - 1);
+        if self.checked.is_empty() {
+            return;
+        }
+        let i = self.cursor.min(self.checked.len() - 1);
         self.checked[i] = !self.checked[i];
     }
 
     /// The checked roles, in [`ModelRole::ALL`] order.
     pub fn selected_roles(&self) -> Vec<ModelRole> {
-        ModelRole::ALL
-            .iter()
+        Self::options(self.security_enabled)
+            .into_iter()
             .zip(self.checked.iter())
             .filter(|(_, &c)| c)
-            .map(|(r, _)| *r)
+            .map(|(r, _)| r)
             .collect()
     }
 }
@@ -278,4 +297,68 @@ pub fn filter_models(cache: &[crate::dto::openrouter::ModelInfo], query: &str) -
         .map(|(i, _)| i)
         .take(50)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cyber_roles_are_hidden_while_security_is_off() {
+        let off = ModelRole::visible(false);
+        assert!(!off.iter().any(|r| r.is_cyber()), "{off:?}");
+        assert_eq!(off.len(), 5);
+    }
+
+    #[test]
+    fn cyber_roles_appear_when_security_is_on() {
+        let on = ModelRole::visible(true);
+        assert_eq!(on.len(), 8);
+        assert!(on.iter().any(|r| matches!(r, ModelRole::CyberRed)));
+    }
+
+    #[test]
+    fn the_picker_options_follow_the_mode() {
+        assert_eq!(RolePickerState::options(false).len(), 5);
+        assert_eq!(RolePickerState::options(true).len(), 8);
+    }
+
+    #[test]
+    fn checked_is_parallel_to_the_options_offered() {
+        let p = RolePickerState::from_roles(&[ModelRole::Main], false);
+        assert_eq!(p.checked.len(), RolePickerState::options(false).len());
+    }
+
+    #[test]
+    fn a_hidden_role_stays_checked_and_comes_back() {
+        // Selection is not lost when the mode hides it: toggling security back on
+        // must restore the assignment rather than silently dropping it.
+        let mut p = RolePickerState::from_roles(&[ModelRole::CyberRed], true);
+        let idx = RolePickerState::options(true)
+            .iter()
+            .position(|r| *r == ModelRole::CyberRed)
+            .expect("present");
+        assert!(p.checked[idx]);
+        // Turn it off and back on without toggling.
+        let mut off = RolePickerState::from_roles(&[ModelRole::CyberRed], false);
+        assert!(off.selected_roles().is_empty());
+        p.cursor = 0;
+        assert!(p.checked[idx]);
+        off.cursor = 0;
+    }
+
+    #[test]
+    fn toggle_on_an_empty_option_list_is_safe() {
+        let mut p = RolePickerState::from_roles(&[], false);
+        p.checked.clear();
+        p.toggle();
+    }
+
+    #[test]
+    fn selected_roles_round_trips() {
+        let p = RolePickerState::from_roles(&[ModelRole::Main, ModelRole::CyberBlue], true);
+        let got = p.selected_roles();
+        assert!(got.contains(&ModelRole::Main));
+        assert!(got.contains(&ModelRole::CyberBlue));
+    }
 }

@@ -14,6 +14,9 @@
 //!   checkbox starts/stops the daemon; the YOLO checkbox arms/disarms Layer-1 YOLO (only
 //!   when the daemon is running); a tool row flips that tool's active state)
 //! - `d`        → `Action::SecurityToggleDomain` (toggle every tool in the selected tool's domain)
+//! - `l`        → `Action::SecurityLane` — cycle this session's cyber lane
+//!   (none → research → red → blue → none). Refused with a status reason when the
+//!   chosen lane's role has no model, so the lane never looks set while ungated.
 //!
 //! Daemon start/stop/toggle no longer have dedicated keys (s/x/t removed) — the daemon is
 //! now the top `[x] Daemon running` checkbox, toggled with Space like any other row.
@@ -70,6 +73,18 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
         }
         KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
+        // Cycle the lane. The cycle order follows the escalation the lanes describe:
+        // off → read-only research → red → blue → off.
+        KeyCode::Char('l') | KeyCode::Char('L') => {
+            use crate::app::sec::lane::Lane;
+            let next = match rest.fg().session.as_ref().and_then(|x| x.settings.cyber_lane) {
+                None => Some(Lane::Research),
+                Some(Lane::Research) => Some(Lane::Red),
+                Some(Lane::Red) => Some(Lane::Blue),
+                Some(Lane::Blue) => None,
+            };
+            Action::SecurityLane(next)
+        }
         // Toggle the body pane (tools ⇄ dependencies). Pure mode-state mutation, like
         // the cursor moves — no runtime round-trip needed.
         KeyCode::Char('h') | KeyCode::Char('H') => {

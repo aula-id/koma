@@ -442,6 +442,11 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
         ModelRole::Compactor | ModelRole::Awareness => Some(legacy_main(settings)),
         // Planner has no legacy fallback by design — unassigned means "use Main".
         ModelRole::Planner => None,
+        // The cyber roles are FAIL-CLOSED too, and for a sharp reason: a red turn
+        // that quietly inherits the coding model would look configured while
+        // having no capability binding, so an unassigned cyber role must be visible
+        // as unassigned rather than silently served by Main.
+        ModelRole::CyberRed | ModelRole::CyberBlue | ModelRole::CyberResearch => None,
         ModelRole::Safeguard => {
             // FAIL-CLOSED: only the legacy classifier model rescues it; an empty
             // field yields `None`, which the harness caller degrades to a human

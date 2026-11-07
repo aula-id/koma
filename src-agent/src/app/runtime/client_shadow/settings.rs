@@ -25,6 +25,7 @@ use crate::model::settings::{InternetMode, MouseCapture, Settings};
 /// fields) renders exactly as the daemon's would.
 pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
     SettingsState {
+        security_enabled: false,
         clean_fingerprint: 0,
         model_editing: s.model_editing,
         provider_editing: s.provider_editing,
@@ -141,6 +142,7 @@ fn shadow_model_modal(m: ModelModalSnapshot) -> ModelModal {
         field: m.field,
         roles: m.roles.iter().map(|r| shadow_role(r)).collect(),
         role_picker: m.role_picker.map(|rp| RolePickerState {
+            security_enabled: false,
             checked: rp.checked,
             cursor: rp.cursor,
         }),

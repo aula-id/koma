@@ -14,6 +14,13 @@ from __future__ import annotations
 
 import sys
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_z3",
     "description": (
@@ -51,6 +58,7 @@ def _handler(args: dict, sessions) -> str:
         [sys.executable, "-c", code],
         timeout=120,
         mem_mb=2048,
+        spawn=_spawn(),
     )
 
 

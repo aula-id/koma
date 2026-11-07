@@ -56,6 +56,8 @@ DESCRIPTOR = {
 
 
 def _handler(args: dict, sessions) -> str:
+    from koma_sec_daemon import verdict  # noqa: PLC0415
+
     # Lazy import — keeps registry loadable without requests installed
     import requests  # noqa: PLC0415
     import urllib3  # noqa: PLC0415
@@ -82,7 +84,9 @@ def _handler(args: dict, sessions) -> str:
             verify=False,
         )
     except Exception as exc:
-        return f"error: {exc}"
+        # A transport failure is not a "not found" — keep them distinct so a
+        # report can tell "the target said no" from "we never arrived".
+        return verdict.typed(verdict.ERROR, f"{type(exc).__name__}: {exc}")
 
     # Build status line
     status_line = f"HTTP {resp.status_code} {resp.reason}"
@@ -95,7 +99,28 @@ def _handler(args: dict, sessions) -> str:
     if len(body_text) > _BODY_CAP:
         body_text = body_text[:_BODY_CAP] + "\n…[body truncated]"
 
-    return f"{status_line}\n{resp_headers}\n\n{body_text}"
+    # A redirect is where the boundary could silently widen: the proxy re-checks
+    # every CONNECT, so this only has to SHOW the chain for the record. A hop that
+    # was refused while following appears in `history` as an error rather than
+    # being swallowed.
+    hops = [f"{h.status_code} {h.url}" for h in resp.history]
+    if follow_redirects and hops:
+        status_line += "\nredirect chain:\n  " + "\n  ".join(hops)
+        out_of_scope = [h.url for h in resp.history if h.status_code == 403]
+        if out_of_scope:
+            status_line += "\n  refused by egress: " + ", ".join(out_of_scope)
+
+    # A PROXY refusal is not the target answering: the scope stopped us before the
+    # target saw the request, so it is `blocked`. Distinguishable by the proxy's
+    # marker header — an ordinary target 403 stays `confirmed`.
+    if resp.headers.get("X-Koma-Egress"):
+        return verdict.typed(
+            verdict.BLOCKED, f"egress refused: {resp.headers['X-Koma-Egress']}\n\n{status_line}"
+        )
+
+    # Confirmed only for a real answer; a 5xx is the target failing, not a finding.
+    kind = verdict.CONFIRMED if resp.status_code < 500 else verdict.UNPROVEN
+    return verdict.typed(kind, f"{status_line}\n{resp_headers}\n\n{body_text}")
 
 
 # Attach handler to descriptor for registry use

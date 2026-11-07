@@ -358,6 +358,12 @@ pub enum ModelRole {
     Safeguard,
     Compactor,
     Planner,
+    /// Cyber lanes. Resolved fail-closed: no Main fallback, because a red turn
+    /// inheriting the coding model silently is exactly the "capabilities leak"
+    /// failure the role split exists to prevent.
+    CyberRed,
+    CyberBlue,
+    CyberResearch,
 }
 
 /// One API provider connection: a base URL + auth + wire type, keyed by `uuid`.

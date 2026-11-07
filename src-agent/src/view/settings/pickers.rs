@@ -11,7 +11,8 @@ use ratatui::{
 /// modal over a dimmed backdrop.
 ///
 /// Mirrors the `/agents` tool picker (`view/agents.rs::draw_tool_picker`) but
-/// SIMPLER — the option set is the fixed [`ModelRole::ALL`] (5 entries), so there
+/// SIMPLER — the option set is [`ModelRole::ALL`], minus the cyber roles while
+/// security mode is off, so there
 /// is no "type to filter" line. Each role is a `[ ] label` / `[x] label` row; the
 /// cursor row carries the inverse highlight. A footer line shows the key hints.
 ///
@@ -30,9 +31,10 @@ pub(super) fn draw_role_picker(
     palette: &Palette,
     area: Rect,
 ) {
-    use crate::app::mode::settings::ModelRole;
-
-    let n = ModelRole::ALL.len();
+    // Cyber roles only appear once security mode is on, so a coding session is not
+    // asked to configure capability it cannot reach.
+    let options = crate::app::mode::settings::ModelRole::visible(picker.security_enabled);
+    let n = options.len();
     // Content rows: one per role + two hint lines (split for narrow modals). Borders add 2.
     let content_h = n as u16 + 2;
     let total_h = content_h + 2;
@@ -78,7 +80,7 @@ pub(super) fn draw_role_picker(
     let body_w = inner.width as usize;
     let cursor = picker.cursor.min(n.saturating_sub(1));
     let mut lines: Vec<Line> = Vec::new();
-    for (i, role) in ModelRole::ALL.iter().enumerate() {
+    for (i, role) in options.iter().enumerate() {
         let checked = picker.checked.get(i).copied().unwrap_or(false);
         let mark = if checked { "[x]" } else { "[ ]" };
         if i == cursor {

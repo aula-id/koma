@@ -33,6 +33,9 @@ pub fn render_overlay(
             ModelRole::Planner => " model — planner ".to_string(),
             ModelRole::Compactor => " model — compactor ".to_string(),
             ModelRole::Safeguard => " model — safeguard ".to_string(),
+            ModelRole::CyberRed => " model — cyber red ".to_string(),
+            ModelRole::CyberBlue => " model — cyber blue ".to_string(),
+            ModelRole::CyberResearch => " model — cyber research ".to_string(),
         },
         ModelCmdSub::AgentList => " model — agents ".to_string(),
         ModelCmdSub::AgentPick { agent_name, .. } => {

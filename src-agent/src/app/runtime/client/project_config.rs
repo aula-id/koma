@@ -182,6 +182,9 @@ fn role_token(r: crate::model::app_config::ModelRole) -> &'static str {
         ModelRole::Safeguard => "safeguard",
         ModelRole::Compactor => "compactor",
         ModelRole::Planner => "planner",
+        ModelRole::CyberRed => "cyber-red",
+        ModelRole::CyberBlue => "cyber-blue",
+        ModelRole::CyberResearch => "cyber-researcher",
     }
 }
 

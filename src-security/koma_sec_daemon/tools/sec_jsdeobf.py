@@ -15,6 +15,13 @@ from __future__ import annotations
 import os
 import tempfile
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_jsdeobf",
     "description": (
@@ -50,7 +57,7 @@ def _handler(args: dict, sessions) -> str:
             jp = fh.name
             fh.write(code)
 
-        output = sandbox.run(["npx", "--yes", "webcrack", jp], timeout=120)
+        output = sandbox.run(["npx", "--yes", "webcrack", jp], timeout=120, spawn=_spawn())
     finally:
         if jp is not None:
             try:

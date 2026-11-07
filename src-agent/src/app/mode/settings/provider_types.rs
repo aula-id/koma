@@ -11,16 +11,43 @@ impl ModelRole {
             ModelRole::Safeguard => "safeguard",
             ModelRole::Compactor => "compactor",
             ModelRole::Planner => "planner",
+            ModelRole::CyberRed => "cyber red",
+            ModelRole::CyberBlue => "cyber blue",
+            ModelRole::CyberResearch => "cyber research",
         }
     }
 
-    pub const ALL: [ModelRole; 5] = [
+    pub const ALL: [ModelRole; 8] = [
         ModelRole::Main,
         ModelRole::Awareness,
         ModelRole::Safeguard,
         ModelRole::Compactor,
         ModelRole::Planner,
+        ModelRole::CyberRed,
+        ModelRole::CyberBlue,
+        ModelRole::CyberResearch,
     ];
+
+    /// The roles a picker should offer. Cyber roles are hidden while security
+    /// mode is off, so an ordinary coding session is not asked to configure
+    /// capability it cannot use. Selection state is kept elsewhere, so toggling
+    /// the mode back restores them rather than losing the assignment.
+    pub fn visible(security_enabled: bool) -> Vec<ModelRole> {
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|r| security_enabled || !r.is_cyber())
+            .collect()
+    }
+
+    /// Does this role exist only for cyber runs? Used to hide it from the picker
+    /// while security mode is off, and to keep it out of the Main fallback.
+    pub fn is_cyber(self) -> bool {
+        matches!(
+            self,
+            ModelRole::CyberRed | ModelRole::CyberBlue | ModelRole::CyberResearch
+        )
+    }
 }
 
 impl ApiType {

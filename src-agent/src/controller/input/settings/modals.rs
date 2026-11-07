@@ -228,7 +228,7 @@ pub(super) fn handle_model_form(
                 s.page = SettingsPage::Models;
             }
             KeyCode::Enter => {
-                s.open_role_picker();
+                s.open_role_picker(s.security_enabled);
             }
             KeyCode::Up => {
                 s.mm_up();

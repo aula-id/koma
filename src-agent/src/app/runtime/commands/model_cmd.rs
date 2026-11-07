@@ -23,6 +23,11 @@ pub(crate) fn parse_role(s: &str) -> Option<ModelRole> {
         "planner" => Some(ModelRole::Planner),
         "compactor" => Some(ModelRole::Compactor),
         "safeguard" => Some(ModelRole::Safeguard),
+        "cyber-red" | "cyber_red" => Some(ModelRole::CyberRed),
+        "cyber-blue" | "cyber_blue" => Some(ModelRole::CyberBlue),
+        "cyber-researcher" | "cyber_researcher" | "cyber-research" | "cyber_research" => {
+            Some(ModelRole::CyberResearch)
+        }
         _ => None,
     }
 }
@@ -75,14 +80,26 @@ pub(super) fn handle_model(args: String, state: &mut AppState) -> Result<()> {
 }
 
 /// Bare `/model` opens all supported roles without changing any binding.
-pub(crate) fn open_roles(state: &mut AppState) {
-    let roles = [
+fn role_rows(security_enabled: bool) -> Vec<(ModelRole, &'static str)> {
+    let mut roles = vec![
         (ModelRole::Main, "main"),
         (ModelRole::Awareness, "awareness"),
         (ModelRole::Planner, "planner"),
         (ModelRole::Compactor, "compactor"),
         (ModelRole::Safeguard, "safeguard"),
     ];
+    if security_enabled {
+        roles.extend([
+            (ModelRole::CyberRed, "cyber-red"),
+            (ModelRole::CyberBlue, "cyber-blue"),
+            (ModelRole::CyberResearch, "cyber-researcher"),
+        ]);
+    }
+    roles
+}
+
+pub(crate) fn open_roles(state: &mut AppState) {
+    let roles = role_rows(state.rest.security_enabled);
     let options = roles
         .iter()
         .map(|(_, token)| (Some((*token).to_string()), (*token).to_string()))
@@ -117,13 +134,7 @@ fn help_lines(state: &AppState) -> Vec<String> {
     if let Some(sess) = state.rest.fg().session.as_ref() {
         let cfg = &state.rest.config;
         let settings = &sess.settings;
-        let roles = [
-            (ModelRole::Main, "main"),
-            (ModelRole::Awareness, "awareness"),
-            (ModelRole::Planner, "planner"),
-            (ModelRole::Compactor, "compactor"),
-            (ModelRole::Safeguard, "safeguard"),
-        ];
+        let roles = role_rows(state.rest.security_enabled);
         for (role, label) in roles {
             let report = crate::app::resolve::role_resolution(cfg, settings, role);
             lines.push(format!(
@@ -212,6 +223,9 @@ pub(crate) fn open_role_pick(role: ModelRole, state: &mut AppState) {
             ModelRole::Planner => "planner",
             ModelRole::Compactor => "compactor",
             ModelRole::Safeguard => "safeguard",
+            ModelRole::CyberRed => "cyber-red",
+            ModelRole::CyberBlue => "cyber-blue",
+            ModelRole::CyberResearch => "cyber-researcher",
         };
 
         *state.mode_mut() = crate::app::mode::Mode::Model(Box::new(ModelCmdState {

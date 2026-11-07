@@ -19,6 +19,13 @@ use tokio::sync::mpsc;
 
 use super::{PendingMap, SecDaemonManager, SecToolDesc};
 
+/// Protocol revision this parent speaks. The daemon refuses a mismatch instead of
+/// guessing, so a half-migrated pair cannot run with unmigrated capability
+/// metadata. Bump together with `protocol.PROTOCOL_VERSION`; additive fields a
+/// peer ignores do not need a bump, a changed field meaning does.
+pub(super) const PROTOCOL_VERSION: u8 = 2;
+use super::wire_tool::parse_tools;
+
 /// The product of a successful spawn + handshake: the live child, its split I/O
 /// halves, and the tools it advertised. `stdout` is a `BufReader` wrapping the raw
 /// child stdout so any bytes already buffered during the handshake read are not lost
@@ -29,6 +36,7 @@ pub(super) struct Connected {
     pub(super) stdout: BufReader<tokio::process::ChildStdout>,
     pub(super) stderr: tokio::process::ChildStderr,
     pub(super) tools: Vec<SecToolDesc>,
+    pub(super) refused: Vec<(String, String)>,
 }
 
 /// Spawn `python -m koma_sec_daemon --token <token>` (stdio piped), perform the
@@ -54,6 +62,9 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if let Some(image) = crate::security::pinned_safety_image() {
+        cmd.env("KOMA_SEC_IMAGE", image);
+    }
     // No console flash on Windows — see `tool::shell::no_console_window_tokio`'s
     // docs for the `FreeConsole()` causal chain this guards against.
     crate::tool::shell::no_console_window_tokio(&mut cmd);
@@ -76,8 +87,10 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         .take()
         .ok_or_else(|| "child stderr not piped".to_string())?;
 
-    // Write the handshake frame.
-    let hello = serde_json::json!({ "v": 1, "token": token }).to_string();
+    // Write the handshake frame. `v` is the protocol MAJOR: the daemon refuses a
+    // mismatch rather than guessing, so a half-migrated pair cannot run with
+    // unmigrated capability metadata.
+    let hello = serde_json::json!({ "v": PROTOCOL_VERSION, "token": token }).to_string();
     stdin
         .write_all(format!("{hello}\n").as_bytes())
         .await
@@ -109,7 +122,17 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         return Err(format!("daemon rejected handshake: {err}"));
     }
 
+    // The daemon echoes its revision. Absent on a daemon too old to have one, which
+    // is tolerated here: `parse_tools` already applies the fail-closed rules to
+    // whatever descriptors arrive, so a v1 daemon degrades to "most tools refused"
+    // rather than "most tools trusted".
     let tools = parse_tools(reply.get("tools"));
+    for (name, reason) in &tools.1 {
+        crate::model::store::append_global_error_log(
+            "security",
+            &format!("refused sec tool '{name}': {reason}"),
+        );
+    }
 
     // Pass the SAME BufReader into Connected so the reader task continues from where
     // the handshake left off. Using into_inner() here would DISCARD any bytes the
@@ -120,54 +143,9 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         stdin,
         stdout: reader,
         stderr,
-        tools,
+        tools: tools.0,
+        refused: tools.1,
     })
-}
-
-/// Parse the `tools` array from a handshake reply into [`SecToolDesc`]s. A missing or
-/// non-array value yields an empty list; malformed entries degrade field-by-field
-/// (missing strings → empty, missing `risk` → false) rather than failing the whole
-/// handshake.
-fn parse_tools(value: Option<&serde_json::Value>) -> Vec<SecToolDesc> {
-    let arr = match value.and_then(serde_json::Value::as_array) {
-        Some(a) => a,
-        None => return Vec::new(),
-    };
-    arr.iter()
-        .filter_map(|t| {
-            // A tool with no name is unusable; skip it.
-            let name = t
-                .get("name")
-                .and_then(serde_json::Value::as_str)?
-                .to_string();
-            Some(SecToolDesc {
-                name,
-                description: t
-                    .get("description")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                parameters: t
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({})),
-                risk: t
-                    .get("risk")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-                compute: t
-                    .get("compute")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                domain: t
-                    .get("domain")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            })
-        })
-        .collect()
 }
 
 /// Owns the child's stdin and forwards every frame received on `rx` to it. Exits when

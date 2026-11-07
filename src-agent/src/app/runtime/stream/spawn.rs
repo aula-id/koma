@@ -18,6 +18,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         rt.agent_mode == crate::app::state::AgentMode::Plan,
         std::sync::atomic::Ordering::Release,
     );
+    let session_id = rt.id.clone();
     let session_ref = rt.session.as_ref();
     // The session's EFFECTIVE cwd: the live `cd` override when set, else the
     // configured workdir. This drives `bash` (its `current_dir`) and the dir
@@ -137,9 +138,22 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         .filter_map(|s| s.skill_dir.clone())
         .collect();
     let search_engine = session_ref.map(|s| s.settings.search_engine.clone());
+    // The lane in force, resolved once here so every tool call in this context is
+    // gated on the SAME answer. Resolved from live state rather than stamped into
+    // the context earlier, because `security_enabled`, the agent mode and the role
+    // assignment can all change under a running session.
+    let (cyber_lane, sec_block) = match crate::app::sec::active::effective(state, sess_idx) {
+        Ok(lane) => (Some(lane), None),
+        Err(why) => (None, Some(why.reason().to_string())),
+    };
+    let sec_inactive: Vec<String> = state.rest.sec_inactive.iter().cloned().collect();
     crate::tool::ToolCtx {
         plan_read_only: rt.plan_read_only.clone(),
         workspace,
+        session_id,
+        cyber_lane,
+        sec_block,
+        sec_inactive,
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,

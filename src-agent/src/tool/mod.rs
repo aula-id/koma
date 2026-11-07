@@ -35,6 +35,7 @@ pub mod plan;
 mod plan_policy;
 pub mod pong;
 pub mod recovery;
+pub mod scope;
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
@@ -44,6 +45,7 @@ pub mod shell_filter;
 pub mod skill;
 pub mod task;
 pub mod todo;
+pub mod verdict;
 
 pub use dircache::DirCache;
 pub use output::CallTrack;
@@ -500,8 +502,23 @@ pub struct ToolCtx {
     /// delegates. Checked immediately before dispatch; it cannot undo I/O that
     /// has already started.
     pub plan_read_only: Arc<std::sync::atomic::AtomicBool>,
-    /// Absolute workspace root (the session's primary workdir).
+    /// Absolute workspace root (the session's primary workdir). Follows a live
+    /// `cd`, so this is the run's cwd, not an allow-list.
     pub workspace: PathBuf,
+    /// The session's cyber lane, when security mode has one armed. `None` in a
+    /// plain coding session. A `sec_` call with no lane is refused.
+    pub cyber_lane: Option<crate::app::sec::lane::Lane>,
+    /// Why `sec_` calls are refused. Set when [`crate::app::sec::active::effective`]
+    /// fails. `None` when a lane is in force.
+    pub sec_block: Option<String>,
+    /// Tool names the user turned off in the security panel.
+    pub sec_inactive: Vec<String>,
+    /// Stable session identity. Every dynamic target traces back to this, so two
+    /// sessions on one checkout cannot collide on a board, a scope record or a
+    /// spilled artifact. Mirrors `SessionRuntime::id`.
+    ///
+    /// Read by [`scope::ScopeBase::of`].
+    pub session_id: String,
     /// All configured workspace roots (may be >1).
     pub workspaces: Vec<PathBuf>,
     pub dir_cache: Arc<RwLock<DirCache>>,
@@ -959,7 +976,7 @@ fn partial_canonicalize(as_path: &Path) -> PathBuf {
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].
 pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String {
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
-    let args: serde_json::Value =
+    let mut args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     if ctx
         .plan_read_only
@@ -1006,12 +1023,97 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
             return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
-    if call.function.name.starts_with("sec_") {
+    if crate::security::is_sec_tool(&call.function.name) {
+        // Fail-closed boundary. `ctx` carries the manager but not the lane flag
+        // or the advertised set, so ask the manager for its own view: an
+        // unadvertised/forged `sec_` name must not run even when the daemon is
+        // live and armed.
         if let Some(mgr) = ctx.sec_manager.as_ref() {
-            let raw = mgr
-                .execute_blocking(&call.function.name, &args)
-                .unwrap_or_else(|e| format!("error: {e}"));
-            return output::finish_tool_output(ctx, &call.function.name, &args, raw);
+            let lane_refusal = scope::lane_refusal(ctx, &call.function.name, &mut args);
+            if let Some(reason) = lane_refusal {
+                let denied = verdict::TypedResult {
+                    verdict: verdict::Verdict::Blocked,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    denied.to_json(),
+                );
+            }
+            if let Some(reason) = mgr.refusal(&call.function.name, ctx.cyber_lane.is_some()) {
+                // A refusal is the tool's own `error` verdict, not a transport
+                // failure: it becomes typed so the model sees the same shape it
+                // sees from every other outcome.
+                let refusal = verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    refusal.to_json(),
+                );
+            }
+            // The lane gate already ran. Scope admission is the remaining check.
+            let lane_refusal = scope::admit_from_call(ctx, &call.function.name, &args);
+            // Admit before anything else: a call whose target the scope does
+            // not cover must not reach the container at all.
+            if let Some(reason) = lane_refusal {
+                let denied = verdict::TypedResult {
+                    verdict: verdict::Verdict::Blocked,
+                    excerpt: reason,
+                    handle: None,
+                };
+                return output::finish_tool_output(
+                    ctx,
+                    &call.function.name,
+                    &args,
+                    denied.to_json(),
+                );
+            }
+
+            // Parse before the output caps run. The verdict is the result; the
+            // excerpt is only its body, and `finish_tool_output` trims bodies.
+            // Untyped results (no verdict) go through the unchanged path below.
+            let typed = match mgr.execute_blocking(&call.function.name, &args) {
+                // Hold an oversized payload aside BEFORE it reaches the model: a
+                // 200-row scan is a turn's context otherwise. Reuses the same tmp
+                // spill the other tools use, so cleanup is already handled.
+                Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
+                    output::spill_foreign(ctx.session_dir.as_deref(), &call.function.name, body)
+                }),
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            };
+            // A verdict clears or fails the binding: only a confirmation keeps
+            // an addressable target. A `not_found` or a crash leaves nothing to
+            // revisit, so the record goes rather than lingering as a dead link
+            // that a later call would happily re-admit.
+            scope::settle(ctx, &call.function.name, &args, typed.verdict);
+            // Frame the body at the ONE place every sec_ result reaches the model:
+            // a target controls this text, so the model is told where the trusted
+            // metadata ends. The verdict and handle ride above the fence, so a body
+            // forging either cannot win.
+            let framed = crate::app::sec::untrusted::frame_result(
+                &typed.excerpt,
+                typed.verdict.as_str(),
+                typed.handle.as_deref(),
+                crate::app::sec::untrusted::Origin::ToolOutput,
+            );
+            let framed = verdict::TypedResult {
+                verdict: typed.verdict,
+                excerpt: framed,
+                handle: typed.handle,
+            };
+            return output::finish_tool_output(ctx, &call.function.name, &args, framed.to_json());
         }
     }
     output::finish_tool_output(
@@ -1036,3 +1138,8 @@ pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "mod_test.rs"]
 mod tests;
+// Shared minimal `ToolCtx` for tests. Re-exported rather than declared a second
+// time: the file is already a `#[path]` module under `seqthink`, and a second
+// `mod` declaration makes clippy warn about a doubly-loaded file.
+#[cfg(test)]
+pub(crate) use seqthink::test_ctx;

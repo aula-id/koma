@@ -1,12 +1,13 @@
-lief>=0.17.5
+cryptography>=42
 fpylll
 hashid
 jsbeautifier
+lief>=0.17.5
 name-that-hash
 playwright
-unicorn==2.1.1
 pwntools>=4.15
 requests>=2.31
 ROPgadget
 sqlmap
+unicorn==2.1.1
 z3-solver

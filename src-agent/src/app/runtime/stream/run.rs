@@ -658,17 +658,24 @@ over sec_remote (stateful socket).\n",
     // MCP otherwise: extend the allow-list with the daemon's `sec_`-prefixed
     // names and append its ToolDefs.
     if state.rest.security_enabled && mode != AgentMode::Plan {
+        let blue = crate::app::sec::active::for_ctx(state, sess_idx)
+            == Some(crate::app::sec::lane::Lane::Blue);
         if let Some(sec) = state.rest.sec_manager.as_ref() {
             let inactive = &state.rest.sec_inactive;
+            let allowed = |name: &str| {
+                !blue
+                    || crate::app::sec::lane::Lane::Blue
+                        .permits(crate::app::sec::lane::Lane::cap_of_tool(name))
+            };
             advertise.extend(
                 sec.tool_names()
                     .into_iter()
-                    .filter(|n| !inactive.contains(n)),
+                    .filter(|n| !inactive.contains(n) && allowed(n)),
             );
             mcp_tools.extend(
                 sec.tool_defs()
                     .into_iter()
-                    .filter(|d| !inactive.contains(&d.function.name)),
+                    .filter(|d| !inactive.contains(&d.function.name) && allowed(&d.function.name)),
             );
         }
     }

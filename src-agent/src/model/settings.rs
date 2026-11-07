@@ -410,6 +410,18 @@ pub struct Settings {
         deserialize_with = "crate::model::app_config::deserialize_models"
     )]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
+    /// The cyber lane this session inhabits, when the user picked one.
+    ///
+    /// PER-SESSION because lane and role assignment are different facts: the three
+    /// cyber roles are GLOBAL (`config.models`, per `21`'s out-of-scope note on
+    /// per-session role assignment), while which lane a given session runs in is a
+    /// session choice. Two sessions can run red and blue at once off the same
+    /// global role assignments.
+    ///
+    /// `#[serde(default)]` so every older `settings.json` loads unchanged. Absent
+    /// means "no lane", which gates nothing — disabled sessions keep their baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cyber_lane: Option<crate::app::sec::lane::Lane>,
     /// The bare filename of the SSH identity key this session uses for
     /// git-over-SSH (e.g. `"id_ed25519"`). Stored as a filename only — never a
     /// full path, never key file contents. `None` means no key has been selected;
@@ -563,6 +575,7 @@ impl Default for Settings {
             search_engine: default_search_engine(),
             subagent_max_turns: default_subagent_max_turns(),
             session_models: Vec::new(),
+            cyber_lane: None,
             git_ssh_key: None,
             mouse_capture: MouseCapture::default(),
         }

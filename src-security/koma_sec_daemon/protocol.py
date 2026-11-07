@@ -8,6 +8,7 @@ Malformed JSON raises ValueError — the caller must turn that into an error fra
 from __future__ import annotations
 
 import json
+import threading
 
 
 def read_frame(stream) -> dict | None:
@@ -32,11 +33,50 @@ def read_frame(stream) -> dict | None:
         return json.loads(line)  # raises ValueError on bad JSON
 
 
+# Protocol revision. Bump MINOR for additive fields a v1 peer ignores, MAJOR for a
+# change an older peer must refuse rather than mis-read. The parent sends its own
+# revision in the handshake frame; `negotiate` refuses rather than guessing.
+PROTOCOL_VERSION = 2
+
+
+def negotiate(hello: dict) -> str | None:
+    """
+    Validate the parent's handshake revision. Return a refusal string, or None when
+    the peer is compatible.
+
+    A MAJOR mismatch is refused outright. A MINOR skew is accepted in EITHER
+    direction: the parent tolerates a daemon that lacks newer fields, and this
+    daemon tolerates a parent that predates them. Only a missing revision is
+    refused, so a half-migrated pair cannot silently run with unmigrated
+    capability metadata.
+    """
+    raw = hello.get("v")
+    if raw is None:
+        return "handshake carried no protocol revision"
+    try:
+        peer = int(raw)
+    except (TypeError, ValueError):
+        return f"handshake revision {raw!r} is not an integer"
+    mine_major = PROTOCOL_VERSION
+    if peer != mine_major:
+        return f"protocol major mismatch: parent v{peer}, daemon v{mine_major}"
+    return None
+
+
+# One frame is written by one thread at a time. Without this a slow flush lets a
+# second frame's bytes interleave between a JSON line and its newline, and the
+# parent's line reader then decodes a spliced line.
+_WRITE_LOCK = threading.Lock()
+
+
 def write_frame(stream, obj: dict) -> None:
     """
-    Serialise *obj* as a single JSON line and write it to *stream*, flushing
-    immediately so the parent process receives each frame as it is produced.
+    Serialise *obj* as one JSON line and flush it.
+
+    Thread-safe: concurrent handler threads may emit frames, and a spliced frame
+    is undecodable rather than merely out of order.
     """
     payload = json.dumps(obj, ensure_ascii=False) + "\n"
-    stream.write(payload)
-    stream.flush()
+    with _WRITE_LOCK:
+        stream.write(payload)
+        stream.flush()

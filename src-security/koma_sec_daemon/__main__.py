@@ -2,9 +2,12 @@
 koma_sec_daemon — long-lived security daemon entrypoint.
 
 Protocol (newline-delimited JSON, parent speaks first):
-  Handshake (parent → daemon):  {"v": 1, "token": "<T>"}   (token optional)
-  Handshake (daemon → parent):  {"ok": true, "tools": [...descriptors...]}
-                            or  {"ok": false, "error": "bad token"}
+  Handshake (parent → daemon):  {"v": 2, "token": "<T>"}   (token optional)
+  Handshake (daemon → parent):  {"ok": true, "v": 2, "tools": [...descriptors...]}
+                            or  {"ok": false, "error": "bad token" | "<refusal>"}
+
+  `v` is the protocol MAJOR. A mismatch is refused, not guessed — see
+  `protocol.negotiate`. Bump MAJOR when an older peer would mis-read a frame.
 
   Call (parent → daemon):       {"id": N, "op": "call", "tool": T, "args": {...}}
   Result (daemon → parent):     {"id": N, "ok": true, "result": "<str>"}
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import sys
 import os
+from pathlib import Path
 import json
 import argparse
 import io
@@ -58,6 +62,45 @@ def _augment_path() -> None:
         os.environ["PATH"] = os.pathsep.join(existing + additions)
 
 
+
+def _route_of(tool: str, args: dict) -> str | None:
+    """The board route a call works on: `<verb> <host:port>`, or None.
+
+    Only network tools have a route worth claiming; a pure-compute tool competes
+    with nothing.
+    """
+    from koma_sec_daemon import effects
+
+    row = effects.MANIFEST.get(tool)
+    if row and row[1] != effects.NET:
+        return None
+    raw = next((args.get(k) for k in ("url", "host", "target") if args.get(k)), None)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(raw if "://" in raw else "//" + raw)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return None
+    return f"{tool} {host}:{parts.port or ''}"
+
+
+def _retain(store, route, tool, frame_id, result) -> None:
+    """Keep the call's output as evidence and carry its handle on the result."""
+    if not result:
+        return
+    try:
+        handle = store.put(
+            f"{tool}-{frame_id}",
+            result,
+            provenance=f"{tool} route={route or '-'} frame={frame_id}",
+        )
+    except Exception as exc:  # noqa: BLE001 - evidence must never fail a call
+        print(f"[koma_sec_daemon] evidence store failed: {exc}", flush=True)
+        return
+    print(f"[koma_sec_daemon] evidence {handle}", flush=True)
+
 def main() -> None:
     _augment_path()
 
@@ -89,7 +132,8 @@ def main() -> None:
 
     from koma_sec_daemon.protocol import read_frame, write_frame
     from koma_sec_daemon import registry
-    from koma_sec_daemon.registry import descriptors, call
+    from koma_sec_daemon import verdict
+    from koma_sec_daemon.registry import descriptors, refused_descriptors, call
     from koma_sec_daemon.sessions import SessionStore
 
     sessions = SessionStore()
@@ -120,26 +164,124 @@ def main() -> None:
             write_frame(real_stdout, {"ok": False, "error": "bad token"})
             sys.exit(1)
 
-    write_frame(real_stdout, {"ok": True, "tools": descriptors()})
+    from koma_sec_daemon.protocol import PROTOCOL_VERSION, negotiate
+
+    refusal = negotiate(frame)
+    if refusal is not None:
+        write_frame(real_stdout, {"ok": False, "error": refusal})
+        sys.exit(1)
+
+    write_frame(
+        real_stdout,
+        {
+            "ok": True,
+            "v": PROTOCOL_VERSION,
+            # Refused descriptors travel with the reply so the parent can surface
+            # the reason. Absent (not empty) is fine: no refusals happened.
+            "tools": descriptors(),
+            # Separate from `tools`: a refusal is a bug, an unavailability is an
+            # environment gap. Both travel so the parent can say the difference.
+            "refused": refused_descriptors(),
+            "unavailable": registry.unavailable_tools(),
+        },
+    )
 
     # --- MAIN LOOP ---
-    # Processes one frame at a time (single-threaded serialization): concurrent
-    # Rust-side calls all queue up here, so a slow tool (e.g. a blocking sec_http
-    # network request) will delay every other pending call for its full duration.
-    # A future concurrency upgrade would use asyncio tasks or a ThreadPoolExecutor
-    # to run handlers in parallel while keeping the I/O loop single-threaded.
+    #
+    # The reader stays single-threaded and dispatch happens on a small pool, so a
+    # slow tool cannot delay an unrelated call. Two rules keep that safe:
+    #
+    # - Each op is routed to keep the things that genuinely must be serialised
+    #   serialised. `install` gets the dedicated install lane: it rewrites the
+    #   shared bin dir and would race a running call's PATH lookup.
+    # - Cancelling a future alone does NOT stop a running handler. `cancel` kills
+    #   the process group of that id's active subprocesses, which is what actually
+    #   ends a stuck tool.
+    #
+    # `call`/`install` each get their own pool; `health`/`cancel` are cheap and
+    # stay on the loop. Every handler gets an `emit` so it can stream progress
+    # frames for a long run instead of going silent.
+    from concurrent.futures import ThreadPoolExecutor
+
+    from koma_sec_daemon import cancel as cancel_mod
+
+    calls = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sec-call")
+    installs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sec-install")
+
+    # The board and evidence store are OPT-IN: a parent that has not created them
+    # still gets a working daemon, just without duplicate protection or retained
+    # artifacts. Both root under KOMA_BOARD / KOMA_EVIDENCE.
+    board_ = None
+    store = None
+    board_root = os.environ.get("KOMA_BOARD")
+    if board_root:
+        from koma_sec_daemon import board as board_mod
+        from koma_sec_daemon import evidence as evidence_mod
+
+        board_ = board_mod.Board(Path(board_root))
+        store = evidence_mod.Store(
+            Path(os.environ.get("KOMA_EVIDENCE", str(Path(board_root) / "evidence")))
+        )
+
+    def emit(payload: dict) -> None:
+        """Write a progress frame from any thread. Never raises."""
+        try:
+            write_frame(real_stdout, payload)
+        except (ValueError, OSError):
+            pass
+
+    def run_call(frame_id, tool_name, tool_args) -> None:
+        # Duplicate-execution check BEFORE the tool runs: the board, not a prompt,
+        # is what stops two lanes firing at one route. The frame id is the owner,
+        # so a retry by the same call re-enters its own claim.
+        route = _route_of(tool_name, tool_args)
+        if board_ is not None and route:
+            refusal = board_mod.dispatch_gate(board_, route, str(frame_id))
+            if refusal:
+                emit({
+                    "id": frame_id,
+                    "ok": True,
+                    "result": verdict.typed(verdict.BLOCKED, refusal),
+                })
+                return
+        result = ""
+        try:
+            result = call(tool_name, tool_args, sessions, cancel_key=frame_id)
+            emit({"id": frame_id, "ok": True, "result": verdict.as_typed(result)})
+        except registry.Unavailable as exc:
+            # A missing dependency is a typed outcome, not a crash: the model sees
+            # what to install instead of the whole call failing opaquely.
+            emit({
+                "id": frame_id,
+                "ok": True,
+                "result": verdict.typed(verdict.UNAVAILABLE, str(exc)),
+            })
+        except Exception as exc:
+            emit({"id": frame_id, "ok": False, "error": str(exc)})
+        finally:
+            cancel_mod.release(frame_id)
+            # Record the outcome as evidence in its own right, so a report can cite
+            # the run rather than only the target's last words.
+            if store is not None:
+                _retain(store, route, tool_name, frame_id, result)
+
+    def run_install(frame_id, key) -> None:
+        try:
+            from koma_sec_daemon import installer
+            emit({"id": frame_id, "ok": True, "result": installer.install(key)})
+        except Exception as exc:
+            emit({"id": frame_id, "ok": False, "error": str(exc)})
+
     try:
         while True:
             try:
                 frame = read_frame(sys.stdin)
             except ValueError as exc:
-                # Malformed JSON — log to stderr, write error without id, continue
                 print(f"[koma_sec_daemon] malformed frame: {exc}", file=sys.stderr)
                 write_frame(real_stdout, {"ok": False, "error": f"malformed frame: {exc}"})
                 continue
 
             if frame is None:
-                # EOF — parent closed the pipe; exit cleanly
                 break
 
             frame_id = frame.get("id")
@@ -148,11 +290,6 @@ def main() -> None:
             if op == "call":
                 tool_name = frame.get("tool", "")
                 tool_args = frame.get("args") or {}
-
-                # Check for unknown tool BEFORE calling so a handler's internal
-                # KeyError (e.g. missing required arg) is never mis-reported as
-                # "unknown tool".  All handler exceptions fall through to the
-                # generic except below and produce a meaningful error string.
                 if tool_name not in registry.REGISTRY:
                     write_frame(real_stdout, {
                         "id": frame_id,
@@ -160,22 +297,15 @@ def main() -> None:
                         "error": f"unknown tool: {tool_name}",
                     })
                     continue
+                calls.submit(run_call, frame_id, tool_name, tool_args)
 
-                try:
-                    result = call(tool_name, tool_args, sessions)
-                    write_frame(real_stdout, {"id": frame_id, "ok": True, "result": result})
-                except Exception as exc:
-                    write_frame(real_stdout, {
-                        "id": frame_id,
-                        "ok": False,
-                        "error": str(exc),
-                    })
+            elif op == "cancel":
+                # Kills this id's child work and answers immediately, so the
+                # parent is not blocked behind the thing it is cancelling.
+                killed = cancel_mod.cancel(frame.get("target"))
+                write_frame(real_stdout, {"id": frame_id, "ok": True, "result": str(killed)})
 
             elif op == "health":
-                # Install-health for every external dep. Modules imported lazily
-                # here so daemon startup stays lean. probe() is pure stdlib and
-                # never raises; result is a JSON-encoded string the Rust side
-                # json-parses out of the standard "result" field.
                 from koma_sec_daemon import health
                 write_frame(real_stdout, {
                     "id": frame_id,
@@ -184,19 +314,14 @@ def main() -> None:
                 })
 
             elif op == "install":
-                # Best-effort tiered install for one dep. installer.install()
-                # returns a status string (incl. "error: …") and never raises.
-                key = frame.get("key", "")
-                from koma_sec_daemon import installer
-                write_frame(real_stdout, {
-                    "id": frame_id,
-                    "ok": True,
-                    "result": installer.install(key),
-                })
+                installs.submit(run_install, frame_id, frame.get("key", ""))
 
             else:
                 write_frame(real_stdout, {"id": frame_id, "ok": False, "error": "unknown op"})
     finally:
+        calls.shutdown(wait=False)
+        installs.shutdown(wait=False)
+        cancel_mod.cancel_all()
         sessions.close_all()
 
 

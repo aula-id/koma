@@ -36,6 +36,9 @@ use super::{
 /// Esc goes back one level; Esc from the menu saves and closes.
 #[derive(Debug, Clone)]
 pub struct SettingsState {
+    /// Mirrors the global security flag so the role picker can hide the cyber
+    /// roles without reaching for app state mid-render.
+    pub security_enabled: bool,
     pub clean_fingerprint: u64,
     pub model_editing: bool,
     pub provider_editing: bool,
@@ -301,6 +304,7 @@ impl SettingsState {
                 .map(|m| map_entry(m, true)),
         );
         let mut state = Self {
+            security_enabled: false,
             clean_fingerprint: 0,
             model_editing: false,
             provider_editing: false,

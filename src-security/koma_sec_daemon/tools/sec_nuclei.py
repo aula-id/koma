@@ -13,6 +13,13 @@ from __future__ import annotations
 
 import shlex
 
+
+def _spawn():
+    """The daemon's tracking spawn factory for this call, or None outside one."""
+    from koma_sec_daemon import registry
+
+    return registry.spawn_for_thread()
+
 DESCRIPTOR = {
     "name": "sec_nuclei",
     "description": (
@@ -89,7 +96,7 @@ def _handler(args: dict, sessions) -> str:
         except ValueError as exc:
             return f"error: failed to parse extra_args: {exc}"
 
-    return sandbox.run(cmd, timeout=300)
+    return sandbox.run(cmd, timeout=300, spawn=_spawn())
 
 
 # Attach handler to descriptor for registry use

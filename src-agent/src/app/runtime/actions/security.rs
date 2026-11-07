@@ -201,18 +201,11 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
                 // `yolo_armed` untouched and tell the user what to do.
                 state.rest.fg_mut().status = "yolo locked — start the daemon first".into();
             } else {
-                state.rest.yolo_armed = !state.rest.yolo_armed;
-                if state.rest.yolo_armed {
-                    state.rest.fg_mut().status =
-                        "yolo armed — switch with /mode yolo or Shift+Tab".into();
-                } else {
-                    // Disarmed: if we're sitting in Yolo right now, fall straight back to
-                    // Auto so the bypass turns off the instant it's disarmed.
-                    if state.rest.agent_mode() == AgentMode::Yolo {
-                        state.rest.set_agent_mode(AgentMode::Auto);
-                    }
-                    state.rest.fg_mut().status = "yolo disarmed".into();
-                }
+                // Delegate both directions to `handle_set_yolo_armed`, which owns the
+                // disarm side effect (leave Yolo mode, drop back to Auto) and both status
+                // lines. Flipping the flag inline here made this row the only disarm path
+                // able to drift from `/yolo` and the YOLO checkbox.
+                handle_set_yolo_armed(state, !state.rest.yolo_armed)?;
             }
         }
         // Tool row: flip its active state.
@@ -346,4 +339,110 @@ fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<Install
         }
         s.refresh(status, inactive, yolo_armed);
     }
+}
+
+#[cfg(test)]
+mod security_baseline_tests {
+    use super::*;
+
+    #[test]
+    fn yolo_cannot_be_armed_without_a_running_daemon() {
+        let mut state = AppState::new(Mode::Chat);
+        assert!(handle_set_yolo_armed(&mut state, true).is_err());
+        assert!(!state.rest.yolo_armed);
+    }
+
+    /// The panel's YOLO row used to flip `yolo_armed` inline, so disarming from
+    /// the panel left `agent_mode` on `Yolo` while `/yolo` and the checkbox
+    /// dropped to `Auto`. Both paths must leave Yolo.
+    #[test]
+    fn disarming_yolo_drops_out_of_yolo_mode() {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.yolo_armed = true;
+        state.rest.set_agent_mode(AgentMode::Yolo);
+        handle_set_yolo_armed(&mut state, false).unwrap();
+        assert!(!state.rest.yolo_armed);
+        assert_eq!(state.rest.agent_mode(), AgentMode::Auto);
+    }
+
+    #[test]
+    fn stopping_security_disarms_yolo_and_leaves_yolo_mode() {
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.security_enabled = true;
+        state.rest.yolo_armed = true;
+        state.rest.set_agent_mode(AgentMode::Yolo);
+        handle_security_stop(&mut state).unwrap();
+        assert!(!state.rest.security_enabled);
+        assert!(!state.rest.yolo_armed);
+        assert_eq!(state.rest.agent_mode(), AgentMode::Auto);
+    }
+}
+
+/// What `apply_lane` did, for the status line and the IPC reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaneOutcome {
+    Set(crate::app::sec::lane::Lane),
+    Cleared,
+    /// Refused, with the reason a user can act on.
+    Refused(&'static str),
+}
+
+/// Set or clear this session's cyber lane.
+///
+/// The lane is per-session (`Settings::cyber_lane`) while the ROLE assignment stays
+/// global, so two windows can run different lanes at once. Persisted immediately:
+/// a lane that vanished on restart would leave a session silently ungated while
+/// still advertising the toolkit.
+///
+/// Fail-closed at set time: a lane whose role has no model is refused here rather
+/// than accepted and then refusing every call. That is the difference between a
+/// setting that looks applied and one that works.
+pub(crate) fn apply_lane(
+    state: &mut AppState,
+    sess_idx: usize,
+    lane: Option<crate::app::sec::lane::Lane>,
+) -> Result<LaneOutcome> {
+    let Some(mut session) = state.rest.sessions[sess_idx].session.take() else {
+        return Ok(LaneOutcome::Refused("no session"));
+    };
+    let outcome = match lane {
+        None => {
+            session.settings.cyber_lane = None;
+            LaneOutcome::Cleared
+        }
+        Some(l) => {
+            let resolves = crate::app::resolve::resolve_role(
+                &state.rest.config,
+                &session.settings,
+                l.role(),
+            )
+            .is_some();
+            if resolves {
+                session.settings.cyber_lane = Some(l);
+                LaneOutcome::Set(l)
+            } else {
+                LaneOutcome::Refused(crate::app::sec::active::Inactive::NoModel.reason())
+            }
+        }
+    };
+    if matches!(outcome, LaneOutcome::Set(_) | LaneOutcome::Cleared) {
+        session.save()?;
+    }
+    state.rest.sessions[sess_idx].session = Some(session);
+    Ok(outcome)
+}
+
+/// `l` in the `/security` panel: set or clear this session's lane.
+pub(super) fn handle_security_lane(
+    state: &mut AppState,
+    sess_idx: usize,
+    lane: Option<crate::app::sec::lane::Lane>,
+) -> Result<()> {
+    let status = match apply_lane(state, sess_idx, lane)? {
+        LaneOutcome::Set(l) => format!("security: lane = {}", l.label()),
+        LaneOutcome::Cleared => "security: lane cleared".to_string(),
+        LaneOutcome::Refused(why) => format!("security: lane not set — {why}"),
+    };
+    state.rest.fg_mut().status = status;
+    Ok(())
 }

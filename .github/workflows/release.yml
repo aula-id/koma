@@ -286,9 +286,50 @@ jobs:
       - working-directory: src-term
         run: bun node_modules/typescript/bin/tsc --noEmit
 
+  safety-image:
+    name: publish koma-safety
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag from the crate version
+        id: ver
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-agent/Cargo.toml | head -1)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: src-security/image
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/aula-id/koma-safety:${{ steps.ver.outputs.version }}
+            ghcr.io/aula-id/koma-safety:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/aula-id/koma
+            org.opencontainers.image.title=koma-safety
+      - name: Make the package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PUT -H "Accept: application/vnd.github+json" \
+            /orgs/aula-id/packages/container/koma-safety \
+            -f visibility=public
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, windows-package, verify, terminal-tests]
+    needs: [build, windows-package, verify, terminal-tests, safety-image]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
