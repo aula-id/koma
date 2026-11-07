@@ -29,26 +29,55 @@ static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security"
 
 /// Does an isolated execution runtime exist, so a `sec_` call could be contained?
 ///
-/// `21` requires a container with no silent host fallback, so this is the gate
-/// that keeps a call from running uncontained. It reports whether Docker is
-/// reachable from THIS process, which is the same answer for every call and cheap
-/// enough to re-check at dispatch — a probe on the hot path would cost a syscall
-/// per tool call, so the result is memoised for the process lifetime.
+/// Requires a container with no silent host fallback. Reports whether Docker is
+/// reachable from THIS process. Re-probed on each call (not process-memoised): a
+/// sticky `false` from boot (Docker/Colima started later) used to leave every
+/// `sec_` tool refused until koma itself restarted.
 ///
 /// A missing runtime is reported as `unavailable` by the caller, never as success
 /// and never as a host fallback.
 pub(crate) fn cyber_execution_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        // Only detection, nothing clever: the boundary itself spawns containers.
-        std::process::Command::new("docker")
-            .arg("info")
-            .arg("--format")
-            .arg("{{.ServerVersion}}")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    docker_daemon_reachable()
+}
+
+/// Probe `docker info`. Used by the runtime gate and the `/security` panel status.
+pub(crate) fn docker_daemon_reachable() -> bool {
+    std::process::Command::new("docker")
+        .arg("info")
+        .arg("--format")
+        .arg("{{.ServerVersion}}")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Short label for the `/security` panel: what the container runtime looks like
+/// right now. Detection only — never starts an engine.
+pub fn runtime_status_label() -> String {
+    let docker = docker_daemon_reachable();
+    let colima = command_ok("colima", &["version"]);
+    let podman = command_ok("podman", &["info"]);
+    match (docker, colima, podman) {
+        (true, true, _) => "docker ready (colima)".into(),
+        (true, _, true) => "docker ready (podman)".into(),
+        (true, _, _) => "docker ready".into(),
+        (false, true, _) => "docker down — colima installed".into(),
+        (false, _, true) => "docker down — podman present".into(),
+        (false, false, false) if command_ok("docker", &["--version"]) => {
+            "docker installed but not running".into()
+        }
+        _ => "no container runtime".into(),
+    }
+}
+
+/// Re-extract the embedded `src-security` tree into `~/.koma/security/` without
+/// rebuilding the venv. Used when the agent binary has moved past a stale
+/// on-disk daemon package (the common "all tools refused" failure mode).
+pub fn refresh_daemon_sources() -> Result<()> {
+    let dest = security_dir()?;
+    std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
+    extract_assets(&SECURITY_ASSETS, &dest)?;
+    Ok(())
 }
 
 /// Tools whose destination is fixed in the handler, so they carry no destination
@@ -204,16 +233,20 @@ pub fn install(force: bool) -> Result<()> {
     ensure_requirement("python3")?;
     ensure_container_runtime()?;
 
-    let venv_ready = dest.exists() && is_installed() && !force;
+    // Always re-extract the embedded daemon package. Skipping this when the venv
+    // already existed left users on a stale wire vocabulary (bool `risk`) after
+    // the agent moved to effect/exec — every tool refused at handshake with no
+    // install path to recover except `--force`.
+    bar.tick("writing security files");
+    std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
+    extract_assets(&SECURITY_ASSETS, &dest)?;
+
+    let venv_ready = is_installed() && !force;
     if venv_ready {
-        bar.tick("writing security files");
         bar.tick("creating the Python environment");
         bar.tick("installing Python packages");
     } else {
-        bar.tick("writing security files");
-
-        // Step 3: on force, remove the venv so it is rebuilt from scratch.
-        // We keep the Python source files (they will be overwritten in step 4).
+        // On force, remove the venv so it is rebuilt from scratch.
         if force {
             let venv = dest.join("venv");
             if venv.exists() {
@@ -222,15 +255,11 @@ pub fn install(force: bool) -> Result<()> {
             }
         }
 
-        // Step 4: extract embedded assets (creates dest if needed).
-        std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
-        extract_assets(&SECURITY_ASSETS, &dest)?;
-
         bar.tick("creating the Python environment");
         let venv_dir = dest.join("venv").display().to_string();
         quiet("python3", &["-m", "venv", &venv_dir])?;
 
-        // Step 6: install Python dependencies.
+        // Install Python dependencies.
         let pip = dest.join("venv").join("bin").join("pip");
         let requirements = dest.join("requirements.txt");
 

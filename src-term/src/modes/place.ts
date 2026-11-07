@@ -62,8 +62,12 @@ export function selectedOf(mode: unknown): number {
       return num(body.list_sel)
     case "ExtScreen":
       return num(body.menu_cursor)
-    case "Security":
-      return body.health_view ? num(body.health_selected) : num(body.selected)
+    case "Security": {
+      const pane = str(body.pane) || (flag(body.health_view) ? "deps" : "tools")
+      if (pane === "deps") return num(body.health_selected)
+      if (pane === "refused") return num(body.refused_selected)
+      return num(body.selected)
+    }
     case "Remote": {
       const view = str(body.sub).split(":")[1] ?? ""
       if (view === "session_hub") return num(body.session_selected)

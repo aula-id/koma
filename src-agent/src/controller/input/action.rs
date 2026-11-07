@@ -287,6 +287,18 @@ pub enum Action {
     /// lane, or `None` to clear it. Refused with a reason when the chosen role has
     /// no model assigned, so the gate is never left looking configured.
     SecurityLane(Option<crate::app::sec::lane::Lane>),
+    /// `a` in the `/security` panel — clear `sec_inactive` so every advertised tool
+    /// is enabled again.
+    SecurityEnableAllTools,
+    /// `n` in the `/security` panel — put every currently advertised tool into
+    /// `sec_inactive`.
+    SecurityDisableAllTools,
+    /// `u` in the `/security` panel — re-extract the embedded daemon package and
+    /// restart the daemon so a stale on-disk vocabulary is replaced.
+    SecurityRefreshToolkit,
+    /// `c` in the `/security` panel — try to bring the container runtime up
+    /// (Colima start when installed; otherwise a status hint only).
+    SecurityEnsureRuntime,
     // --- Bash job panel actions ---
     /// Esc from the `/bash` panel — return to Chat.
     CloseBash,

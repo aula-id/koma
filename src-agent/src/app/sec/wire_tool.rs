@@ -3,35 +3,37 @@
 //!
 //! Two stages, deliberately separate:
 //!
-//! 1. [`WireTool`] deserializes the daemon's handshake entry. `risk` is a
-//!    three-value [`RiskWire`] with no catch-all, so an unrecognized label is a
-//!    parse error rather than a silent `false`.
+//! 1. [`WireTool`] deserializes the daemon's handshake entry. Reach and runtime
+//!    axes accept the phase-2 vocabulary (`effect` / `exec`) preferred by the
+//!    Python daemon, plus the phase-1 spellings (`risk` / `compute`) so a
+//!    half-migrated pair still fails closed with a clear reason rather than a
+//!    serde type error.
 //! 2. [`WireTool::into_desc`] applies the fail-closed rules with no daemon
-//!    involved: the [allow-list](ALLOWED_COMPUTE) on `compute`, and the
-//!    downgrade for a `remote`/`exploit` tool whose schema declares no network
-//!    argument. Both are testable in isolation, which is the point — the rules
-//!    that matter cannot be exercised without a live child otherwise.
+//!    involved: the allow-list on the runtime class, and the downgrade for a
+//!    `remote`/`exploit` tool whose schema declares no network argument (unless
+//!    it is a fixed-host tool such as `sec_factor`).
 //!
-//! Absent-vs-unknown is a real distinction here, and both now fail CLOSED. `risk`
-//! is REQUIRED: an absent tier used to fall back to [`RiskWire::Static`], the
-//! weakest value, so a descriptor that never learned the field was advertised as
-//! harmless — a network tool would have been offered without an egress parameter
-//! and would have failed at dispatch instead of at handshake. `compute` and
-//! `domain` fail the tool outright for the same reason: the tier decides routing
-//! and containment, so a guess is worse than a visible gap.
+//! Absent-vs-unknown is a real distinction here, and both fail CLOSED. The reach
+//! tier is REQUIRED: an absent tier must not fall back to the weakest value, so
+//! a descriptor that never learned the field is refused at handshake instead of
+//! being advertised as harmless.
 
 use serde::Deserialize;
 
 use super::{RiskWire, SecToolDesc};
 
-/// `compute` values this parent understands.
+/// Runtime classes this parent understands on the wire.
 ///
-/// A daemon-side typo (`"netwrok"`) must not quietly classify a network tool as
-/// pure compute, so anything outside this list is refused. Adding a value is a
-/// two-line change here plus its Python counterpart.
-const ALLOWED_COMPUTE: &[&str] = &["instant-cpu", "light", "network", "browser", "heavy"];
+/// Phase-2 `exec` values (`cpu`/`binary`/`net`/`browser`) are canonical. The
+/// older `compute` labels stay accepted so a daemon that still emits them is not
+/// wiped out by a vocabulary rename alone — they normalize to the same internal
+/// string the cockpit already shows.
+const ALLOWED_EXEC: &[&str] = &["cpu", "binary", "net", "browser"];
 
 /// One advertised tool, straight off the handshake.
+///
+/// Fields are optional at deserialize time so we can name *which* axis is missing
+/// in the refusal rather than collapsing every gap into a serde type error.
 #[derive(Debug, Clone, Deserialize)]
 struct WireTool {
     name: String,
@@ -39,18 +41,88 @@ struct WireTool {
     description: String,
     #[serde(default = "empty_object")]
     parameters: serde_json::Value,
-    /// No default: see the module note. `Option` so the refusal can say which
-    /// field was missing rather than reporting a generic malformed descriptor.
+    /// Phase-2 reach axis (preferred). Same labels as [`RiskWire`].
     #[serde(default)]
-    risk: Option<RiskWire>,
+    effect: Option<RiskWire>,
+    /// Phase-1 reach axis. Accepts the string enum *or* a legacy bool via
+    /// [`FlexibleRisk`].
     #[serde(default)]
-    compute: String,
+    risk: Option<FlexibleRisk>,
+    /// Phase-2 runtime axis (preferred): `cpu` / `binary` / `net` / `browser`.
+    #[serde(default)]
+    #[serde(rename = "exec")]
+    exec_class: Option<String>,
+    /// Phase-1 runtime axis (`instant-cpu`, `network`, …). Normalized into the
+    /// phase-2 vocabulary when `exec` is absent.
+    #[serde(default)]
+    compute: Option<String>,
     #[serde(default)]
     domain: String,
 }
 
 fn empty_object() -> serde_json::Value {
     serde_json::json!({})
+}
+
+/// `risk` on the wire: string enum (current) or legacy bool (`true`→remote,
+/// `false`→local). Bool mapping is intentionally coarse — stale installs should
+/// be refreshed via `koma --security-install`; this only keeps the handshake
+/// from refusing every tool with a type error while that happens.
+#[derive(Debug, Clone, Copy)]
+enum FlexibleRisk {
+    Labeled(RiskWire),
+    LegacyBool(bool),
+}
+
+impl<'de> Deserialize<'de> for FlexibleRisk {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = FlexibleRisk;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a risk/effect label string or a legacy boolean")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(FlexibleRisk::LegacyBool(v))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                let labeled = match v.trim().to_ascii_lowercase().as_str() {
+                    "static" => RiskWire::Static,
+                    "local" => RiskWire::Local,
+                    "remote" => RiskWire::Remote,
+                    "exploit" => RiskWire::Exploit,
+                    other => {
+                        return Err(E::unknown_variant(
+                            other,
+                            &["static", "local", "remote", "exploit"],
+                        ))
+                    }
+                };
+                Ok(FlexibleRisk::Labeled(labeled))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl FlexibleRisk {
+    fn into_wire(self) -> RiskWire {
+        match self {
+            FlexibleRisk::Labeled(w) => w,
+            // Legacy bool: true meant "touches a target", false meant local/static.
+            // Map true→Remote and false→Local so egress still applies to old network
+            // tools; static pure-compute tools that used false lose a bit of
+            // precision (Local vs Static) which is safer than under-classifying.
+            FlexibleRisk::LegacyBool(true) => RiskWire::Remote,
+            FlexibleRisk::LegacyBool(false) => RiskWire::Local,
+        }
+    }
 }
 
 /// Parse the handshake's `tools` array.
@@ -97,23 +169,21 @@ pub(super) fn parse_tools(
 impl WireTool {
     /// Apply the fail-closed rules and yield a gated descriptor.
     fn into_desc(self) -> Result<SecToolDesc, String> {
-        let compute = self.compute.trim().to_string();
-        if compute.is_empty() {
-            return Err("descriptor carried no compute class".to_owned());
-        }
-        if !ALLOWED_COMPUTE.contains(&compute.as_str()) {
-            return Err(format!("unknown compute class '{compute}'"));
-        }
-        let Some(risk) = self.risk else {
-            return Err("descriptor carried no risk tier".to_owned());
-        };
-        let risk = risk.into();
+        let risk_wire = self
+            .effect
+            .or_else(|| self.risk.map(FlexibleRisk::into_wire))
+            .ok_or_else(|| "descriptor carried no effect/risk tier".to_owned())?;
+        let risk = risk_wire.into();
+
+        let compute = resolve_runtime(self.exec_class.as_deref(), self.compute.as_deref())?;
+
         // A network tool whose schema offers no way to name a destination is
         // unreachable through the enforced egress path, so it is not safe to
-        // advertise: `sec_nuclei` takes `url`, `sec_http` takes `url`, but a
-        // hypothetical `sec_portscan` taking one is fine too — the parameter name
-        // is recorded rather than assumed, because the gate has to name it.
+        // advertise — unless it is a fixed-host tool (destination is constant
+        // in the handler, not an argument).
         let network_param = if matches!(risk, super::SecRisk::Static | super::SecRisk::Local) {
+            None
+        } else if crate::security::fixed_host(&self.name) {
             None
         } else {
             match network_parameter(&self.parameters) {
@@ -137,6 +207,34 @@ impl WireTool {
     }
 }
 
+/// Pick a runtime class from `exec` (preferred) or legacy `compute`.
+fn resolve_runtime(exec: Option<&str>, compute: Option<&str>) -> Result<String, String> {
+    if let Some(raw) = exec.map(str::trim).filter(|s| !s.is_empty()) {
+        let key = raw.to_ascii_lowercase();
+        if ALLOWED_EXEC.contains(&key.as_str()) {
+            return Ok(key);
+        }
+        return Err(format!("unknown exec class '{raw}'"));
+    }
+    if let Some(raw) = compute.map(str::trim).filter(|s| !s.is_empty()) {
+        return normalize_legacy_compute(raw);
+    }
+    Err("descriptor carried no exec/compute class".to_owned())
+}
+
+/// Map phase-1 `compute` labels onto the phase-2 `exec` vocabulary.
+fn normalize_legacy_compute(raw: &str) -> Result<String, String> {
+    let key = raw.to_ascii_lowercase();
+    let mapped = match key.as_str() {
+        "cpu" | "instant-cpu" | "light" | "long-cpu" | "gpu" | "heavy" => "cpu",
+        "binary" | "executes-target" => "binary",
+        "net" | "network" => "net",
+        "browser" => "browser",
+        other => return Err(format!("unknown compute class '{other}'")),
+    };
+    Ok(mapped.to_owned())
+}
+
 /// The first `string` parameter whose name marks it as a destination.
 const DESTINATION_HINTS: &[&str] = &["url", "host", "target", "hostname", "endpoint"];
 
@@ -146,10 +244,18 @@ fn network_parameter(parameters: &serde_json::Value) -> Option<String> {
     let required = parameters
         .get("required")
         .and_then(serde_json::Value::as_array)
-        .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     for name in &required {
-        if is_string_prop(props.get(*name)) && DESTINATION_HINTS.iter().any(|h| name.to_lowercase().contains(h)) {
+        if is_string_prop(props.get(*name))
+            && DESTINATION_HINTS
+                .iter()
+                .any(|h| name.to_lowercase().contains(h))
+        {
             return Some((*name).to_string());
         }
     }
@@ -165,7 +271,8 @@ fn network_parameter(parameters: &serde_json::Value) -> Option<String> {
 
 fn is_string_prop(spec: Option<&serde_json::Value>) -> bool {
     matches!(
-        spec.and_then(|s| s.get("type")).and_then(serde_json::Value::as_str),
+        spec.and_then(|s| s.get("type"))
+            .and_then(serde_json::Value::as_str),
         Some("string")
     )
 }
@@ -173,4 +280,3 @@ fn is_string_prop(spec: Option<&serde_json::Value>) -> bool {
 #[cfg(test)]
 #[path = "wire_tool_test.rs"]
 mod tests;
-

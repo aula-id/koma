@@ -63,6 +63,14 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         Vec::new(),
     );
     st.health_fetching = fetching;
+    st.lane_label = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
     *state.mode_mut() = Mode::Security(Box::new(st));
     Ok(())
 }

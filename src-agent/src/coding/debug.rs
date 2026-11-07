@@ -393,15 +393,26 @@ fn read_messages(s: &Arc<Session>, reader: Box<dyn Read + Send>) -> Result<()> {
             }
             Some("request") => {
                 if msg["command"] != "runInTerminal"
-                    || s.reverse_requests
-                        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                            if n < 4 {
-                                Some(n + 1)
-                            } else {
-                                None
+                    || {
+                        // Cap concurrent reverse requests without unstable Atomic::try_update.
+                        let mut ok = false;
+                        let mut cur = s.reverse_requests.load(Ordering::Acquire);
+                        while cur < 4 {
+                            match s.reverse_requests.compare_exchange_weak(
+                                cur,
+                                cur + 1,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            ) {
+                                Ok(_) => {
+                                    ok = true;
+                                    break;
+                                }
+                                Err(actual) => cur = actual,
                             }
-                        })
-                        .is_err()
+                        }
+                        !ok
+                    }
                 {
                     let seq = s.seq.fetch_add(1, Ordering::Relaxed) + 1;
                     let _ = send(

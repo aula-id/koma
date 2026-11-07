@@ -654,6 +654,14 @@ fn shadow_agent_field(f: &str) -> AgentEditField {
 /// The status snapshot rides verbatim (already serde-safe); the cursor is restored
 /// as-is. Render-only — every key is forwarded to the daemon.
 pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
+    use crate::app::mode::SecPane;
+    let pane = match s.pane.as_str() {
+        "deps" => SecPane::Deps,
+        "refused" => SecPane::Refused,
+        // Fall back to the legacy bool when pane token is absent/unknown.
+        _ if s.health_view => SecPane::Deps,
+        _ => SecPane::Tools,
+    };
     SecurityState {
         status: s.status,
         selected: s.selected,
@@ -665,8 +673,14 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         // Install-health + the pane toggle + its cursor ride verbatim so the client
         // renders the same dependency pane the daemon would.
         install_health: s.install_health,
-        health_view: s.health_view,
+        pane,
         health_selected: s.health_selected,
+        refused_selected: s.refused_selected,
+        lane_label: if s.lane_label.is_empty() {
+            "none".into()
+        } else {
+            s.lane_label
+        },
         // Spinner state rides verbatim — the client renders + animates the
         // "checking dependencies…" line from the daemon's projected frame counter.
         health_fetching: s.health_fetching,

@@ -402,6 +402,22 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_lane(state, idx, lane)?;
         }
 
+        Action::SecurityEnableAllTools => {
+            security::handle_security_enable_all(state)?;
+        }
+
+        Action::SecurityDisableAllTools => {
+            security::handle_security_disable_all(state)?;
+        }
+
+        Action::SecurityRefreshToolkit => {
+            security::handle_security_refresh_toolkit(state)?;
+        }
+
+        Action::SecurityEnsureRuntime => {
+            security::handle_security_ensure_runtime(state)?;
+        }
+
         Action::CloseBash => {
             bash::handle_close_bash(state)?;
         }

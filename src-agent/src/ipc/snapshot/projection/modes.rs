@@ -1163,8 +1163,15 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         // here. `health()` is a heavy IPC round-trip and this projection runs on every
         // frame; the mode seeds it once on open and after an install.
         install_health: s.install_health.clone(),
-        health_view: s.health_view,
+        health_view: s.health_view(),
+        pane: match s.pane {
+            crate::app::mode::SecPane::Tools => "tools".into(),
+            crate::app::mode::SecPane::Deps => "deps".into(),
+            crate::app::mode::SecPane::Refused => "refused".into(),
+        },
         health_selected: s.health_selected,
+        refused_selected: s.refused_selected,
+        lane_label: s.lane_label.clone(),
         // Spinner state for the in-flight health probe — projected so the client renders
         // the same "checking dependencies…" line and ANIMATES it from `health_frame`
         // (the daemon advances the frame every tick; the client owns no probe of its own).
