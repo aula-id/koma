@@ -340,8 +340,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         env:
-          # The action otherwise uploads a *.dockerbuild record. publish
-          # downloads every artifact, and that record failed five times.
+          # Skip the *.dockerbuild artifact. It is not a release file, and
+          # downloading it failed after five retries on the v0.4.9 run.
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: src-security/image
@@ -360,13 +360,43 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, windows-package, verify, terminal-tests, safety-image]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+      # Named downloads only. A bare download also pulls the Docker build
+      # record, and that blob failed after five retries on v0.4.9.
       - uses: actions/download-artifact@v4
         with:
-          pattern: koma-*
+          name: koma-linux-x64
           path: release-assets
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: koma-linux-arm64
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: koma-darwin-arm64
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: koma-darwin-x64
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: koma-windows
+          path: release-assets
+      - name: Require the release files
+        run: |
+          set -euo pipefail
+          if [ ! -s release-assets/koma-x64.msi ]; then
+            found=$(find release-assets -name koma-x64.msi -print -quit)
+            test -n "$found"
+            mv "$found" release-assets/koma-x64.msi
+          fi
+          for file in koma-linux-x64 koma-linux-arm64 koma-darwin-arm64 koma-darwin-x64 koma-x64.msi; do
+            test -s "release-assets/$file" || { echo "::error::missing $file"; find release-assets -type f; exit 1; }
+          done
       - name: Hammer the release identity
         run: |
           set -euo pipefail
@@ -389,11 +419,13 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           url="https://github.com/aula-id/koma/releases/download/${GITHUB_REF_NAME}/release.json"
-          for _ in 1 2 3 4 5 6; do
-            if curl -fsSL "$url" -o release-check.json; then
+          ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if curl -fsSL "$url" -o release-check.json && test -s release-check.json; then
+              ok=1
               break
             fi
-            sleep 5
+            sleep 10
           done
-          test -s release-check.json
+          test "$ok" = 1
           python3 scripts/check-release.py release-check.json "$version" "$GITHUB_SHA"
