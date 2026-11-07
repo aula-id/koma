@@ -82,6 +82,7 @@ export function Chat({
   send,
   sendTracked,
   onFlushError,
+  onRecycle,
 }: {
   snap: Snapshot
   theme: Theme
