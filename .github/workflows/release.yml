@@ -347,13 +347,10 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/aula-id/koma
             org.opencontainers.image.title=koma-safety
-      - name: Make the package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api --method PUT -H "Accept: application/vnd.github+json" \
-            /orgs/aula-id/packages/container/koma-safety \
-            -f visibility=public
+      # No visibility call. PUT /orgs/{org}/packages/container/{name} is not
+      # a GitHub endpoint and returns 404, which failed this job after the
+      # image was already pushed. A new package stays private until someone
+      # sets koma-safety public once in the package settings. Later tags keep it.
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
