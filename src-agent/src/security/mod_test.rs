@@ -128,14 +128,28 @@ fn missing_requirements_have_a_macos_and_linux_command() {
         Some(vec!["brew", "install", "python@3.12"])
     );
     assert_eq!(
-        requirement_argv("macos", "brew", "docker"),
-        Some(vec!["brew", "install", "--cask", "docker"])
-    );
-    assert_eq!(
         requirement_argv("linux", "apt", "docker"),
         Some(vec!["sudo", "apt-get", "install", "-y", "docker.io"])
     );
     assert!(requirement_argv("windows", "brew", "docker").is_none());
+}
+
+#[test]
+fn nothing_installed_offers_colima_on_macos_and_the_docker_engine_on_linux() {
+    assert_eq!(
+        offered_runtime_argv("macos", "brew"),
+        Some(vec!["brew", "install", "colima", "docker"])
+    );
+    assert_eq!(
+        offered_runtime_argv("linux", "apt"),
+        Some(vec!["sudo", "apt-get", "install", "-y", "docker.io"])
+    );
+    assert_eq!(
+        offered_runtime_argv("linux", "dnf"),
+        Some(vec!["sudo", "dnf", "install", "-y", "docker"])
+    );
+    assert!(offered_runtime_argv("windows", "brew").is_none());
+    assert!(offered_runtime_argv("other", "brew").is_none());
 }
 
 #[test]

@@ -404,6 +404,18 @@ fn probe_runtime() -> RuntimeSeen {
     }
 }
 
+/// What to install when Docker, Colima, Podman, and Kubernetes are all absent.
+/// macOS gets Colima. Linux gets the Docker engine, not Docker Desktop.
+fn offered_runtime_argv(os: &str, manager: &str) -> Option<Vec<&'static str>> {
+    match (os, manager) {
+        ("macos", "brew") => Some(vec!["brew", "install", "colima", "docker"]),
+        ("linux", "apt") => Some(vec!["sudo", "apt-get", "install", "-y", "docker.io"]),
+        ("linux", "dnf") => Some(vec!["sudo", "dnf", "install", "-y", "docker"]),
+        ("linux", "pacman") => Some(vec!["sudo", "pacman", "-S", "--noconfirm", "docker"]),
+        _ => None,
+    }
+}
+
 fn docker_client_argv(os: &str, manager: &str) -> Option<Vec<&'static str>> {
     match (os, manager) {
         ("macos", "brew") => Some(vec!["brew", "install", "docker"]),
@@ -421,7 +433,6 @@ fn accepts_yes(answer: &str) -> bool {
 fn requirement_argv(os: &str, manager: &str, tool: &str) -> Option<Vec<&'static str>> {
     match (os, manager, tool) {
         ("macos", "brew", "python3") => Some(vec!["brew", "install", "python@3.12"]),
-        ("macos", "brew", "docker") => Some(vec!["brew", "install", "--cask", "docker"]),
         ("linux", "apt", "python3") => Some(vec![
             "sudo",
             "apt-get",
@@ -508,6 +519,47 @@ fn ensure_requirement(tool: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn offer_runtime() -> Result<()> {
+    let os = host_os();
+    if os == "other" {
+        return Err(anyhow!("security mode is not supported on Windows"));
+    }
+    let argv = offered_runtime_argv(os, package_manager());
+    let shown = argv
+        .as_ref()
+        .map(|args| args.join(" "))
+        .unwrap_or_else(|| "install a container engine".to_string());
+    let prompt = if os == "macos" {
+        format!("No container engine is installed. Install Colima with `{shown}` and start it?")
+    } else {
+        format!("No container engine is installed. Install the Docker engine with `{shown}` and start it?")
+    };
+    if !confirm(&prompt)? {
+        return Err(anyhow!(
+            "a container engine is required. Install was declined.\n  {shown}"
+        ));
+    }
+    let Some(argv) = argv else {
+        return Err(anyhow!("no package manager can install a container engine"));
+    };
+    if os == "linux" && package_manager() == "apt" {
+        quiet("sudo", &["apt-get", "update"])?;
+    }
+    quiet(argv[0], &argv[1..])?;
+    if os == "macos" {
+        quiet("colima", &["start"])?;
+    } else {
+        quiet("sudo", &["systemctl", "enable", "--now", "docker"])?;
+    }
+    if tool_ok("docker") {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "the engine was installed but `docker info` still fails. Rerun koma --security-install."
+        ))
+    }
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
@@ -657,7 +709,7 @@ fn ensure_container_runtime() -> Result<()> {
         RuntimeChoice::DockerStopped => Err(anyhow!(
             "Docker is installed but not running. Open it, then rerun koma --security-install."
         )),
-        RuntimeChoice::InstallDocker => ensure_requirement("docker"),
+        RuntimeChoice::InstallDocker => offer_runtime(),
     }
 }
 
