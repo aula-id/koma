@@ -59,7 +59,7 @@ cd src-term
 The soak test appends 2,000 turns through `SessionProgress` deltas in ten cycles,
 pages back four times per cycle while checking the anchor and mounted-turn
 counts, returns to the tail, then rewinds history with a full snapshot. RSS must
-grow by less than 4 MiB per cycle over the second half. The second test loads
+grow by less than 8 MiB per cycle over the second half. The second test loads
 3,000 synthetic turns, scrolls in both directions, exercises cleanup on Unix,
 and checks RSS growth against a 160 MiB allowance after the initial paint. These
 are synthetic regressions, not a guarantee for every conversation. A single
