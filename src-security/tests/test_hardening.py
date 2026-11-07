@@ -8,11 +8,11 @@ import time
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from koma_sec_daemon import cancel, registry, sandbox, verdict  # noqa: E402
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class RegistrationTest(unittest.TestCase):

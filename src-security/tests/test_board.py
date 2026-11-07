@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from koma_sec_daemon import board  # noqa: E402
 
@@ -250,7 +250,7 @@ class DaemonWiringTest(unittest.TestCase):
         p = subprocess.Popen(
             [sys.executable, "-m", "koma_sec_daemon"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, cwd=str(Path(__file__).parent), env=self.env,
+            text=True, cwd=str(Path(__file__).resolve().parent.parent), env=self.env,
         )
         p.stdin.write(json.dumps({"v": 2}) + "\n")
         p.stdin.flush()

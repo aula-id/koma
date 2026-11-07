@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "proxy"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "proxy"))
 
 from koma_proxy import Rules, _parse, _rule_admits, _split_authority  # noqa: E402
 

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from koma_sec_daemon import verdict  # noqa: E402
 from koma_sec_daemon.tools import sec_browser  # noqa: E402

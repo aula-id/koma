@@ -76,203 +76,21 @@ pub fn for_ctx(state: &AppState, sess_idx: usize) -> Option<Lane> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "active_test.rs"]
+mod tests;
 
-    #[test]
-    fn every_inactive_reason_is_distinct_and_non_empty() {
-        let all = [
-            Inactive::Disabled,
-            Inactive::PlanMode,
-            Inactive::NoLane,
-            Inactive::NoModel,
-        ];
-        for (i, a) in all.iter().enumerate() {
-            assert!(!a.reason().is_empty());
-            for b in &all[i + 1..] {
-                assert_ne!(a.reason(), b.reason(), "{a:?} vs {b:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_lane_maps_to_its_role() {
-        // The resolution here depends on the enum, not on config, so it is worth
-        // pinning: a swapped mapping would gate the wrong capability.
-        assert_eq!(Lane::Research.role(), ModelRole::CyberResearch);
-        assert_eq!(Lane::Red.role(), ModelRole::CyberRed);
-        assert_eq!(Lane::Blue.role(), ModelRole::CyberBlue);
-    }
-
-    use crate::model::app_config::ModelRole;
-}
 
 #[cfg(test)]
-mod stop_during_run {
-    //! Phase 1: stopping must refuse the NEXT call, without re-spawning anything.
-    //!
-    //! The gate is re-asked at dispatch, so these drive the same predicate the
-    //! dispatch path calls rather than a snapshot taken earlier.
+#[path = "active_stop_during_run_test.rs"]
+mod stop_during_run;
 
-    use crate::security::{cyber_execution_available, sec_refusal};
-
-    /// Mirrors the daemon: only known names are in the advertised set.
-    fn advertised(name: &str) -> bool {
-        matches!(name, "sec_http" | "sec_decode")
-    }
-
-    #[test]
-    fn a_forged_sec_name_is_refused_even_with_everything_on() {
-        let got = sec_refusal("sec_nope", true, advertised);
-        assert!(got.expect("refused").contains("not advertised"));
-    }
-
-    #[test]
-    fn stopping_mid_run_refuses_the_next_call() {
-        // `enabled` false models the lane being switched off between two calls of
-        // one round: the second must not execute.
-        let got = sec_refusal("sec_http", false, advertised);
-        assert!(got.expect("refused").contains("lane off"));
-    }
-
-    #[test]
-    fn a_non_sec_tool_is_never_gated() {
-        // Baseline coding behaviour is untouched by the boundary.
-        assert!(sec_refusal("bash", false, advertised).is_none());
-    }
-
-    #[test]
-    fn the_runtime_verdict_matches_the_probe() {
-        // A call that clears every other check is refused exactly when no runtime
-        // exists — never admitted to the host as a fallback.
-        let got = sec_refusal("sec_http", true, advertised);
-        assert_eq!(got.is_none(), cyber_execution_available());
-    }
-
-    #[test]
-    fn the_reason_order_puts_the_most_specific_diagnosis_first() {
-        // A forged name while the lane is off still names the forged name, because
-        // that is true regardless of the lane and is the more useful message.
-        let got = sec_refusal("sec_nope", false, advertised).expect("refused");
-        assert!(got.contains("lane off") || got.contains("not advertised"), "{got}");
-    }
-}
 
 #[cfg(test)]
-mod inheritance {
-    //! A sub-agent clones its parent's settings, so `cyber_lane` comes along for
-    //! free. But `build_tool_ctx` resolves the lane against the CHILD session, so
-    //! inheritance is only correct while the child carries the same selection and
-    //! the same role assignment. Pinned here because a silent divergence would give
-    //! a sub-agent a wider capability than its parent.
+#[path = "active_inheritance_test.rs"]
+mod inheritance;
 
-    use crate::app::sec::lane::Lane;
-    use crate::model::settings::Settings;
-
-    #[test]
-    fn a_cloned_settings_carries_the_lane() {
-        let parent = Settings {
-            cyber_lane: Some(Lane::Red),
-            ..Default::default()
-        };
-        let child = parent.clone();
-        assert_eq!(child.cyber_lane, Some(Lane::Red));
-    }
-
-    #[test]
-    fn an_unset_parent_stays_unset_in_the_child() {
-        let parent = Settings::default();
-        assert_eq!(parent.clone().cyber_lane, None);
-    }
-
-    #[test]
-    fn the_lane_survives_a_settings_round_trip() {
-        // It is persisted per session, so a restart must not silently drop it and
-        // leave the session ungated.
-        let s = Settings {
-            cyber_lane: Some(Lane::Blue),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&s).expect("serialise");
-        let back: Settings = serde_json::from_str(&json).expect("deserialise");
-        assert_eq!(back.cyber_lane, Some(Lane::Blue));
-    }
-
-    #[test]
-    fn an_older_settings_file_without_the_key_still_loads() {
-        // `#[serde(default)]` is what keeps every pre-existing settings.json valid.
-        let json = serde_json::to_string(&Settings::default()).expect("serialise");
-        let mut value: serde_json::Value = serde_json::from_str(&json).expect("parse");
-        value.as_object_mut().expect("object").remove("cyber_lane");
-        let back: Settings = serde_json::from_value(value).expect("load");
-        assert_eq!(back.cyber_lane, None);
-    }
-}
 
 #[cfg(test)]
-mod roles {
-    //! Phase 4: the cyber roles are hidden while the lane is off, and Main never
-    //! inherits a cyber capability. Both are easy to break by "helpfully" adding a
-    //! fallback, so both are pinned.
+#[path = "active_roles_test.rs"]
+mod roles;
 
-    use crate::model::app_config::ModelRole;
-
-    #[test]
-    fn the_cyber_roles_are_hidden_when_security_is_off() {
-        let off = ModelRole::visible(false);
-        for role in [
-            ModelRole::CyberRed,
-            ModelRole::CyberBlue,
-            ModelRole::CyberResearch,
-        ] {
-            assert!(!off.contains(&role), "{role:?} is visible while off");
-        }
-    }
-
-    #[test]
-    fn they_appear_once_enabled() {
-        let on = ModelRole::visible(true);
-        for role in [
-            ModelRole::CyberRed,
-            ModelRole::CyberBlue,
-            ModelRole::CyberResearch,
-        ] {
-            assert!(on.contains(&role), "{role:?} missing while on");
-        }
-    }
-
-    #[test]
-    fn enabling_only_ever_adds_the_cyber_roles() {
-        // Turning security on must not disturb any ordinary role.
-        let off = ModelRole::visible(false);
-        let on = ModelRole::visible(true);
-        for role in &off {
-            assert!(on.contains(role), "{role:?} disappeared when enabling");
-        }
-        assert_eq!(on.len(), off.len() + 3);
-    }
-
-    #[test]
-    fn main_is_not_a_cyber_role() {
-        assert!(!ModelRole::Main.is_cyber());
-    }
-
-    #[test]
-    fn no_cyber_role_resolves_through_main() {
-        // Fail-closed by design: an unassigned cyber role must read as unassigned
-        // rather than being quietly served by the coding model.
-        let mut config = crate::model::app_config::AppConfig::default();
-        config.models.clear();
-        let settings = crate::model::settings::Settings::default();
-        for role in [
-            ModelRole::CyberRed,
-            ModelRole::CyberBlue,
-            ModelRole::CyberResearch,
-        ] {
-            assert!(
-                crate::app::resolve::resolve_role(&config, &settings, role).is_none(),
-                "{role:?} fell back to a model it should not have"
-            );
-        }
-    }
-}
