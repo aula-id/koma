@@ -2,25 +2,25 @@
 
 Isolation and security-runtime dashboard (not a per-tool enable list).
 
-## What it controls
-- **Daemon** — start/stop the host security control plane
-- **YOLO arm** — unlocks `/mode yolo` (arm ≠ mode). Requires a running daemon.
-  After arming, switch with `/mode yolo` or Shift+Tab for hands-off runs.
-- **Runtime strip** — docker/colima readiness, lane, refused descriptors
-- **Catalog summary** — how many toolkit rows are loaded (by domain). Concrete
-  tools are discovered dynamically by the agent via `sec_catalog` / `sec_run`.
+## Controls
+- **Daemon** — start/stop host security control plane
+- **YOLO arm** — unlocks `/mode yolo` (arm ≠ mode). Requires running daemon.
+- **Runtime / boundary** — docker readiness, guest up/down, egress rules summary
+- **Catalog summary** — domain counts; concrete tools via agent `sec_catalog`
 
-## Agent tools (when security is on)
-- `sec_catalog` — browse categories / list / get (Plan may use this only)
-- `sec_run` — execute one concrete tool (lane + scope gates)
-- `sec_fs` — copy files into/out of the guest
-- `sec_runtime` — boundary status / up / down / health
+## Agent tools (security on + daemon)
+- `sec_catalog` — categories / list (paged) / get
+- `sec_run` — one concrete tool in koma-safety guest
+- `sec_fs` — copy_in / copy_out / ls
+- `sec_runtime` — status | up | down | health | net | rules
 
-## Typical path
-1. `koma --security-install` (once)
-2. `/security` → start daemon
-3. Confirm scope + pick lane (research / red / blue)
-4. Optional: arm YOLO, then `/mode yolo`
-5. Agent uses catalog → run inside the guest
+Working-set pins survive chat compaction (session `sec_working_set.json`).
 
-Use /help for the registered command and keyboard reference.
+## Path
+1. `koma --security-install` once  
+2. `/security` start daemon  
+3. Scope + lane  
+4. Optional YOLO arm → `/mode yolo`  
+5. catalog → run inside guest  
+
+Image: `ghcr.io/aula-id/koma-safety` (`minimal` / `standard` / `extended` compositions).

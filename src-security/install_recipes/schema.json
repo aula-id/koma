@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://koma.run/schemas/sec-install-recipe.json",
+  "title": "Koma security install recipe",
+  "type": "object",
+  "required": ["slug", "binary_name", "method", "detect", "packs", "lanes", "effect", "exec"],
+  "additionalProperties": false,
+  "properties": {
+    "slug": { "type": "string", "minLength": 1 },
+    "binary_name": { "type": "string", "minLength": 1 },
+    "method": {
+      "type": "string",
+      "enum": ["apt", "pip", "go_release", "git_build", "gem", "copy_data", "skip"]
+    },
+    "source": { "type": "string" },
+    "version_pin": { "type": "string" },
+    "detect": { "type": "string", "description": "which(1) name or import path" },
+    "packs": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["minimal", "standard", "extended"] },
+      "minItems": 1
+    },
+    "lanes": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["research", "red", "blue"] },
+      "minItems": 1
+    },
+    "effect": { "type": "string", "enum": ["static", "local", "remote", "exploit"] },
+    "exec": { "type": "string", "enum": ["cpu", "binary", "net", "browser"] },
+    "approx_size_class": { "type": "string", "enum": ["xs", "s", "m", "l", "xl"] },
+    "license_note": { "type": "string" },
+    "categories": { "type": "array", "items": { "type": "string" } }
+  }
+}
