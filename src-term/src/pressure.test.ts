@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { afterGc, CALM, CLEANUP_INTERVAL_MS, GC_USEFUL_BYTES, pressureLimits, pressureNotice, pressureTick } from "./pressure.ts"
+import { afterGc, CALM, CLEANUP_INTERVAL_MS, GC_MISSES, GC_USEFUL_BYTES, IDLE_COLLECT, IDLE_COLLECT_FLOOR, IDLE_COLLECT_MS, RECYCLE_GAP_MS, idleCollectDue, idleCollectResult, idleCollectStep, pressureLimits, pressureNotice, pressureTick, ramTone, recycleArmed, viewRecycleDue } from "./pressure.ts"
 
 const MIB = 1024 * 1024
 const limits = { high: 768 * MIB, low: 512 * MIB, warn: 2048 * MIB }
@@ -49,5 +49,50 @@ describe("pressure valve", () => {
     expect(pressureNotice(warned)).toContain("Restarting the terminal keeps your session")
     expect(pressureTick(warned, 600 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
     expect(pressureTick(warned, 500 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(false)
+  })
+
+  test("a quiet turn collects on the interval, and a live turn never does", () => {
+    expect(idleCollectDue(0, IDLE_COLLECT_MS, true)).toBe(true)
+    expect(idleCollectDue(0, IDLE_COLLECT_MS / 2, true)).toBe(false)
+    expect(idleCollectDue(0, IDLE_COLLECT_MS, false)).toBe(false)
+    expect(idleCollectDue(1_000, 1_000 + IDLE_COLLECT_MS, false)).toBe(false)
+  })
+
+  test("a quiet collect skips a live turn and a small process, then pauses after two weak sweeps", () => {
+    const hot = IDLE_COLLECT_FLOOR + GC_USEFUL_BYTES
+    expect(idleCollectStep(IDLE_COLLECT, IDLE_COLLECT_MS, false, hot).collect).toBe(false)
+    expect(idleCollectStep(IDLE_COLLECT, IDLE_COLLECT_MS, true, IDLE_COLLECT_FLOOR - 1).collect).toBe(false)
+    const due = idleCollectStep(IDLE_COLLECT, IDLE_COLLECT_MS, true, hot)
+    expect(due.collect).toBe(true)
+    const once = idleCollectResult(due.state, hot, hot)
+    expect(once.paused).toBe(false)
+    expect(once.misses).toBe(1)
+    const paused = idleCollectResult(once, hot, hot)
+    expect(paused.misses).toBe(GC_MISSES)
+    expect(paused.paused).toBe(true)
+    expect(idleCollectStep(paused, IDLE_COLLECT_MS * 4, true, hot).collect).toBe(false)
+    const climbed = idleCollectStep(paused, IDLE_COLLECT_MS * 4, true, paused.lastRss + GC_USEFUL_BYTES)
+    expect(climbed.collect).toBe(true)
+    expect(idleCollectResult(due.state, hot, hot - GC_USEFUL_BYTES).misses).toBe(0)
+  })
+
+  test("the view recycles only after a short window and a useless sweep, and not twice inside the gap", () => {
+    const stuck = { ...pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits), gcUseful: false }
+    expect(viewRecycleDue(stuck, 800 * MIB, limits.high, true, true)).toBe(true)
+    expect(viewRecycleDue(stuck, 800 * MIB, limits.high, false, true)).toBe(false)
+    expect(viewRecycleDue(stuck, limits.high - 1, limits.high, true, true)).toBe(false)
+    expect(viewRecycleDue({ ...stuck, gcUseful: true }, 800 * MIB, limits.high, true, true)).toBe(false)
+    expect(viewRecycleDue({ ...stuck, reduced: false }, 800 * MIB, limits.high, true, true)).toBe(false)
+    expect(viewRecycleDue(stuck, 800 * MIB, limits.high, true, false)).toBe(false)
+    expect(recycleArmed(1_000, 0)).toBe(true)
+    expect(recycleArmed(1_000, 1_000)).toBe(false)
+    expect(recycleArmed(1_000 + RECYCLE_GAP_MS, 1_000)).toBe(true)
+  })
+
+  test("the RAM row stays dim until the window shrinks, and turns error at the restart mark", () => {
+    expect(ramTone(CALM)).toBe("dim")
+    const hot = pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits)
+    expect(ramTone(hot)).toBe("warn")
+    expect(ramTone(pressureTick(CALM, 2100 * MIB, CLEANUP_INTERVAL_MS, limits))).toBe("error")
   })
 })

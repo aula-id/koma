@@ -26,6 +26,8 @@ function initialRoute(): Route {
 const MIN_COLUMNS = 50
 /** Matches `UPDATE_EXIT` in `src-agent/src/app/term_preview.rs`. */
 const UPDATE_EXIT = 75
+/** Matches `RECYCLE_EXIT`. The launcher respawns this view and leaves the daemon up. */
+const RECYCLE_EXIT = 76
 const UPDATE_FILE = process.env.KOMA_UPDATE_FILE
 
 process.title = "koma"
@@ -102,6 +104,13 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
     process.exit(UPDATE_EXIT)
   }
 
+  function recycle(id: string) {
+    writeFileSync(UPDATE_FILE!, id)
+    renderer.destroy()
+    syntaxStyle.destroy()
+    process.exit(RECYCLE_EXIT)
+  }
+
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
     if (text) copyText(text)
@@ -152,6 +161,7 @@ function App({ syntaxStyle: baseSyntaxStyle }: { syntaxStyle: SyntaxStyleHandle 
         onExit={leave}
         onRemote={onRemote}
         onUpdate={UPDATE_FILE ? update : undefined}
+        onRecycle={UPDATE_FILE ? recycle : undefined}
         onPalette={setPalette}
         ctrlC={sessionCtrlC}
       />

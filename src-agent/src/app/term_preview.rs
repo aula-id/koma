@@ -25,26 +25,74 @@ pub enum TermStart {
 /// `KOMA_UPDATE_FILE` and wants this process to install and reopen it.
 const UPDATE_EXIT: i32 = 75;
 
+/// Client exit code when the view is retained past the point a sweep can help.
+/// The session id is in `KOMA_UPDATE_FILE`. This process respawns the view.
+const RECYCLE_EXIT: i32 = 76;
+
+/// Matches `RECYCLE_GAP_MS` in the terminal client. A second request inside
+/// this window is refused so a still-hot view cannot respawn in a loop.
+const RECYCLE_GAP_MS: u64 = 600_000;
+
+/// A normal launch may recycle. After one recycle, the next request waits out the gap.
+fn recycle_cooled(last_ms: Option<u64>, now_ms: u64, gap_ms: u64) -> bool {
+    last_ms
+        .map(|at| now_ms.saturating_sub(at) >= gap_ms)
+        .unwrap_or(true)
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
 /// Spawn the OpenTUI preview and wait until it exits.
 ///
 /// The preview owns the terminal. On Unix it is moved into the foreground
 /// process group so Ctrl-C reaches OpenTUI, which restores the screen, instead
 /// of killing this process mid-frame.
 pub fn run_term_preview(start: TermStart) -> Result<()> {
-    let update_file = crate::model::store::base_dir()?
-        .join(format!("update-{}.session", std::process::id()));
+    let update_file =
+        crate::model::store::base_dir()?.join(format!("update-{}.session", std::process::id()));
     // Captured before the installer renames a new binary over this one.
     let exe = std::env::current_exe().ok();
-    let code = run_client(start, &update_file)?;
-    if code == Some(UPDATE_EXIT) {
-        let session = std::fs::read_to_string(&update_file).unwrap_or_default();
-        let _ = std::fs::remove_file(&update_file);
-        return update_and_reopen(exe, session.trim());
-    }
-    match code {
-        Some(0) => Ok(()),
-        Some(code) => std::process::exit(code),
-        None => std::process::exit(1),
+    let mut start = start;
+    let mut recycled_at: Option<u64> = None;
+    let mut blocked = false;
+    loop {
+        let code = run_client(&start, &update_file, recycled_at)?;
+        if code == Some(UPDATE_EXIT) {
+            let session = std::fs::read_to_string(&update_file).unwrap_or_default();
+            let _ = std::fs::remove_file(&update_file);
+            return update_and_reopen(exe, session.trim());
+        }
+        if code == Some(RECYCLE_EXIT) {
+            let session = std::fs::read_to_string(&update_file).unwrap_or_default();
+            let _ = std::fs::remove_file(&update_file);
+            let session = session.trim();
+            if session.is_empty() {
+                anyhow::bail!("the terminal asked to recycle without a session");
+            }
+            let now = unix_ms();
+            if blocked || !recycle_cooled(recycled_at, now, RECYCLE_GAP_MS) {
+                // The view asked again inside the quiet gap. Respawn once, disarmed,
+                // and leave if that process asks too.
+                if blocked {
+                    eprintln!("koma: terminal recycle repeated inside the quiet gap; the session daemon is still running");
+                    return Ok(());
+                }
+                blocked = true;
+            }
+            recycled_at = Some(now);
+            start = TermStart::Session(Some(session.to_string()));
+            continue;
+        }
+        match code {
+            Some(0) => return Ok(()),
+            Some(code) => std::process::exit(code),
+            None => std::process::exit(1),
+        }
     }
 }
 
@@ -79,7 +127,12 @@ fn update_and_reopen(_exe: Option<std::path::PathBuf>, _session: &str) -> Result
 }
 
 /// Run the client until it exits. `None` means it was killed by a signal.
-fn run_client(start: TermStart, update_file: &std::path::Path) -> Result<Option<i32>> {
+/// `recycled_at` is set when this view replaces one that could not return memory.
+fn run_client(
+    start: &TermStart,
+    update_file: &std::path::Path,
+    recycled_at: Option<u64>,
+) -> Result<Option<i32>> {
     let launch = super::term_bundle::prepare().context(
         "the new terminal could not be prepared on this machine.\n  \
          Use `koma legacy` to open the legacy terminal.",
@@ -107,6 +160,9 @@ fn run_client(start: TermStart, update_file: &std::path::Path) -> Result<Option<
     cmd.env("KOMA_BUILD", crate::model::store::build_fingerprint());
     cmd.env("KOMA_VERSION", crate::model::store::current_version());
     cmd.env("KOMA_UPDATE_FILE", update_file);
+    if let Some(at) = recycled_at {
+        cmd.env("KOMA_RECYCLED_AT", at.to_string());
+    }
     match start {
         TermStart::Remote {
             target,
@@ -114,9 +170,9 @@ fn run_client(start: TermStart, update_file: &std::path::Path) -> Result<Option<
             port,
             session,
         } => {
-            let mut parsed = crate::remote::parse_target(&target)?;
+            let mut parsed = crate::remote::parse_target(target)?;
             if let Some(port) = port {
-                parsed.port = Some(port);
+                parsed.port = Some(*port);
             }
             let target = match parsed.port {
                 Some(port) => format!("{}@{}:{}", parsed.user, parsed.host, port),
@@ -304,4 +360,16 @@ pub fn run_term_remote() -> Result<()> {
 
 fn blank_to_none(value: Option<String>) -> Option<String> {
     value.filter(|text| !text.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recycle_cooled;
+
+    #[test]
+    fn a_recycle_blocks_a_second_until_the_gap() {
+        assert!(recycle_cooled(None, 1_000, 600_000));
+        assert!(!recycle_cooled(Some(1_000), 1_000 + 599_000, 600_000));
+        assert!(recycle_cooled(Some(1_000), 1_000 + 600_000, 600_000));
+    }
 }

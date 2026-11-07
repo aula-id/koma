@@ -123,7 +123,9 @@ pub(super) fn apply_frame(
         // loop, in the pre-render handshake (see `client_run`). If one still reaches
         // here (a re-attach mid-session re-emits it), it is non-visual: the version was
         // already verified at connect time, so just advance the seq and render nothing.
-        DaemonEvent::Hello { .. } | DaemonEvent::TurnResult { .. } | DaemonEvent::InterruptAndSubmitResult { .. } => FrameEffect::none(),
+        DaemonEvent::Hello { .. }
+        | DaemonEvent::TurnResult { .. }
+        | DaemonEvent::InterruptAndSubmitResult { .. } => FrameEffect::none(),
         // The `/resume` hand-off: the daemon asked THIS client to open its LOCAL
         // swapper. Latch the request so `render_loop` returns `ClientTransition::OpenSwapper`
         // AFTER this drain pass — `apply_frame` owns no terminal / connection and can't
@@ -336,6 +338,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
             .map(|version| crate::app::version::VersionInfo {
                 version: version.clone(),
                 message: None,
+                sha: None,
             });
     // The shadow `AppConfig`'s registered-model + provider catalogue is populated
     // ONLY for the `/agents` screen (which resolves a chosen `model_uuid` to a

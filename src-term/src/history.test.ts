@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   CHAT_TURNS_DEFAULT,
+  assignSlots,
   countTurns,
   historyRows,
   isHistoryPrepend,
@@ -122,5 +123,15 @@ describe("byte-budgeted window", () => {
     expect(countTurns(rows.slice(shiftWindow(rows, tail, -1, 30), tail))).toBe(20)
     const huge = sized([5_000_000, 5_000_000, 5_000_000])
     expect(shiftWindow(huge, 4, -1, 30, 1000)).toBe(2)
+  })
+
+  test("a turn that stays on screen keeps its slot", () => {
+    const first = assignSlots(new Map(), [10, 11, 12])
+    expect([...first.values()]).toEqual([0, 1, 2])
+    const paged = assignSlots(first, [11, 12, 13])
+    expect(paged.get(11)).toBe(1)
+    expect(paged.get(12)).toBe(2)
+    expect(paged.get(13)).toBe(0)
+    expect(new Set(paged.values()).size).toBe(3)
   })
 })

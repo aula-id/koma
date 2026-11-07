@@ -32,6 +32,8 @@ jobs:
   build:
     name: build ${{ matrix.asset }}
     runs-on: ${{ matrix.os }}
+    env:
+      KOMA_GIT_SHA: ${{ github.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +64,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Stamp the release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=python3
+          command -v python3 >/dev/null || py=python
+          "$py" scripts/stamp-release.py "${GITHUB_REF_NAME#v}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -142,9 +153,20 @@ jobs:
   windows-package:
     name: package windows x64 (msi)
     runs-on: windows-latest
+    env:
+      KOMA_GIT_SHA: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Stamp the release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=python3
+          command -v python3 >/dev/null || py=python
+          "$py" scripts/stamp-release.py "${GITHUB_REF_NAME#v}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -302,20 +324,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Tag from the crate version
+      - name: Tag from the release
         id: ver
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-agent/Cargo.toml | head -1)
+          version="${GITHUB_REF_NAME#v}"
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/aula-id/koma-safety:${version}"
+            if [[ "$version" != *-* ]]; then
+              echo "ghcr.io/aula-id/koma-safety:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: src-security/image
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/aula-id/koma-safety:${{ steps.ver.outputs.version }}
-            ghcr.io/aula-id/koma-safety:latest
+          tags: ${{ steps.ver.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/aula-id/koma
             org.opencontainers.image.title=koma-safety
@@ -332,16 +360,38 @@ jobs:
     needs: [build, windows-package, verify, terminal-tests, safety-image]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Hammer the release identity
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          VERSION="$version" python3 -c 'import json,os; json.dump({"version": os.environ["VERSION"], "sha": os.environ["GITHUB_SHA"]}, open("release.json", "w")); open("release.json", "a").write("\n")'
+          python3 scripts/check-release.py release.json "$version" "$GITHUB_SHA"
       - uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release-assets/koma-linux-x64
             release-assets/koma-linux-arm64
             release-assets/koma-darwin-arm64
             release-assets/koma-darwin-x64
             release-assets/koma-x64.msi
+            release.json
           fail_on_unmatched_files: true
+      - name: Check the published release
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/aula-id/koma/releases/download/${GITHUB_REF_NAME}/release.json"
+          for _ in 1 2 3 4 5 6; do
+            if curl -fsSL "$url" -o release-check.json; then
+              break
+            fi
+            sleep 5
+          done
+          test -s release-check.json
+          python3 scripts/check-release.py release-check.json "$version" "$GITHUB_SHA"

@@ -8,6 +8,7 @@ import {
   CHAT_TURNS_DEFAULT,
   CHAT_MOUNT_TURNS,
   CHAT_WINDOW_BYTES,
+  assignSlots,
   countTurns,
   historyRows,
   messageSize,
@@ -33,7 +34,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
-import { pressureNotice, usePressureValve } from "./pressure.ts"
+import { CALM, pressureLimits, ramTone, recycleArmed, useIdleCollect, usePressureValve, viewRecycleDue, type Pressure } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -53,7 +54,14 @@ const COMPOSER_KEYS = [
   { name: "return", shift: true, action: "newline" as const },
   { name: "enter", shift: true, action: "newline" as const },
   { name: "kpenter", shift: true, action: "newline" as const },
+  // Ghostty, iTerm, Kitty, and VS Code map Shift+Enter to ESC CR. That arrives as
+  // meta+return, which would otherwise submit.
+  { name: "return", meta: true, action: "newline" as const },
+  { name: "enter", meta: true, action: "newline" as const },
+  { name: "kpenter", meta: true, action: "newline" as const },
   { name: "j", ctrl: true, action: "newline" as const },
+  // Kitty can report Ctrl+J as the linefeed codepoint rather than the letter j.
+  { name: "\n", ctrl: true, action: "newline" as const },
 ]
 const PALETTE_KEYS = [
   { name: "up", action: "palette-nav" as const },
@@ -74,6 +82,7 @@ export function Chat({
   send,
   sendTracked,
   onFlushError,
+  onRecycle,
 }: {
   snap: Snapshot
   theme: Theme
@@ -87,9 +96,30 @@ export function Chat({
   send: (request: unknown) => void
   sendTracked: (request: unknown) => Promise<string>
   onFlushError: (text: string) => void
+  /** Ask the launcher to replace this view and keep the daemon. Local sessions only. */
+  onRecycle?: (id: string) => void
 }) {
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
+  const [pressure, setPressure] = useState(CALM)
   const session = snap.sessions.find((row) => row.id === snap.foreground_id) ?? snap.sessions[0]
+  const turnRef = useRef({ session, status: snap.global.status })
+  turnRef.current = { session, status: snap.global.status }
+  const recycleRef = useRef(onRecycle)
+  recycleRef.current = onRecycle
+  const askedRecycle = useRef(false)
+  useIdleCollect(() => {
+    const turn = turnRef.current
+    return !turn.session || !isThinking(turn.status, turn.session)
+  })
+  useEffect(() => {
+    const recycle = recycleRef.current
+    const turn = turnRef.current
+    if (askedRecycle.current || !recycle || !turn.session) return
+    const idle = !isThinking(turn.status, turn.session)
+    if (!viewRecycleDue(pressure, process.memoryUsage().rss, pressureLimits().high, idle, recycleArmed(Date.now()))) return
+    askedRecycle.current = true
+    recycle(turn.session.id)
+  }, [pressure])
   if (!session) {
     return (
       <box flexGrow={1}>
@@ -108,12 +138,13 @@ export function Chat({
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingTop={1} paddingBottom={1}>
       {snap.global.toast ? <Toast key={`daemon:${snap.global.toast_event_id ?? snap.global.toast.join(":")}`} id={snap.global.toast_event_id ?? snap.global.toast.join(":")} kind={snap.global.toast[0]} text={snap.global.toast[1]} theme={theme} hidden={notice != null} /> : null}
       {notice ? <Toast key={`local:${notice.id}`} id={notice.id} kind={notice.kind ?? "info"} text={notice.text} theme={theme} onDismiss={onNoticeDismiss} /> : null}
-      <HistoryPane session={session} theme={theme} syntaxStyle={syntaxStyle} />
+      <HistoryPane session={session} theme={theme} syntaxStyle={syntaxStyle} onPressure={setPressure} />
       <Steers session={session} theme={theme} selected={snap.global.pending_steer_sel} focused={snap.global.pending_steer_focus} />
       <Composer
         snap={snap}
         session={session}
         theme={theme}
+        pressure={pressure}
         focused={focused}
         compact={Boolean(modalOverlay)}
         interaction={interaction}
@@ -122,7 +153,6 @@ export function Chat({
         flushRef={flushRef}
         onFlushError={onFlushError}
       />
-      <Status snap={snap} session={session} theme={theme} />
     </box>
   )
 }
@@ -150,15 +180,20 @@ export function HistoryPane({
   session,
   theme,
   syntaxStyle,
+  onPressure,
 }: {
   session: SessionSnap
   theme: Theme
   syntaxStyle: SyntaxStyle
+  onPressure?: (pressure: Pressure) => void
 }) {
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
   const stickRef = useRef(true)
   const expandingRef = useRef(false)
   const restoreRef = useRef<(() => void) | null>(null)
+  // A forward page drops the turns above the viewport. The scroll offset falls
+  // to 0, which is the top of the new page, not a request to load older turns.
+  const pagedForward = useRef(false)
   const sessionRef = useRef(session)
   sessionRef.current = session
   const rows = useMemo(() => historyRows(session.messages), [session.messages])
@@ -169,17 +204,6 @@ export function HistoryPane({
   // Moved during render: a commit with the stale window mounts and drops whole
   // turns, and OpenTUI keeps some native memory for every destroyed renderable.
   const [seen, setSeen] = useState({ rows, historyKey })
-  if (seen.rows !== rows || seen.historyKey !== historyKey) {
-    const sessionChanged = seen.historyKey !== historyKey
-    if (sessionChanged) {
-      stickRef.current = true
-      setFollowing(true)
-      setSticky(null)
-    }
-    const next = nextRenderFrom(seen.rows, rows, from, stickRef.current, CHAT_TURNS_DEFAULT, sessionChanged, 0, CHAT_WINDOW_BYTES)
-    setSeen({ rows, historyKey })
-    if (next !== from) setFrom(next)
-  }
   const pressureCleanup = useRef(() => {})
   const pressure = usePressureValve(
     session.id,
@@ -189,8 +213,26 @@ export function HistoryPane({
   const reduced = pressure.reduced
   const mountBytes = reduced ? CHAT_WINDOW_BYTES / 2 : CHAT_WINDOW_BYTES
   const step = reduced ? 15 : 30
+  if (seen.rows !== rows || seen.historyKey !== historyKey) {
+    const sessionChanged = seen.historyKey !== historyKey
+    if (sessionChanged) {
+      stickRef.current = true
+      setFollowing(true)
+      setSticky(null)
+    }
+    const next = nextRenderFrom(seen.rows, rows, from, stickRef.current, CHAT_TURNS_DEFAULT, sessionChanged, 0, mountBytes)
+    setSeen({ rows, historyKey })
+    if (next !== from) setFrom(next)
+  }
   const end = windowEnd(rows, from, reduced ? CHAT_TURNS_DEFAULT : CHAT_MOUNT_TURNS, mountBytes)
-  const notice = pressureNotice(pressure)
+
+  useEffect(() => { onPressure?.(pressure) }, [onPressure, pressure])
+
+  useEffect(() => {
+    if (!stickRef.current) return
+    const tail = visibleFromTurn(rows, CHAT_TURNS_DEFAULT, mountBytes)
+    setFrom((current) => current === tail ? current : tail)
+  }, [reduced])
 
   useEffect(() => {
     const box = scrollRef.current
@@ -204,7 +246,7 @@ export function HistoryPane({
   }, [from, pressure.cleanups])
 
   function expand() {
-    if (expandingRef.current || from <= 0) return
+    if (expandingRef.current || from <= 0 || pagedForward.current) return
     const next = shiftWindow(rows, from, -1, step, mountBytes)
     if (next >= from) return
     const box = scrollRef.current
@@ -233,17 +275,27 @@ export function HistoryPane({
   function newer() {
     const box = scrollRef.current
     if (!box || expandingRef.current) return
-    preserveAnchor(box)
+    const next = shiftWindow(rows, from, 1, step, mountBytes)
+    if (next <= from) {
+      followTail()
+      return
+    }
+    const nextSource = rows[next]?.sourceIndex ?? Number.POSITIVE_INFINITY
+    const turns = box.getChildren()[0]?.getChildren() ?? []
+    const surviving = turns.filter((turn) => turnIndex(turn) >= nextSource)
+    const visible = surviving.find((turn) => turn.y + turn.height > box.viewport.y)
+    const anchor = visible ?? surviving[0]
+    restoreRef.current = anchor ? box.anchor(anchor) : () => { box.scrollTo(box.scrollHeight) }
+    pagedForward.current = true
     expandingRef.current = true
-    setFrom(shiftWindow(rows, from, 1, step, mountBytes))
+    setFrom(next)
   }
 
   function followTail() {
-    const was = stickRef.current
     stickRef.current = true
+    pagedForward.current = false
     setFollowing(true)
-    if (was) return
-    const tail = visibleFromTurn(rows, CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES)
+    const tail = visibleFromTurn(rows, CHAT_TURNS_DEFAULT, mountBytes)
     if (tail !== from) setFrom(tail)
   }
 
@@ -276,13 +328,17 @@ export function HistoryPane({
     const view = box.viewport?.height ?? box.height
     const distance = box.scrollHeight - box.scrollTop - view
     if (distance < 2) {
-      if (end < rows.length) { newer(); return }
+      if (end < rows.length && !stickRef.current) { newer(); return }
       followTail()
       return
     }
     if (stickRef.current) {
       stickRef.current = false
       setFollowing(false)
+    }
+    if (pagedForward.current) {
+      if (box.scrollTop >= 2) pagedForward.current = false
+      return
     }
     if (box.scrollTop < 2) expand()
   }
@@ -343,10 +399,6 @@ export function HistoryPane({
         </scrollbox>
         <SolidScrollBar source={scrollRef} theme={theme} />
       </box>
-      {!following || notice ? <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between">
-        <text fg={pressure.warned ? theme.warn : theme.dim} flexGrow={1} minWidth={0}>{notice ?? "Reading history"}</text>
-        <text fg={theme.accent} onMouseDown={followTail}>Latest ↓</text>
-      </box> : null}
     </box>
   )
 }
@@ -403,10 +455,17 @@ function Transcript({
   const live = Boolean(session.streaming || session.stream_reasoning)
   const pending = session.pending_tool_calls.filter((call) => !used.has(call.id))
   const turns = groupTurns(session.messages, sourceOffset)
+  const slots = useRef(new Map<number, number>())
+  const rev = useRef(session.history_rev)
+  if (rev.current !== session.history_rev) {
+    rev.current = session.history_rev
+    slots.current = new Map()
+  }
+  slots.current = assignSlots(slots.current, turns.map((turn) => turn.at))
   return (
     <box flexDirection="column" gap={1} paddingLeft={1} paddingRight={1}>
       {turns.map((turn) => (
-        <box key={`turn-${session.history_rev}-${turn.at}`} id={`turn-${turn.at}`} flexDirection="column" gap={1}>
+        <box key={slots.current.get(turn.at)} id={`turn-${turn.at}`} flexDirection="column" gap={1}>
           {turn.user ? (
             <box id={`user-${turn.at}`}>
               <HistoryTurn
@@ -417,9 +476,9 @@ function Transcript({
               />
             </box>
           ) : null}
-          {turn.rest.map(({ message, at }) => (
+          {turn.rest.map(({ message }, index) => (
             <HistoryTurn
-              key={`m-${at}`}
+              key={index}
               message={message}
               theme={theme}
               syntaxStyle={syntaxStyle}
@@ -1053,6 +1112,7 @@ function Composer({
   snap,
   session,
   theme,
+  pressure,
   focused,
   compact = false,
   interaction,
@@ -1064,6 +1124,7 @@ function Composer({
   snap: Snapshot
   session: SessionSnap
   theme: Theme
+  pressure: Pressure
   focused: boolean
   compact?: boolean
   interaction?: ReactNode
@@ -1296,7 +1357,6 @@ function Composer({
           }} />
         </box>)}
       </scrollbox> : null}
-      <box height={1} />
       <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
         <text>
           <span fg={theme.fg}>Koma </span>
@@ -1307,8 +1367,9 @@ function Composer({
         </text>
         <text fg={theme.dim}>{modelLabel(session.resolved_model_id, session.effort)}</text>
       </box>
-      <box height={1} />
+      <Tips theme={theme} width={width} />
       <box flexDirection="column" flexShrink={0}>{interaction}<FolderGuide draft={draft} cwd={session.cwd} theme={theme} /></box>
+      <box height={boxHeight} flexShrink={0}>
       <box
         border
         borderStyle="rounded"
@@ -1316,7 +1377,7 @@ function Composer({
         title={session.name ? ` ${session.name} ` : undefined}
         titleAlignment="right"
         titleColor={theme.accent}
-        height={boxHeight}
+        flexGrow={1}
         flexDirection="row"
         paddingLeft={0}
         paddingRight={2}
@@ -1336,7 +1397,7 @@ function Composer({
         backgroundColor={theme.bg}
         focusedBackgroundColor={theme.bg}
         cursorColor={theme.accent}
-        keyBindings={(paletteOpen ? [...COMPOSER_KEYS, ...PALETTE_KEYS] : COMPOSER_KEYS) as { name: string; action: TextareaAction; ctrl?: boolean; shift?: boolean }[]}
+        keyBindings={(paletteOpen ? [...COMPOSER_KEYS, ...PALETTE_KEYS] : COMPOSER_KEYS) as { name: string; action: TextareaAction; ctrl?: boolean; shift?: boolean; meta?: boolean }[]}
         onPaste={(event) => {
           event.preventDefault()
           if (!focused) return
@@ -1359,7 +1420,11 @@ function Composer({
         }}
       />
       </box>
-      {compact ? <box height={1} /> : <Tips theme={theme} width={width} />}
+      <box position="absolute" left={2} right={2} bottom={0} height={1} zIndex={1} flexDirection="row" justifyContent="space-between">
+        <Status snap={snap} session={session} theme={theme} />
+      </box>
+      </box>
+      <RamLine pressure={pressure} session={session} theme={theme} />
     </box>
   )
 }
@@ -1459,20 +1524,64 @@ function Status({ snap, session, theme }: { snap: Snapshot; session: SessionSnap
   const elapsed = useWorkElapsed(snap.global.work_elapsed_ms, live)
   const readout = usageReadout(session)
   return (
-    <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2}>
-      <text>
+    <>
+      <text height={1} bg={theme.bg}>
         {elapsed == null ? (
-          <span fg={theme.dim}>{label}</span>
+          <span fg={theme.dim}>{` ${label} `}</span>
         ) : (
           [
-            <span key="spin" fg={theme.accent}>{`${SPINNER[Math.floor(elapsed / 80) % SPINNER.length] ?? "⠋"} `}</span>,
+            <span key="spin" fg={theme.accent}>{` ${SPINNER[Math.floor(elapsed / 80) % SPINNER.length] ?? "⠋"} `}</span>,
             <span key="status" fg={theme.fg}>{label}</span>,
-            <span key="time" fg={theme.dim}>{`  ${(elapsed / 1000).toFixed(1)}s`}</span>,
+            <span key="time" fg={theme.dim}>{`  ${(elapsed / 1000).toFixed(1)}s `}</span>,
           ]
         )}
       </text>
-      {readout ? <text fg={theme.accent}>{readout}</text> : null}
+      {readout ? <text height={1} bg={theme.bg} fg={theme.accent}>{` ${readout} `}</text> : null}
+    </>
+  )
+}
+
+function RamLine({ pressure, session, theme }: { pressure: Pressure; session: SessionSnap; theme: Theme }) {
+  const [rss, setRss] = useState(() => process.memoryUsage().rss)
+  useEffect(() => {
+    const timer = setInterval(() => setRss(process.memoryUsage().rss), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const tone = ramTone(pressure)
+  const color = tone === "error" ? theme.error : tone === "warn" ? theme.warn : theme.dim
+  const mb = Math.round(rss / (1024 * 1024))
+  return (
+    <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
+      <text fg={color}>{`RAM[${mb}mb]`}</text>
+      <DrssMark active={session.context_usage?.drss_active === true} theme={theme} />
     </box>
+  )
+}
+
+const DRSS_LABEL = "[DRSS]"
+const DRSS_GAP = 4
+
+/** Head index of the legacy comet. Past the label, the mark rests dim for `DRSS_GAP` frames. */
+export function drssHead(elapsedMs: number): number {
+  const period = [...DRSS_LABEL].length + DRSS_GAP
+  return Math.floor(elapsedMs / 80) % period
+}
+
+function DrssMark({ active, theme }: { active: boolean; theme: Theme }) {
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(() => setNow(Date.now()), 80)
+    return () => clearInterval(timer)
+  }, [active])
+  if (!active) return <text fg={theme.dim}>[!]</text>
+  const head = drssHead(now)
+  return (
+    <text>
+      {[...DRSS_LABEL].map((ch, index) => (
+        <span key={index} fg={index === head ? theme.accent : index + 1 === head ? theme.fg : theme.dim}>{ch}</span>
+      ))}
+    </text>
   )
 }
 

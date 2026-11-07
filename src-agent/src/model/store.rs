@@ -775,6 +775,11 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Commit stamped into a release build. Local builds are `unknown`.
+pub fn current_sha() -> &'static str {
+    env!("KOMA_GIT_SHA")
+}
+
 pub fn build_fingerprint() -> String {
     let version = env!("CARGO_PKG_VERSION");
 

@@ -412,7 +412,13 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             .rest
             .latest_version
             .as_ref()
-            .filter(|v| crate::app::version::is_newer(&v.version, env!("CARGO_PKG_VERSION")))
+            .filter(|v| {
+                crate::app::version::release_supersedes(
+                    v,
+                    env!("CARGO_PKG_VERSION"),
+                    env!("KOMA_GIT_SHA"),
+                )
+            })
             .map(|v| v.version.clone()),
     }
 }
