@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 const MIB = 1024 * 1024
 export const PRESSURE_CHECK_MS = 5000
 export const CLEANUP_INTERVAL_MS = 30_000
+/** Quiet-turn collection. A live turn is left alone so a full GC does not stall a paint. */
+export const IDLE_COLLECT_MS = 30_000
 /** Forced GC stops after this many cleanups in a row free less than `GC_USEFUL_BYTES`. */
 export const GC_USEFUL_BYTES = 32 * MIB
 export const GC_MISSES = 2
@@ -58,6 +60,35 @@ export function pressureNotice(state: Pressure): string | null {
   if (state.warned) return "Memory is high. Restarting the terminal keeps your session."
   if (state.hint && state.reduced) return "Memory high; reduced history window."
   return null
+}
+
+/**
+ * Whether this tick may collect. A live turn never collects.
+ * The timer can fire a little early; a quarter of the interval is slack, capped at one second.
+ */
+export function idleCollectDue(lastAt: number, now: number, idle: boolean, interval = IDLE_COLLECT_MS): boolean {
+  if (!idle) return false
+  const slack = Math.min(1000, Math.floor(interval / 4))
+  return now - lastAt >= interval - slack
+}
+
+/**
+ * Sweep the JavaScript heap while the turn is quiet.
+ * This does not shrink the history window and does not change the RAM color.
+ */
+export function useIdleCollect(idle: () => boolean, intervalMs = IDLE_COLLECT_MS): void {
+  const idleRef = useRef(idle)
+  idleRef.current = idle
+  const lastAt = useRef(0)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now()
+      if (!idleCollectDue(lastAt.current, now, idleRef.current(), intervalMs)) return
+      lastAt.current = now
+      Bun.gc(true)
+    }, intervalMs)
+    return () => clearInterval(timer)
+  }, [intervalMs])
 }
 
 /** Footer color for this client's RSS. The restart case wins over a short window. */

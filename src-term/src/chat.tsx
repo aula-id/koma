@@ -33,7 +33,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
-import { CALM, ramTone, usePressureValve, type Pressure } from "./pressure.ts"
+import { CALM, ramTone, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -53,7 +53,14 @@ const COMPOSER_KEYS = [
   { name: "return", shift: true, action: "newline" as const },
   { name: "enter", shift: true, action: "newline" as const },
   { name: "kpenter", shift: true, action: "newline" as const },
+  // Ghostty, iTerm, Kitty, and VS Code map Shift+Enter to ESC CR. That arrives as
+  // meta+return, which would otherwise submit.
+  { name: "return", meta: true, action: "newline" as const },
+  { name: "enter", meta: true, action: "newline" as const },
+  { name: "kpenter", meta: true, action: "newline" as const },
   { name: "j", ctrl: true, action: "newline" as const },
+  // Kitty can report Ctrl+J as the linefeed codepoint rather than the letter j.
+  { name: "\n", ctrl: true, action: "newline" as const },
 ]
 const PALETTE_KEYS = [
   { name: "up", action: "palette-nav" as const },
@@ -91,6 +98,12 @@ export function Chat({
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
   const [pressure, setPressure] = useState(CALM)
   const session = snap.sessions.find((row) => row.id === snap.foreground_id) ?? snap.sessions[0]
+  const turnRef = useRef({ session, status: snap.global.status })
+  turnRef.current = { session, status: snap.global.status }
+  useIdleCollect(() => {
+    const turn = turnRef.current
+    return !turn.session || !isThinking(turn.status, turn.session)
+  })
   if (!session) {
     return (
       <box flexGrow={1}>
@@ -1361,7 +1374,7 @@ function Composer({
         backgroundColor={theme.bg}
         focusedBackgroundColor={theme.bg}
         cursorColor={theme.accent}
-        keyBindings={(paletteOpen ? [...COMPOSER_KEYS, ...PALETTE_KEYS] : COMPOSER_KEYS) as { name: string; action: TextareaAction; ctrl?: boolean; shift?: boolean }[]}
+        keyBindings={(paletteOpen ? [...COMPOSER_KEYS, ...PALETTE_KEYS] : COMPOSER_KEYS) as { name: string; action: TextareaAction; ctrl?: boolean; shift?: boolean; meta?: boolean }[]}
         onPaste={(event) => {
           event.preventDefault()
           if (!focused) return
