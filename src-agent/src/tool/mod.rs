@@ -128,6 +128,8 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "browser_tabs"
             | "browser_inspect"
             | "show_image"
+            // Security: Plan may browse the catalog only (no run/fs/runtime mutate).
+            | "sec_catalog"
     )
 }
 
@@ -1136,6 +1138,7 @@ fn dispatch_sec_meta(
     args: &mut serde_json::Value,
 ) -> String {
     // Meta tools still need a cyber lane selected (security mode on).
+    // Plan mode is gated earlier via tool_allowed_in_plan (sec_catalog only).
     if let Some(reason) = scope::lane_refusal(ctx, name, args) {
         let denied = verdict::TypedResult {
             verdict: verdict::Verdict::Blocked,
@@ -1162,6 +1165,14 @@ fn dispatch_sec_meta(
             let mut payload = args.clone();
             if let Some(obj) = payload.as_object_mut() {
                 obj.remove("op");
+                if !obj.contains_key("lane") {
+                    if let Some(lane) = ctx.cyber_lane {
+                        obj.insert(
+                            "lane".into(),
+                            serde_json::Value::String(lane.label().to_string()),
+                        );
+                    }
+                }
             }
             match mgr.catalog_op(op, &payload) {
                 Ok(raw) => verdict::TypedResult {

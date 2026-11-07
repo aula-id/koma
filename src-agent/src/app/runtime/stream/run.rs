@@ -300,12 +300,14 @@ directly and report what you find, with concrete fixes.\n\
 \n\
 ## How to use the security toolkit\n\
 Do NOT call legacy concrete tool names as top-level functions. Use ONLY:\n\
-- `sec_catalog` — op=categories | list | get (discover tools and schemas)\n\
+- `sec_catalog` — op=categories | list | get (discover tools and schemas; lane-filtered)\n\
 - `sec_run` — {name, args} execute one concrete tool (gates apply to the inner name)\n\
 - `sec_fs` — op=copy_in | copy_out | ls (explicit files into/out of the guest)\n\
 - `sec_runtime` — op=status | up | down | health (koma-safety isolation boundary)\n\
 Prefer sec_run over raw shell (`curl`/`nc`) for security work. Bring the jail up with \
-sec_runtime when needed; sec_run may lazy-start it.\n",
+sec_runtime when needed; sec_run may lazy-start it.\n\
+\n\
+YOLO: full hands-off security runs need the daemon up, YOLO armed in `/security`, then `/mode yolo` (or Shift+Tab). Arming alone does not switch mode. Plan mode may only `sec_catalog` — no run/fs/runtime.\n",
                         );
                         let inactive = &state.rest.sec_inactive;
                         let active_domains: std::collections::HashSet<String> = sec
@@ -627,16 +629,25 @@ first when needed.\n",
         computer_frames,
         state.rest.sessions[sess_idx].screen_browser.status.enabled,
     );
-    // Security meta-tools for the MAIN agent (≤4 fixed ToolDefs). Concrete toolkit
-    // entries are discovered via sec_catalog and executed via sec_run — they are NOT
-    // dumped onto the wire. Gated on security_enabled + manager + not Plan.
-    if state.rest.security_enabled && mode != AgentMode::Plan {
+    // Security meta-tools (≤4 fixed ToolDefs). Concrete toolkit entries stay off the
+    // wire. Agent/YOLO get the full meta set; Plan gets sec_catalog only (discover,
+    // never run).
+    if state.rest.security_enabled {
         if let Some(sec) = state.rest.sec_manager.as_ref() {
             if sec.is_running() {
-                for name in crate::app::sec::meta::META_TOOL_NAMES {
-                    advertise.push((*name).to_string());
+                if mode == AgentMode::Plan {
+                    advertise.push("sec_catalog".into());
+                    mcp_tools.extend(
+                        crate::app::sec::SecDaemonManager::meta_tool_defs()
+                            .into_iter()
+                            .filter(|d| d.function.name == "sec_catalog"),
+                    );
+                } else {
+                    for name in crate::app::sec::meta::META_TOOL_NAMES {
+                        advertise.push((*name).to_string());
+                    }
+                    mcp_tools.extend(crate::app::sec::SecDaemonManager::meta_tool_defs());
                 }
-                mcp_tools.extend(crate::app::sec::SecDaemonManager::meta_tool_defs());
             }
         }
     }

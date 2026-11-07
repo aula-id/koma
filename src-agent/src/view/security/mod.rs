@@ -113,7 +113,6 @@ fn render_tools(
         .add_modifier(Modifier::BOLD);
 
     let items = st.tool_items();
-    let mut last_domain: Option<&str> = None;
     for (pos, item) in items.iter().enumerate() {
         let is_selected = pos == st.selected;
         match item {
@@ -242,94 +241,50 @@ fn render_tools(
                 }
                 lines.push(Line::from(""));
             }
-            SecSel::Tool(i) => {
-                let t = &st.status.tools[*i];
-
-                if last_domain != Some(t.domain.as_str()) {
-                    if last_domain.is_some() {
-                        lines.push(Line::from(""));
-                    }
-                    let domain_label = if t.domain.is_empty() {
-                        "other"
-                    } else {
-                        t.domain.as_str()
-                    };
-                    lines.push(Line::from(Span::styled(
-                        format!("[{domain_label}]"),
-                        dim_style,
-                    )));
-                    last_domain = Some(t.domain.as_str());
-                }
-
-                let is_inactive = st.inactive.contains(&t.name);
-                let name_style = if is_selected && active {
-                    sel_style
-                } else if is_inactive {
-                    dim_style
-                } else {
-                    tool_style
-                };
-
-                let compute_span = if t.compute.is_empty() {
-                    Span::raw("")
-                } else {
-                    Span::styled(format!("  [{}]", t.compute), dim_style)
-                };
-
-                let effect_label = if t.effect.is_empty() {
-                    if t.risk {
-                        "remote"
-                    } else {
-                        ""
-                    }
-                } else {
-                    t.effect.as_str()
-                };
-                let effect_span = if effect_label.is_empty() || effect_label == "static" {
-                    Span::raw("")
-                } else {
-                    let style = match effect_label {
-                        "exploit" => Style::default()
-                            .fg(palette.error)
-                            .add_modifier(Modifier::ITALIC),
-                        "remote" => Style::default()
-                            .fg(palette.warn)
-                            .add_modifier(Modifier::ITALIC),
-                        _ => Style::default()
-                            .fg(palette.dim)
-                            .add_modifier(Modifier::ITALIC),
-                    };
-                    Span::styled(format!("  {effect_label}"), style)
-                };
-
-                let off_span = if is_inactive {
-                    Span::styled("  off", dim_style)
-                } else {
-                    Span::raw("")
-                };
-
-                let missing_dep = missing_dep_for(t.name.as_str(), &st.install_health);
-                let mark_span = if missing_dep {
-                    Span::styled(
-                        "  [!!]",
-                        Style::default()
-                            .fg(palette.warn)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    Span::raw("")
-                };
-
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{:<20}", t.name), name_style),
-                    compute_span,
-                    effect_span,
-                    off_span,
-                    mark_span,
-                ]));
+            SecSel::Tool(_) => {
+                // Not navigable on the dashboard (kept for IPC/compat).
             }
         }
+    }
+
+    // Catalog summary — tools load dynamically via sec_catalog / sec_run.
+    lines.push(Line::from(Span::styled("catalog (dynamic)", dim_style)));
+    if st.status.tools.is_empty() {
+        lines.push(Line::from(Span::styled(
+            if st.status.running {
+                "  (no toolkit rows yet)"
+            } else {
+                "  start daemon to load smoke pack inventory"
+            },
+            dim_style,
+        )));
+    } else {
+        use std::collections::BTreeMap;
+        let mut by_domain: BTreeMap<&str, usize> = BTreeMap::new();
+        for tool in &st.status.tools {
+            let d = if tool.domain.is_empty() {
+                "other"
+            } else {
+                tool.domain.as_str()
+            };
+            *by_domain.entry(d).or_insert(0) += 1;
+        }
+        let parts: Vec<String> = by_domain
+            .into_iter()
+            .map(|(d, n)| format!("{d}:{n}"))
+            .collect();
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {} tools · {} · agent uses sec_catalog → sec_run",
+                st.status.tools.len(),
+                parts.join(" · ")
+            ),
+            if active { tool_style } else { dim_style },
+        )));
+        lines.push(Line::from(Span::styled(
+            "  boundary: sec_runtime status|up|down · files: sec_fs · plan: catalog only",
+            dim_style,
+        )));
     }
 }
 

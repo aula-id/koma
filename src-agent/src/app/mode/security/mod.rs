@@ -1,8 +1,9 @@
 //! Security mode state: the working state for the `/security` daemon control panel.
 //!
-//! A control view (no editor) with THREE toggleable body panes: the Tool inventory
-//! (default), a Dependency install-health list, and a Refused-descriptors list.
-//! Navigation moves the cursor over whichever pane is active.
+//! A control view (no editor) with THREE body panes: the isolation **dashboard**
+//! (default: daemon + YOLO + runtime summary), Dependency install-health, and
+//! Refused-descriptors. Tools are loaded dynamically via sec_catalog/sec_run —
+//! this panel is not a per-tool enable grid.
 
 use crate::app::sec::{InstallHealthEntry, SecStatus};
 
@@ -22,14 +23,14 @@ pub enum SecSel {
     Daemon,
     /// The YOLO-arm checkbox row (rendered second, after the daemon checkbox).
     Yolo,
-    /// A tool row; the `usize` indexes into `status.tools`.
+    /// Legacy tool-row index (no longer navigable on the dashboard; kept for IPC).
     Tool(usize),
 }
 
 /// Which body pane the `/security` panel is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SecPane {
-    /// Tool inventory (default).
+    /// Isolation dashboard (default): daemon, YOLO, runtime/catalog summary.
     #[default]
     Tools,
     /// Dependency install-health.
@@ -140,22 +141,9 @@ impl SecurityState {
     /// keep their `status.tools` iteration order. The returned `usize` in each
     /// `SecSel::Tool(i)` indexes back into `status.tools`.
     pub fn tool_items(&self) -> Vec<SecSel> {
-        let mut items = vec![SecSel::Daemon, SecSel::Yolo];
-        // Distinct domains in first-seen order (matches the renderer's grouping).
-        let mut domains: Vec<&str> = Vec::new();
-        for t in &self.status.tools {
-            if !domains.iter().any(|d| *d == t.domain) {
-                domains.push(&t.domain);
-            }
-        }
-        for domain in &domains {
-            for (i, t) in self.status.tools.iter().enumerate() {
-                if t.domain == *domain {
-                    items.push(SecSel::Tool(i));
-                }
-            }
-        }
-        items
+        // Dashboard only: daemon + YOLO. Concrete tools are dynamic (sec_catalog);
+        // they are summarized below the controls, not toggled here.
+        vec![SecSel::Daemon, SecSel::Yolo]
     }
 
     /// The navigable rows of the DEPENDENCIES pane, IN RENDER ORDER: indices into
