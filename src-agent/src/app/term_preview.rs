@@ -170,7 +170,7 @@ fn run_client(
             port,
             session,
         } => {
-            let mut parsed = crate::remote::parse_target(&target)?;
+            let mut parsed = crate::remote::parse_target(target)?;
             if let Some(port) = port {
                 parsed.port = Some(*port);
             }
