@@ -142,7 +142,9 @@ fn menu_action(
         }
         MenuAction::Discard if matches!(state.mode(), Mode::Settings(_)) => {
             let Mode::Settings(s) = state.mode_mut() else {
-                unreachable!()
+                let message = "Settings closed before the form could be cancelled.".to_string();
+                state.rest.fg_mut().set_toast(message.clone());
+                bail!("{message}");
             };
             if s.search_editor.is_some() {
                 s.search_editor = None;
@@ -575,13 +577,17 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
                 s.selected = index;
             }
         }
-        Mode::Security(s) => {
-            if s.health_view {
-                s.health_selected = index;
-            } else {
+        Mode::Security(s) => match s.pane {
+            crate::app::mode::SecPane::Refused => {
+                s.refused_selected = index;
+            }
+            crate::app::mode::SecPane::Images => {
+                s.images_selected = index;
+            }
+            crate::app::mode::SecPane::Tools => {
                 s.selected = index;
             }
-        }
+        },
         Mode::SessionPicker(s) => {
             s.selected = bounded(index, s.filtered_idx.len())?;
         }
@@ -703,6 +709,15 @@ fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
                 s.result_sel = 0;
             }
         }
+        Mode::Security(s) => match field {
+            "pane" => {
+                s.set_pane(
+                    crate::app::mode::SecPane::parse(&value)
+                        .unwrap_or(crate::app::mode::SecPane::Tools),
+                );
+            }
+            _ => bail!("Unknown security field"),
+        },
         Mode::KeyInput(s) => match field {
             "endpoint" => s.endpoint = value,
             "api_key" => s.api_key = value,

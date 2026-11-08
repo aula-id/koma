@@ -1,28 +1,12 @@
 //! Action handlers for the `/security` daemon control panel.
 //!
-//! Actions:
-//! - `CloseSecurity`        — return to Chat.
-//! - `SecurityRestart`      — stop then start the daemon (`r`; the only daemon-lifecycle
-//!   action with its own key — start/stop/toggle fold into the Daemon checkbox).
-//! - `SecurityToggleTool`   — toggle the SELECTED row. The tools pane mixes the daemon
-//!   checkbox (row 0) and the YOLO checkbox (row 1) with the tool inventory, so this
-//!   branches on the selected [`SecSel`]: `Daemon` starts/stops the daemon; `Yolo`
-//!   arms/disarms the Layer-1 YOLO flag (gated on the daemon running; disarming while in
-//!   Yolo drops `agent_mode` back to Auto); `Tool(i)` flips that tool's membership in
-//!   `state.rest.sec_inactive`.
-//! - `SecurityToggleDomain` — toggle every tool sharing the selected tool's domain
-//!   (no-op when the daemon or YOLO checkbox is selected — it has no domain).
-//! - `SecurityInstall`      — install/repair one dependency, then re-fetch install-health.
-//!
-//! After every lifecycle action the open `Mode::Security` state is refreshed from
-//! the live manager so the panel reflects the new daemon state immediately. The plain
-//! refreshes carry `install_health` untouched (it is a heavy IPC round-trip); only the
-//! install path re-fetches it.
+//! `s` starts/stops the daemon, `o` arms YOLO through the existing gate, `e`
+//! enters or leaves yolo mode, `u` reloads the catalog index and image inventory.
+//! `SecurityToggleTool` is a no-op (Space/Enter no longer toggle checkboxes).
 
 use anyhow::Result;
 
-use crate::app::mode::{Mode, SecSel};
-use crate::app::sec::InstallHealthEntry;
+use crate::app::mode::Mode;
 use crate::app::state::{AgentMode, AppState};
 
 /// Handle `Action::CloseSecurity`: return to Chat.
@@ -43,7 +27,7 @@ pub(crate) fn handle_security_start(state: &mut AppState) -> Result<()> {
         m.start(state.rest.sec_token.clone());
     }
     state.rest.fg_mut().status = "security: starting daemon…".into();
-    refresh_security_state(state, None);
+    refresh_security_state(state);
     Ok(())
 }
 
@@ -61,7 +45,7 @@ pub(crate) fn handle_security_stop(state: &mut AppState) -> Result<()> {
     }
     disarm_yolo_for_stop(state);
     state.rest.fg_mut().status = "security: daemon stopped".into();
-    refresh_security_state(state, None);
+    refresh_security_state(state);
     Ok(())
 }
 
@@ -88,7 +72,7 @@ pub(crate) fn handle_set_yolo_armed(state: &mut AppState, armed: bool) -> Result
         }
         state.rest.fg_mut().status = "yolo disarmed".into();
     }
-    refresh_security_state(state, None);
+    refresh_security_state(state);
     Ok(())
 }
 
@@ -117,164 +101,88 @@ pub(super) fn handle_security_restart(state: &mut AppState) -> Result<()> {
     }
     disarm_yolo_for_stop(state);
     state.rest.fg_mut().status = "security: restarting daemon…".into();
-    refresh_security_state(state, None);
+    refresh_security_state(state);
     Ok(())
 }
 
-/// What `Action::SecurityToggleTool` resolved the selected row to, lifted out of the
-/// panel before any `rest` mutation so the borrow is released. Mirrors [`SecSel`] but
-/// carries the tool's resolved *name* (not its index) for the tool case.
-enum ToggleTarget {
-    /// The daemon checkbox: start the daemon if stopped, stop it if running.
-    Daemon,
-    /// The YOLO checkbox: arm/disarm (gated on the daemon running).
-    Yolo,
-    /// A tool row, resolved to its name.
-    Tool(String),
-}
-
-/// Handle `Action::SecurityToggleTool`: toggle whatever row is selected in the tools
-/// pane. The pane mixes the daemon checkbox (row 0) and the YOLO checkbox (row 1) with the
-/// tool inventory, so this reads the selected [`SecSel`] (resolved through the panel's
-/// render-ordered item list) and branches:
+/// Handle `Action::SecurityToggleTool`: no-op.
 ///
-/// - `SecSel::Daemon` → toggle the daemon: STOP it when running, START it when stopped,
-///   reusing the existing stop/start handlers (so the stop path also enforces the
-///   YOLO-disarm invariant).
-/// - `SecSel::Yolo` → flip the Layer-1 YOLO arm flag (the checkbox), GATED on the daemon
-///   running: refused (no state change) when the daemon is stopped. When running, arming
-///   merely UNLOCKS the `Yolo` agent mode (the user still switches in via `/mode yolo` /
-///   Shift+Tab); disarming while currently in `Yolo` drops `agent_mode` back to `Auto` so
-///   the harness-bypass can never outlive its arm.
-/// - `SecSel::Tool(i)` → flip `status.tools[i]`'s membership in `state.rest.sec_inactive`
-///   (active → disabled, disabled → active).
-///
-/// A no-op when nothing is selected. Refreshes the panel after.
+/// Space/Enter no longer toggle daemon or YOLO rows. Start/stop is `s`
+/// ([`handle_security_toggle_daemon`]); arm is `o`. Kept so a stale client key
+/// still refreshes the panel instead of missing a match arm.
 pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
-    // Resolve the selected row (and, for a tool, its name) out of the open panel BEFORE
-    // mutating `rest` — `selected_sec()` walks the same render-ordered list the cursor and
-    // view use, so this targets exactly the highlighted row.
-    let target = if let Mode::Security(s) = state.mode() {
-        match s.selected_sec() {
-            Some(SecSel::Daemon) => Some(ToggleTarget::Daemon),
-            Some(SecSel::Yolo) => Some(ToggleTarget::Yolo),
-            Some(SecSel::Tool(i)) => s
-                .status
-                .tools
-                .get(i)
-                .map(|t| ToggleTarget::Tool(t.name.clone())),
-            None => None,
-        }
-    } else {
-        None
-    };
-
-    match target {
-        // Daemon checkbox row: toggle the daemon via the existing start/stop handlers.
-        // Branch on the LIVE manager running flag (authoritative), not the mode-state copy.
-        // The stop handler enforces the YOLO-disarm invariant; both handlers refresh the
-        // panel, so the trailing refresh below is just belt-and-suspenders.
-        Some(ToggleTarget::Daemon) => {
-            let running = state
-                .rest
-                .sec_manager
-                .as_ref()
-                .map(|m| m.status().running)
-                .unwrap_or(false);
-            if running {
-                handle_security_stop(state)?;
-            } else {
-                handle_security_start(state)?;
-            }
-            return Ok(());
-        }
-        // YOLO checkbox row: arm/disarm — GATED on the daemon running.
-        Some(ToggleTarget::Yolo) => {
-            let running = state
-                .rest
-                .sec_manager
-                .as_ref()
-                .map(|m| m.status().running)
-                .unwrap_or(false);
-            if !running {
-                // Daemon stopped: refuse the arm (YOLO requires a running daemon). Leave
-                // `yolo_armed` untouched and tell the user what to do.
-                state.rest.fg_mut().status = "yolo locked — start the daemon first".into();
-            } else {
-                // Delegate both directions to `handle_set_yolo_armed`, which owns the
-                // disarm side effect (leave Yolo mode, drop back to Auto) and both status
-                // lines. Flipping the flag inline here made this row the only disarm path
-                // able to drift from `/yolo` and the YOLO checkbox.
-                handle_set_yolo_armed(state, !state.rest.yolo_armed)?;
-            }
-        }
-        // Tool row: flip its active state.
-        Some(ToggleTarget::Tool(name)) => {
-            if state.rest.sec_inactive.contains(&name) {
-                state.rest.sec_inactive.remove(&name);
-                state.rest.fg_mut().status = format!("security: {name} enabled");
-            } else {
-                state.rest.sec_inactive.insert(name.clone());
-                state.rest.fg_mut().status = format!("security: {name} disabled");
-            }
-        }
-        // Tool row whose index didn't resolve (stale cursor), or nothing selected: no-op.
-        None => {}
-    }
-    refresh_security_state(state, None);
+    refresh_security_state(state);
     Ok(())
 }
 
-/// Handle `Action::SecurityToggleDomain`: toggle every tool sharing the selected
-/// tool's domain.
-///
-/// If ALL tools in that domain are currently active, disable them all; otherwise (any
-/// already disabled) enable them all. Resolves the selected row through the panel's
-/// render-ordered item list and acts ONLY on a `SecSel::Tool(i)` (using `status.tools[i]`
-/// for the domain); when the daemon or YOLO checkbox is selected it has no domain, so this
-/// is a no-op with an explanatory status. Refreshes the panel after.
-pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> {
-    // Resolve the selected tool's domain + every tool name in it out of the panel. Only a
-    // tool row has a domain; the daemon and YOLO checkboxes resolve to `None` here.
-    let domain_tools: Option<(String, Vec<String>)> = if let Mode::Security(s) = state.mode() {
-        match s.selected_sec() {
-            Some(SecSel::Tool(i)) => s.status.tools.get(i).map(|sel| {
-                let domain = sel.domain.clone();
-                let names = s
-                    .status
-                    .tools
-                    .iter()
-                    .filter(|t| t.domain == domain)
-                    .map(|t| t.name.clone())
-                    .collect::<Vec<_>>();
-                (domain, names)
-            }),
-            // Daemon/YOLO checkbox (or nothing) selected: no domain to toggle.
-            _ => None,
-        }
+/// `s` — start the daemon if stopped, stop it if running.
+pub(super) fn handle_security_toggle_daemon(state: &mut AppState) -> Result<()> {
+    let running = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status().running)
+        .unwrap_or(false);
+    if running {
+        handle_security_stop(state)
     } else {
-        None
-    };
-    if let Some((domain, names)) = domain_tools {
-        // Disable the whole domain only when every member is currently active;
-        // otherwise enable all (so a mixed/partly-disabled domain flips fully on).
-        let all_active = names.iter().all(|n| !state.rest.sec_inactive.contains(n));
-        if all_active {
-            for n in &names {
-                state.rest.sec_inactive.insert(n.clone());
-            }
-            state.rest.fg_mut().status = format!("security: domain [{domain}] disabled");
-        } else {
-            for n in &names {
-                state.rest.sec_inactive.remove(n);
-            }
-            state.rest.fg_mut().status = format!("security: domain [{domain}] enabled");
-        }
-    } else {
-        // No tool row selected (the YOLO checkbox has no domain).
-        state.rest.fg_mut().status = "security: no domain selected".into();
+        handle_security_start(state)
     }
-    refresh_security_state(state, None);
+}
+
+/// `o` — flip the Layer-1 YOLO arm flag through the existing gate.
+pub(super) fn handle_security_toggle_yolo(state: &mut AppState) -> Result<()> {
+    let next = !state.rest.yolo_armed;
+    if handle_set_yolo_armed(state, next).is_err() {
+        // Gate already wrote the status line and bailed before refresh.
+        refresh_security_state(state);
+    }
+    Ok(())
+}
+
+/// `e` — enter or leave `AgentMode::Yolo`.
+///
+/// Refused (no mode change) unless the daemon is running AND yolo is armed.
+/// Leaving Yolo sets Auto. Entering from any other mode sets Yolo.
+pub(super) fn handle_security_enter_yolo(state: &mut AppState) -> Result<()> {
+    let running = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status().running)
+        .unwrap_or(false);
+    if !running || !state.rest.yolo_armed {
+        state.rest.fg_mut().status = "yolo locked — start the daemon and arm first".into();
+        refresh_security_state(state);
+        return Ok(());
+    }
+    if state.rest.agent_mode() == AgentMode::Yolo {
+        state.rest.set_agent_mode(AgentMode::Auto);
+        state.rest.fg_mut().status = "yolo: left — mode auto".into();
+    } else {
+        state.rest.set_agent_mode(AgentMode::Yolo);
+        state.rest.fg_mut().status = "yolo: entered".into();
+    }
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `u` — reload the catalog index and the image inventory. Not a daemon restart.
+pub(super) fn handle_security_refresh_dashboard(state: &mut AppState) -> Result<()> {
+    crate::app::runtime::commands::security::reload_security_catalog(state);
+    state.rest.fg_mut().status = "security: dashboard refreshed".into();
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// Handle `Action::SecurityToggleDomain`: no per-tool grid on the dashboard.
+///
+/// Domain enable/disable is not exposed from the dashboard (tools are catalog-driven).
+/// Kept as a key binding for compatibility; reports a short status.
+pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> {
+    state.rest.fg_mut().status =
+        "security: domain toggle is catalog-driven (use sec_catalog / Images pane)".into();
+    refresh_security_state(state);
     Ok(())
 }
 
@@ -290,25 +198,16 @@ pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> 
 /// previous list in place (we pass `None`), so the pane never blanks on a transient
 /// IPC hiccup.
 pub(super) fn handle_security_install(key: String, state: &mut AppState) -> Result<()> {
-    let fresh: Option<Vec<InstallHealthEntry>> = if let Some(m) = state.rest.sec_manager.as_ref() {
-        // Capture the install outcome + re-probe BEFORE writing status: `m` holds an
-        // immutable borrow of `state.rest`, and the per-session status write (C6) needs a
-        // mutable `fg_mut()` borrow — so resolve everything that touches `m` first, drop
-        // the borrow, then update the foreground session's status.
-        let install_status = match m.install(&key) {
+    let install_status = if let Some(m) = state.rest.sec_manager.as_ref() {
+        match m.install(&key) {
             Ok(msg) => format!("security: {msg}"),
             Err(e) => format!("security: install '{key}' failed: {e}"),
-        };
-        // Re-probe install-health regardless of the install's outcome — even a failed
-        // install may have changed what is present, and a success certainly did.
-        let health = m.health().ok();
-        state.rest.fg_mut().status = install_status;
-        health
+        }
     } else {
-        state.rest.fg_mut().status = format!("security: install '{key}' failed: no daemon");
-        None
+        format!("security: install '{key}' failed: no daemon")
     };
-    refresh_security_state(state, fresh);
+    state.rest.fg_mut().status = install_status;
+    refresh_security_state(state);
     Ok(())
 }
 
@@ -317,26 +216,32 @@ pub(super) fn handle_security_install(key: String, state: &mut AppState) -> Resu
 /// not `Security` (the action was dispatched from somewhere else), this is a
 /// no-op — the panel will pick up fresh status the next time it opens.
 ///
-/// `fresh_health` is the install path's freshly-probed install-health:
-/// - `None` (the lifecycle refreshes) → `install_health` is CARRIED untouched, so no
-///   extra (heavy) `health()` IPC call is made.
-/// - `Some(list)` (the install path) → seed the panel's `install_health` with the new
-///   list so the dependency pane's present-flags reflect the install.
-fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<InstallHealthEntry>>) {
+/// Catalog and images are preserved. Lane and agent-mode labels are mirrored
+/// the same way the key handler does.
+fn refresh_security_state(state: &mut AppState) {
     let status = state
         .rest
         .sec_manager
         .as_ref()
-        .map(|m| m.status())
+        .map(|m| {
+            let base = m.status();
+            m.enrich_status(base)
+        })
         .unwrap_or_default();
     let inactive = state.rest.sec_inactive.clone();
     let yolo_armed = state.rest.yolo_armed;
+    let lane_label = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
+    let agent_mode_label = state.rest.agent_mode().label().to_string();
     if let Mode::Security(s) = state.mode_mut() {
-        // `refresh` preserves `install_health`; overwrite it only when the install path
-        // handed us a fresh probe. `refresh` re-clamps both cursors afterwards.
-        if let Some(health) = fresh_health {
-            s.install_health = health;
-        }
+        s.lane_label = lane_label;
+        s.agent_mode_label = agent_mode_label;
         s.refresh(status, inactive, yolo_armed);
     }
 }
@@ -411,12 +316,9 @@ pub(crate) fn apply_lane(
             LaneOutcome::Cleared
         }
         Some(l) => {
-            let resolves = crate::app::resolve::resolve_role(
-                &state.rest.config,
-                &session.settings,
-                l.role(),
-            )
-            .is_some();
+            let resolves =
+                crate::app::resolve::resolve_role(&state.rest.config, &session.settings, l.role())
+                    .is_some();
             if resolves {
                 session.settings.cyber_lane = Some(l);
                 LaneOutcome::Set(l)
@@ -426,6 +328,15 @@ pub(crate) fn apply_lane(
         }
     };
     if matches!(outcome, LaneOutcome::Set(_) | LaneOutcome::Cleared) {
+        // Lane change invalidates pins that may not be legal on the new surface.
+        let mut ws = crate::app::sec::working_set::load(&session.path);
+        ws.clear_pins();
+        if let Some(l) = lane {
+            ws.set_lane(l.label());
+        } else {
+            ws.set_lane("");
+        }
+        let _ = crate::app::sec::working_set::store(&session.path, &ws);
         session.save()?;
     }
     state.rest.sessions[sess_idx].session = Some(session);
@@ -444,5 +355,160 @@ pub(super) fn handle_security_lane(
         LaneOutcome::Refused(why) => format!("security: lane not set — {why}"),
     };
     state.rest.fg_mut().status = status;
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `a` — enable every advertised tool (clear the inactive set).
+pub(super) fn handle_security_enable_all(state: &mut AppState) -> Result<()> {
+    state.rest.sec_inactive.clear();
+    state.rest.fg_mut().status = "security: all tools enabled".into();
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `n` — disable every currently advertised tool.
+pub(super) fn handle_security_disable_all(state: &mut AppState) -> Result<()> {
+    let names: Vec<String> = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status().tools.into_iter().map(|t| t.name).collect())
+        .unwrap_or_default();
+    for n in &names {
+        state.rest.sec_inactive.insert(n.clone());
+    }
+    state.rest.fg_mut().status = format!("security: {} tools disabled", names.len());
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `u` — re-extract the embedded daemon package and restart so a stale wire
+/// vocabulary (bool `risk`) is replaced without a full `--force` pip rebuild.
+pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()> {
+    match crate::security::refresh_daemon_sources() {
+        Ok(()) => {
+            state.rest.fg_mut().status = "security: toolkit sources refreshed — restarting…".into();
+            // Keep security_enabled; restart disarms YOLO by design.
+            handle_security_restart(state)?;
+            // Toolkit refresh can change what the host runtime looks like to the panel.
+            crate::security::runtime_status_kick(true);
+        }
+        Err(e) => {
+            state.rest.fg_mut().status = format!("security: refresh failed: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// `p` on Images — pull the selected composition (blocking, like install).
+pub(super) fn handle_security_image_pull(id: String, state: &mut AppState) -> Result<()> {
+    state.rest.fg_mut().status = format!("security: pulling image '{id}'…");
+    if let Mode::Security(s) = state.mode_mut() {
+        s.images_busy = true;
+    }
+    let outcome = match crate::security::pull_composition(&id, false) {
+        Ok(()) => format!("security: pulled '{id}'"),
+        Err(e) => format!("security: pull '{id}' failed: {e}"),
+    };
+    state.rest.fg_mut().status = outcome;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.images_busy = false;
+        s.refresh_images();
+    }
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// Enter/`a` on Images — activate a previously pulled composition and restart
+/// the daemon so `KOMA_SEC_IMAGE` / `KOMA_SEC_COMPOSITION` are re-read.
+pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -> Result<()> {
+    match crate::security::activate_composition(&id) {
+        Ok(()) => {
+            // Reuse the stop+start path so the child picks up the new pin.
+            handle_security_restart(state)?;
+            state.rest.fg_mut().status = format!("security: activated '{id}'; daemon restarted");
+        }
+        Err(e) => {
+            state.rest.fg_mut().status = format!("security: activate '{id}' failed: {e}");
+        }
+    }
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `x`/Delete on Images — drop a non-active local composition.
+pub(super) fn handle_security_image_remove(id: String, state: &mut AppState) -> Result<()> {
+    let outcome = match crate::security::remove_composition(&id) {
+        Ok(()) => format!("security: removed '{id}'"),
+        Err(e) => format!("security: remove '{id}' failed: {e}"),
+    };
+    state.rest.fg_mut().status = outcome;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `r` on Images — rebuild the composition list from inventory.
+pub(super) fn handle_security_image_refresh(state: &mut AppState) -> Result<()> {
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    state.rest.fg_mut().status = "security: images list refreshed".into();
+    refresh_security_state(state);
+    Ok(())
+}
+
+/// `c` — try to bring Docker up via Colima when present; otherwise surface a hint.
+pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()> {
+    // Force a blocking probe: the user asked for a runtime check/start.
+    let (ok, label) = crate::security::runtime_status_refresh(true);
+    if ok {
+        state.rest.fg_mut().status = format!("security: runtime ok — {label}");
+        refresh_security_state(state);
+        return Ok(());
+    }
+    // Prefer Colima when installed (mac path). Non-interactive: just run it.
+    let colima = std::process::Command::new("colima")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if colima {
+        state.rest.fg_mut().status = "security: starting colima…".into();
+        match std::process::Command::new("colima").arg("start").output() {
+            Ok(out) if out.status.success() => {
+                let (_, label) = crate::security::runtime_status_refresh(true);
+                state.rest.fg_mut().status = format!("security: colima started — {label}");
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let tail = err.trim();
+                state.rest.fg_mut().status = format!(
+                    "security: colima start failed{}",
+                    if tail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {tail}")
+                    }
+                );
+                crate::security::runtime_status_kick(true);
+            }
+            Err(e) => {
+                state.rest.fg_mut().status = format!("security: colima start failed: {e}");
+                crate::security::runtime_status_kick(true);
+            }
+        }
+    } else {
+        let (_, label) = crate::security::runtime_status_refresh(true);
+        state.rest.fg_mut().status =
+            format!("security: {label} — open Docker / run koma --security-install");
+    }
+    refresh_security_state(state);
     Ok(())
 }

@@ -1,0 +1,12 @@
+adb-toolkit
+barf
+cerberus
+codecat
+codeql
+dexcalibur
+objection
+panda
+pwntools
+semgrep
+triton
+uglifyjs2

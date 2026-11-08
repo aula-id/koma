@@ -46,7 +46,7 @@ pub const RESEARCH_SURFACE: &[&str] = &[
     "read", "grep", "glob", "dir_list",
     // Local analysis only; nothing in the matrix lets research open a socket.
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice",
     // NOT sec_crack / sec_factor: both LOOK local but the daemon's effect manifest
     // ties them to an external fetch (a hashcat download, a fixed factordb.com
@@ -61,27 +61,63 @@ pub const RED_SURFACE: &[&str] = &[
     "sec_zap", "sec_xss_confirm", "sec_remote", "sec_replay", "sec_recording",
     // Local analysis, because a red turn reads what it just pulled back.
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice", "sec_crack", "sec_factor",
 ];
 
 pub const BLUE_SURFACE: &[&str] = &[
     "read", "grep", "glob", "dir_list",
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice",
     "sec_http",
     "edit", "write",
 ];
 
-/// The surface for a lane.
+/// Meta control-plane tools available on every lane when security mode is on.
+pub const META_SURFACE: &[&str] = &["sec_catalog", "sec_run", "sec_fs", "sec_runtime"];
+
+/// The surface for a lane (includes [`META_SURFACE`]).
 #[must_use]
 pub fn surface(lane: Lane) -> &'static [&'static str] {
     match lane {
-        Lane::Research => RESEARCH_SURFACE,
-        Lane::Red => RED_SURFACE,
-        Lane::Blue => BLUE_SURFACE,
+        Lane::Research => research_surface(),
+        Lane::Red => red_surface(),
+        Lane::Blue => blue_surface(),
     }
+}
+
+fn research_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + RESEARCH_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(RESEARCH_SURFACE);
+        v
+    }).as_slice()
+}
+
+fn red_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + RED_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(RED_SURFACE);
+        v
+    }).as_slice()
+}
+
+fn blue_surface() -> &'static [&'static str] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<&'static str>> = OnceLock::new();
+    S.get_or_init(|| {
+        let mut v = Vec::with_capacity(META_SURFACE.len() + BLUE_SURFACE.len());
+        v.extend_from_slice(META_SURFACE);
+        v.extend_from_slice(BLUE_SURFACE);
+        v
+    }).as_slice()
 }
 
 /// A capability a tool can require.
@@ -180,11 +216,13 @@ impl Lane {
     #[must_use]
     pub fn cap_of_tool(tool: &str) -> Cap {
         match tool {
+            // Control-plane meta tools: discovery + jail lifecycle, not network.
+            "sec_catalog" | "sec_runtime" | "sec_fs" | "sec_run" => Cap::Read,
             // Pure compute / local file inspection: no socket.
             "edit" | "write" => Cap::Edit,
             "sec_http" => Cap::Observe,
             "sec_decode" | "sec_triage" | "sec_sourcemap" | "sec_unmin" | "sec_jsdeobf"
-            | "sec_wasm" | "sec_rop" | "sec_z3" | "sec_sage" | "sec_rsa" | "sec_lattice"
+            | "sec_wasm" | "sec_rop" | "sec_z3" | "sec_rsa" | "sec_lattice"
             | "sec_hashid" => Cap::Read,
             "sec_browser" | "sec_remote" | "sec_ffuf" | "sec_nuclei" | "sec_dalfox"
             | "sec_sqlmap" | "sec_zap" | "sec_xss" | "sec_xss_confirm" | "sec_replay"

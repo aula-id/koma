@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "pack": "crypto-src",
+  "tools": [
+    {
+      "id": "c7decrypt",
+      "name": "c7decrypt",
+      "summary": "Cisco password type-7 encryptor and decryptor",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "c7decrypt"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=c7decrypt"
+    },
+    {
+      "id": "crypto_identifier",
+      "name": "crypto_identifier",
+      "summary": "Tool that try to identify what cipher is used and uncipher the data",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "crypto-identifier"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=crypto-identifier"
+    },
+    {
+      "id": "cryptoguard",
+      "name": "cryptoguard",
+      "summary": "Program analysis tool to find cryptographic misuse in Java and Android",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cryptoguard"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cryptoguard"
+    },
+    {
+      "id": "cryptorex",
+      "name": "cryptorex",
+      "summary": "Large-scale firmware analysis of cryptographic misuse in IoT devices; supports ARM, MIPS, MIPSel architetures",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cryptorex"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cryptorex"
+    },
+    {
+      "id": "cryscanner",
+      "name": "cryscanner",
+      "summary": "Identify misuse of cryptographic libraries by collecting and analysing logs",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cryscanner"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cryscanner"
+    }
+  ]
+}

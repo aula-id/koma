@@ -1,65 +1,52 @@
 //! Key handler for the `/security` daemon control panel (`Mode::Security`).
 //!
-//! A read-only control panel — no sub-modes and no editing, so the dispatch is
-//! simple: escape/quit, cursor navigation, and daemon lifecycle keys.
-//!
-//! Key map:
-//! - `Esc`      → `Action::CloseSecurity` (return to Chat)
-//! - `Up`       → move cursor up in the ACTIVE pane (tools or deps)
-//! - `Down`     → move cursor down in the ACTIVE pane (tools or deps)
-//! - `h`/`H`    → toggle the body pane (tools ⇄ dependencies); mode-state only
-//! - `i`/`I`    → (deps pane only) `Action::SecurityInstall` the selected dependency
-//! - `r`        → `Action::SecurityRestart`
-//! - `Enter`/`Space` → `Action::SecurityToggleTool` (toggle the SELECTED row: the daemon
-//!   checkbox starts/stops the daemon; the YOLO checkbox arms/disarms Layer-1 YOLO (only
-//!   when the daemon is running); a tool row flips that tool's active state)
-//! - `d`        → `Action::SecurityToggleDomain` (toggle every tool in the selected tool's domain)
-//! - `l`        → `Action::SecurityLane` — cycle this session's cyber lane
-//!   (none → research → red → blue → none). Refused with a status reason when the
-//!   chosen lane's role has no model, so the lane never looks set while ungated.
-//!
-//! Daemon start/stop/toggle no longer have dedicated keys (s/x/t removed) — the daemon is
-//! now the top `[x] Daemon running` checkbox, toggled with Space like any other row.
+//! Letters (do not drift):
+//! - `s` start/stop daemon
+//! - `c` runtime
+//! - `u` refresh dashboard (catalog index + images) — not a daemon restart
+//! - `o` arm/disarm YOLO
+//! - `e` enter/leave yolo mode
+//! - `l` lane
+//! - `h` cycle panes · `1` `2` `3` jump
+//! - `f` filter · `/` search
+//! - `p` `a` `x` pull/activate/remove (Images: selected composition; Tools: selected
+//!   tool's image, only when it is a real composition and needs the op)
+//! - `r` Images refresh only
+//! - `y` `n` confirms only (no security confirm) → `Action::None`
+//! - Space/Enter activate on Images; no-op on Tools/Refused
+//! - Esc closes, unless catalog search is active (then clears the query)
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::mode::SecurityState;
-use crate::app::state::AppStateRest;
+use crate::app::mode::{SecPane, SecurityState};
 
 use super::Action;
 
 /// Handle a key press inside the `/security` control panel.
-pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_security(
+    s: &mut SecurityState,
+    rest: &mut crate::app::state::AppStateRest,
+    key: KeyEvent,
+) -> Action {
     // Keep the cursor clamp honest: the daemon may have started/stopped since the
-    // panel opened (the view re-reads status live, but this mode-state copy didn't),
-    // so refresh from the live manager before handling navigation.
+    // panel opened. `status()` is memory + cached runtime only (no subprocess probes).
     if let Some(m) = rest.sec_manager.as_ref() {
         s.status = m.status();
     }
-    // Self-heal install-health: it is normally seeded once on panel open, but the daemon
-    // starts ASYNCHRONOUSLY — if the panel opened before the daemon was ready (or the
-    // daemon was started from inside the panel), the open-time probe never ran and no
-    // other path re-probes. Kick off a NON-BLOCKING probe here once the daemon is up.
-    // Gated on `is_empty()` (health() returns the full manifest, never an empty list, so a
-    // delivered result sticks) and on `sec_health_rx.is_none()` inside the helper, so the
-    // probe fires exactly once. NO blocking `health()` runs on the input path any more —
-    // `service_global` drains the receiver and clears `health_fetching`.
-    // Short-circuit `&&`: the side-effecting kick-off only fires when the panel actually
-    // needs a probe (empty health, daemon up) — and the helper itself no-ops when one is
-    // already in flight, so this stays exactly-once.
-    if s.install_health.is_empty()
-        && s.status.running
-        && crate::app::runtime::commands::security::kick_off_health_probe(rest)
-    {
-        s.health_fetching = true;
-    }
-    // Keep the mode-state's inactive mirror in step with the authoritative set on
-    // `rest` (the action handlers mutate `rest.sec_inactive` then refresh, but a
-    // re-entry into the panel reads this on each key).
     s.inactive = rest.sec_inactive.clone();
-    // Same for the YOLO arm flag — mirror the authoritative `rest.yolo_armed` so the
-    // checkbox row reflects the live state on every key.
     s.yolo_armed = rest.yolo_armed;
+    s.lane_label = rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
+    s.agent_mode_label = rest.agent_mode().label().to_string();
+
+    if s.catalog_searching {
+        return handle_catalog_search(s, key);
+    }
 
     match key.code {
         KeyCode::Esc => Action::CloseSecurity,
@@ -71,44 +58,201 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
             s.move_down();
             Action::None
         }
-        KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
-        KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
-        // Cycle the lane. The cycle order follows the escalation the lanes describe:
-        // off → read-only research → red → blue → off.
-        KeyCode::Char('l') | KeyCode::Char('L') => {
-            use crate::app::sec::lane::Lane;
-            let next = match rest.fg().session.as_ref().and_then(|x| x.settings.cyber_lane) {
-                None => Some(Lane::Research),
-                Some(Lane::Research) => Some(Lane::Red),
-                Some(Lane::Red) => Some(Lane::Blue),
-                Some(Lane::Blue) => None,
-            };
-            Action::SecurityLane(next)
-        }
-        // Toggle the body pane (tools ⇄ dependencies). Pure mode-state mutation, like
-        // the cursor moves — no runtime round-trip needed.
-        KeyCode::Char('h') | KeyCode::Char('H') => {
-            s.toggle_health_view();
+        KeyCode::Left => {
+            if s.pane == SecPane::Tools {
+                s.cycle_map(-1);
+            }
             Action::None
         }
-        // Install/repair the selected dependency — ONLY in the dependency pane, and only
-        // when a row is actually selected. `health_selected` indexes `health_items()`
-        // (render order), so resolve through it to find the underlying entry.
-        KeyCode::Char('i') | KeyCode::Char('I') => {
-            if s.health_view {
-                match s
-                    .health_items()
-                    .get(s.health_selected)
-                    .and_then(|&idx| s.install_health.get(idx))
-                {
-                    Some(e) => Action::SecurityInstall(e.key.clone()),
-                    None => Action::None,
-                }
+        KeyCode::Right => {
+            if s.pane == SecPane::Tools {
+                s.cycle_map(1);
+            }
+            Action::None
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => images_activate_or_none(s),
+        KeyCode::Char('1') => {
+            s.set_pane(SecPane::Tools);
+            Action::None
+        }
+        KeyCode::Char('2') => {
+            s.set_pane(SecPane::Images);
+            Action::None
+        }
+        KeyCode::Char('3') => {
+            s.set_pane(SecPane::Refused);
+            Action::None
+        }
+        KeyCode::Char('h') | KeyCode::Char('H') => {
+            s.cycle_pane();
+            Action::None
+        }
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            s.cycle_filter();
+            Action::None
+        }
+        KeyCode::Char('/') => {
+            s.catalog_searching = true;
+            s.catalog_query.clear();
+            s.selected = 0;
+            s.clamp_cursors();
+            Action::None
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => Action::SecurityToggleDaemon,
+        KeyCode::Char('c') | KeyCode::Char('C') => Action::SecurityEnsureRuntime,
+        KeyCode::Char('u') | KeyCode::Char('U') => Action::SecurityRefreshDashboard,
+        KeyCode::Char('o') | KeyCode::Char('O') => Action::SecurityToggleYolo,
+        KeyCode::Char('e') | KeyCode::Char('E') => Action::SecurityEnterYolo,
+        KeyCode::Char('l') | KeyCode::Char('L') => lane_action(rest),
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('n') | KeyCode::Char('N') => {
+            Action::None
+        }
+        KeyCode::Char('p') | KeyCode::Char('P') => pull_action(s),
+        KeyCode::Char('a') | KeyCode::Char('A') => activate_action(s),
+        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => remove_action(s),
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            if s.pane == SecPane::Images {
+                Action::SecurityImageRefresh
             } else {
                 Action::None
             }
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => Action::SecurityRestart,
         _ => Action::None,
     }
+}
+
+fn handle_catalog_search(s: &mut SecurityState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            s.catalog_searching = false;
+            s.catalog_query.clear();
+            s.selected = 0;
+            s.clamp_cursors();
+            Action::None
+        }
+        KeyCode::Backspace => {
+            s.catalog_query.pop();
+            s.selected = 0;
+            s.clamp_cursors();
+            Action::None
+        }
+        KeyCode::Up => {
+            s.move_up();
+            Action::None
+        }
+        KeyCode::Down => {
+            s.move_down();
+            Action::None
+        }
+        KeyCode::Left => {
+            if s.pane == SecPane::Tools {
+                s.cycle_map(-1);
+            }
+            Action::None
+        }
+        KeyCode::Right => {
+            if s.pane == SecPane::Tools {
+                s.cycle_map(1);
+            }
+            Action::None
+        }
+        KeyCode::Enter => {
+            s.catalog_searching = false;
+            s.selected = 0;
+            s.clamp_cursors();
+            Action::None
+        }
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            s.catalog_query.push(c);
+            s.selected = 0;
+            s.clamp_cursors();
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+fn lane_action(rest: &crate::app::state::AppStateRest) -> Action {
+    use crate::app::sec::lane::Lane;
+    let next = match rest.fg().session.as_ref().and_then(|x| x.settings.cyber_lane) {
+        None => Some(Lane::Research),
+        Some(Lane::Research) => Some(Lane::Red),
+        Some(Lane::Red) => Some(Lane::Blue),
+        Some(Lane::Blue) => None,
+    };
+    Action::SecurityLane(next)
+}
+
+fn images_activate_or_none(s: &SecurityState) -> Action {
+    if s.pane == SecPane::Images {
+        match s.selected_image() {
+            Some(row) => Action::SecurityImageActivate(row.id.clone()),
+            None => Action::None,
+        }
+    } else {
+        Action::None
+    }
+}
+
+fn pull_action(s: &SecurityState) -> Action {
+    if s.pane == SecPane::Images {
+        return match s.selected_image() {
+            Some(row) => Action::SecurityImagePull(row.id.clone()),
+            None => Action::None,
+        };
+    }
+    if s.pane == SecPane::Tools {
+        if let Some(row) = s.selected_catalog() {
+            if crate::app::mode::security::is_real_composition(&row.image) && row.ready_mark == "remote"
+            {
+                return Action::SecurityImagePull(row.image.clone());
+            }
+        }
+    }
+    Action::None
+}
+
+fn activate_action(s: &SecurityState) -> Action {
+    if s.pane == SecPane::Images {
+        return match s.selected_image() {
+            Some(row) => Action::SecurityImageActivate(row.id.clone()),
+            None => Action::None,
+        };
+    }
+    if s.pane == SecPane::Tools {
+        if let Some(row) = s.selected_catalog() {
+            if crate::app::mode::security::is_real_composition(&row.image)
+                && row.ready_mark == "local"
+            {
+                return Action::SecurityImageActivate(row.image.clone());
+            }
+        }
+    }
+    Action::None
+}
+
+fn remove_action(s: &SecurityState) -> Action {
+    if s.pane == SecPane::Images {
+        return match s.selected_image() {
+            Some(row) => Action::SecurityImageRemove(row.id.clone()),
+            None => Action::None,
+        };
+    }
+    if s.pane == SecPane::Tools {
+        if let Some(row) = s.selected_catalog() {
+            let local_idle = row.ready_mark == "local"
+                && s.images
+                    .iter()
+                    .find(|img| img.id.eq_ignore_ascii_case(&row.image))
+                    .map(|img| img.local && !img.active)
+                    .unwrap_or(false);
+            if crate::app::mode::security::is_real_composition(&row.image) && local_idle {
+                return Action::SecurityImageRemove(row.image.clone());
+            }
+        }
+    }
+    Action::None
 }

@@ -46,7 +46,45 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "Extensions") return mode === "detail" ? [enter("Open screen"), char("Global activation", "g"), char("On demand", "o"), char("Uninstall", "u"), back] : [enter("Details"), back]
   if (name === "ExtStore") return mode === "install_confirm" ? [ { ...char("Install", "y"), disabled: !!b.installing }, back ] : mode === "detail" ? [char("Install", "i"), back] : [enter("Details"), char("Refresh", "r"), back]
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
-  if (name === "Security") return [enter("Toggle"), char("Domain", "d"), char(b.health_view ? "Tools" : "Dependencies", "h"), char("Install", "i"), char("Restart", "r"), back]
+  if (name === "Security") {
+    const pane = String(b.pane || "tools")
+    const running = !!(b.status as { running?: boolean } | undefined)?.running
+    const armed = !!b.yolo_armed
+    const mode = String(b.agent_mode_label || "auto")
+    const paneJump = (label: string, id: string, primary = false): ActionDescriptor => ({
+      label,
+      primary,
+      action: { Replace: { field: "pane", value: id } },
+    })
+    const tabs = [
+      paneJump("Dashboard", "tools", pane === "tools"),
+      paneJump("Images", "images", pane === "images"),
+      paneJump("Refused", "refused", pane === "refused"),
+    ]
+    if (pane === "images") {
+      return [
+        ...tabs,
+        enter("Activate"),
+        char("Pull", "p"),
+        char("Remove", "x"),
+        char("Refresh list", "r"),
+        back,
+      ]
+    }
+    if (pane === "refused") {
+      return [...tabs, char("Refresh", "u"), back]
+    }
+    return [
+      ...tabs,
+      char(running ? "Stop" : "Start", "s"),
+      char("Runtime", "c"),
+      char("Refresh", "u"),
+      char(armed ? "Disarm" : "Arm", "o"),
+      { ...char(mode === "yolo" ? "Leave" : "Enter", "e"), disabled: !(running && armed) },
+      char("Lane", "l"),
+      back,
+    ]
+  }
   if (name === "Remote") {
     const sub = String(b.sub)
     if (sub.endsWith(":edit")) return [enter("Edit"), { label: "Save (s)", action: "Save", primary: true }, back]

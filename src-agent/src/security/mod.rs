@@ -13,10 +13,16 @@
 //! | [`venv_python`] | path to the venv Python; used as "installed" marker |
 //! | [`is_installed`] | non-panicking predicate consumed by gating logic |
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
+//! | [`safety_image_tag`] / [`safety_image_tag_for`] | GHCR tag (minimal by default) |
+//! | [`read_images_inventory`] | `images.json` composition inventory |
+//! | [`pull_composition`] / [`activate_composition`] / [`remove_composition`] | Images pane backend |
 
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::model::store::base_dir;
 
@@ -27,28 +33,207 @@ use crate::model::store::base_dir;
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
+// Inventory/pull APIs are consumed by the Images pane and daemon spawn path.
+mod images;
+pub use images::{
+    activate_composition, active_composition_id, composition_tag, list_known_compositions,
+    pull_composition, read_images_inventory, remove_composition, safety_image_tag_for,
+};
+#[allow(unused_imports)] // public inventory types for callers/tests
+pub use images::{ImageEntry, ImagesInventory};
+use images::pull_safety_image;
+
+/// How long a runtime probe answer is served before a refresh is allowed.
+///
+/// Mirrors the `/mcp` status cache idea: short enough that starting Docker/Colima
+/// shows up on the `/security` panel within a few seconds, long enough that the
+/// ~10Hz snapshot projection and per-key panel handlers never spawn `docker info`
+/// (plus colima/podman) on the hot path.
+const RUNTIME_PROBE_TTL: Duration = Duration::from_secs(3);
+
+/// Last known container-runtime probe. `at = None` means "never probed".
+struct RuntimeProbeCache {
+    at: Option<Instant>,
+    ok: bool,
+    label: String,
+}
+
+static RUNTIME_PROBE_CACHE: OnceLock<Mutex<RuntimeProbeCache>> = OnceLock::new();
+/// Single-flight guard so N ~10Hz callers past a stale TTL don't each spawn
+/// their own `docker`/`colima`/`podman` subprocess storm.
+static RUNTIME_PROBE_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+fn runtime_probe_cache() -> &'static Mutex<RuntimeProbeCache> {
+    RUNTIME_PROBE_CACHE.get_or_init(|| {
+        Mutex::new(RuntimeProbeCache {
+            at: None,
+            ok: false,
+            label: "checking runtime…".into(),
+        })
+    })
+}
+
+fn runtime_probe_stale(cache: &RuntimeProbeCache) -> bool {
+    match cache.at {
+        Some(at) => at.elapsed() >= RUNTIME_PROBE_TTL,
+        None => true,
+    }
+}
+
+fn store_runtime_probe(ok: bool, label: String) {
+    let mut guard = runtime_probe_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    guard.at = Some(Instant::now());
+    guard.ok = ok;
+    guard.label = label;
+}
+
+fn read_runtime_probe() -> (bool, String) {
+    let guard = runtime_probe_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    (guard.ok, guard.label.clone())
+}
+
+/// Run the real docker/colima/podman probes once. No cache. Detection only —
+/// never starts an engine.
+fn probe_runtime_now() -> (bool, String) {
+    let docker = docker_daemon_reachable_uncached();
+    let colima = command_ok("colima", &["version"]);
+    let podman = command_ok("podman", &["info"]);
+    let docker_cli = !docker && !colima && !podman && command_ok("docker", &["--version"]);
+    let label = runtime_label(docker, colima, podman, docker_cli);
+    (docker, label)
+}
+
+/// Pure label builder for the `/security` runtime strip (and tests).
+fn runtime_label(docker: bool, colima: bool, podman: bool, docker_cli: bool) -> String {
+    match (docker, colima, podman) {
+        (true, true, _) => "docker ready (colima)".into(),
+        (true, _, true) => "docker ready (podman)".into(),
+        (true, _, _) => "docker ready".into(),
+        (false, true, _) => "docker down — colima installed".into(),
+        (false, _, true) => "docker down — podman present".into(),
+        (false, false, false) if docker_cli => "docker installed but not running".into(),
+        _ => "no container runtime".into(),
+    }
+}
+
+/// Kick a background runtime probe if `force` or the cache is empty/stale.
+/// Single-flight. Returns immediately; callers read [`runtime_status_cached`].
+pub fn runtime_status_kick(force: bool) {
+    let stale = {
+        let guard = runtime_probe_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        force || runtime_probe_stale(&guard)
+    };
+    if !stale {
+        return;
+    }
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    std::thread::spawn(|| {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label);
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+    });
+}
+
+/// Non-blocking read for the `/security` panel + snapshot projection.
+///
+/// Returns the last known `(runtime_ok, label)` immediately. If the cache is
+/// empty or older than [`RUNTIME_PROBE_TTL`], also kicks a background refresh
+/// (single-flight). Never spawns subprocesses on the calling thread.
+pub fn runtime_status_cached() -> (bool, String) {
+    runtime_status_kick(false);
+    read_runtime_probe()
+}
+
+/// Blocking refresh for user actions / open / tool gate when a fresh answer is
+/// required. Honours TTL unless `force` is set. Coalesces with an in-flight
+/// background probe instead of stacking another `docker info`.
+pub fn runtime_status_refresh(force: bool) -> (bool, String) {
+    if !force {
+        let guard = runtime_probe_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if !runtime_probe_stale(&guard) {
+            return (guard.ok, guard.label.clone());
+        }
+    }
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label.clone());
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+        return (ok, label);
+    }
+    // Another probe owns the lock. Wait for it — `docker info` can take several
+    // seconds on slow arm CI, and returning the pre-probe `ok=false` default here
+    // made sec_refusal flip false→true across back-to-back calls (baseline tests).
+    for _ in 0..500 {
+        std::thread::sleep(Duration::from_millis(20));
+        if !RUNTIME_PROBE_REFRESHING.load(Ordering::Acquire) {
+            let guard = runtime_probe_cache()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if guard.at.is_some() && (force || !runtime_probe_stale(&guard)) {
+                return (guard.ok, guard.label.clone());
+            }
+            break;
+        }
+    }
+    // Peer never published a fresh answer — take over rather than serve stale.
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label.clone());
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+        return (ok, label);
+    }
+    read_runtime_probe()
+}
+
 /// Does an isolated execution runtime exist, so a `sec_` call could be contained?
 ///
-/// `21` requires a container with no silent host fallback, so this is the gate
-/// that keeps a call from running uncontained. It reports whether Docker is
-/// reachable from THIS process, which is the same answer for every call and cheap
-/// enough to re-check at dispatch — a probe on the hot path would cost a syscall
-/// per tool call, so the result is memoised for the process lifetime.
+/// Requires a container with no silent host fallback. Answers from the TTL cache
+/// (refreshing synchronously when stale) so a Docker/Colima start after boot is
+/// noticed within [`RUNTIME_PROBE_TTL`] without re-probing on every model call.
 ///
 /// A missing runtime is reported as `unavailable` by the caller, never as success
 /// and never as a host fallback.
 pub(crate) fn cyber_execution_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        // Only detection, nothing clever: the boundary itself spawns containers.
-        std::process::Command::new("docker")
-            .arg("info")
-            .arg("--format")
-            .arg("{{.ServerVersion}}")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    runtime_status_refresh(false).0
+}
+
+fn docker_daemon_reachable_uncached() -> bool {
+    std::process::Command::new("docker")
+        .arg("info")
+        .arg("--format")
+        .arg("{{.ServerVersion}}")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Re-extract the embedded `src-security` tree into `~/.koma/security/` without
+/// rebuilding the venv. Used when the agent binary has moved past a stale
+/// on-disk daemon package (the common "all tools refused" failure mode).
+pub fn refresh_daemon_sources() -> Result<()> {
+    let dest = security_dir()?;
+    std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
+    extract_assets(&SECURITY_ASSETS, &dest)?;
+    Ok(())
 }
 
 /// Tools whose destination is fixed in the handler, so they carry no destination
@@ -204,16 +389,20 @@ pub fn install(force: bool) -> Result<()> {
     ensure_requirement("python3")?;
     ensure_container_runtime()?;
 
-    let venv_ready = dest.exists() && is_installed() && !force;
+    // Always re-extract the embedded daemon package. Skipping this when the venv
+    // already existed left users on a stale wire vocabulary (bool `risk`) after
+    // the agent moved to effect/exec — every tool refused at handshake with no
+    // install path to recover except `--force`.
+    bar.tick("writing security files");
+    std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
+    extract_assets(&SECURITY_ASSETS, &dest)?;
+
+    let venv_ready = is_installed() && !force;
     if venv_ready {
-        bar.tick("writing security files");
         bar.tick("creating the Python environment");
         bar.tick("installing Python packages");
     } else {
-        bar.tick("writing security files");
-
-        // Step 3: on force, remove the venv so it is rebuilt from scratch.
-        // We keep the Python source files (they will be overwritten in step 4).
+        // On force, remove the venv so it is rebuilt from scratch.
         if force {
             let venv = dest.join("venv");
             if venv.exists() {
@@ -222,15 +411,11 @@ pub fn install(force: bool) -> Result<()> {
             }
         }
 
-        // Step 4: extract embedded assets (creates dest if needed).
-        std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
-        extract_assets(&SECURITY_ASSETS, &dest)?;
-
         bar.tick("creating the Python environment");
         let venv_dir = dest.join("venv").display().to_string();
         quiet("python3", &["-m", "venv", &venv_dir])?;
 
-        // Step 6: install Python dependencies.
+        // Install Python dependencies.
         let pip = dest.join("venv").join("bin").join("pip");
         let requirements = dest.join("requirements.txt");
 
@@ -258,37 +443,35 @@ pub fn install(force: bool) -> Result<()> {
         )?;
     }
 
-    bar.tick("downloading koma-safety");
+    bar.tick("downloading koma-safety (minimal)");
     pull_safety_image(&dest, force)?;
     bar.done();
     Ok(())
 }
 
-/// GHCR name of the guest image. The tag is this build's crate version.
+/// GHCR name of the guest image. Tags are `{version}-{composition}`.
 pub const SAFETY_IMAGE: &str = "ghcr.io/aula-id/koma-safety";
 
-/// Tag the installer pulls. `KOMA_SEC_IMAGE` overrides it for a local build.
+/// Tag the installer pulls (`…:{version}-minimal`). `KOMA_SEC_IMAGE` overrides it
+/// for a local build.
 #[must_use]
 pub fn safety_image_tag() -> String {
     match std::env::var("KOMA_SEC_IMAGE") {
         Ok(over) if !over.is_empty() => over,
-        _ => format!("{SAFETY_IMAGE}:{}", env!("CARGO_PKG_VERSION")),
+        _ => safety_image_tag_for("minimal"),
     }
 }
 
-fn image_ref_path(dest: &std::path::Path) -> PathBuf {
+pub(super) fn image_ref_path(dest: &std::path::Path) -> PathBuf {
     dest.join("image-ref")
 }
 
-/// Digest reference written by the last successful pull for this version.
+/// Digest reference of the **active** composition for this version.
+///
+/// Prefers `images.json` active digest; falls back to legacy `image-ref` line 2.
 #[must_use]
 pub fn pinned_safety_image() -> Option<String> {
-    let dest = security_dir().ok()?;
-    let text = std::fs::read_to_string(image_ref_path(&dest)).ok()?;
-    let mut lines = text.lines();
-    let version = lines.next()?.trim();
-    let reference = lines.next()?.trim();
-    (version == env!("CARGO_PKG_VERSION") && !reference.is_empty()).then(|| reference.to_string())
+    images::pinned_from_inventory_or_ref()
 }
 
 fn ships_to_the_user(path: &std::path::Path) -> bool {
@@ -713,7 +896,7 @@ fn ensure_container_runtime() -> Result<()> {
     }
 }
 
-fn quiet(program: &str, args: &[&str]) -> Result<()> {
+pub(super) fn quiet(program: &str, args: &[&str]) -> Result<()> {
     let out = std::process::Command::new(program)
         .args(args)
         .output()
@@ -730,47 +913,78 @@ fn quiet(program: &str, args: &[&str]) -> Result<()> {
     ))
 }
 
-fn pull_safety_image(dest: &std::path::Path, force: bool) -> Result<()> {
-    let version = env!("CARGO_PKG_VERSION");
-    if !force && pinned_safety_image().is_some() {
-        return Ok(());
-    }
-    let docker = std::process::Command::new("docker")
-        .args(["info", "--format", "{{.ServerVersion}}"])
-        .output();
-    if !docker.map(|o| o.status.success()).unwrap_or(false) {
-        return Err(anyhow!(
-            "docker is not installed or not running — security install downloads {SAFETY_IMAGE}:{version} from GHCR"
-        ));
-    }
-    let tag = safety_image_tag();
-    quiet("docker", &["pull", "--quiet", &tag])?;
-    let inspect = std::process::Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            "{{json .RepoDigests}}",
-            &tag,
-        ])
-        .output()
-        .context("failed to inspect the pulled image")?;
-    if !inspect.status.success() {
-        return Err(anyhow!("docker image inspect {tag} failed"));
-    }
-    let digests: Vec<String> = serde_json::from_slice(&inspect.stdout).unwrap_or_default();
-    let reference = if tag.starts_with(SAFETY_IMAGE) {
-        digests
+/// One compact catalog row from `index.json` or the daemon `catalog index` op.
+///
+/// File rows use `summary`; the daemon uses `blurb`. Both map here. Readiness is
+/// not in the payload — the panel overlays it from the image inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogIndexRow {
+    pub id: String,
+    pub blurb: String,
+    pub image: String,
+    pub exec: String,
+    pub domain: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogIndexFile {
+    #[serde(default)]
+    tools: Vec<CatalogIndexJson>,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogIndexJson {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    blurb: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    exec: String,
+    #[serde(default)]
+    domain: String,
+}
+
+/// Embedded `src-security/catalog/index.json` (path relative to this file).
+///
+/// Marks start unset; callers overlay them. Empty if the file does not parse.
+pub fn embedded_catalog_rows() -> Vec<CatalogIndexRow> {
+    parse_catalog_index(include_str!(
+        "../../../src-security/catalog/index.json"
+    ))
+    .unwrap_or_default()
+}
+
+/// Parse a catalog index object (`{"tools":[...]}`). Accepts file `summary` or
+/// daemon `blurb`. Rows with an empty id are dropped. `None` if `raw` is not JSON.
+pub fn parse_catalog_index(raw: &str) -> Option<Vec<CatalogIndexRow>> {
+    let file: CatalogIndexFile = serde_json::from_str(raw).ok()?;
+    Some(
+        file.tools
             .into_iter()
-            .find(|d| d.starts_with(SAFETY_IMAGE) && d.contains("@sha256:"))
-            .ok_or_else(|| anyhow!("pull of {tag} did not record a ghcr digest"))?
-    } else {
-        tag
-    };
-    let body = format!("{version}\n{reference}\n");
-    std::fs::write(image_ref_path(dest), body)
-        .with_context(|| format!("write {}", image_ref_path(dest).display()))?;
-    Ok(())
+            .filter_map(|row| {
+                let id = row.id.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                let blurb = if row.blurb.trim().is_empty() {
+                    row.summary
+                } else {
+                    row.blurb
+                };
+                Some(CatalogIndexRow {
+                    id,
+                    blurb: blurb.trim().to_string(),
+                    image: row.image.trim().to_string(),
+                    exec: row.exec.trim().to_string(),
+                    domain: row.domain.trim().to_string(),
+                })
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

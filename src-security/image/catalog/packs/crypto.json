@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "pack": "crypto",
+  "tools": [
+    {
+      "id": "exif",
+      "name": "exif",
+      "summary": "Shows EXIF information for JPEG files only",
+      "categories": [
+        "steganography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "exif"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y exif; detect=exif"
+    },
+    {
+      "id": "sslscan",
+      "name": "sslscan",
+      "summary": "Tests SSL/TLS enabled services to discover supported cipher suites.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sslscan"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sslscan; detect=sslscan"
+    },
+    {
+      "id": "sslstrip",
+      "name": "sslstrip",
+      "summary": "A tool for exploiting Moxie Marlinspike's SSL \"stripping\" attack.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sslstrip"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sslstrip; detect=sslstrip"
+    },
+    {
+      "id": "sslyze",
+      "name": "sslyze",
+      "summary": "SSL analysis library and a CLI tools",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sslyze"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sslyze; detect=sslyze"
+    },
+    {
+      "id": "steghide",
+      "name": "steghide",
+      "summary": "Tool to hide messages in images",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "steghide"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y steghide; detect=steghide"
+    },
+    {
+      "id": "testssl_sh",
+      "name": "testssl_sh",
+      "summary": "Testing TLS/SSL encryption anywhere on any port.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "testssl.sh"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y testssl.sh; detect=testssl.sh"
+    },
+    {
+      "id": "uglifyjs",
+      "name": "uglifyjs",
+      "summary": "A JavaScript parser, minifier, compressor and beautifier toolkit.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "uglifyjs"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y uglifyjs; detect=uglifyjs"
+    },
+    {
+      "id": "dvenom",
+      "name": "dvenom",
+      "summary": "Helps to bypass antiviruses by providing an encryption wrapper and loader for your shellcode.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dvenom"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto",
+      "how_to": "channel=go; primary=go install github.com/Zerx0r/dvenom@latest; detect=dvenom"
+    },
+    {
+      "id": "tlsx",
+      "name": "tlsx",
+      "summary": "tlsx",
+      "categories": [
+        "cryptography"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "tlsx"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "crypto",
+      "how_to": "channel=go; primary=go install -v github.com/projectdiscovery/tlsx/cmd/tlsx@latest; detect=tlsx"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+github.com/Zerx0r/dvenom@latest
+github.com/projectdiscovery/tlsx/cmd/tlsx@latest

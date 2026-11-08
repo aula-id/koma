@@ -153,16 +153,43 @@ export interface ExtScreenSnapshot {
   error: string | null
 }
 
+export interface SafetyImageRow {
+  id: string
+  blurb: string
+  tag: string
+  size_label: string
+  local: boolean
+  active: boolean
+  status?: string
+}
+
+export interface CatalogRow {
+  id: string
+  blurb: string
+  image: string
+  exec: string
+  domain: string
+  ready_mark: string
+}
+
 export interface SecuritySnapshot {
   status: SecStatus
   selected: number
   inactive: Array<string>
   yolo_armed: boolean
-  install_health: Array<InstallHealthEntry>
-  health_view: boolean
-  health_selected: number
-  health_fetching: boolean
-  health_frame: number
+  pane?: string
+  refused_selected?: number
+  images?: Array<SafetyImageRow>
+  images_selected?: number
+  images_busy?: boolean
+  lane_label?: string
+  catalog?: Array<CatalogRow>
+  catalog_filter?: string
+  catalog_query?: string
+  catalog_searching?: boolean
+  /** Composition id. Empty or missing = all. */
+  map_filter?: string
+  agent_mode_label?: string
 }
 
 export interface HelpSnapshot {
@@ -584,6 +611,9 @@ export interface SecStatus {
   running: boolean
   installed: boolean
   tools: Array<SecToolInfo>
+  refused?: Array<{ name: string; reason: string }>
+  runtime_ok?: boolean
+  runtime?: string
 }
 
 export interface InstallHealthEntry {
@@ -782,6 +812,7 @@ export interface SecToolInfo {
   name: string
   domain: string
   risk: boolean
+  effect?: string
   compute: string
 }
 

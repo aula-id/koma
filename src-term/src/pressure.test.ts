@@ -46,7 +46,7 @@ describe("pressure valve", () => {
   test("warns above the warning mark until RSS falls below the low mark", () => {
     const warned = pressureTick(CALM, 2100 * MIB, CLEANUP_INTERVAL_MS, limits)
     expect(warned.warned).toBe(true)
-    expect(pressureNotice(warned)).toContain("Restarting the terminal keeps your session")
+    expect(pressureNotice(warned)).toBe("Memory is high. History window reduced.")
     expect(pressureTick(warned, 600 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
     expect(pressureTick(warned, 500 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(false)
   })
@@ -76,9 +76,9 @@ describe("pressure valve", () => {
     expect(idleCollectResult(due.state, hot, hot - GC_USEFUL_BYTES).misses).toBe(0)
   })
 
-  test("the view recycles only after a short window and a useless sweep, and not twice inside the gap", () => {
+  test("view recycle is disabled; the launcher gap helper still arms after the wait", () => {
     const stuck = { ...pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits), gcUseful: false }
-    expect(viewRecycleDue(stuck, 800 * MIB, limits.high, true, true)).toBe(true)
+    expect(viewRecycleDue(stuck, 800 * MIB, limits.high, true, true)).toBe(false)
     expect(viewRecycleDue(stuck, 800 * MIB, limits.high, false, true)).toBe(false)
     expect(viewRecycleDue(stuck, limits.high - 1, limits.high, true, true)).toBe(false)
     expect(viewRecycleDue({ ...stuck, gcUseful: true }, 800 * MIB, limits.high, true, true)).toBe(false)
@@ -89,7 +89,7 @@ describe("pressure valve", () => {
     expect(recycleArmed(1_000 + RECYCLE_GAP_MS, 1_000)).toBe(true)
   })
 
-  test("the RAM row stays dim until the window shrinks, and turns error at the restart mark", () => {
+  test("the RAM row stays dim until the window shrinks, and turns error at the warn mark", () => {
     expect(ramTone(CALM)).toBe("dim")
     const hot = pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits)
     expect(ramTone(hot)).toBe("warn")

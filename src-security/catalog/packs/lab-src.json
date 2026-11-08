@@ -1,0 +1,846 @@
+{
+  "version": 1,
+  "pack": "lab-src",
+  "tools": [
+    {
+      "id": "al_khaser",
+      "name": "al_khaser",
+      "summary": "Public malware techniques used in the wild: virtual machine, emulation, debuggers.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "al-khaser"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=al-khaser"
+    },
+    {
+      "id": "badsecrets",
+      "name": "badsecrets",
+      "summary": "A library for detecting known or weak cryptographic secrets across many web frameworks",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "badsecrets"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=badsecrets"
+    },
+    {
+      "id": "barmie",
+      "name": "barmie",
+      "summary": "Enumerating and attacking Java Remote Method Invocation services.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "barmie"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=barmie"
+    },
+    {
+      "id": "bhqw",
+      "name": "bhqw",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bhqw"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=bhqw"
+    },
+    {
+      "id": "blacklist3r",
+      "name": "blacklist3r",
+      "summary": "Identify usage of pre-shared Machine Keys in a application for encryption and decryption.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "blacklist3r"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=blacklist3r"
+    },
+    {
+      "id": "bqm",
+      "name": "bqm",
+      "summary": "Bloodhound Query Merger; deduplicate custom BloudHound queries from different datasets and merge them in one customqueries.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bqm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=bqm"
+    },
+    {
+      "id": "brute_hacking_framework",
+      "name": "brute_hacking_framework",
+      "summary": "A framework including all the tools that work on Windows.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "brute-hacking-framework"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=brute-hacking-framework"
+    },
+    {
+      "id": "bundler_audit",
+      "name": "bundler_audit",
+      "summary": "Patch-level verification for Bundler.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bundler-audit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=bundler-audit"
+    },
+    {
+      "id": "confuserex",
+      "name": "confuserex",
+      "summary": "An open-source, free protector for .NET applications.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "confuserex"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=confuserex"
+    },
+    {
+      "id": "cookie_crimes",
+      "name": "cookie_crimes",
+      "summary": "Read local Chrome cookies without root or decrypting and display then in JSON",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cookie_crimes"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cookie_crimes"
+    },
+    {
+      "id": "ctf_party",
+      "name": "ctf_party",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ctf-party"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=ctf-party"
+    },
+    {
+      "id": "docker_bench_security",
+      "name": "docker_bench_security",
+      "summary": "Check for dozens of common best-practices around deploying Docker containers in production.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "docker-bench-security"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=docker-bench-security"
+    },
+    {
+      "id": "doxycannon",
+      "name": "doxycannon",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "doxycannon"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=doxycannon"
+    },
+    {
+      "id": "dvcs_ripper",
+      "name": "dvcs_ripper",
+      "summary": "Rip web accessible version control systems: svn, git...",
+      "categories": [
+        "source-code-management"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dvcs-ripper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dvcs-ripper"
+    },
+    {
+      "id": "evil_sql_client",
+      "name": "evil_sql_client",
+      "summary": "Interactive .NET SQL console client with enhanced SQL Server discovery/access/exfiltration features.",
+      "categories": [
+        "databases"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "evil-sql-client"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=evil-sql-client"
+    },
+    {
+      "id": "goad",
+      "name": "goad",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "goad"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=goad"
+    },
+    {
+      "id": "golinkfinder",
+      "name": "golinkfinder",
+      "summary": "A fast and minimal JS endpoint extractor.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "golinkfinder"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=golinkfinder"
+    },
+    {
+      "id": "hiddenwall",
+      "name": "hiddenwall",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hiddenwall"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=hiddenwall"
+    },
+    {
+      "id": "houndsploit",
+      "name": "houndsploit",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "houndsploit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=houndsploit"
+    },
+    {
+      "id": "jok3r",
+      "name": "jok3r",
+      "summary": "Network and Web Pentest Automation Framework.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "jok3r"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=jok3r"
+    },
+    {
+      "id": "lazyegg",
+      "name": "lazyegg",
+      "summary": "Powerful tool for extracting various types of data from a target URL.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "lazyegg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=lazyegg"
+    },
+    {
+      "id": "malicious_pdf",
+      "name": "malicious_pdf",
+      "summary": "Generates a bunch of malicious pdf files with phone-home functionality.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "malicious-pdf"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=malicious-pdf"
+    },
+    {
+      "id": "matro7sh_loaders",
+      "name": "matro7sh_loaders",
+      "summary": "Encode Havoc shellcode (.bin) in XOR, chacha20, AES; supports 2 loaders: Myph, 221b",
+      "categories": [
+        "plugins"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "matro7sh-loaders"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=matro7sh-loaders"
+    },
+    {
+      "id": "moniorg",
+      "name": "moniorg",
+      "summary": "By looking through CT logs an attacker can gather a lot of information about organization's infrastructure i.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "moniorg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=moniorg"
+    },
+    {
+      "id": "phunter",
+      "name": "phunter",
+      "summary": "OSINT tool allowing you to find various information via a phone number.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "phunter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=phunter"
+    },
+    {
+      "id": "plution",
+      "name": "plution",
+      "summary": "Prototype pollution scanner using headless chrome.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "plution"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=plution"
+    },
+    {
+      "id": "poastal",
+      "name": "poastal",
+      "summary": "Poastal is an email OSINT tool that provides valuable information on any email address.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "poastal"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=poastal"
+    },
+    {
+      "id": "postmaniac",
+      "name": "postmaniac",
+      "summary": "Postman OSINT tool to extract creds, token, username, email & more from Postman Public Workspaces.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "postmaniac"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=postmaniac"
+    },
+    {
+      "id": "powershdll",
+      "name": "powershdll",
+      "summary": "Run PowerShell with dlls only to bypass software restrictions; it can be run with rundll32.exe, installutil.exe, regsvcs.exe, regasm.exe, regsvr32.exe or as a standalone executable",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "powershdll"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=powershdll"
+    },
+    {
+      "id": "privacynet",
+      "name": "privacynet",
+      "summary": "Allow users to route Internet traffic through Tor and hide their real IP address.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "privacynet"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=privacynet"
+    },
+    {
+      "id": "psbypassclm",
+      "name": "psbypassclm",
+      "summary": "Bypass for PowerShell Constrained Language Mode.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "psbypassclm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=psbypassclm"
+    },
+    {
+      "id": "psmapexec",
+      "name": "psmapexec",
+      "summary": "A PowerShell tool heavily inspired by the popular tool CrackMapExec/NetExec.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "psmapexec"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=psmapexec"
+    },
+    {
+      "id": "pwndbg",
+      "name": "pwndbg",
+      "summary": "Enhance GDB, for exploit development and reverse engineering",
+      "categories": [
+        "plugins"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pwndbg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=pwndbg"
+    },
+    {
+      "id": "pybuster",
+      "name": "pybuster",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pybuster"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=pybuster"
+    },
+    {
+      "id": "pymeta",
+      "name": "pymeta",
+      "summary": "Search the web for files on a domain to download and extract metadata.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pymeta"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=pymeta"
+    },
+    {
+      "id": "race_the_web",
+      "name": "race_the_web",
+      "summary": "Tests for race conditions in web applications.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "race-the-web"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=race-the-web"
+    },
+    {
+      "id": "rdp_scraper",
+      "name": "rdp_scraper",
+      "summary": "Enumerates users based off RDP Screenshots.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "rdp-scraper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=rdp-scraper"
+    },
+    {
+      "id": "recollapse",
+      "name": "recollapse",
+      "summary": "Helper tool for black-box regex fuzzing to bypass validations.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "recollapse"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=recollapse"
+    },
+    {
+      "id": "related_domains",
+      "name": "related_domains",
+      "summary": "Find related domains of a given domain.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "related-domains"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=related-domains"
+    },
+    {
+      "id": "ronin_exploits",
+      "name": "ronin_exploits",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ronin-exploits"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=ronin-exploits"
+    }
+  ]
+}

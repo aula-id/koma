@@ -221,12 +221,12 @@ test("all toggle families share the switch glyph and keep their selection handle
     { mode: { Extensions: { mode: "use", rows: [{ name: "Example extension", active: true }], list_sel: 0 } }, label: "Example extension", layout: "before" },
     { mode: { Mcp: { mode: "edit", field: "enabled", draft_enabled: true, draft_transport: "stdio" } }, label: "enabled", layout: "right" },
     { mode: { Mcp: { mode: "browse", servers: [{ name: "Example server", enabled: true }], list_sel: 0 } }, label: "Example server", layout: "right" },
-    { mode: { Security: { status: { running: true, tools: [{ name: "Example tool", domain: "filesystem" }] }, selected: 0 } }, label: "Security daemon", layout: "right" },
   ]
   for (const fixture of fixtures) {
     const requests: unknown[] = []
     const moved: number[] = []
-    const view = await testRender(<ModeSurface mode={fixture.mode} theme={themeFor("dark")} columns={80} onMove={(index) => moved.push(index)} send={(request) => requests.push(request)} />, { width: 80, height: 24 })
+    const height = 24
+    const view = await testRender(<ModeSurface mode={fixture.mode} theme={themeFor("dark")} columns={80} onMove={(index) => moved.push(index)} send={(request) => requests.push(request)} />, { width: 80, height })
     try {
       for (let pass = 0; pass < 4; pass++) await act(async () => { await view.waitForVisualIdle() })
       const frame = view.captureCharFrame()

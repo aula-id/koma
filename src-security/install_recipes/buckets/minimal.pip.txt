@@ -1,0 +1,8 @@
+z3-solver
+ROPgadget
+hashid
+name-that-hash
+checksec.py
+jsbeautifier
+cryptography
+fpylll

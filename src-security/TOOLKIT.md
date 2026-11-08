@@ -40,7 +40,6 @@ frame reader.
 
 | Binary / service   | Tool module  | Install hint                                                                 |
 |--------------------|--------------|------------------------------------------------------------------------------|
-| `sage`             | sec_sage     | Install SageMath: `apt install sagemath`  or  https://www.sagemath.org/     |
 | `RsaCtfTool`       | sec_rsa      | `pip install RsaCtfTool`  or  `git clone https://github.com/RsaCtfTool/RsaCtfTool` |
 | `hashcat`          | sec_crack    | `apt install hashcat`  or  https://hashcat.net/hashcat/                      |
 | `hashid` / `name-that-hash` | sec_hashid | `pip install hashid`  or  `pip install name-that-hash`           |
@@ -49,8 +48,6 @@ frame reader.
 
 ### Notes
 
-- `sage` must be on `$PATH` as the `sage` binary; `sec_sage` shells out to it
-  directly. On some distros the package is `sagemath`.
 - `RsaCtfTool` can be used as a Python import or as a CLI binary; `sec_rsa`
   uses the CLI form — ensure the script is executable and on `$PATH`.
 - `hashcat` requires a compatible GPU driver for GPU acceleration; CPU-only

@@ -64,6 +64,7 @@ pub(super) fn service_global(
     dirty |= drains::drain_endpoints(state);
     dirty |= drains::drain_version(state);
     dirty |= drains::drain_sec_health(state);
+    dirty |= drains::sync_security_runtime_cache(state);
     dirty |= drains::drain_ext_screen(state);
     dirty |= drains::drain_store(state, handle);
     dirty |= drains::drain_oauth(state, handle);
@@ -84,7 +85,6 @@ pub(super) fn service_global(
     // again further down).
     let shimmer_active = ui::reconcile_shimmer(state);
 
-    dirty |= drains::advance_security_spinner(state);
     dirty |= drains::advance_oauth_spinner(state);
 
     if ui::force_dirty_while_live(state, shimmer_active) {

@@ -41,9 +41,6 @@ mod misc;
 pub(crate) use misc::open_settings;
 pub(crate) mod new_session;
 pub(crate) mod skill_cmd;
-// `pub(crate)` so the shared `kick_off_health_probe` helper is reachable from BOTH the
-// `/security` command (panel open) and the input-path self-heal (controller), which must
-// start the non-blocking health probe with identical semantics.
 pub(crate) mod security;
 // `pub(crate)` so `store_row_from_item`/`store_detail_from_wire` (the `/store` row/detail
 // mappers) are reachable from `event_loop::global::drains::drain_store`, which folds a

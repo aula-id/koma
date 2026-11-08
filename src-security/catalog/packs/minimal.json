@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "pack": "minimal",
+  "tools": [
+    {
+      "id": "curl",
+      "name": "curl",
+      "summary": "curl (apt)",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": true,
+      "image_or_pack": "minimal",
+      "how_to": "detect=curl; method=apt; source=curl"
+    },
+    {
+      "id": "jq",
+      "name": "jq",
+      "summary": "jq (apt)",
+      "categories": [
+        "development"
+      ],
+      "effect": "static",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": true,
+      "requires": [],
+      "scope_needed": false,
+      "image_or_pack": "minimal",
+      "how_to": "detect=jq; method=apt; source=jq"
+    }
+  ]
+}

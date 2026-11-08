@@ -1,0 +1,21 @@
+{
+  "tools_in": 723,
+  "tools_out": 723,
+  "apt_high": 199,
+  "apt_medium": 0,
+  "detect_bins": 723,
+  "confidence": {
+    "high": 216,
+    "medium": 507,
+    "other": 0
+  },
+  "preferred_channels": {
+    "go": 64,
+    "from-source": 230,
+    "npm": 151,
+    "apt": 202,
+    "snap": 14,
+    "cargo": 62
+  },
+  "pack": "/Users/agungnd/Projects/koma/src-security/catalog/packs/debian.json"
+}

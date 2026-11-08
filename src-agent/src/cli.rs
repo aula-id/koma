@@ -383,6 +383,8 @@ pub fn print_help() -> i32 {
          flags:\n\
          \x20 --resume                       open the resume hub\n\
          \x20 --session <id>                 bind this invocation to a specific session id\n\
+         \x20 --security-install [--force]   install security daemon + minimal guest image\n\
+         \x20 --internet-fullmode-install    install internet full-mode (Playwright) stack\n\
          \x20 --version, -V                  print the version and exit\n\
          \x20 --help, -h                     print this help and exit\n\
          \n\

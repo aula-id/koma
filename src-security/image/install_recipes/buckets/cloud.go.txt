@@ -1,0 +1,5 @@
+github.com/BishopFox/cloudfox@latest
+github.com/projectdiscovery/cloudlist@latest
+github.com/cybercdh/dirlstr@latest
+github.com/snyk/driftctl@latest
+github.com/tomnomnom/waybackurls@latest

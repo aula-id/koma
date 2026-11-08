@@ -200,6 +200,52 @@ def unavailable_tools() -> list[dict]:
 _CURRENT: dict[int, object] = {}
 
 
+def _pack_row(name: str) -> dict | None:
+    """Catalog pack row for *name* (id or display name), or None."""
+    try:
+        from koma_sec_daemon import catalog
+    except Exception:  # noqa: BLE001
+        return None
+    packs = catalog._load_packs()  # noqa: SLF001 — shared pack index
+    if name in packs:
+        return packs[name]
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    for row in packs.values():
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("id") or "").strip().lower() == needle:
+            return row
+        if str(row.get("name") or "").strip().lower() == needle:
+            return row
+    return None
+
+
+def _generic_from_pack(name: str, args: dict) -> str | None:
+    """Run generic_cli for a pack-only tool. None = not a pack tool."""
+    import shutil
+
+    row = _pack_row(name)
+    if row is None:
+        return None
+    requires = row.get("requires") or []
+    bin_name = None
+    if isinstance(requires, list) and requires:
+        cand = requires[0]
+        if isinstance(cand, str) and cand.strip():
+            bin_name = cand.strip()
+    if not bin_name:
+        bin_name = str(row.get("name") or row.get("id") or name).strip()
+    if not bin_name:
+        return None
+    # Resolve by catalog tool name so pack requires/how_to are used.
+    from koma_sec_daemon import generic_cli
+
+    _ = bin_name  # pack binary name; generic_cli re-resolves via catalog
+    _ = shutil.which  # keep import used for future fast-path
+    return generic_cli.run(name, args or {})
+
 def call(name: str, args: dict, sessions, cancel_key: object | None = None) -> str:
     """
     Look up *name* and invoke its handler.
@@ -207,10 +253,16 @@ def call(name: str, args: dict, sessions, cancel_key: object | None = None) -> s
     Raises KeyError for an unknown tool, `Unavailable` when the dependency is
     missing (so the parent can answer with a typed verdict instead of a crash),
     and lets any handler exception propagate unchanged.
+
+    Pack-only catalog tools (no dedicated handler) fall back to generic_cli
+    when a pack row names a binary via `requires`.
     """
     try:
         descriptor = REGISTRY[name]
     except KeyError:
+        generic = _generic_from_pack(name, args or {})
+        if generic is not None:
+            return generic
         raise KeyError(name)
     if descriptor.get("available") is False:
         raise Unavailable(name, descriptor["missing"])

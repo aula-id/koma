@@ -360,13 +360,10 @@ pub struct AppStateRest {
     /// loop (alongside `warm_rx`/`endpoints_rx`). Each `try_recv`'d `VersionInfo` is
     /// stored into `latest_version`. Non-blocking: never awaited.
     pub version_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::version::VersionInfo>>,
-    /// Receiver for an in-flight NON-BLOCKING security health probe. `Some` while a
-    /// `SecDaemonManager::health_async` fetch is pending; drained each tick in
-    /// `service_global` and folded into the open [`crate::app::mode::SecurityState`]
-    /// (`install_health`), then cleared. Mirrors `version_rx`. `None` when no probe is
-    /// in flight. Kept out of the IPC snapshot — only the daemon owns the manager, so
-    /// only the daemon ever drives a probe; the client animates from the projected
-    /// `health_fetching` / `health_frame` instead.
+    /// Receiver for an in-flight NON-BLOCKING security health probe. The dashboard
+    /// no longer folds this into the panel (catalog readiness comes from the image
+    /// inventory). The channel stays so a probe started elsewhere can still be
+    /// drained without leaking. `None` when no probe is in flight.
     pub sec_health_rx: Option<
         tokio::sync::mpsc::UnboundedReceiver<
             Result<Vec<crate::app::sec::InstallHealthEntry>, String>,

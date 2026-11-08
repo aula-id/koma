@@ -13,6 +13,7 @@ so the registry loads cleanly even when node/npx is absent.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 
 
@@ -57,7 +58,10 @@ def _handler(args: dict, sessions) -> str:
             jp = fh.name
             fh.write(code)
 
-        output = sandbox.run(["npx", "--yes", "webcrack", jp], timeout=120, spawn=_spawn())
+        if shutil.which("webcrack"):
+            output = sandbox.run(["webcrack", jp], timeout=120, spawn=_spawn())
+        else:
+            output = sandbox.run(["npx", "--yes", "webcrack", jp], timeout=120, spawn=_spawn())
     finally:
         if jp is not None:
             try:

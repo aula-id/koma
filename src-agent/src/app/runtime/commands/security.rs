@@ -3,66 +3,87 @@
 use anyhow::Result;
 
 use crate::app::mode::{Mode, SecurityState};
-use crate::app::state::{AppState, AppStateRest};
+use crate::app::state::AppState;
 
-/// Kick off a NON-BLOCKING per-dependency health probe if one is warranted, stashing the
-/// receiver in `rest.sec_health_rx` for `service_global` to drain. Returns `true` iff a
-/// probe was actually started (so the caller can flip `SecurityState::health_fetching`).
+/// Reload the dashboard catalog + image inventory.
 ///
-/// The single place that starts a probe, so panel-open and the input-path self-heal share
-/// identical kick-off semantics. A probe is started only when:
-/// - a daemon manager exists (`rest.sec_manager` is `Some`), AND
-/// - the daemon is running (a stopped daemon has no health to report — `health()` would
-///   just error), AND
-/// - no probe is already in flight (`rest.sec_health_rx.is_none()` — don't double-fire).
-///
-/// `health_async` returns immediately (the blocking IPC runs on a blocking-pool thread),
-/// so this never blocks the UI/input thread.
-pub(crate) fn kick_off_health_probe(rest: &mut AppStateRest) -> bool {
-    if rest.sec_health_rx.is_some() {
-        return false;
+/// Seeds from the embedded index immediately (so a stopped daemon still has rows).
+/// If the daemon is running, replaces rows from `catalog index`. A failed or empty
+/// daemon reply keeps the file rows. Does not call `health()` and does not block
+/// when the daemon is not running.
+pub(crate) fn reload_security_catalog(state: &mut AppState) {
+    if !matches!(state.mode(), Mode::Security(_)) {
+        return;
     }
-    let Some(mgr) = rest.sec_manager.as_ref() else {
-        return false;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.seed_embedded_catalog();
+        s.refresh_images();
+    }
+    let running = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.is_running())
+        .unwrap_or(false);
+    if !running {
+        return;
+    }
+    let raw = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .and_then(|m| m.catalog_op("index", &serde_json::json!({})).ok());
+    let Some(raw) = raw else {
+        return;
     };
-    if !mgr.is_running() {
-        return false;
+    let Some(rows) = crate::security::parse_catalog_index(&raw) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
     }
-    rest.sec_health_rx = Some(mgr.health_async());
-    true
+    if let Mode::Security(s) = state.mode_mut() {
+        s.set_catalog_index(rows);
+    }
 }
 
 /// Handle the `/security` command: open the security daemon control panel.
 ///
 /// Does NOT require an active session — the control panel is global state
 /// (daemon lifecycle), not session-scoped. Opens regardless of whether the
-/// daemon is installed or running (it shows the "not installed" / "stopped"
-/// state faithfully so the user can see why tools aren't appearing). Opening
-/// a panel is always safe mid-stream (read-only view; the turn keeps streaming),
-/// so there is no busy guard here.
+/// daemon is installed or running (it shows the stopped state faithfully).
+/// Opening a panel is always safe mid-stream (read-only view; the turn keeps
+/// streaming), so there is no busy guard here.
 pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
-    // Read live status from the manager; fall back to Default (not installed,
-    // not running, no tools) when there is no manager.
+    // Force a fresh container-runtime probe off the UI thread (single-flight cache).
+    // `status()` below only *reads* the cache — never blocks on `docker info`.
+    crate::security::runtime_status_kick(true);
     let status = state
         .rest
         .sec_manager
         .as_ref()
         .map(|m| m.status())
-        .unwrap_or_default();
-    // Per-dependency install-health is fetched NON-BLOCKING. `health()` is a cold ~1-2s
-    // IPC round-trip; running it here on the UI thread froze the panel on first open.
-    // Instead open with an EMPTY list and kick off the async probe (when the daemon is
-    // running) — `service_global` drains the result into `install_health` and clears the
-    // spinner. A stopped daemon / no manager starts no probe (the deps pane shows
-    // "no health data" until it is started, exactly as before).
-    let fetching = kick_off_health_probe(&mut state.rest);
-    let mut st = SecurityState::new(
-        status,
-        state.rest.sec_inactive.clone(),
-        state.rest.yolo_armed,
-        Vec::new(),
-    );
-    st.health_fetching = fetching;
+        .unwrap_or_else(|| {
+            let (runtime_ok, runtime) = crate::security::runtime_status_cached();
+            crate::app::sec::SecStatus {
+                runtime_ok,
+                runtime,
+                ..Default::default()
+            }
+        });
+    let mut st = SecurityState::new(status, state.rest.sec_inactive.clone(), state.rest.yolo_armed);
+    st.refresh_images();
+    st.lane_label = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map(|l| l.label().to_string())
+        .unwrap_or_else(|| "none".into());
+    st.agent_mode_label = state.rest.agent_mode().label().to_string();
     *state.mode_mut() = Mode::Security(Box::new(st));
+    // File rows are already seeded. If the daemon is up, replace them from index.
+    reload_security_catalog(state);
     Ok(())
 }

@@ -9,6 +9,8 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -22,6 +24,10 @@ TARGETS = {
     'aarch64-apple-darwin': ('darwin', 'arm64', 'bun-darwin-aarch64', '80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403'),
     'x86_64-pc-windows-msvc': ('win32', 'x64', 'bun-windows-x64-baseline', 'd7a7d3eb216614544aab0cde2d8d9f2e4e87839bf5a30a1cd11d077f02d84e0c'),
 }
+# GitHub release CDN flakes (504 / read timeout) are common on Actions; retry hard.
+DOWNLOAD_ATTEMPTS = 8
+DOWNLOAD_TIMEOUT_S = 180
+DOWNLOAD_BACKOFF_S = (2, 4, 8, 12, 16, 20, 30)
 
 
 def require(condition, message):
@@ -47,17 +53,55 @@ def host_target():
     return f'{arch}-{os_name}'
 
 
+def _fetch_url(url, destination, checksum):
+    """Stream url → destination; verify sha256. Raises on transport or checksum errors."""
+    request = urllib.request.Request(url, headers={'User-Agent': 'koma-prepare-terminal'})
+    hasher = hashlib.sha256()
+    partial = destination.with_suffix(destination.suffix + '.partial')
+    try:
+        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_S) as response:
+            status = getattr(response, 'status', None) or response.getcode()
+            if status is not None and int(status) >= 400:
+                raise urllib.error.HTTPError(url, int(status), f'HTTP {status}', response.headers, None)
+            with partial.open('wb') as out:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    out.write(chunk)
+        if hasher.hexdigest() != checksum:
+            raise ValueError(f'Bun checksum mismatch: {url}')
+        os.replace(partial, destination)
+    finally:
+        if partial.exists():
+            partial.unlink(missing_ok=True)
+
+
 def download_bun(target, cache):
     _, _, asset, checksum = TARGETS[target]
     archive = cache / f'{asset}-{VERSION}.zip'
-    if not archive.exists() or digest(archive) != checksum:
-        url = f'https://github.com/oven-sh/bun/releases/download/bun-v{VERSION}/{asset}.zip'
-        with urllib.request.urlopen(url, timeout=120) as response:
-            data = response.read()
-        if hashlib.sha256(data).hexdigest() != checksum:
-            raise ValueError(f'Bun checksum mismatch: {url}')
-        archive.write_bytes(data)
-    return archive
+    if archive.exists() and digest(archive) == checksum:
+        return archive
+    if archive.exists():
+        archive.unlink()
+    url = f'https://github.com/oven-sh/bun/releases/download/bun-v{VERSION}/{asset}.zip'
+    last_error = None
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            print(f'downloading Bun {VERSION} ({asset}) attempt {attempt}/{DOWNLOAD_ATTEMPTS}', flush=True)
+            _fetch_url(url, archive, checksum)
+            return archive
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+            last_error = error
+            if archive.exists():
+                archive.unlink(missing_ok=True)
+            if attempt >= DOWNLOAD_ATTEMPTS:
+                break
+            delay = DOWNLOAD_BACKOFF_S[min(attempt - 1, len(DOWNLOAD_BACKOFF_S) - 1)]
+            print(f'  retry in {delay}s after: {error}', flush=True)
+            time.sleep(delay)
+    raise OSError(f'Bun download failed after {DOWNLOAD_ATTEMPTS} attempts: {url} ({last_error})')
 
 
 def unpack_bun(archive, destination, target):

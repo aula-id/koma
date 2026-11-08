@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "pack": "dfir-ext",
+  "tools": [
+    {
+      "id": "eml_analyzer",
+      "name": "eml_analyzer",
+      "summary": "Analyze EML files: headers, bodies, attachments; extract IOCs; identify suspicious attachments",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "eml-analyzer"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g eml-analyzer; detect=eml-analyzer"
+    },
+    {
+      "id": "osquery",
+      "name": "osquery",
+      "summary": "Uses SQL queries to monitor and analyze operating systems, providing endpoint visibility for security",
+      "categories": [
+        "incident-response"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "osquery"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g osquery; detect=osquery"
+    },
+    {
+      "id": "pandora",
+      "name": "pandora",
+      "summary": "Analysis framework that discovers if a file is suspicious and conveniently show the results",
+      "categories": [
+        "defensive"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pandora"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g pandora; detect=pandora"
+    },
+    {
+      "id": "redirect_tracker",
+      "name": "redirect_tracker",
+      "summary": "Track the HTTP redirect chains; 301 and 302, JavaScript and Meta fresh redirects",
+      "categories": [
+        "threat-intelligence"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "redirect-tracker"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g redirect-tracker; detect=redirect-tracker"
+    },
+    {
+      "id": "velociraptor",
+      "name": "velociraptor",
+      "summary": "Endpoint visibility and collection tool",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "velociraptor"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g velociraptor; detect=velociraptor"
+    },
+    {
+      "id": "volatility",
+      "name": "volatility",
+      "summary": "Volatile memory extraction utility",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "volatility"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=npm; primary=npm install -g volatility; detect=volatility"
+    },
+    {
+      "id": "libiris",
+      "name": "libiris",
+      "summary": "Cross-platform sandboxing library",
+      "categories": [
+        "defensive"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "libiris"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=cargo; primary=cargo install libiris; detect=libiris"
+    },
+    {
+      "id": "mvt",
+      "name": "mvt",
+      "summary": "Mobile Verification Toolkit; collection of utilities to simplify and automate the process of gathering forensic traces helpful to identify a potential compromise of Android and iOS devices",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "mvt"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=cargo; primary=cargo install mvt; detect=mvt"
+    },
+    {
+      "id": "rekall",
+      "name": "rekall",
+      "summary": "Volatile memory extraction utility",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "rekall"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=cargo; primary=cargo install rekall; detect=rekall"
+    },
+    {
+      "id": "sigma",
+      "name": "sigma",
+      "summary": "Generic signature format for SIEM systems",
+      "categories": [
+        "incident-response"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sigma"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-ext",
+      "how_to": "channel=cargo; primary=cargo install sigma; detect=sigma"
+    }
+  ]
+}

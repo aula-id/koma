@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "pack": "pxn-ext",
+  "tools": [
+    {
+      "id": "cssg",
+      "name": "cssg",
+      "summary": "Cobalt Strike Shellcode Generator; script used to more easily generate and format beacon shellcode in Cobalt Strike",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cssg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g cssg; detect=cssg"
+    },
+    {
+      "id": "dllinjector",
+      "name": "dllinjector",
+      "summary": "Dll injection tool",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dllinjector"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g dllinjector; detect=dllinjector"
+    },
+    {
+      "id": "ffm",
+      "name": "ffm",
+      "summary": "Freedom Fighting Mode (FFM), hacking harness, post-exploitation tool",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ffm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g ffm; detect=ffm"
+    },
+    {
+      "id": "lateralus",
+      "name": "lateralus",
+      "summary": "Terminal based phishing campaign tool",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "lateralus"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g lateralus; detect=lateralus"
+    },
+    {
+      "id": "masky",
+      "name": "masky",
+      "summary": "Library and CLI allowing to remotely dump domain user credentials via an ADCS without dumping the LSASS process memory",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "masky"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g masky; detect=masky"
+    },
+    {
+      "id": "uboat",
+      "name": "uboat",
+      "summary": "HTTP botnet PoC",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "uboat"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g uboat; detect=uboat"
+    },
+    {
+      "id": "watson",
+      "name": "watson",
+      "summary": "Enumerate missing KBs and suggest exploits for useful privilege escalation vulnerabilities.",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "watson"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=npm; primary=npm install -g watson; detect=watson"
+    },
+    {
+      "id": "jaws",
+      "name": "jaws",
+      "summary": "Just Another Windows (Enum) Script; quickly identify potential privilege escalation vectors on Windows systems",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "jaws"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install jaws; detect=jaws"
+    },
+    {
+      "id": "link",
+      "name": "link",
+      "summary": "Command and control framework; HTTPS communication, process injection, in-memory .NET assembly execution, SharpCollection tools, sRDI implementation for shellcode generation, Windows link reloads DLLs from disk into current process",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "link"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install link; detect=link"
+    },
+    {
+      "id": "minidump",
+      "name": "minidump",
+      "summary": "Library and CLI to parse and read Microsoft minidump file format",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "minidump"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install minidump; detect=minidump"
+    },
+    {
+      "id": "nighthawk",
+      "name": "nighthawk",
+      "summary": "Command & Control framework; multi-operator, API driven, malleable native implant",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "nighthawk"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install nighthawk; detect=nighthawk"
+    },
+    {
+      "id": "overlord",
+      "name": "overlord",
+      "summary": "CLI used to build Red Teaming infrastructure in an automated way, supports AWS and Digital Ocean",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "overlord"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install overlord; detect=overlord"
+    },
+    {
+      "id": "scarecrow",
+      "name": "scarecrow",
+      "summary": "Payload creation framework designed around EDR bypass",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "scarecrow"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install scarecrow; detect=scarecrow"
+    },
+    {
+      "id": "seatbelt",
+      "name": "seatbelt",
+      "summary": "Seatbelt",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "seatbelt"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-ext",
+      "how_to": "channel=cargo; primary=cargo install seatbelt; detect=seatbelt"
+    }
+  ]
+}

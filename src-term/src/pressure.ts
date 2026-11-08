@@ -8,8 +8,10 @@ export const CLEANUP_INTERVAL_MS = 30_000
 export const IDLE_COLLECT_MS = 30_000
 /** Below this, a quiet collect only pauses. The idle client is already small. */
 export const IDLE_COLLECT_FLOOR = 128 * MIB
-/** After a view recycle, wait this long before asking for another. */
+/** After a view recycle, wait this long before asking for another. Kept for the launcher gap. */
 export const RECYCLE_GAP_MS = 10 * 60 * 1000
+/** How long the ready line keeps the braille "cleanup" flash after a sweep. */
+export const CLEANUP_FLASH_MS = 1000
 /** Forced GC stops after this many cleanups in a row free less than `GC_USEFUL_BYTES`. */
 export const GC_USEFUL_BYTES = 32 * MIB
 export const GC_MISSES = 2
@@ -62,7 +64,7 @@ export function afterGc(state: Pressure, before: number, after: number): Pressur
 }
 
 export function pressureNotice(state: Pressure): string | null {
-  if (state.warned) return "Memory is high. Restarting the terminal keeps your session."
+  if (state.warned) return "Memory is high. History window reduced."
   if (state.hint && state.reduced) return "Memory high; reduced history window."
   return null
 }
@@ -113,11 +115,12 @@ export function recycleArmed(now: number, recycledAt = Number(process.env.KOMA_R
 }
 
 /**
- * Restart the view only when the window is already short, the sweep stopped helping,
- * and this process is still above the high mark. A live turn is left alone.
+ * Recycle used to exit the view and let the launcher respawn it. That kill/reappear
+ * flicker is disabled: keep the process, shrink the window, and sweep in place.
+ * The launcher still accepts exit 76 if something else asks for a recycle.
  */
-export function viewRecycleDue(state: Pressure, rss: number, high: number, idle: boolean, armed: boolean): boolean {
-  return armed && idle && state.reduced && !state.gcUseful && rss >= high
+export function viewRecycleDue(_state: Pressure, _rss: number, _high: number, _idle: boolean, _armed: boolean): boolean {
+  return false
 }
 
 /**
@@ -129,11 +132,14 @@ export function useIdleCollect(
   idle: () => boolean,
   intervalMs = IDLE_COLLECT_MS,
   readRss: () => number = () => process.memoryUsage().rss,
+  onCollect?: () => void,
 ): void {
   const idleRef = useRef(idle)
   const readRef = useRef(readRss)
+  const collectRef = useRef(onCollect)
   idleRef.current = idle
   readRef.current = readRss
+  collectRef.current = onCollect
   const state = useRef(IDLE_COLLECT)
   useEffect(() => {
     const timer = setInterval(() => {
@@ -141,6 +147,7 @@ export function useIdleCollect(
       const step = idleCollectStep(state.current, Date.now(), idleRef.current(), rss, intervalMs)
       state.current = step.state
       if (!step.collect) return
+      collectRef.current?.()
       gcAndSweep()
       Bun.gc(true)
       state.current = idleCollectResult(state.current, rss, readRef.current())
@@ -149,7 +156,7 @@ export function useIdleCollect(
   }, [intervalMs])
 }
 
-/** Footer color for this client's RSS. The restart case wins over a short window. */
+/** Footer color for this client's RSS. The high-memory warning wins over a short window. */
 export function ramTone(state: Pressure): "dim" | "warn" | "error" {
   if (state.warned) return "error"
   if (state.reduced || state.hint) return "warn"
@@ -198,7 +205,7 @@ export function usePressureValve(
       update(next)
     }
     const timer = setInterval(() => check(false), PRESSURE_CHECK_MS)
-    // Windows has no SIGUSR2. The RSS timer still shrinks the window and can recycle the view.
+    // Windows has no SIGUSR2. The RSS timer still shrinks the window.
     if (process.platform === "win32") return () => clearInterval(timer)
     const signal = () => check(true)
     process.on("SIGUSR2", signal)

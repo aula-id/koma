@@ -1,0 +1,909 @@
+{
+  "version": 1,
+  "pack": "lab",
+  "tools": [
+    {
+      "id": "b374k",
+      "name": "b374k",
+      "summary": "Webshell with many features: file manager, search, command execution, DB connection, SQL explorer, process list",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "b374k"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y b374k; detect=b374k"
+    },
+    {
+      "id": "dex2jar",
+      "name": "dex2jar",
+      "summary": "Tools to work with android .dex and java .class files.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dex2jar"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y dex2jar; detect=dex2jar"
+    },
+    {
+      "id": "donut",
+      "name": "donut",
+      "summary": "Generates x86\\_32, x86\\_64, or AMD64 position-independent shellcode that loads .NET Assemblies, PE files (EXE), VBScript, JScript, and DLL files from memory and runs them with parameters",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "donut"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y donut; detect=donut"
+    },
+    {
+      "id": "hakrawler",
+      "name": "hakrawler",
+      "summary": "hakrawler",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hakrawler"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y hakrawler; detect=hakrawler"
+    },
+    {
+      "id": "httprobe",
+      "name": "httprobe",
+      "summary": "httprobe",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "httprobe"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y httprobe; detect=httprobe"
+    },
+    {
+      "id": "js_beautify",
+      "name": "js_beautify",
+      "summary": "Beautifier for JavaScript.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "js-beautify"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y js-beautify; detect=js-beautify"
+    },
+    {
+      "id": "phpggc",
+      "name": "phpggc",
+      "summary": "PHP unserialize() payloads along with a tool to generate them.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "phpggc"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y phpggc; detect=phpggc"
+    },
+    {
+      "id": "pipal",
+      "name": "pipal",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pipal"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y pipal; detect=pipal"
+    },
+    {
+      "id": "qsreplace",
+      "name": "qsreplace",
+      "summary": "qsreplace",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "qsreplace"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y qsreplace; detect=qsreplace"
+    },
+    {
+      "id": "rush",
+      "name": "rush",
+      "summary": "A cross-platform command-line tool for executing jobs in parallel.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "rush"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y rush; detect=rush"
+    },
+    {
+      "id": "smbmap",
+      "name": "smbmap",
+      "summary": "smbmap",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "smbmap"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y smbmap; detect=smbmap"
+    },
+    {
+      "id": "sprayingtoolkit",
+      "name": "sprayingtoolkit",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sprayingtoolkit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sprayingtoolkit; detect=sprayingtoolkit"
+    },
+    {
+      "id": "spraykatz",
+      "name": "spraykatz",
+      "summary": "Credentials gathering tool automating remote procdump and parse of lsass process.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "spraykatz"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y spraykatz; detect=spraykatz"
+    },
+    {
+      "id": "trurl",
+      "name": "trurl",
+      "summary": "Command line tool for URL parsing and manipulation.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "trurl"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y trurl; detect=trurl"
+    },
+    {
+      "id": "unicorn",
+      "name": "unicorn",
+      "summary": "Tool for using a PowerShell downgrade attack and inject shellcode into memory",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "unicorn"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y unicorn; detect=unicorn"
+    },
+    {
+      "id": "uro",
+      "name": "uro",
+      "summary": "uro",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "uro"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y uro; detect=uro"
+    },
+    {
+      "id": "cdk",
+      "name": "cdk",
+      "summary": "Make security testing of K8s, Docker, and Containerd easier.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cdk"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/cdk-team/CDK@latest; detect=cdk"
+    },
+    {
+      "id": "dorky",
+      "name": "dorky",
+      "summary": "Quickly do keyword searches over GitLab and GitHub for OSINT & bug bounty recon.",
+      "categories": [
+        "source-code-management"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dorky"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/codingo/dorky@latest; detect=dorky"
+    },
+    {
+      "id": "getjs",
+      "name": "getjs",
+      "summary": "A tool to fastly get all javascript sources/files.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "getjs"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/003random/getJS@latest; detect=getjs"
+    },
+    {
+      "id": "gorsair",
+      "name": "gorsair",
+      "summary": "Gives root access on remote docker containers that expose their APIs.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "gorsair"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/Ullaakut/Gorsair@latest; detect=gorsair"
+    },
+    {
+      "id": "hakoriginfinder",
+      "name": "hakoriginfinder",
+      "summary": "Discover the origin host behind a reverse proxy, useful for bypassing cloud WAFs!.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hakoriginfinder"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/hakluke/hakoriginfinder@latest; detect=hakoriginfinder"
+    },
+    {
+      "id": "haktldextract",
+      "name": "haktldextract",
+      "summary": "Extract domains/subdomains from URLs en masse.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "haktldextract"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/hakluke/haktldextract@latest; detect=haktldextract"
+    },
+    {
+      "id": "haktrails",
+      "name": "haktrails",
+      "summary": "Golang client for querying SecurityTrails API data.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "haktrails"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/hakluke/haktrails@latest; detect=haktrails"
+    },
+    {
+      "id": "kiterunner",
+      "name": "kiterunner",
+      "summary": "Contextual content discovery tool.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "kiterunner"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install -v github.com/assetnote/kiterunner/cmd/kr@latest; detect=kiterunner"
+    },
+    {
+      "id": "kubestroyer",
+      "name": "kubestroyer",
+      "summary": "Exploit Kubernetes clusters misconfigurations and be the swiss army knife of your pentests.",
+      "categories": [
+        "virtualization"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "kubestroyer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/Rolix44/Kubestroyer@latest; detect=kubestroyer"
+    },
+    {
+      "id": "linx",
+      "name": "linx",
+      "summary": "Reveals invisible links within JavaScript files.",
+      "categories": [
+        "development"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "linx"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/riza/linx@latest; detect=linx"
+    },
+    {
+      "id": "mapcidr",
+      "name": "mapcidr",
+      "summary": "mapcidr",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "mapcidr"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install -v github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest; detect=mapcidr"
+    },
+    {
+      "id": "meg",
+      "name": "meg",
+      "summary": "Fetch many paths for many hosts, without killing the hosts.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "meg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install -v github.com/tomnomnom/meg@latest; detect=meg"
+    },
+    {
+      "id": "mksub",
+      "name": "mksub",
+      "summary": "Generate tens of thousands of subdomain combinations in a matter of seconds.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "mksub"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/trickest/mksub@latest; detect=mksub"
+    },
+    {
+      "id": "murphysec",
+      "name": "murphysec",
+      "summary": "An open source tool focused on software supply chain security.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "murphysec"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/murphysecurity/murphysec@latest; detect=murphysec"
+    },
+    {
+      "id": "pop",
+      "name": "pop",
+      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pop"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/charmbracelet/pop@latest; detect=pop"
+    },
+    {
+      "id": "qsinject",
+      "name": "qsinject",
+      "summary": "Allows you to quickly substitute query string values with regex matches, one-at-a-time.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "qsinject"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/ameenmaali/qsinject@latest; detect=qsinject"
+    },
+    {
+      "id": "recursebuster",
+      "name": "recursebuster",
+      "summary": "Rapid content discovery tool for recursively querying webservers.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "recursebuster"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/C-Sto/recursebuster@latest; detect=recursebuster"
+    },
+    {
+      "id": "scilla",
+      "name": "scilla",
+      "summary": "Information Gathering tool - DNS / Subdomains / Ports / Directories enumeration.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "scilla"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/edoardottt/scilla@latest; detect=scilla"
+    },
+    {
+      "id": "second_order",
+      "name": "second_order",
+      "summary": "Second-order subdomain takeover scanner.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "second-order"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/mhmdiaa/second-order@latest; detect=second-order"
+    },
+    {
+      "id": "socialhunter",
+      "name": "socialhunter",
+      "summary": "Crawls the given URL and finds broken social media links that can be hijacked.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "socialhunter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/utkusen/socialhunter@latest; detect=socialhunter"
+    },
+    {
+      "id": "sourcemapper",
+      "name": "sourcemapper",
+      "summary": "Extract JavaScript source trees from source map files.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sourcemapper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/denandz/sourcemapper@latest; detect=sourcemapper"
+    },
+    {
+      "id": "subzy",
+      "name": "subzy",
+      "summary": "Subdomain takeover vulnerability checker.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "subzy"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/PentestPad/subzy@latest; detect=subzy"
+    },
+    {
+      "id": "traitor",
+      "name": "traitor",
+      "summary": "Automatic Linux privilege escalation via exploitation of low-hanging fruit.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "traitor"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/liamg/traitor@latest; detect=traitor"
+    },
+    {
+      "id": "unfurl",
+      "name": "unfurl",
+      "summary": "An Entropy-Based Link Vulnerability Tool.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "unfurl"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install -v github.com/tomnomnom/unfurl@latest; detect=unfurl"
+    },
+    {
+      "id": "urlhunter",
+      "name": "urlhunter",
+      "summary": "Allows searching on URLs that are exposed via shortener services.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "urlhunter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/utkusen/urlhunter@latest; detect=urlhunter"
+    },
+    {
+      "id": "webpalm",
+      "name": "webpalm",
+      "summary": "A tool that traverses a website and generates a tree of all the webpages and their links.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "webpalm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/XORbit01/webpalm@latest; detect=webpalm"
+    },
+    {
+      "id": "yet_another_robber",
+      "name": "yet_another_robber",
+      "summary": "Yar is a tool for plunderin' organizations, users and/or repositories.",
+      "categories": [
+        "other"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "yet-another-robber"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "lab",
+      "how_to": "channel=go; primary=go install github.com/nielsing/yar@latest; detect=yet-another-robber"
+    }
+  ]
+}

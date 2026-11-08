@@ -34,7 +34,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
-import { CALM, pressureLimits, ramTone, recycleArmed, useIdleCollect, usePressureValve, viewRecycleDue, type Pressure } from "./pressure.ts"
+import { CALM, CLEANUP_FLASH_MS, IDLE_COLLECT_MS, ramTone, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -82,7 +82,7 @@ export function Chat({
   send,
   sendTracked,
   onFlushError,
-  onRecycle,
+  onRecycle: _onRecycle,
 }: {
   snap: Snapshot
   theme: Theme
@@ -96,30 +96,40 @@ export function Chat({
   send: (request: unknown) => void
   sendTracked: (request: unknown) => Promise<string>
   onFlushError: (text: string) => void
-  /** Ask the launcher to replace this view and keep the daemon. Local sessions only. */
+  /** Kept for launcher API compatibility. View recycle is disabled. */
   onRecycle?: (id: string) => void
 }) {
+  void _onRecycle
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
   const [pressure, setPressure] = useState(CALM)
+  const [cleanupUntil, setCleanupUntil] = useState(0)
   const session = snap.sessions.find((row) => row.id === snap.foreground_id) ?? snap.sessions[0]
   const turnRef = useRef({ session, status: snap.global.status })
   turnRef.current = { session, status: snap.global.status }
-  const recycleRef = useRef(onRecycle)
-  recycleRef.current = onRecycle
-  const askedRecycle = useRef(false)
-  useIdleCollect(() => {
-    const turn = turnRef.current
-    return !turn.session || !isThinking(turn.status, turn.session)
-  })
+  const flashCleanup = useRef(() => {})
+  flashCleanup.current = () => setCleanupUntil(Date.now() + CLEANUP_FLASH_MS)
+  const cleanups = useRef(pressure.cleanups)
+  useIdleCollect(
+    () => {
+      const turn = turnRef.current
+      return !turn.session || !isThinking(turn.status, turn.session)
+    },
+    IDLE_COLLECT_MS,
+    () => process.memoryUsage().rss,
+    () => flashCleanup.current(),
+  )
   useEffect(() => {
-    const recycle = recycleRef.current
-    const turn = turnRef.current
-    if (askedRecycle.current || !recycle || !turn.session) return
-    const idle = !isThinking(turn.status, turn.session)
-    if (!viewRecycleDue(pressure, process.memoryUsage().rss, pressureLimits().high, idle, recycleArmed(Date.now()))) return
-    askedRecycle.current = true
-    recycle(turn.session.id)
-  }, [pressure])
+    if (pressure.cleanups <= cleanups.current) return
+    cleanups.current = pressure.cleanups
+    flashCleanup.current()
+  }, [pressure.cleanups])
+  useEffect(() => {
+    if (cleanupUntil <= 0) return
+    const wait = Math.max(0, cleanupUntil - Date.now())
+    const timer = setTimeout(() => setCleanupUntil(0), wait)
+    return () => clearTimeout(timer)
+  }, [cleanupUntil])
+  const cleaning = cleanupUntil > 0
   if (!session) {
     return (
       <box flexGrow={1}>
@@ -145,6 +155,7 @@ export function Chat({
         session={session}
         theme={theme}
         pressure={pressure}
+        cleaning={cleaning}
         focused={focused}
         compact={Boolean(modalOverlay)}
         interaction={interaction}
@@ -1113,6 +1124,7 @@ function Composer({
   session,
   theme,
   pressure,
+  cleaning = false,
   focused,
   compact = false,
   interaction,
@@ -1125,6 +1137,7 @@ function Composer({
   session: SessionSnap
   theme: Theme
   pressure: Pressure
+  cleaning?: boolean
   focused: boolean
   compact?: boolean
   interaction?: ReactNode
@@ -1421,7 +1434,7 @@ function Composer({
       />
       </box>
       <box position="absolute" left={2} right={2} bottom={0} height={1} zIndex={1} flexDirection="row" justifyContent="space-between">
-        <Status snap={snap} session={session} theme={theme} />
+        <Status snap={snap} session={session} theme={theme} cleaning={cleaning} />
       </box>
       </box>
       <RamLine pressure={pressure} session={session} theme={theme} />
@@ -1518,10 +1531,12 @@ function Tips({ theme, width }: { theme: Theme; width: number }) {
   )
 }
 
-function Status({ snap, session, theme }: { snap: Snapshot; session: SessionSnap; theme: Theme }) {
-  const label = statusLabel(snap.global.status)
-  const live = isThinking(snap.global.status, session)
-  const elapsed = useWorkElapsed(snap.global.work_elapsed_ms, live)
+function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; session: SessionSnap; theme: Theme; cleaning?: boolean }) {
+  const thinking = isThinking(snap.global.status, session)
+  const showCleanup = cleaning && !thinking
+  const label = showCleanup ? "cleanup" : statusLabel(snap.global.status)
+  const live = thinking || showCleanup
+  const elapsed = useWorkElapsed(showCleanup ? 0 : snap.global.work_elapsed_ms, live)
   const readout = usageReadout(session)
   return (
     <>
@@ -1532,7 +1547,7 @@ function Status({ snap, session, theme }: { snap: Snapshot; session: SessionSnap
           [
             <span key="spin" fg={theme.accent}>{` ${SPINNER[Math.floor(elapsed / 80) % SPINNER.length] ?? "⠋"} `}</span>,
             <span key="status" fg={theme.fg}>{label}</span>,
-            <span key="time" fg={theme.dim}>{`  ${(elapsed / 1000).toFixed(1)}s `}</span>,
+            showCleanup ? null : <span key="time" fg={theme.dim}>{`  ${(elapsed / 1000).toFixed(1)}s `}</span>,
           ]
         )}
       </text>

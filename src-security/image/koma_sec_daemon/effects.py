@@ -71,7 +71,6 @@ MANIFEST: dict[str, tuple[str, str, str | None, str]] = {
     "sec_rop": (LOCAL, CPU, None, "reads a target binary"),
     "sec_crack": (LOCAL, CPU, None, "hashcat/john against a wordlist"),
     "sec_z3": (STATIC, CPU, None, "SMT solve"),
-    "sec_sage": (STATIC, CPU, None, "SageMath solve"),
     "sec_rsa": (STATIC, CPU, None, "RSA arithmetic"),
     "sec_factor": (REMOTE, NET, None, "fixed-host factordb.com lookup"),
     "sec_lattice": (STATIC, CPU, None, "lattice reduction"),

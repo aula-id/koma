@@ -195,7 +195,12 @@ impl Connection {
             self.publish();
             Ok(state)
         } else {
-            unreachable!()
+            let message = "Run state reply was not a run state.".to_string();
+            crate::model::notifications::record(
+                Some(self.projection.id.clone()),
+                crate::model::notifications::Entry::new(message.clone(), "error", "sdk"),
+            );
+            Err(RpcError::new("unavailable", message))
         }
     }
     pub async fn state(&mut self) -> Result<State, RpcError> {

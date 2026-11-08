@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "pack": "dfir-src",
+  "tools": [
+    {
+      "id": "anomark",
+      "name": "anomark",
+      "summary": "Statistical learning algorithm to create a model on the command lines of the Process Creation events on Windows, in order to detect anomalies in future events",
+      "categories": [
+        "defensive"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "anomark"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=anomark"
+    },
+    {
+      "id": "codechella_crisis_response",
+      "name": "codechella_crisis_response",
+      "summary": "An application curated to crisis zones to facilitate the dissemination of accurate mission-critical information from sources on the ground to key partners with minimal lag time",
+      "categories": [
+        "crisis-management"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "codechella-crisis-response"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=codechella-crisis-response"
+    },
+    {
+      "id": "darksurgeon",
+      "name": "darksurgeon",
+      "summary": "Windows project to empower incident response, digital forensics, malware analysis, and network defense with HashiCorp Packer and Vagrant",
+      "categories": [
+        "defensive"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "darksurgeon"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=darksurgeon"
+    },
+    {
+      "id": "dfir_orc",
+      "name": "dfir_orc",
+      "summary": "Forensics artefact collection tool for systems running Microsoft Windows",
+      "categories": [
+        "incident-response"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dfir-orc"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dfir-orc"
+    },
+    {
+      "id": "ds_store_exp",
+      "name": "ds_store_exp",
+      "summary": "Extract files from .DS_Store recursively",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ds_store_exp"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=ds_store_exp"
+    },
+    {
+      "id": "ntu_crysis",
+      "name": "ntu_crysis",
+      "summary": "Crisis management web application / project for software systems analysis and design",
+      "categories": [
+        "crisis-management"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ntu-crysis"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=ntu-crysis"
+    }
+  ]
+}

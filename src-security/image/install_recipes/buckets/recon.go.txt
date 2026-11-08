@@ -1,0 +1,16 @@
+github.com/zan8in/afrog@latest
+github.com/projectdiscovery/alterx/cmd/alterx@latest
+github.com/projectdiscovery/asnmap/cmd/asnmap@latest
+github.com/ax-i-om/bitcrook@latest
+github.com/projectdiscovery/chaos-client/cmd/chaos@latest
+github.com/michelin/ChopChop@latest
+github.com/cybercdh/cnames@latest
+github.com/s0rg/crawley@latest
+github.com/jimen0/differer@latest
+github.com/disclose/diosts@latest
+github.com/zhzyker/dismap@latest
+github.com/bp0lr/dmut@latest
+github.com/trickest/dsieve@latest
+github.com/americanexpress/earlybird@latest
+github.com/tomnomnom/gf@latest
+github.com/projectdiscovery/uncover/cmd/uncover@latest

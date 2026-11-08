@@ -288,14 +288,25 @@ pub(super) fn command(
     params: &Value,
 ) -> Result<Value, String> {
     static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let guard = ACTIVE
-        .try_update(
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-            |n| if n < 8 { Some(n + 1) } else { None },
-        )
-        .map_err(|_| "Too many active language commands")?;
-    let _ = guard;
+    // Cap concurrent language commands without unstable Atomic::try_update.
+    {
+        use std::sync::atomic::Ordering;
+        let mut cur = ACTIVE.load(Ordering::Acquire);
+        loop {
+            if cur >= 8 {
+                return Err("Too many active language commands".into());
+            }
+            match ACTIVE.compare_exchange_weak(
+                cur,
+                cur + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
     let result = (|| {
         let pending = manager(workspace)?
             .lock()

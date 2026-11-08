@@ -1137,10 +1137,11 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
 
 /// Project the `/security` control panel.
 ///
-/// Re-reads LIVE status from the daemon manager every snapshot — the panel always
-/// reflects current daemon state after start/stop/restart, not just the state when
-/// the mode was opened. Falls back to `s.status` (the in-mode snapshot) when there
-/// is no manager (thin client path, which has no manager of its own).
+/// Re-reads daemon memory status every snapshot so start/stop/restart show up
+/// immediately. Runtime fields ride the non-blocking probe cache inside
+/// `status()` (background refresh when stale) — this projection never runs
+/// `docker info` itself. Falls back to `s.status` when there is no manager
+/// (thin client path).
 pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapshot {
     let status = state
         .rest
@@ -1159,17 +1160,18 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         // YOLO arm flag is authoritative on `state.rest`; carry it so the client's panel
         // renders the same armed/locked status row.
         yolo_armed: state.rest.yolo_armed,
-        // Install-health is carried straight from the mode state — NEVER re-fetched
-        // here. `health()` is a heavy IPC round-trip and this projection runs on every
-        // frame; the mode seeds it once on open and after an install.
-        install_health: s.install_health.clone(),
-        health_view: s.health_view,
-        health_selected: s.health_selected,
-        // Spinner state for the in-flight health probe — projected so the client renders
-        // the same "checking dependencies…" line and ANIMATES it from `health_frame`
-        // (the daemon advances the frame every tick; the client owns no probe of its own).
-        health_fetching: s.health_fetching,
-        health_frame: s.health_frame,
+        pane: s.pane.as_str().into(),
+        refused_selected: s.refused_selected,
+        images: s.images.clone(),
+        images_selected: s.images_selected,
+        images_busy: s.images_busy,
+        lane_label: s.lane_label.clone(),
+        catalog: s.catalog.clone(),
+        catalog_filter: s.catalog_filter.as_str().into(),
+        catalog_query: s.catalog_query.clone(),
+        catalog_searching: s.catalog_searching,
+        map_filter: s.map_filter.clone().unwrap_or_default(),
+        agent_mode_label: state.rest.agent_mode().label().to_string(),
     }
 }
 

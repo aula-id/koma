@@ -76,6 +76,8 @@ mod baseline;
 #[cfg(test)]
 pub(crate) mod fake_daemon;
 pub mod lane;
+pub mod meta;
+pub mod working_set;
 pub mod run;
 pub mod prompt;
 pub mod scope;
@@ -408,6 +410,17 @@ impl SecDaemonManager {
     /// timeout removes the pending entry and returns `Err("sec tool '<name>' timed
     /// out")`.
     pub fn execute_blocking(&self, tool: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.execute_blocking_in_lane(tool, args, None)
+    }
+
+    /// Like [`Self::execute_blocking`], tagging the daemon call with the session
+    /// cyber lane so pack `lanes` / research net-off apply on the guest path.
+    pub fn execute_blocking_in_lane(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        lane: Option<&str>,
+    ) -> Result<String, String> {
         // Namespace guard only. The lane flag and the per-session advertise
         // check need a `SessionRuntime`, so they run at the boundary
         // (`crate::tool::execute_tool`, `subagent::engine`) where both are in
@@ -415,7 +428,13 @@ impl SecDaemonManager {
         if let Some(reason) = crate::security::sec_refusal(tool, true, |n| self.is_advertised(n)) {
             return Err(reason);
         }
-        self.request(serde_json::json!({ "op": "call", "tool": tool, "args": args }))
+        let mut frame = serde_json::json!({ "op": "call", "tool": tool, "args": args });
+        if let Some(l) = lane {
+            if let Some(obj) = frame.as_object_mut() {
+                obj.insert("lane".into(), serde_json::Value::String(l.to_string()));
+            }
+        }
+        self.request(frame)
     }
 
     /// The same guard as [`Self::execute_blocking`]'s prelude, for callers that
@@ -563,8 +582,41 @@ impl SecDaemonManager {
         self.request(serde_json::json!({ "op": "install", "key": key }))
     }
 
-    /// Wire [`ToolDef`]s for every advertised tool, ready to extend the request
-    /// `tools` array. Empty when the daemon is not running.
+    /// Catalog meta-op (`categories` / `list` / `get`). Result is a JSON object string.
+    pub fn catalog_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "catalog",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// Runtime boundary meta-op (`status` / `up` / `down` / `health`).
+    pub fn runtime_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "runtime",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// Guest filesystem meta-op (`copy_in` / `copy_out` / `ls`).
+    pub fn fs_op(&self, sub: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({
+            "op": "fs",
+            "sub": sub,
+            "args": args,
+        }))
+    }
+
+    /// The four model-facing meta [`ToolDef`]s. Independent of Docker reachability so
+    /// `sec_catalog` / `sec_runtime status` stay usable when the guest is down.
+    pub fn meta_tool_defs() -> Vec<ToolDef> {
+        meta::meta_tool_defs()
+    }
+
+    /// Wire [`ToolDef`]s for every concrete toolkit tool (cockpit / legacy). Empty when
+    /// the daemon is not running. Model turns use [`Self::meta_tool_defs`] instead.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
         if !crate::security::cyber_execution_available() {
             return Vec::new();
@@ -604,6 +656,9 @@ impl SecDaemonManager {
     /// separable — a forged name and an unconfigured runtime are different
     /// diagnoses, and the boundary reports whichever applies first.
     pub fn is_advertised(&self, name: &str) -> bool {
+        if meta::is_meta_tool(name) {
+            return self.is_running();
+        }
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.tools.iter().any(|t| t.name == name)
     }
@@ -632,9 +687,11 @@ impl SecDaemonManager {
 
     /// A serializable snapshot for the `/security` cockpit: running/installed flags
     /// plus the per-tool metadata. Cheap — locks the inner state and copies the small
-    /// tool list.
+    /// tool list. Runtime fields come from the **non-blocking** probe cache (may kick a
+    /// background refresh when stale); this never runs `docker info` on the caller.
     pub fn status(&self) -> SecStatus {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let (runtime_ok, runtime) = crate::security::runtime_status_cached();
         SecStatus {
             running: inner.running,
             installed: crate::security::is_installed(),
@@ -645,10 +702,65 @@ impl SecDaemonManager {
                     name: t.name.clone(),
                     domain: t.domain.clone(),
                     risk: t.risk > SecRisk::Static,
+                    effect: risk_label(t.risk).into(),
                     compute: t.compute.clone(),
                 })
                 .collect(),
+            refused: inner
+                .refused_tools
+                .iter()
+                .map(|(name, reason)| SecRefusedInfo {
+                    name: name.clone(),
+                    reason: reason.clone(),
+                })
+                .collect(),
+            runtime_ok,
+            runtime,
+            boundary_up: false,
+            net: String::new(),
+            rules: Vec::new(),
+            catalog_ready: 0,
+            catalog_total: 0,
         }
+    }
+
+    /// Fill boundary net/rules + catalog ready counts (IPC; call on panel refresh only).
+    pub fn enrich_status(&self, mut status: SecStatus) -> SecStatus {
+        if !status.running {
+            return status;
+        }
+        if let Ok(raw) = self.runtime_op("status", &serde_json::json!({})) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                status.boundary_up = v.get("up").and_then(|x| x.as_bool()).unwrap_or(false);
+                status.net = v
+                    .get("net")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(if status.boundary_up { "unknown" } else { "down" })
+                    .to_string();
+                if let Some(arr) = v.get("rules").and_then(|x| x.as_array()) {
+                    status.rules = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+        }
+        if let Ok(raw) = self.catalog_op("summary", &serde_json::json!({})) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                status.catalog_total = v.get("tools").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                status.catalog_ready = v.get("ready").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+            }
+        }
+        status
+    }
+}
+
+fn risk_label(r: SecRisk) -> &'static str {
+    match r {
+        SecRisk::Static => "static",
+        SecRisk::Local => "local",
+        SecRisk::Remote => "remote",
+        SecRisk::Exploit => "exploit",
     }
 }
 
@@ -661,6 +773,35 @@ pub struct SecStatus {
     pub installed: bool,
     /// One entry per advertised tool.
     pub tools: Vec<SecToolInfo>,
+    /// Descriptors the last handshake refused (name + reason). Empty when the
+    /// daemon is stopped or every tool passed. `#[serde(default)]` keeps older
+    /// snapshots decoding.
+    #[serde(default)]
+    pub refused: Vec<SecRefusedInfo>,
+    /// Live `docker info` probe — independent of daemon running.
+    /// Served from the process runtime-probe cache (see `runtime_status_cached`);
+    /// not re-probed on every snapshot frame.
+    #[serde(default)]
+    pub runtime_ok: bool,
+    /// Human label for the container runtime (`docker ready (colima)`, …).
+    /// Same cache as [`Self::runtime_ok`].
+    #[serde(default)]
+    pub runtime: String,
+    /// Boundary guest up (from `sec_runtime status`). Default false when unknown.
+    #[serde(default)]
+    pub boundary_up: bool,
+    /// Egress mode: `off` | `scope` | `down` | `unknown`.
+    #[serde(default)]
+    pub net: String,
+    /// Live proxy allowlist lines (host ports).
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// Catalog tools marked ready (from catalog summary when daemon up).
+    #[serde(default)]
+    pub catalog_ready: u32,
+    /// Catalog tools total known to packs+registry.
+    #[serde(default)]
+    pub catalog_total: u32,
 }
 
 /// Per-tool metadata surfaced in [`SecStatus`].
@@ -673,8 +814,18 @@ pub struct SecToolInfo {
     /// Whether the tool's effects go beyond pure computation. Derived from
     /// [`SecRisk`] so the panel's advisory marker does not need the enum.
     pub risk: bool,
-    /// Free-form compute-class hint.
+    /// Reach tier label (`static` / `local` / `remote` / `exploit`).
+    #[serde(default)]
+    pub effect: String,
+    /// Runtime class (`cpu` / `binary` / `net` / `browser`, or legacy compute).
     pub compute: String,
+}
+
+/// One handshake refusal, for the cockpit's refused list.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SecRefusedInfo {
+    pub name: String,
+    pub reason: String,
 }
 
 /// One dependency's install-health entry, as reported by the daemon's `health` op.

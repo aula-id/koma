@@ -154,10 +154,10 @@ pub struct HelpSnapshot {
 ///
 /// Carries a full [`crate::app::sec::SecStatus`] (which already derives
 /// Serialize + Deserialize) plus the tool-list cursor. The projection re-reads
-/// LIVE status from the daemon manager at snapshot time (see
-/// `ipc::snapshot::projection::modes::security_snapshot`) so the panel always
-/// reflects current daemon state after start/stop/restart, rather than the
-/// potentially-stale snapshot that was open when the mode was entered.
+/// daemon memory status at snapshot time (see
+/// `ipc::snapshot::projection::modes::security_snapshot`); runtime fields come
+/// from the non-blocking probe cache so the panel stays live without spawning
+/// `docker info` every frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SecuritySnapshot {
@@ -176,27 +176,40 @@ pub struct SecuritySnapshot {
     /// an older client decoding a newer daemon (and vice-versa) safe (defaults false).
     #[serde(default)]
     pub yolo_armed: bool,
-    /// Per-dependency install-health, carried VERBATIM from the open mode state (NOT
-    /// re-fetched at snapshot time — `health()` is a heavy IPC round-trip and the
-    /// projection runs every frame). Empty when the daemon is stopped.
+    /// Active pane token: `"tools"` | `"images"` | `"refused"`. Default tools.
     #[serde(default)]
-    pub install_health: Vec<crate::app::sec::InstallHealthEntry>,
-    /// Which body pane is showing: `false` = tools (default), `true` = dependencies.
+    pub pane: String,
+    /// Selected index into `status.refused` (the refused-pane cursor).
     #[serde(default)]
-    pub health_view: bool,
-    /// Selected index into `install_health` (the dependency-pane cursor).
+    pub refused_selected: usize,
+    /// Guest composition rows for the Images pane (catalogue + inventory).
     #[serde(default)]
-    pub health_selected: usize,
-    /// `true` while a non-blocking health probe is in flight on the daemon. Projected so
-    /// the thin client renders the same "checking dependencies…" spinner state on the
-    /// daemon info line. `#[serde(default)]` keeps version-skewed peers safe (false).
+    pub images: Vec<crate::app::mode::SafetyImageRow>,
+    /// Selected index into `images`.
     #[serde(default)]
-    pub health_fetching: bool,
-    /// Braille spinner frame counter for the in-flight probe. MUST be projected (it is
-    /// advanced daemon-side every tick) so the client's spinner actually animates rather
-    /// than sitting on a single frame. `#[serde(default)]` keeps version-skewed peers safe.
+    pub images_selected: usize,
+    /// Optional busy flag while a long image op runs (v1 pull is blocking).
     #[serde(default)]
-    pub health_frame: u64,
+    pub images_busy: bool,
+    /// Session cyber-lane label for the status strip.
+    #[serde(default)]
+    pub lane_label: String,
+    /// Full catalog (marks already overlaid). The cursor is an index into the filtered window.
+    #[serde(default)]
+    pub catalog: Vec<crate::app::mode::CatalogRow>,
+    /// `"all"` | `"ready"` | `"needs"`.
+    #[serde(default)]
+    pub catalog_filter: String,
+    #[serde(default)]
+    pub catalog_query: String,
+    #[serde(default)]
+    pub catalog_searching: bool,
+    /// Composition id from the guest-map cell. Empty = all.
+    #[serde(default)]
+    pub map_filter: String,
+    /// Foreground agent-mode label (`auto` / `yolo` / …).
+    #[serde(default)]
+    pub agent_mode_label: String,
 }
 
 /// A serde-safe projection of ONE background bash job for the `/bash` panel.
