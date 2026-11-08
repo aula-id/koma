@@ -238,8 +238,8 @@ fn render_dashboard(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette
 
     let start = window_start(st.selected, shown, CATALOG_WINDOW);
     let end = (start + CATALOG_WINDOW).min(shown);
-    for pos in start..end {
-        let Some(row) = st.catalog.get(filtered[pos]) else {
+    for (pos, &idx) in filtered.iter().enumerate().skip(start).take(end - start) {
+        let Some(row) = st.catalog.get(idx) else {
             continue;
         };
         let on = pos == st.selected;
