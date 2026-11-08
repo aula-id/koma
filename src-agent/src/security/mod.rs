@@ -913,6 +913,80 @@ pub(super) fn quiet(program: &str, args: &[&str]) -> Result<()> {
     ))
 }
 
+/// One compact catalog row from `index.json` or the daemon `catalog index` op.
+///
+/// File rows use `summary`; the daemon uses `blurb`. Both map here. Readiness is
+/// not in the payload — the panel overlays it from the image inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogIndexRow {
+    pub id: String,
+    pub blurb: String,
+    pub image: String,
+    pub exec: String,
+    pub domain: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogIndexFile {
+    #[serde(default)]
+    tools: Vec<CatalogIndexJson>,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogIndexJson {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    blurb: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    exec: String,
+    #[serde(default)]
+    domain: String,
+}
+
+/// Embedded `src-security/catalog/index.json` (path relative to this file).
+///
+/// Marks start unset; callers overlay them. Empty if the file does not parse.
+pub fn embedded_catalog_rows() -> Vec<CatalogIndexRow> {
+    parse_catalog_index(include_str!(
+        "../../../src-security/catalog/index.json"
+    ))
+    .unwrap_or_default()
+}
+
+/// Parse a catalog index object (`{"tools":[...]}`). Accepts file `summary` or
+/// daemon `blurb`. Rows with an empty id are dropped. `None` if `raw` is not JSON.
+pub fn parse_catalog_index(raw: &str) -> Option<Vec<CatalogIndexRow>> {
+    let file: CatalogIndexFile = serde_json::from_str(raw).ok()?;
+    Some(
+        file.tools
+            .into_iter()
+            .filter_map(|row| {
+                let id = row.id.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                let blurb = if row.blurb.trim().is_empty() {
+                    row.summary
+                } else {
+                    row.blurb
+                };
+                Some(CatalogIndexRow {
+                    id,
+                    blurb: blurb.trim().to_string(),
+                    image: row.image.trim().to_string(),
+                    exec: row.exec.trim().to_string(),
+                    domain: row.domain.trim().to_string(),
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 #[path = "mod_test.rs"]
 mod tests;

@@ -261,40 +261,40 @@ pub enum Action {
     // --- Security daemon control panel actions ---
     /// Esc from the `/security` panel — return to Chat.
     CloseSecurity,
-    /// `r` in the `/security` panel — restart the daemon (stop then start). Daemon
-    /// start/stop/toggle no longer have their own keys/Actions: the top `[x] Daemon
-    /// running` checkbox owns them (toggled via `SecurityToggleTool`).
+    /// Not bound. Restart is not a dashboard button; `r` refreshes Images only.
+    #[allow(dead_code)]
     SecurityRestart,
-    /// `Enter`/`Space` in the `/security` panel — toggle the currently-SELECTED row. The
-    /// tools pane mixes the daemon checkbox (row 0) and the YOLO checkbox (row 1) with the
-    /// tool inventory: the daemon checkbox starts/stops the daemon; the YOLO checkbox
-    /// arms/disarms the Layer-1 YOLO flag (`state.rest.yolo_armed`, gated on the daemon
-    /// running; disarming while in `Yolo` drops `agent_mode` back to `Auto`); a tool row
-    /// flips its membership in `state.rest.sec_inactive` (a disabled tool is no longer
-    /// advertised to the model). Refreshes the panel.
+    /// Legacy: Space/Enter used to toggle the daemon/YOLO checkbox. Those are letter
+    /// keys now; this arm is a no-op refresh so a stale client does not miss a match.
+    #[allow(dead_code)]
     SecurityToggleTool,
-    /// `d` in the `/security` panel — toggle every tool sharing the selected tool's
-    /// domain: if all of that domain are currently active, disable them all; otherwise
-    /// enable them all. A no-op when the YOLO checkbox is selected. Refreshes the panel.
+    /// `s` — start the daemon if stopped, stop it if running.
+    SecurityToggleDaemon,
+    /// `o` — arm/disarm YOLO through the existing gate.
+    SecurityToggleYolo,
+    /// `e` — enter or leave `AgentMode::Yolo`. Refused unless the daemon is running
+    /// and YOLO is armed.
+    SecurityEnterYolo,
+    /// `u` — reload catalog index + image inventory. Not a daemon restart.
+    SecurityRefreshDashboard,
+    /// Not bound. Domain enable/disable is not on the dashboard.
+    #[allow(dead_code)]
     SecurityToggleDomain,
-    /// `i` in the `/security` panel's DEPENDENCY pane — install/repair the selected
-    /// dependency. Inner string is its manifest key (the argument to
-    /// [`crate::app::sec::SecDaemonManager::install`]). v1 runs the install BLOCKING
-    /// (a Tier-2 download can take seconds), then re-fetches install-health so the
-    /// pane's present-flags update.
+    /// Not bound. Host dep install stays on the daemon; the panel does not call it.
+    #[allow(dead_code)]
     SecurityInstall(String),
     /// `l` in the `/security` panel — set this session's cyber lane. Inner is the
     /// lane, or `None` to clear it. Refused with a reason when the chosen role has
     /// no model assigned, so the gate is never left looking configured.
     SecurityLane(Option<crate::app::sec::lane::Lane>),
-    /// `a` in the `/security` panel — clear `sec_inactive` so every advertised tool
-    /// is enabled again.
+    /// Not bound. `a` on the dashboard activates the selected tool's image.
+    #[allow(dead_code)]
     SecurityEnableAllTools,
-    /// `n` in the `/security` panel — put every currently advertised tool into
-    /// `sec_inactive`.
+    /// Not bound. `n` is confirms-only.
+    #[allow(dead_code)]
     SecurityDisableAllTools,
-    /// `u` in the `/security` panel — re-extract the embedded daemon package and
-    /// restart the daemon so a stale on-disk vocabulary is replaced.
+    /// Not bound. `u` reloads the dashboard catalog, it does not restart the daemon.
+    #[allow(dead_code)]
     SecurityRefreshToolkit,
     /// `c` in the `/security` panel — try to bring the container runtime up
     /// (Colima start when installed; otherwise a status hint only).

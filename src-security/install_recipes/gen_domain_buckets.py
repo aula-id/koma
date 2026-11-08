@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "pentest_tools_cli_debian_linux.json"
 BUCKETS = ROOT / "buckets"
 PACKS = ROOT.parent / "catalog" / "packs"
+INDEX_OUT = ROOT.parent / "catalog" / "index.json"
 SUMMARY_OUT = ROOT / "buckets_summary.json"
 COMPOSITIONS_OUT = BUCKETS / "compositions.json"
 COMPOSITIONS_MD = ROOT / "COMPOSITIONS.md"
@@ -292,6 +293,43 @@ def src_spec(channel: dict, tool: dict) -> str | None:
     if tid:
         return str(tid).strip()
     return None
+
+
+def write_catalog_index() -> int:
+    """Compact dashboard index. Skips `debian.json`. Later pack files win on id."""
+    by_id: dict[str, dict] = {}
+    if PACKS.is_dir():
+        for path in sorted(PACKS.glob("*.json")):
+            if path.name == "debian.json":
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            for tool in data.get("tools") or []:
+                if not isinstance(tool, dict):
+                    continue
+                tid = tool.get("id") or tool.get("name")
+                if not isinstance(tid, str) or not tid.strip():
+                    continue
+                tid = tid.strip()
+                img = str(tool.get("image_or_pack") or path.stem)
+                by_id[tid] = {
+                    "id": tid,
+                    "image": img,
+                    "domain": img.split("-", 1)[0] if img else "other",
+                    "exec": str(tool.get("exec") or ""),
+                    "summary": str(tool.get("summary") or "")[:160],
+                }
+    rows = [by_id[k] for k in sorted(by_id)]
+    INDEX_OUT.parent.mkdir(parents=True, exist_ok=True)
+    INDEX_OUT.write_text(
+        json.dumps({"version": 1, "tools": rows}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return len(rows)
 
 
 def write_lines(path: Path, items: list[str]) -> None:
@@ -697,6 +735,8 @@ def main() -> int:
         "skipped_snap": skipped_snap,
         "packs": sorted(packs_written),
     }
+    n_index = write_catalog_index()
+    report["catalog_index"] = n_index
     print(json.dumps(report, indent=2))
     return 0
 

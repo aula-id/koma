@@ -58,7 +58,7 @@ const fullScreens: [string, Record<string, unknown>][] = [
   ["Extensions", { mode: "browse", rows: [{ name: "Test extension", description: "An extension" }], list_sel: 0 }],
   ["ExtStore", { mode: "browse", rows: [{ name: "Test listing" }], list_sel: 0 }],
   ["ExtScreen", { screen: { title: "Test screen", body: [{ t: "menu", items: [{ id: "one", label: "Option one" }] }] } }],
-  ["Security", { status: { running: true, installed: true, tools: [{ name: "Tool one", domain: "filesystem" }] }, selected: 2 }],
+  ["Security", { status: { running: true, installed: true, tools: [{ name: "Tool one", domain: "filesystem" }] }, selected: 0, catalog: [{ id: "nmap", blurb: "scan", image: "recon", exec: "net", domain: "recon", ready_mark: "remote" }] }],
   ["Remote", { sub: "manage:browse", hosts: [{ name: "Test host", user: "user", host: "example.test", port: 22 }], filtered: [0], selected: 0 }],
   ["Onboard", { cursor: 1 }],
   ["OnboardProvider", { step: "login", oauth_flow: { kind: "pick", cursor: 7, options: OAUTH_OPTIONS } }],
@@ -101,12 +101,11 @@ for (const [width, height] of [[50, 24], [80, 18], [100, 40]]) {
         }
         if (body.picker) expect(frame).toContain("Item 30")
         if (name === "Security") {
-          // Dashboard chrome is always painted; the daemon toggle row can clip
-          // under tabs + status meters on short fixtures (50×24 / 80×18).
           expect(frame).toContain("Dashboard")
           expect(frame).toContain("Images")
-          expect(frame).toContain("Deps")
-          expect(frame).toMatch(/running|stopped/i)
+          expect(frame).toContain("Refused")
+          expect(frame).toContain("nmap")
+          expect(frame).not.toContain("Deps")
         }
         if (name === "OnboardProvider" && body.step === "login") expect(frame).toContain("Command Code (paste key)")
         if (name === "Usage") expect(frame).toContain("42 tokens")

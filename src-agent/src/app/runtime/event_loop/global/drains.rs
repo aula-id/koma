@@ -87,56 +87,21 @@ pub(super) fn drain_version(state: &mut AppState) -> bool {
     dirty
 }
 
-/// Drain the NON-BLOCKING security health probe (mirrors the `version_rx` drain). A
-/// `SecDaemonManager::health_async` fetch sends exactly one result: Ok(entries) on a
-/// successful probe, Ok(Err(msg)) when the daemon reported/timed-out an error. Fold a
-/// success into the OPEN `/security` panel's `install_health` and clear the spinner;
-/// toast an error. Take() the receiver so the arms can mutate `state.mode`; put it back
-/// only while still Empty (a delivered result OR a closed channel ends the probe). On
-/// any terminal outcome the spinner flag is cleared so a panel that is open stops
-/// animating. Non-blocking (try_recv).
+/// Drain a leftover security health probe, if one is still in flight.
+///
+/// The dashboard no longer folds install-health into the panel. The channel stays
+/// so a probe started elsewhere cannot leak; the result is discarded.
 pub(super) fn drain_sec_health(state: &mut AppState) -> bool {
-    let mut dirty = false;
-    if let Some(mut hrx) = state.rest.sec_health_rx.take() {
-        match hrx.try_recv() {
-            Ok(Ok(health)) => {
-                // De-globalized (C3): apply to whichever session(s) have the `/security`
-                // panel open, not the (stale outside a client bracket) foreground.
-                for s in security_states(state) {
-                    s.install_health = health.clone();
-                    s.health_fetching = false;
-                }
-                // Receiver consumed (one-shot result delivered) → don't put it back.
-                dirty = true;
-            }
-            Ok(Err(e)) => {
-                // Toast is per-session (C6); a health-probe failure is a global notice —
-                // surface it on the foreground session (single-window: the only session).
-                state
-                    .rest
-                    .fg_mut()
-                    .set_toast(format!("security health probe failed: {e}"));
-                for s in security_states(state) {
-                    s.health_fetching = false;
-                }
-                // Receiver consumed → don't put it back.
-                dirty = true;
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                // Still in flight — keep the receiver for the next tick.
-                state.rest.sec_health_rx = Some(hrx);
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                // Sender dropped without sending (shouldn't happen — the spawn always
-                // sends — but stay clean): end the probe, clear the spinner.
-                for s in security_states(state) {
-                    s.health_fetching = false;
-                }
-                dirty = true;
-            }
+    let Some(mut hrx) = state.rest.sec_health_rx.take() else {
+        return false;
+    };
+    match hrx.try_recv() {
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+            state.rest.sec_health_rx = Some(hrx);
+            false
         }
+        _ => false,
     }
-    dirty
 }
 
 /// Drain the `/settings` OAuth submenu's connect-flow channel (mirrors
@@ -1142,21 +1107,7 @@ pub(super) fn sync_security_runtime_cache(state: &mut AppState) -> bool {
     dirty
 }
 
-/// ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
-/// loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
-/// the braille frames actually cycle, paired with the force-dirty check so the loop
-/// redraws even though no events arrive during the cold IPC round-trip. De-globalized
-/// (C3): bump it on whichever session(s) have `/security` open, not the stale foreground.
-pub(super) fn advance_security_spinner(state: &mut AppState) -> bool {
-    let mut dirty = false;
-    if state.rest.sec_health_rx.is_some() {
-        for s in security_states(state) {
-            s.health_frame = s.health_frame.wrapping_add(1);
-            dirty = true;
-        }
-    }
-    dirty
-}
+// The dashboard no longer animates a health-probe spinner.
 
 /// ADVANCE the OAuth submenu's connect-flow spinner while a Codex/Kilo Code
 /// flow is waiting. Mirrors the security health-probe advance above: only the

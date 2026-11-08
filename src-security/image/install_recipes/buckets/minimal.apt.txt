@@ -1,0 +1,11 @@
+file
+hashcat
+wabt
+ruby
+nodejs
+npm
+unzip
+openjdk-17-jre-headless
+libfplll-dev
+libgmp-dev
+libmpfr-dev

@@ -1,10 +1,9 @@
-//! Security daemon control panel view.
+//! `/security` control panel view.
 //!
 //! A full-screen status panel in the house border style:
 //! - Header: label "security" with BOTTOM border only.
-//! - Control block: navigable `[x] Daemon running` checkbox, status strip
-//!   (installed / runtime / lane / refused), YOLO checkbox.
-//! - Body (cycled by `h`): TOOLS | IMAGES | DEPENDENCIES | REFUSED panes.
+//! - Body: Dashboard | Images | Refused (cycled by `h`, jumped by 1/2/3).
+//! - Dashboard is Paragraph text: gates, YOLO, guest map, catalog window.
 //! - Footer: full-width inverse hint bar (per active pane).
 
 use ratatui::{
@@ -15,9 +14,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::mode::{SecPane, SecSel, SecurityState};
-use crate::app::sec::InstallHealthEntry;
+use crate::app::mode::security::{is_real_composition, map_column_ids, map_domains};
+use crate::app::mode::{SecPane, SecurityState};
 use crate::view::theme::Palette;
+
+const CATALOG_WINDOW: usize = 24;
 
 /// Render the `/security` control panel for `st` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
@@ -30,7 +31,6 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
         ])
         .split(frame.area());
 
-    // --- Header ---
     let header_block = Block::new()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(palette.dim));
@@ -44,46 +44,33 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
         }),
     );
 
-    // --- Body ---
     let body = outer[1].inner(Margin {
         horizontal: 2,
         vertical: 1,
     });
 
     let mut lines: Vec<Line> = Vec::new();
-
-    let active = st.status.running && st.status.installed;
-    let dim_style = Style::default().fg(palette.dim);
+    push_tabs(&mut lines, st, palette);
+    lines.push(Line::from(""));
 
     match st.pane {
-        SecPane::Tools => {
-            render_tools(&mut lines, st, palette, active, dim_style);
-        }
-        SecPane::Images => {
-            render_images(&mut lines, st, palette);
-        }
-        SecPane::Deps => {
-            render_deps(&mut lines, st, palette);
-        }
-        SecPane::Refused => {
-            render_refused(&mut lines, st, palette);
-        }
+        SecPane::Tools => render_dashboard(&mut lines, st, palette),
+        SecPane::Images => render_images(&mut lines, st, palette),
+        SecPane::Refused => render_refused(&mut lines, st, palette),
     }
 
     frame.render_widget(Paragraph::new(lines), body);
 
-    // --- Footer ---
     let footer_rect = outer[2];
     if footer_rect.width > 0 {
         let hint = match st.pane {
             SecPane::Tools => {
-                "click tabs · ↑↓ · Space toggle · u refresh · c runtime · h panes · r restart · Esc"
+                "↑↓ tools · ←→ map · f filter · / search · s start/stop · c runtime · u refresh · o arm · e yolo · l lane · h/123 · Esc"
             }
             SecPane::Images => {
-                "click tabs · ↑↓ scroll · p pull · enter activate · x remove · r refresh · Esc"
+                "↑↓ · p pull · enter/a activate · x remove · r refresh · h/123 panes · Esc"
             }
-            SecPane::Deps => "click tabs · ↑↓ scroll · i install · h panes · r restart · Esc",
-            SecPane::Refused => "click tabs · ↑↓ · u refresh · h panes · r restart · Esc",
+            SecPane::Refused => "↑↓ · h/123 panes · Esc",
         };
         let bar_style = Style::default()
             .fg(palette.sel_fg)
@@ -101,292 +88,286 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
     }
 }
 
-fn bar_line(label: &str, done: usize, total: usize, width: usize) -> String {
-    let t = total;
-    let d = done.min(if t == 0 { done } else { t });
-    let pct = if t > 0 {
-        d as f64 / t as f64
-    } else if done > 0 {
-        1.0
-    } else {
-        0.0
-    };
-    let fill = ((pct * width as f64).round() as usize).min(width);
-    let empty = width.saturating_sub(fill);
-    let counts = if t > 0 {
-        format!("{d}/{t}")
-    } else {
-        format!("{d}")
-    };
-    format!(
-        "{label:<10}{}{}  {counts}",
-        "█".repeat(fill),
-        "░".repeat(empty)
-    )
+fn push_tabs(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
+    let tabs = [
+        (SecPane::Tools, "Dashboard (1)"),
+        (SecPane::Images, "Images (2)"),
+        (SecPane::Refused, "Refused (3)"),
+    ];
+    let mut spans = Vec::new();
+    for (i, (pane, label)) in tabs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        let on = st.pane == *pane;
+        let text = if on {
+            format!("▸ {label}")
+        } else {
+            format!("  {label}")
+        };
+        spans.push(Span::styled(
+            text,
+            if on {
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.dim)
+            },
+        ));
+    }
+    lines.push(Line::from(spans));
 }
 
-fn render_tools(
-    lines: &mut Vec<Line>,
-    st: &SecurityState,
-    palette: &Palette,
-    active: bool,
-    dim_style: Style,
-) {
-    let tool_style = if active {
-        Style::default().fg(palette.fg)
-    } else {
-        Style::default().fg(palette.dim)
-    };
-    let sel_style = Style::default()
-        .fg(palette.sel_fg)
-        .bg(palette.sel_bg)
-        .add_modifier(Modifier::BOLD);
-
-    // Pane tabs (keyboard: h cycles; client can MenuReplace pane=…)
-    lines.push(Line::from(vec![
-        Span::styled(
-            "▸ Dashboard",
+fn gate_span(label: &str, up: bool, palette: &Palette) -> Vec<Span<'static>> {
+    let (mark, style) = if up {
+        (
+            "●",
             Style::default()
-                .fg(palette.accent)
+                .fg(palette.success)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  Images  Deps  Refused", dim_style),
-        Span::styled("   (h cycle · click tabs in TUI)", dim_style),
+        )
+    } else {
+        ("○", Style::default().fg(palette.warn))
+    };
+    vec![
+        Span::styled(format!("{label} "), Style::default().fg(palette.dim)),
+        Span::styled(mark.to_string(), style),
+        Span::raw("  "),
+    ]
+}
+
+fn render_dashboard(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
+    let dim = Style::default().fg(palette.dim);
+    let guest_up = st.images.iter().any(|r| r.active);
+    let mut gates = Vec::new();
+    gates.extend(gate_span("runtime", st.status.runtime_ok, palette));
+    gates.extend(gate_span("daemon", st.status.running, palette));
+    gates.extend(gate_span("guest", guest_up, palette));
+    gates.extend(gate_span("boundary", st.status.boundary_up, palette));
+    gates.push(Span::styled(
+        format!("lane {} (l)", st.lane_label),
+        dim,
+    ));
+    lines.push(Line::from(gates));
+
+    let start_stop = if st.status.running {
+        "Stop (s)"
+    } else {
+        "Start (s)"
+    };
+    lines.push(Line::from(vec![
+        Span::styled(start_stop, Style::default().fg(palette.accent)),
+        Span::styled("   Runtime (c)   Refresh (u)", dim),
     ]));
     lines.push(Line::from(""));
 
-    let items = st.tool_items();
-    for (pos, item) in items.iter().enumerate() {
-        let is_selected = pos == st.selected;
-        match item {
-            SecSel::Daemon => {
-                let (box_label, base_style) = if st.status.running {
-                    (
-                        "[x] Daemon running",
-                        Style::default()
-                            .fg(palette.success)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    ("[ ] Daemon stopped", Style::default().fg(palette.fg))
-                };
-                let row_style = if is_selected { sel_style } else { base_style };
-                lines.push(Line::from(Span::styled(box_label, row_style)));
-
-                let installed_label = if st.status.installed { "yes" } else { "no" };
-                let runtime_style = if st.status.runtime_ok {
-                    Style::default().fg(palette.success)
-                } else {
-                    Style::default()
-                        .fg(palette.warn)
-                        .add_modifier(Modifier::BOLD)
-                };
-                let mut info_spans = vec![
-                    Span::styled(
-                        format!(
-                            "installed: {} · {} tools",
-                            installed_label,
-                            st.status.tools.len()
-                        ),
-                        dim_style,
-                    ),
-                    Span::styled(" · runtime: ", dim_style),
-                    Span::styled(
-                        if st.status.runtime.is_empty() {
-                            "unknown".into()
-                        } else {
-                            st.status.runtime.clone()
-                        },
-                        runtime_style,
-                    ),
-                    Span::styled(format!(" · lane: {}", st.lane_label), dim_style),
-                ];
-                if !st.status.refused.is_empty() {
-                    info_spans.push(Span::styled(" · ", dim_style));
-                    info_spans.push(Span::styled(
-                        format!("{} refused", st.status.refused.len()),
-                        Style::default()
-                            .fg(palette.error)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
-                if st.health_fetching {
-                    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-                    let spinner = SPINNER[(st.health_frame % 10) as usize];
-                    info_spans.push(Span::styled(" · ", dim_style));
-                    info_spans.push(Span::styled(
-                        format!("{spinner} checking dependencies…"),
-                        Style::default().fg(palette.accent),
-                    ));
-                } else if st
-                    .status
-                    .tools
-                    .iter()
-                    .any(|tool| missing_dep_for(tool.name.as_str(), &st.install_health))
-                {
-                    info_spans.push(Span::styled(" · ", dim_style));
-                    info_spans.push(Span::styled(
-                        "[!!]",
-                        Style::default()
-                            .fg(palette.warn)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                    info_spans.push(Span::styled(" dependency not installed", dim_style));
-                }
-                if !st.status.installed {
-                    info_spans.push(Span::styled(
-                        " · run: koma --security-install",
-                        Style::default().fg(palette.warn),
-                    ));
-                }
-                lines.push(Line::from(info_spans));
-                lines.push(Line::from(""));
-            }
-            SecSel::Yolo => {
-                if !st.status.running {
-                    let row_style = if is_selected { sel_style } else { dim_style };
-                    lines.push(Line::from(vec![
-                        Span::styled("[ ] Enable YOLO mode", row_style),
-                        Span::styled("   (start daemon first)", dim_style),
-                    ]));
-                } else {
-                    let (box_label, base_style) = if st.yolo_armed {
-                        (
-                            "[x] Enable YOLO mode",
-                            Style::default()
-                                .fg(palette.success)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        ("[ ] Enable YOLO mode", Style::default().fg(palette.fg))
-                    };
-                    let row_style = if is_selected { sel_style } else { base_style };
-                    lines.push(Line::from(Span::styled(box_label, row_style)));
-                    if st.yolo_armed {
-                        lines.push(Line::from(Span::styled(
-                            "! YOLO MODE ENABLED",
-                            Style::default()
-                                .fg(palette.error)
-                                .add_modifier(Modifier::BOLD),
-                        )));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            "YOLO mode disabled — harness active",
-                            dim_style,
-                        )));
-                    }
-                }
-                lines.push(Line::from(""));
-            }
-        }
-    }
-
-    // Progress dashboard
-    lines.push(Line::from(Span::styled("progress", dim_style)));
-    let cat_total = if st.status.catalog_total > 0 {
-        st.status.catalog_total as usize
+    let armed = st.yolo_armed;
+    let in_yolo = st.agent_mode_label == "yolo";
+    let enter_label = if in_yolo { "Leave (e)" } else { "Enter (e)" };
+    let arm_label = if armed { "Disarm (o)" } else { "Arm (o)" };
+    let enter_style = if st.status.running && armed {
+        Style::default().fg(palette.accent)
     } else {
-        st.status.tools.len()
+        dim
     };
-    let cat_ready = st.status.catalog_ready as usize;
-    lines.push(Line::from(Span::styled(
-        format!("  {}", bar_line("catalog", cat_ready, cat_total, 16)),
-        Style::default().fg(palette.success),
-    )));
-    let deps_ok = st.install_health.iter().filter(|e| e.present).count();
-    let deps_n = st.install_health.len();
-    if deps_n > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", bar_line("deps ok", deps_ok, deps_n, 16)),
-            if deps_ok == deps_n {
-                Style::default().fg(palette.success)
-            } else {
-                Style::default().fg(palette.warn)
-            },
-        )));
-    }
-    let img_local = st.images.iter().filter(|r| r.local).count();
-    let img_n = st.images.len();
-    if img_n > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", bar_line("images", img_local, img_n, 16)),
-            Style::default().fg(palette.accent),
-        )));
-        if let Some(active) = st.images.iter().find(|r| r.active) {
-            lines.push(Line::from(Span::styled(
-                format!("  active image: {}", active.id),
-                dim_style,
-            )));
-        }
-    }
-    if !st.status.refused.is_empty() {
-        lines.push(Line::from(Span::styled(
+    lines.push(Line::from(vec![
+        Span::styled(
             format!(
-                "  {}",
-                bar_line(
-                    "refused",
-                    st.status.refused.len(),
-                    st.status.refused.len(),
-                    16
-                )
+                "YOLO {} · mode {}",
+                if armed { "armed" } else { "locked" },
+                st.agent_mode_label
             ),
-            Style::default().fg(palette.error),
-        )));
+            if armed {
+                Style::default().fg(palette.warn)
+            } else {
+                dim
+            },
+        ),
+        Span::raw("   "),
+        Span::styled(arm_label, Style::default().fg(palette.accent)),
+        Span::raw("   "),
+        Span::styled(enter_label, enter_style),
+    ]));
+    lines.push(Line::from(""));
+
+    render_guest_map(lines, st, palette);
+    lines.push(Line::from(""));
+
+    let filtered = st.filtered_catalog();
+    let shown = filtered.len();
+    let ready = filtered
+        .iter()
+        .filter(|idx| st.catalog.get(**idx).map(|r| r.ready_mark == "ready").unwrap_or(false))
+        .count();
+    let active = st
+        .images
+        .iter()
+        .find(|r| r.active)
+        .map(|r| r.id.as_str())
+        .unwrap_or("none");
+    let mut counts = format!("{shown} shown · {ready} ready on {active}");
+    if st.catalog_filter != crate::app::mode::CatalogFilter::All {
+        counts.push_str(match st.catalog_filter {
+            crate::app::mode::CatalogFilter::ReadyHere => " · ready here",
+            crate::app::mode::CatalogFilter::NeedsImage => " · needs image",
+            crate::app::mode::CatalogFilter::All => "",
+        });
+    }
+    if st.catalog_searching || !st.catalog_query.is_empty() {
+        counts.push_str(&format!(" · /{}", st.catalog_query));
+    }
+    lines.push(Line::from(Span::styled(counts, dim)));
+
+    if let Some(row) = st.selected_catalog() {
+        lines.push(render_selected_strip(row, palette));
     }
     lines.push(Line::from(""));
 
-    lines.push(Line::from(Span::styled("catalog + boundary", dim_style)));
-    if st.status.running {
-        let cat = if st.status.catalog_total > 0 {
-            format!(
-                "  catalog ready {}/{} · handshake {}",
-                st.status.catalog_ready,
-                st.status.catalog_total,
-                st.status.tools.len()
-            )
-        } else {
-            format!(
-                "  handshake {} tools · agent: sec_catalog → sec_run",
-                st.status.tools.len()
-            )
-        };
+    if filtered.is_empty() {
         lines.push(Line::from(Span::styled(
-            cat,
-            if active { tool_style } else { dim_style },
-        )));
-        let net = if st.status.net.is_empty() {
-            if st.status.boundary_up {
-                "unknown"
+            if st.catalog.is_empty() {
+                "no catalog rows"
             } else {
-                "down"
-            }
-        } else {
-            st.status.net.as_str()
-        };
-        let rules_n = st.status.rules.len();
-        let rules_preview = if rules_n == 0 {
-            "deny-all".to_string()
-        } else if rules_n <= 3 {
-            st.status.rules.join(", ")
-        } else {
-            format!("{}, … (+{})", st.status.rules[..2].join(", "), rules_n - 2)
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  boundary {} · net={} · rules[{}]: {}",
-                if st.status.boundary_up { "up" } else { "down" },
-                net,
-                rules_n,
-                rules_preview
-            ),
-            if active { tool_style } else { dim_style },
+                "no tools match this filter"
+            },
+            dim,
         )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "  start daemon to load catalog + boundary status",
-            dim_style,
-        )));
+        return;
     }
+
+    let start = window_start(st.selected, shown, CATALOG_WINDOW);
+    let end = (start + CATALOG_WINDOW).min(shown);
+    for pos in start..end {
+        let Some(row) = st.catalog.get(filtered[pos]) else {
+            continue;
+        };
+        let on = pos == st.selected;
+        let mark = mark_glyph(&row.ready_mark);
+        let label = format!(
+            "{prefix}{mark} {:<18} {:<12} {}",
+            clip(&row.id, 18),
+            clip(&row.image, 12),
+            clip(&row.blurb, 42),
+            prefix = if on { ">" } else { " " },
+        );
+        let style = if on {
+            Style::default()
+                .fg(palette.sel_fg)
+                .bg(palette.sel_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.fg)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+}
+
+fn render_selected_strip(row: &crate::app::mode::CatalogRow, palette: &Palette) -> Line<'static> {
+    let dim = Style::default().fg(palette.dim);
+    let (glyph, reason, hint) = match row.ready_mark.as_str() {
+        "ready" => ("●", "image active", ""),
+        "local" => ("▒", "pulled, not active", "  Activate (a)"),
+        _ => ("·", "not pulled", "  Pull (p)"),
+    };
+    let hint = if is_real_composition(&row.image) {
+        hint
+    } else {
+        ""
+    };
+    let glyph_style = match row.ready_mark.as_str() {
+        "ready" => Style::default().fg(palette.success),
+        "local" => Style::default().fg(palette.accent),
+        _ => dim,
+    };
+    Line::from(vec![
+        Span::styled(glyph.to_string(), glyph_style),
+        Span::styled(
+            format!(" {}  image {}  exec {}  {}", row.id, row.image, row.exec, reason),
+            Style::default().fg(palette.fg),
+        ),
+        Span::styled(hint.to_string(), Style::default().fg(palette.accent)),
+    ])
+}
+
+fn render_guest_map(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
+    let dim = Style::default().fg(palette.dim);
+    let sel = Style::default()
+        .fg(palette.sel_fg)
+        .bg(palette.sel_bg)
+        .add_modifier(Modifier::BOLD);
+    let header = if st.map_filter.is_some() {
+        format!("filter {}", st.map_filter.as_deref().unwrap_or(""))
+    } else {
+        "map all".into()
+    };
+    let header_style = if st.map_filter.is_none() { sel } else { dim };
+    lines.push(Line::from(vec![
+        Span::styled(header, header_style),
+        Span::styled("    base  -2  ext  src", dim),
+    ]));
+
+    for domain in map_domains() {
+        let cols = map_column_ids(domain, &st.images);
+        if cols.is_empty() {
+            continue;
+        }
+        let mut spans = vec![Span::styled(format!("{domain:<10}"), dim)];
+        for kind in ["", "-2", "-ext", "-src"] {
+            let id = if kind.is_empty() {
+                (*domain).to_string()
+            } else {
+                format!("{domain}{kind}")
+            };
+            if !cols.iter().any(|c| c == &id) {
+                spans.push(Span::raw("    "));
+                continue;
+            }
+            let row = st.images.iter().find(|r| r.id == id);
+            let glyph = match row {
+                Some(r) if r.active => "██",
+                Some(r) if r.local => "▒▒",
+                Some(_) => "··",
+                None => "  ",
+            };
+            let on = st.map_filter.as_deref() == Some(id.as_str());
+            spans.push(Span::styled(
+                format!("{glyph}  "),
+                if on { sel } else { Style::default().fg(palette.fg) },
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(Span::styled(
+        "· remote  ▒ local  █ active",
+        dim,
+    )));
+}
+
+fn mark_glyph(mark: &str) -> &'static str {
+    match mark {
+        "ready" => "●",
+        "local" => "▒",
+        _ => "·",
+    }
+}
+
+fn window_start(selected: usize, len: usize, window: usize) -> usize {
+    if len <= window {
+        return 0;
+    }
+    let half = window / 2;
+    selected.saturating_sub(half).min(len - window)
+}
+
+fn clip(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    if count <= n {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(n.saturating_sub(1)).collect();
+    t.push('…');
+    t
 }
 
 fn render_images(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
@@ -502,91 +483,4 @@ fn render_refused(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) 
             dim_style,
         )));
     }
-}
-
-/// Returns `true` if ANY dependency entry whose `tools` list contains `tool_name` is absent.
-fn missing_dep_for(tool_name: &str, health: &[InstallHealthEntry]) -> bool {
-    health
-        .iter()
-        .any(|d| d.tools.iter().any(|t| t == tool_name) && !d.present)
-}
-
-fn tier_label(tier: u8) -> &'static str {
-    match tier {
-        1 => "pip",
-        2 => "auto-download",
-        3 => "manual",
-        _ => "other",
-    }
-}
-
-/// Render the dependency install-health pane into `lines`.
-fn render_deps(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
-    let dim_style = Style::default().fg(palette.dim);
-
-    if st.install_health.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "no health data (daemon stopped)",
-            dim_style,
-        )));
-        return;
-    }
-
-    let items = st.health_items();
-    let mut last_tier: Option<u8> = None;
-    for (pos, idx) in items.iter().enumerate() {
-        let e = &st.install_health[*idx];
-
-        if last_tier != Some(e.tier) {
-            if last_tier.is_some() {
-                lines.push(Line::from(""));
-            }
-            lines.push(Line::from(Span::styled(
-                format!("── tier {} ({}) ──", e.tier, tier_label(e.tier)),
-                dim_style,
-            )));
-            last_tier = Some(e.tier);
-        }
-
-        let is_selected = pos == st.health_selected;
-
-        let name_style = if is_selected {
-            Style::default()
-                .fg(palette.sel_fg)
-                .bg(palette.sel_bg)
-                .add_modifier(Modifier::BOLD)
-        } else if e.present {
-            Style::default().fg(palette.accent)
-        } else {
-            dim_style
-        };
-
-        let (marker, marker_style) = if e.present {
-            ("ok     ", Style::default().fg(palette.accent))
-        } else {
-            ("missing", dim_style)
-        };
-
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("{:<18}", e.name), name_style),
-            Span::raw("  "),
-            Span::styled(marker, marker_style),
-            Span::styled(format!("  {}", e.method), dim_style),
-        ]));
-
-        if !e.hint.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("      needs: {}", e.hint),
-                dim_style,
-            )));
-        }
-        if !e.tools.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("      enables: {}", e.tools.join(", ")),
-                dim_style,
-            )));
-        }
-    }
-    lines.push(Line::from(""));
 }

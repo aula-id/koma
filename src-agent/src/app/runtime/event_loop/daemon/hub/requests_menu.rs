@@ -577,22 +577,17 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
                 s.selected = index;
             }
         }
-        Mode::Security(s) => {
-            match s.pane {
-                crate::app::mode::SecPane::Deps => {
-                    s.health_selected = index;
-                }
-                crate::app::mode::SecPane::Refused => {
-                    s.refused_selected = index;
-                }
-                crate::app::mode::SecPane::Images => {
-                    s.images_selected = index;
-                }
-                crate::app::mode::SecPane::Tools => {
-                    s.selected = index;
-                }
+        Mode::Security(s) => match s.pane {
+            crate::app::mode::SecPane::Refused => {
+                s.refused_selected = index;
             }
-        }
+            crate::app::mode::SecPane::Images => {
+                s.images_selected = index;
+            }
+            crate::app::mode::SecPane::Tools => {
+                s.selected = index;
+            }
+        },
         Mode::SessionPicker(s) => {
             s.selected = bounded(index, s.filtered_idx.len())?;
         }
@@ -716,8 +711,10 @@ fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
         }
         Mode::Security(s) => match field {
             "pane" => {
-                s.pane = crate::app::mode::SecPane::parse(&value)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown security pane"))?;
+                s.set_pane(
+                    crate::app::mode::SecPane::parse(&value)
+                        .unwrap_or(crate::app::mode::SecPane::Tools),
+                );
             }
             _ => bail!("Unknown security field"),
         },

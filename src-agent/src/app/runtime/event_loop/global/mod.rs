@@ -85,7 +85,6 @@ pub(super) fn service_global(
     // again further down).
     let shimmer_active = ui::reconcile_shimmer(state);
 
-    dirty |= drains::advance_security_spinner(state);
     dirty |= drains::advance_oauth_spinner(state);
 
     if ui::force_dirty_while_live(state, shimmer_active) {

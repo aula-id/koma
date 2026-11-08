@@ -181,98 +181,114 @@ export function storeView(body: MenuData["ExtStore"] & Rec, theme: Theme, wide: 
   }
 }
 
-function progressBar(done: number, total: number, width = 18): string {
-  const t = Math.max(0, total)
-  const d = Math.max(0, Math.min(done, t || done))
-  const pct = t > 0 ? d / t : done > 0 ? 1 : 0
-  const fill = Math.round(pct * width)
-  return `${"█".repeat(fill)}${"░".repeat(Math.max(0, width - fill))} ${t ? `${d}/${t}` : `${d}`}`
+const MAP_DOMAINS = ["recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir", "lab", "minimal"]
+
+function catalogRows(body: Rec): Rec[] {
+  const all = rows(body.catalog)
+  const filter = str(body.catalog_filter) || "all"
+  const query = str(body.catalog_query).toLowerCase()
+  const map = str(body.map_filter)
+  return all.filter((row) => {
+    const mark = str(row.ready_mark) || "remote"
+    if (filter === "ready" && mark !== "ready") return false
+    if (filter === "needs" && mark === "ready") return false
+    if (map && str(row.image) !== map) return false
+    if (query) {
+      const id = str(row.id).toLowerCase()
+      const blurb = str(row.blurb).toLowerCase()
+      if (!id.includes(query) && !blurb.includes(query)) return false
+    }
+    return true
+  })
 }
 
-function securityMeter({ label, done, total, theme, color }: { label: string; done: number; total: number; theme: Theme; color?: string }) {
-  const bar = progressBar(done, total, 16)
-  const fg = color ?? theme.accent
-  return (
-    <box height={1} flexShrink={0} flexDirection="row" paddingLeft={1} paddingRight={1}>
-      <text fg={theme.dim}>{label.padEnd(10)}</text>
-      <text fg={fg}>{bar}</text>
-    </box>
-  )
+function markGlyph(mark: string): string {
+  if (mark === "ready") return "●"
+  if (mark === "local") return "▒"
+  return "·"
+}
+
+function guestMapText(images: Rec[], mapFilter: string): string[] {
+  const byId = new Map(images.map((row) => [str(row.id), row]))
+  const glyph = (id: string) => {
+    const row = byId.get(id)
+    if (!row) return "  "
+    if (flag(row.active)) return "██"
+    if (flag(row.local)) return "▒▒"
+    return "··"
+  }
+  const lines = [mapFilter ? `filter ${mapFilter}` : "map all", "         base  -2  ext  src"]
+  for (const domain of MAP_DOMAINS) {
+    const ids = [domain, `${domain}-2`, `${domain}-ext`, `${domain}-src`].filter((id) => byId.has(id))
+    if (!ids.length) continue
+    const cells = [domain, `${domain}-2`, `${domain}-ext`, `${domain}-src`].map((id) => byId.has(id) ? glyph(id) : "  ")
+    lines.push(`${domain.padEnd(9)}${cells.join("  ")}`)
+  }
+  lines.push("· remote  ▒ local  █ active")
+  return lines
 }
 
 export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onMove: (index: number) => void, send: (request: unknown) => void) {
   const status = rec(body.status)
-  const tools = rows(status.tools)
-  const inactive = new Set(strings(body.inactive))
-  const health = rows(body.install_health)
   const refused = rows(status.refused)
   const images = rows(body.images)
-  const pane = str(body.pane) || (flag(body.health_view) ? "deps" : "tools")
+  const pane = str(body.pane) || "tools"
   const setPane = (id: string) => send({ MenuReplace: { field: "pane", value: id } })
-  const healthSorted = [...health].sort((a, b) => num(a.tier) - num(b.tier))
-  const lines: Line[] =
-    pane === "deps"
-      ? healthSorted.map((row) => ({
-        label: str(row.name) || str(row.key),
-        detail: `tier ${num(row.tier)} · ${str(row.method)}`,
-        badge: { text: flag(row.present) ? "present" : "missing", role: flag(row.present) ? "success" : "warn" },
-      }))
-      : pane === "refused"
-        ? refused.map((row) => ({ label: str(row.name), detail: str(row.reason), badge: { text: "refused", role: "warn" } }))
-        : pane === "images"
-          ? images.map((row) => ({
-            label: `${flag(row.active) ? "* " : "  "}${str(row.id)}`,
-            detail: `${str(row.size_label) || "—"} · ${str(row.blurb)}`,
-            badge: {
-              text: flag(row.active) ? "active" : flag(row.local) ? "local" : "remote",
-              role: flag(row.active) ? "success" : flag(row.local) ? "info" : "dim",
-            },
-          }))
-          : [
-            { label: "Security daemon", toggle: flag(status.running), badge: { text: flag(status.running) ? "running" : "stopped", role: flag(status.running) ? "success" : "dim" } },
-            { label: "YOLO mode", toggle: flag(body.yolo_armed), badge: { text: flag(body.yolo_armed) ? "armed" : "locked", role: flag(body.yolo_armed) ? "warn" : "dim" } },
-          ]
+  const catalog = catalogRows(body)
   const selected =
-    pane === "deps"
-      ? num(body.health_selected)
-      : pane === "refused"
-        ? num(body.refused_selected)
-        : pane === "images"
-          ? num(body.images_selected)
-          : num(body.selected)
-  const runtime = str(status.runtime) || (flag(status.runtime_ok) ? "docker ready" : "runtime unknown")
+    pane === "refused"
+      ? num(body.refused_selected)
+      : pane === "images"
+        ? num(body.images_selected)
+        : Math.min(num(body.selected), Math.max(0, catalog.length - 1))
+  const tool = catalog[selected]
+  const lines: Line[] =
+    pane === "refused"
+      ? refused.map((row) => ({ label: str(row.name), detail: str(row.reason), badge: { text: "refused", role: "warn" } }))
+      : pane === "images"
+        ? images.map((row) => ({
+          label: `${flag(row.active) ? "* " : "  "}${str(row.id)}`,
+          detail: `${str(row.size_label) || "—"} · ${str(row.blurb)}`,
+          badge: {
+            text: flag(row.active) ? "active" : flag(row.local) ? "local" : "remote",
+            role: flag(row.active) ? "success" : flag(row.local) ? "info" : "dim",
+          },
+        }))
+        : catalog.map((row) => ({
+          label: `${markGlyph(str(row.ready_mark))} ${str(row.id)}`,
+          detail: str(row.blurb),
+          badge: { text: str(row.image) || str(row.ready_mark), role: str(row.ready_mark) === "ready" ? "success" : "dim" },
+        }))
+  const runtimeUp = flag(status.runtime_ok)
+  const daemonUp = flag(status.running)
+  const guestUp = images.some((row) => flag(row.active))
+  const boundaryUp = flag(status.boundary_up)
   const lane = str(body.lane_label) || "none"
-  const refusedN = refused.length
-  const catalogReady = num(status.catalog_ready)
-  const catalogTotal = num(status.catalog_total) || tools.length
-  const depsPresent = health.filter((row) => flag(row.present)).length
-  const depsTotal = health.length
-  const imagesLocal = images.filter((row) => flag(row.local)).length
-  const imagesActive = str(images.find((row) => flag(row.active))?.id) || "—"
-  const toolsOn = tools.filter((row) => !inactive.has(str(row.name))).length
+  const mode = str(body.agent_mode_label) || "auto"
+  const armed = flag(body.yolo_armed)
+  const activeImage = str(images.find((row) => flag(row.active))?.id) || "none"
+  const ready = catalog.filter((row) => str(row.ready_mark) === "ready").length
   const paneTabs: { id: string; label: string }[] = [
     { id: "tools", label: "Dashboard" },
     { id: "images", label: "Images" },
-    { id: "deps", label: "Deps" },
     { id: "refused", label: "Refused" },
   ]
-  const paneTitle =
-    pane === "deps" ? "Dependencies" : pane === "refused" ? "Refused" : pane === "images" ? "Guest images" : "Controls"
   const hint =
     pane === "images"
-      ? "click panes · scroll list · activate / pull / remove in footer"
-      : pane === "deps"
-        ? "click panes · scroll · install in footer"
-        : "click panes · click rows · footer actions · esc back"
+      ? "↑↓ · p pull · a activate · x remove · r refresh"
+      : pane === "refused"
+        ? "↑↓ · esc back"
+        : "↑↓ tools · ←→ map · f filter · / search · s/c/u · o arm · e yolo"
+  const enterLabel = mode === "yolo" ? "Leave (e)" : "Enter (e)"
+  const enterLocked = !(daemonUp && armed)
   return {
     title: "security",
     hint,
     children: (
       <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
-        {/* clickable pane tabs */}
         <box flexDirection="row" flexShrink={0} flexWrap="wrap" columnGap={1} paddingLeft={1} paddingBottom={1}>
           {paneTabs.map((tab) => {
-            const on = pane === tab.id || (pane === "tools" && tab.id === "tools")
+            const on = pane === tab.id
             return (
               <box
                 key={tab.id}
@@ -289,27 +305,21 @@ export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onM
           })}
         </box>
 
-        {/* stats dashboard */}
-        <box flexShrink={0} flexDirection="column" border borderStyle="rounded" borderColor={theme.dim} title=" status " titleColor={theme.dim} marginBottom={1}>
-          <box height={1} paddingLeft={1} flexDirection="row">
-            <text fg={flag(status.running) ? theme.success : theme.dim}>{flag(status.running) ? "● running" : "○ stopped"}</text>
-            <text fg={theme.dim}>{` · ${flag(status.installed) ? "installed" : "not installed"} · ${runtime} · lane ${lane}`}</text>
-          </box>
-          <box height={1} paddingLeft={1} flexDirection="row">
-            <text fg={theme.dim}>{`yolo ${flag(body.yolo_armed) ? "armed" : "locked"} · boundary ${flag(status.boundary_up) ? "up" : "down"} · active image ${imagesActive || "—"}`}</text>
-          </box>
-          {securityMeter({ label: "catalog", done: catalogReady, total: catalogTotal, theme, color: theme.success })}
-          {securityMeter({ label: "tools on", done: toolsOn, total: tools.length || toolsOn, theme, color: theme.accent })}
-          {depsTotal > 0 ? securityMeter({ label: "deps ok", done: depsPresent, total: depsTotal, theme, color: depsPresent === depsTotal ? theme.success : theme.warn }) : null}
-          {images.length > 0 ? securityMeter({ label: "images", done: imagesLocal, total: images.length, theme, color: theme.info }) : null}
-          {refusedN > 0 ? securityMeter({ label: "refused", done: refusedN, total: refusedN, theme, color: theme.error }) : null}
-          {!flag(status.installed) ? <Note text="run: koma --security-install  (minimal guest only)" theme={theme} color={theme.warn} /> : null}
-        </box>
-
-        {pane === "deps" && healthSorted[selected]?.hint ? (
-          <Note text={`${str(healthSorted[selected]?.method)} · ${str(healthSorted[selected]?.hint)}`} theme={theme} color={theme.info} />
+        {pane === "tools" && tool ? (
+          <text fg={theme.fg} wrapMode="none">{`${markGlyph(str(tool.ready_mark))} ${str(tool.id)}  image ${str(tool.image)}  exec ${str(tool.exec)}  ${str(tool.ready_mark)}`}</text>
         ) : null}
-        {pane === "refused" && !refused.length ? <Note text={flag(status.running) ? "none — every descriptor passed" : "no data (daemon stopped)"} theme={theme} /> : null}
+        {pane === "tools" ? (
+          <box flexShrink={0} flexDirection="column">
+            <text fg={theme.dim} wrapMode="none">{`runtime ${runtimeUp ? "●" : "○"}  daemon ${daemonUp ? "●" : "○"}  guest ${guestUp ? "●" : "○"}  boundary ${boundaryUp ? "●" : "○"}  lane ${lane} (l)`}</text>
+            <text fg={theme.fg} wrapMode="none">{`${daemonUp ? "Stop (s)" : "Start (s)"}   Runtime (c)   Refresh (u)`}</text>
+            <text fg={armed ? theme.warn : theme.dim} wrapMode="none">{`YOLO ${armed ? "armed" : "locked"} · mode ${mode}   ${armed ? "Disarm (o)" : "Arm (o)"}   ${enterLabel}`}</text>
+            {enterLocked ? <text fg={theme.dim}>enter locked until daemon is running and armed</text> : null}
+            {guestMapText(images, str(body.map_filter)).map((line, index) => <text key={index} fg={theme.dim} wrapMode="none">{line}</text>)}
+            <text fg={theme.dim}>{`${catalog.length} shown · ${ready} ready on ${activeImage}`}</text>
+          </box>
+        ) : null}
+
+        {pane === "refused" && !refused.length ? <Note text={daemonUp ? "none — every descriptor passed" : "no data (daemon stopped)"} theme={theme} /> : null}
         {pane === "images" && flag(body.images_busy) ? <Note text="pulling image…" theme={theme} color={theme.info} /> : null}
         {pane === "images" && images[selected] ? (
           <box flexDirection="row" flexShrink={0} columnGap={1} paddingLeft={1} paddingBottom={1}>
@@ -319,23 +329,8 @@ export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onM
             <Action label="Refresh" theme={theme} onPress={() => sendKey(send, { Char: "r" })} />
           </box>
         ) : null}
-        {pane === "tools" ? (
-          <box flexDirection="row" flexShrink={0} columnGap={1} paddingLeft={1} paddingBottom={1}>
-            <Action label="Start/Stop" primary theme={theme} onPress={() => sendKey(send, "Enter")} />
-            <Action label="Runtime" theme={theme} onPress={() => sendKey(send, { Char: "c" })} />
-            <Action label="Refresh" theme={theme} onPress={() => sendKey(send, { Char: "u" })} />
-            <Action label="Restart" theme={theme} onPress={() => sendKey(send, { Char: "r" })} />
-          </box>
-        ) : null}
-        {pane === "deps" ? (
-          <box flexDirection="row" flexShrink={0} columnGap={1} paddingLeft={1} paddingBottom={1}>
-            <Action label="Install dep" primary theme={theme} onPress={() => sendKey(send, { Char: "i" })} />
-            <Action label="Restart" theme={theme} onPress={() => sendKey(send, { Char: "r" })} />
-          </box>
-        ) : null}
-        {body.health_fetching ? <Note text="checking dependencies…" theme={theme} /> : null}
 
-        <Panel title={paneTitle} hot theme={theme}>
+        <Panel title={pane === "refused" ? "Refused" : pane === "images" ? "Guest images" : "Tools"} hot theme={theme}>
           <Lines rows={lines} selected={selected} theme={theme} onPress={onMove} rail />
         </Panel>
       </box>

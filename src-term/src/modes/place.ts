@@ -1,5 +1,5 @@
 import { agentFields, mcpFields } from "./manage.tsx"
-import { flag, modeParts, num, rec, str, type Rec } from "./read.ts"
+import { modeParts, num, rec, str, type Rec } from "./read.ts"
 
 /** Where a daemon mode is drawn. Chat, quit, rewind, and loading are handled elsewhere. */
 export function placeOf(mode: unknown): "overlay" | "full" | null {
@@ -63,8 +63,7 @@ export function selectedOf(mode: unknown): number {
     case "ExtScreen":
       return num(body.menu_cursor)
     case "Security": {
-      const pane = str(body.pane) || (flag(body.health_view) ? "deps" : "tools")
-      if (pane === "deps") return num(body.health_selected)
+      const pane = str(body.pane) || "tools"
       if (pane === "refused") return num(body.refused_selected)
       if (pane === "images") return num(body.images_selected)
       return num(body.selected)

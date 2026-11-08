@@ -655,14 +655,8 @@ fn shadow_agent_field(f: &str) -> AgentEditField {
 /// as-is. Render-only — every key is forwarded to the daemon.
 pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
     use crate::app::mode::SecPane;
-    let pane = match s.pane.as_str() {
-        "images" => SecPane::Images,
-        "deps" => SecPane::Deps,
-        "refused" => SecPane::Refused,
-        // Fall back to the legacy bool when pane token is absent/unknown.
-        _ if s.health_view => SecPane::Deps,
-        _ => SecPane::Tools,
-    };
+    // Unknown / removed panes (including the old deps tab) land on Tools.
+    let pane = SecPane::parse(&s.pane).unwrap_or(SecPane::Tools);
     SecurityState {
         status: s.status,
         selected: s.selected,
@@ -671,24 +665,30 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         inactive: s.inactive.into_iter().collect(),
         // YOLO arm flag rides verbatim so the client's panel renders the armed row.
         yolo_armed: s.yolo_armed,
-        // Install-health + the pane toggle + its cursor ride verbatim so the client
-        // renders the same dependency pane the daemon would.
-        install_health: s.install_health,
         images: s.images,
         images_selected: s.images_selected,
         images_busy: s.images_busy,
         pane,
-        health_selected: s.health_selected,
         refused_selected: s.refused_selected,
         lane_label: if s.lane_label.is_empty() {
             "none".into()
         } else {
             s.lane_label
         },
-        // Spinner state rides verbatim — the client renders + animates the
-        // "checking dependencies…" line from the daemon's projected frame counter.
-        health_fetching: s.health_fetching,
-        health_frame: s.health_frame,
+        agent_mode_label: if s.agent_mode_label.is_empty() {
+            "auto".into()
+        } else {
+            s.agent_mode_label
+        },
+        catalog: s.catalog,
+        catalog_filter: crate::app::mode::CatalogFilter::parse(&s.catalog_filter),
+        catalog_query: s.catalog_query,
+        catalog_searching: s.catalog_searching,
+        map_filter: if s.map_filter.is_empty() {
+            None
+        } else {
+            Some(s.map_filter)
+        },
     }
 }
 

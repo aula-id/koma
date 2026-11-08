@@ -1,57 +1,89 @@
-//! Security mode state: the working state for the `/security` daemon control panel.
+//! Working state for the `/security` control panel.
 //!
-//! A control view (no editor) with FOUR body panes: the isolation **dashboard**
-//! (default: daemon + YOLO + runtime summary), **Images** (guest compositions),
-//! Dependency install-health, and Refused-descriptors. Tools are loaded dynamically
-//! via sec_catalog/sec_run — this panel is not a per-tool enable grid.
+//! Three body panes: the isolation **dashboard** (gates, YOLO, guest map, catalog),
+//! **Images** (guest compositions), and **Refused** descriptors. Tools are a
+//! scrollable catalog — not a per-tool enable grid, and not arrow targets for
+//! the daemon / YOLO gates.
 
-use crate::app::sec::{InstallHealthEntry, SecStatus};
+use crate::app::sec::SecStatus;
 
-/// One navigable row in the TOOLS (dashboard) pane.
-///
-/// The pane is a short list: daemon-running checkbox, then YOLO-arm checkbox.
-/// Concrete tools are discovered via `sec_catalog` / `sec_run`, not toggled here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecSel {
-    /// The daemon start/stop checkbox row (always rendered first). Toggling it starts the
-    /// daemon when stopped, stops it when running — folding the old s/x/t keybinds into a
-    /// navigable checkbox.
-    Daemon,
-    /// The YOLO-arm checkbox row (rendered second, after the daemon checkbox).
-    Yolo,
+/// One catalog tool row. `ready_mark` is overlaid in Rust from the image inventory
+/// (`ready` | `local` | `remote`), never taken from the catalog payload.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CatalogRow {
+    pub id: String,
+    pub blurb: String,
+    pub image: String,
+    pub exec: String,
+    pub domain: String,
+    /// `"ready"` | `"local"` | `"remote"`.
+    pub ready_mark: String,
+}
+
+/// Catalog list filter. `f` cycles All → ReadyHere → NeedsImage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum CatalogFilter {
+    #[default]
+    All,
+    ReadyHere,
+    NeedsImage,
+}
+
+impl CatalogFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::ReadyHere => "ready",
+            Self::NeedsImage => "needs",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::ReadyHere,
+            Self::ReadyHere => Self::NeedsImage,
+            Self::NeedsImage => Self::All,
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ready" | "ready_here" | "readyhere" => Self::ReadyHere,
+            "needs" | "needs_image" | "needsimage" => Self::NeedsImage,
+            _ => Self::All,
+        }
+    }
 }
 
 /// Which body pane the `/security` panel is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SecPane {
-    /// Isolation dashboard (default): daemon, YOLO, runtime/catalog summary.
+    /// Isolation dashboard (default): gates, guest map, catalog.
     #[default]
     Tools,
     /// Guest composition images (pull / activate / remove).
     Images,
-    /// Dependency install-health.
-    Deps,
     /// Handshake refusals (malformed / ungated descriptors).
     Refused,
 }
 
 impl SecPane {
-    /// Cycle Tools → Images → Deps → Refused → Tools.
+    /// Cycle Tools → Images → Refused → Tools.
     pub fn next(self) -> Self {
         match self {
             SecPane::Tools => SecPane::Images,
-            SecPane::Images => SecPane::Deps,
-            SecPane::Deps => SecPane::Refused,
+            SecPane::Images => SecPane::Refused,
             SecPane::Refused => SecPane::Tools,
         }
     }
 
-    /// Parse pane id from client (`tools` / `images` / `deps` / `refused`).
+    /// Parse pane id from client (`tools` / `images` / `refused`).
+    ///
+    /// `deps` and any unknown token are not a pane — callers treat that as Tools.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "tools" | "tool" | "dashboard" | "home" => Some(Self::Tools),
             "images" | "image" | "guest" => Some(Self::Images),
-            "deps" | "dependencies" | "dependency" | "health" => Some(Self::Deps),
             "refused" | "refuse" => Some(Self::Refused),
             _ => None,
         }
@@ -62,7 +94,6 @@ impl SecPane {
         match self {
             Self::Tools => "tools",
             Self::Images => "images",
-            Self::Deps => "deps",
             Self::Refused => "refused",
         }
     }
@@ -88,37 +119,26 @@ pub struct SafetyImageRow {
     pub status: String,
 }
 
+/// Guest-map domain order. `minimal` is last; it has no `-2` / ext / src siblings.
+const MAP_DOMAINS: &[&str] = &[
+    "recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir", "lab", "minimal",
+];
+
+/// Images that are not a pullable composition. Readiness falls back to "any guest active".
+const PSEUDO_IMAGES: &[&str] = &["", "smoke", "none", "external", "debian", "empty"];
+
 /// Working state for the `/security` daemon control panel.
-///
-/// Holds a snapshot of the daemon status (refreshed on open + after each control key),
-/// the per-dependency install-health list (fetched ONCE on open and after an install —
-/// it is a heavy IPC round-trip, so it is carried, never re-fetched on a plain refresh),
-/// the guest-image composition list, and a cursor for each pane. No drafts, no editor —
-/// control panel only.
 #[derive(Debug, Clone)]
 pub struct SecurityState {
     /// Latest status snapshot from the daemon manager (or a default when no manager).
     pub status: SecStatus,
-    /// Tool-pane cursor: an index into [`SecurityState::tool_items`] (the navigable rows
-    /// in RENDER order — the daemon checkbox, then the YOLO checkbox, then tools grouped by
-    /// domain), NOT into the flat `status.tools` vector. This is what keeps nav order ==
-    /// render order: both
-    /// the renderer and the move/clamp logic walk the same `tool_items()` list, so the
-    /// highlight always lands on the row visually below/above.
+    /// Tools-pane cursor: an index into [`Self::filtered_catalog`], not into gates.
     pub selected: usize,
-    /// Tool names the user has disabled (the inactive set), mirrored from
-    /// `state.rest.sec_inactive`. Empty = every tool active. The view dims a row whose
-    /// name is in this set; the toggle actions flip membership on `state.rest` and
-    /// refresh this copy.
+    /// Tool names the user has disabled, mirrored from `state.rest.sec_inactive`.
     pub inactive: std::collections::HashSet<String>,
-    /// YOLO-mode arm flag, mirrored from `state.rest.yolo_armed` (like `inactive`).
-    /// The panel renders the YOLO checkbox row from this; toggling that row (Space/Enter
-    /// while it is selected) flips `state.rest.yolo_armed` and refreshes this copy.
+    /// YOLO-mode arm flag, mirrored from `state.rest.yolo_armed`.
     pub yolo_armed: bool,
-    /// Per-dependency install-health, fetched once on panel open (and re-fetched after
-    /// an install). Empty when the daemon is stopped / no health data is available.
-    pub install_health: Vec<InstallHealthEntry>,
-    /// Known guest compositions + local inventory for the Images pane.
+    /// Known guest compositions + local inventory for the Images pane and the map.
     pub images: Vec<SafetyImageRow>,
     /// Images-pane cursor: index into [`Self::images`].
     pub images_selected: usize,
@@ -126,64 +146,77 @@ pub struct SecurityState {
     pub images_busy: bool,
     /// Active body pane.
     pub pane: SecPane,
-    /// Dependency-pane cursor: an index into [`SecurityState::health_items`] (the
-    /// install-health rows in tier-grouped RENDER order), NOT into the flat
-    /// `install_health` vector — same nav/render-sync trick as `selected`.
-    pub health_selected: usize,
     /// Refused-pane cursor: index into `status.refused`.
     pub refused_selected: usize,
-    /// `true` while a NON-BLOCKING health probe is in flight (the receiver lives in
-    /// `state.rest.sec_health_rx`). Drives the loading spinner on the daemon info line;
-    /// cleared by `service_global` when the probe lands. Projected to the thin client so
-    /// it shows the same "checking dependencies…" state.
-    pub health_fetching: bool,
-    /// Braille spinner frame counter for the in-flight health probe, advanced each tick
-    /// by `service_global` while `state.rest.sec_health_rx` is `Some`. Projected so the
-    /// client animates the spinner from this counter (it owns no manager / receiver of
-    /// its own).
-    pub health_frame: u64,
     /// Session cyber-lane label for the status strip (`research` / `red` / `blue` / `none`).
     pub lane_label: String,
+    /// Foreground agent-mode label (`auto` / `yolo` / …), mirrored like `lane_label`.
+    pub agent_mode_label: String,
+    /// Full catalog. Marks are overlaid; the cursor walks [`Self::filtered_catalog`].
+    pub catalog: Vec<CatalogRow>,
+    pub catalog_filter: CatalogFilter,
+    pub catalog_query: String,
+    pub catalog_searching: bool,
+    /// Composition id from the guest-map cell. `None` = all.
+    pub map_filter: Option<String>,
 }
 
 impl SecurityState {
-    /// Build from a live status snapshot, the disabled-tool set, the YOLO arm flag, and
-    /// the install-health list, both cursors at the top, showing the tools pane by
-    /// default. Seeds the Images list from disk inventory.
+    /// Build from a live status snapshot, the disabled-tool set, and the YOLO arm flag.
+    /// Seeds images from disk and the catalog from the embedded index (marks overlaid).
     pub fn new(
         status: SecStatus,
         inactive: std::collections::HashSet<String>,
         yolo_armed: bool,
-        install_health: Vec<InstallHealthEntry>,
     ) -> Self {
         let mut st = Self {
             status,
             selected: 0,
             inactive,
             yolo_armed,
-            install_health,
             images: Vec::new(),
             images_selected: 0,
             images_busy: false,
             pane: SecPane::Tools,
-            health_selected: 0,
             refused_selected: 0,
-            health_fetching: false,
-            health_frame: 0,
             lane_label: "none".into(),
+            agent_mode_label: "auto".into(),
+            catalog: Vec::new(),
+            catalog_filter: CatalogFilter::All,
+            catalog_query: String::new(),
+            catalog_searching: false,
+            map_filter: None,
         };
         st.refresh_images();
+        st.seed_embedded_catalog();
         st
     }
 
-    /// Compatibility: true when the deps pane is showing (old `health_view` bool).
-    pub fn health_view(&self) -> bool {
-        self.pane == SecPane::Deps
+    /// Replace the catalog with the embedded index, then overlay marks.
+    pub fn seed_embedded_catalog(&mut self) {
+        self.set_catalog_index(crate::security::embedded_catalog_rows());
     }
 
-    /// Rebuild [`Self::images`] from the static catalogue + `images.json` inventory.
-    ///
-    /// Size labels come from inventory `size_bytes` when present (recorded at pull time).
+    /// Replace catalog rows from a parsed index (file or daemon). Marks start remote,
+    /// then overlay from the current image inventory.
+    pub fn set_catalog_index(&mut self, rows: Vec<crate::security::CatalogIndexRow>) {
+        self.catalog = rows
+            .into_iter()
+            .map(|r| CatalogRow {
+                id: r.id,
+                blurb: r.blurb,
+                image: r.image,
+                exec: r.exec,
+                domain: r.domain,
+                ready_mark: "remote".into(),
+            })
+            .collect();
+        self.overlay_ready_marks();
+        self.clamp_cursors();
+    }
+
+    /// Rebuild [`Self::images`] from the static catalogue + `images.json` inventory,
+    /// then recompute catalog marks (readiness rides the inventory, not the payload).
     pub fn refresh_images(&mut self) {
         let inv = crate::security::read_images_inventory();
         let version = env!("CARGO_PKG_VERSION");
@@ -220,50 +253,49 @@ impl SecurityState {
             });
         }
         self.images = rows;
+        self.overlay_ready_marks();
         self.clamp_cursors();
     }
 
-    /// The navigable rows of the TOOLS pane, IN RENDER ORDER — the single source of truth
-    /// shared by the renderer and the cursor logic (so nav order can never desync from
-    /// what is on screen).
-    ///
-    /// Order: the daemon checkbox first (`SecSel::Daemon`), then the YOLO checkbox
-    /// (`SecSel::Yolo`). Concrete tools are not navigable on this dashboard.
-    pub fn tool_items(&self) -> Vec<SecSel> {
-        // Dashboard only: daemon + YOLO. Concrete tools are dynamic (sec_catalog);
-        // they are summarized below the controls, not toggled here.
-        vec![SecSel::Daemon, SecSel::Yolo]
+    fn overlay_ready_marks(&mut self) {
+        overlay_ready_marks(&mut self.catalog, &self.images);
     }
 
-    /// The navigable rows of the DEPENDENCIES pane, IN RENDER ORDER: indices into
-    /// `install_health`, grouped by tier (distinct tiers ascending, then each entry of
-    /// that tier in `install_health` order) — matching `render_deps`. The dependency
-    /// counterpart of [`SecurityState::tool_items`].
-    pub fn health_items(&self) -> Vec<usize> {
-        let mut tiers: Vec<u8> = Vec::new();
-        for e in &self.install_health {
-            if !tiers.contains(&e.tier) {
-                tiers.push(e.tier);
-            }
-        }
-        tiers.sort_unstable();
-        let mut items: Vec<usize> = Vec::new();
-        for tier in &tiers {
-            for (i, e) in self.install_health.iter().enumerate() {
-                if e.tier == *tier {
-                    items.push(i);
+    /// Indices into [`Self::catalog`] that pass filter, map cell, and query.
+    /// The cursor and the renderer both walk this list.
+    pub fn filtered_catalog(&self) -> Vec<usize> {
+        let q = self.catalog_query.to_ascii_lowercase();
+        self.catalog
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                let filter_ok = match self.catalog_filter {
+                    CatalogFilter::All => true,
+                    CatalogFilter::ReadyHere => row.ready_mark == "ready",
+                    CatalogFilter::NeedsImage => row.ready_mark != "ready",
+                };
+                if !filter_ok {
+                    return false;
                 }
-            }
-        }
-        items
+                if let Some(id) = self.map_filter.as_deref() {
+                    if !row.image.eq_ignore_ascii_case(id) {
+                        return false;
+                    }
+                }
+                if q.is_empty() {
+                    return true;
+                }
+                row.id.to_ascii_lowercase().contains(&q)
+                    || row.blurb.to_ascii_lowercase().contains(&q)
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
-    /// The currently-selected tool-pane row, resolved through `tool_items()` so it always
-    /// reflects render order. `None` only when the list is somehow empty (it never is —
-    /// the daemon + YOLO rows are always present — but the bounds-checked `get` keeps it
-    /// total).
-    pub fn selected_sec(&self) -> Option<SecSel> {
-        self.tool_items().get(self.selected).copied()
+    /// Selected catalog row, if the filtered window has one.
+    pub fn selected_catalog(&self) -> Option<&CatalogRow> {
+        let idx = *self.filtered_catalog().get(self.selected)?;
+        self.catalog.get(idx)
     }
 
     /// Currently selected Images row, if any.
@@ -271,12 +303,45 @@ impl SecurityState {
         self.images.get(self.images_selected)
     }
 
+    /// Guest-map cells in row-major order, with a leading `None` ("all") position.
+    pub fn map_cell_ids(&self) -> Vec<Option<String>> {
+        let mut cells = vec![None];
+        for domain in MAP_DOMAINS {
+            for id in map_column_ids(domain, &self.images) {
+                cells.push(Some(id));
+            }
+        }
+        cells
+    }
+
+    /// Left/Right on the Tools pane. `dir` is -1 or +1; wraps, including "all".
+    pub fn cycle_map(&mut self, dir: i32) {
+        let cells = self.map_cell_ids();
+        if cells.is_empty() {
+            self.map_filter = None;
+            return;
+        }
+        let cur = cells
+            .iter()
+            .position(|c| c.as_deref() == self.map_filter.as_deref())
+            .unwrap_or(0);
+        let n = cells.len() as i32;
+        let next = (cur as i32 + dir).rem_euclid(n) as usize;
+        self.map_filter = cells[next].clone();
+        self.selected = 0;
+        self.clamp_cursors();
+    }
+
+    /// `f` — cycle the catalog readiness filter and reset the tool cursor.
+    pub fn cycle_filter(&mut self) {
+        self.catalog_filter = self.catalog_filter.next();
+        self.selected = 0;
+        self.clamp_cursors();
+    }
+
     /// Move the cursor up by one (saturating at 0) in the ACTIVE pane.
     pub fn move_up(&mut self) {
         match self.pane {
-            SecPane::Deps => {
-                self.health_selected = self.health_selected.saturating_sub(1);
-            }
             SecPane::Refused => {
                 self.refused_selected = self.refused_selected.saturating_sub(1);
             }
@@ -292,12 +357,6 @@ impl SecurityState {
     /// Move the cursor down by one in the ACTIVE pane, clamped to that pane's last row.
     pub fn move_down(&mut self) {
         match self.pane {
-            SecPane::Deps => {
-                let max = self.health_items().len().saturating_sub(1);
-                if self.health_selected < max {
-                    self.health_selected += 1;
-                }
-            }
             SecPane::Refused => {
                 let max = self.status.refused.len().saturating_sub(1);
                 if self.refused_selected < max {
@@ -311,7 +370,7 @@ impl SecurityState {
                 }
             }
             SecPane::Tools => {
-                let max = self.tool_items().len().saturating_sub(1);
+                let max = self.filtered_catalog().len().saturating_sub(1);
                 if self.selected < max {
                     self.selected += 1;
                 }
@@ -319,27 +378,20 @@ impl SecurityState {
         }
     }
 
-    /// Cycle Tools → Images → Deps → Refused → Tools, re-clamping the newly active cursor.
+    /// Cycle Tools → Images → Refused → Tools, re-clamping the newly active cursor.
     pub fn cycle_pane(&mut self) {
         self.pane = self.pane.next();
         self.clamp_cursors();
     }
 
-    /// Back-compat alias for [`Self::cycle_pane`].
-    #[allow(dead_code)]
-    pub fn toggle_health_view(&mut self) {
-        self.cycle_pane();
+    pub fn set_pane(&mut self, pane: SecPane) {
+        self.pane = pane;
+        self.clamp_cursors();
     }
 
-    /// Replace the status snapshot + disabled-tool set + YOLO arm flag (called after
-    /// start/stop/restart, a tool/domain toggle, or the YOLO arm toggle to reflect the
-    /// new state without re-opening the panel).
+    /// Replace the status snapshot + disabled-tool set + YOLO arm flag.
     ///
-    /// PRESERVES `install_health` (carried from `&self`): re-fetching it is a heavy IPC
-    /// round-trip, so a plain lifecycle refresh must not pay it. The install path seeds
-    /// fresh health out-of-band (see `refresh_security_state`).
-    ///
-    /// PRESERVES `images` the same way — image ops call [`Self::refresh_images`] explicitly.
+    /// PRESERVES catalog and images — those reload explicitly (`u` / image ops).
     pub fn refresh(
         &mut self,
         status: SecStatus,
@@ -349,23 +401,16 @@ impl SecurityState {
         self.status = status;
         self.inactive = inactive;
         self.yolo_armed = yolo_armed;
-        // `install_health` / `images` intentionally untouched here.
         self.clamp_cursors();
     }
 
     /// Clamp ALL pane cursors against their current navigable-row counts.
-    fn clamp_cursors(&mut self) {
-        let tool_len = self.tool_items().len();
+    pub(crate) fn clamp_cursors(&mut self) {
+        let tool_len = self.filtered_catalog().len();
         if tool_len == 0 {
             self.selected = 0;
         } else if self.selected >= tool_len {
             self.selected = tool_len - 1;
-        }
-        let health_len = self.health_items().len();
-        if health_len == 0 {
-            self.health_selected = 0;
-        } else if self.health_selected >= health_len {
-            self.health_selected = health_len - 1;
         }
         let refused_len = self.status.refused.len();
         if refused_len == 0 {
@@ -380,6 +425,69 @@ impl SecurityState {
             self.images_selected = images_len - 1;
         }
     }
+}
+
+/// Column ids that exist in `images` for `domain`, in map order:
+/// base, `-2` (only if present), ext, src.
+pub fn map_column_ids(domain: &str, images: &[SafetyImageRow]) -> Vec<String> {
+    let has = |id: &str| images.iter().any(|r| r.id == id);
+    let mut ids = Vec::new();
+    if has(domain) {
+        ids.push(domain.to_string());
+    }
+    let two = format!("{domain}-2");
+    if has(&two) {
+        ids.push(two);
+    }
+    let ext = format!("{domain}-ext");
+    if has(&ext) {
+        ids.push(ext);
+    }
+    let src = format!("{domain}-src");
+    if has(&src) {
+        ids.push(src);
+    }
+    ids
+}
+
+/// True when `image` is a pullable composition id (not smoke/none/external/debian/empty).
+pub fn is_real_composition(image: &str) -> bool {
+    let img = image.trim().to_ascii_lowercase();
+    !PSEUDO_IMAGES.contains(&img.as_str())
+}
+
+/// Overlay readiness onto catalog rows from the image inventory.
+///
+/// - smoke/none/external/debian/empty: `ready` if any image row is active, else `remote`
+/// - else match `images.id` case-insensitively: active → ready, local → local, else remote
+pub fn ready_mark_for(image: &str, images: &[SafetyImageRow]) -> String {
+    let key = image.trim().to_ascii_lowercase();
+    if PSEUDO_IMAGES.contains(&key.as_str()) {
+        return if images.iter().any(|r| r.active) {
+            "ready".into()
+        } else {
+            "remote".into()
+        };
+    }
+    match images
+        .iter()
+        .find(|r| r.id.eq_ignore_ascii_case(image.trim()))
+    {
+        Some(r) if r.active => "ready".into(),
+        Some(r) if r.local => "local".into(),
+        _ => "remote".into(),
+    }
+}
+
+pub fn overlay_ready_marks(rows: &mut [CatalogRow], images: &[SafetyImageRow]) {
+    for row in rows {
+        row.ready_mark = ready_mark_for(&row.image, images);
+    }
+}
+
+/// Domain order the guest map walks. Exposed for the view.
+pub fn map_domains() -> &'static [&'static str] {
+    MAP_DOMAINS
 }
 
 fn format_image_size(bytes: u64) -> String {
@@ -398,5 +506,62 @@ fn format_image_size(bytes: u64) -> String {
         format!("{:.0}K", b / KB)
     } else {
         format!("{bytes}B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(id: &str, local: bool, active: bool) -> SafetyImageRow {
+        SafetyImageRow {
+            id: id.into(),
+            blurb: String::new(),
+            tag: String::new(),
+            size_label: "—".into(),
+            local,
+            active,
+            status: if active {
+                "active".into()
+            } else if local {
+                "local".into()
+            } else {
+                "remote".into()
+            },
+        }
+    }
+
+    fn row(id: &str, image: &str) -> CatalogRow {
+        CatalogRow {
+            id: id.into(),
+            blurb: String::new(),
+            image: image.into(),
+            exec: "net".into(),
+            domain: "recon".into(),
+            ready_mark: "remote".into(),
+        }
+    }
+
+    #[test]
+    fn pane_cycle_is_tools_images_refused() {
+        assert_eq!(SecPane::Tools.next(), SecPane::Images);
+        assert_eq!(SecPane::Images.next(), SecPane::Refused);
+        assert_eq!(SecPane::Refused.next(), SecPane::Tools);
+    }
+
+    #[test]
+    fn catalog_ready_mark_follows_image_rows() {
+        let images = vec![image("recon", true, true), image("web", true, false)];
+        let mut rows = vec![row("a", "recon"), row("b", "WEB"), row("c", "pxn")];
+        overlay_ready_marks(&mut rows, &images);
+        assert_eq!(rows[0].ready_mark, "ready");
+        assert_eq!(rows[1].ready_mark, "local");
+        assert_eq!(rows[2].ready_mark, "remote");
+
+        assert_eq!(ready_mark_for("smoke", &images), "ready");
+        assert_eq!(ready_mark_for("none", &images), "ready");
+        assert_eq!(ready_mark_for("external", &[image("web", true, false)]), "remote");
+        assert_eq!(ready_mark_for("debian", &[]), "remote");
+        assert_eq!(ready_mark_for("empty", &[]), "remote");
     }
 }

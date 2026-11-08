@@ -163,22 +163,33 @@ export interface SafetyImageRow {
   status?: string
 }
 
+export interface CatalogRow {
+  id: string
+  blurb: string
+  image: string
+  exec: string
+  domain: string
+  ready_mark: string
+}
+
 export interface SecuritySnapshot {
   status: SecStatus
   selected: number
   inactive: Array<string>
   yolo_armed: boolean
-  install_health: Array<InstallHealthEntry>
-  health_view: boolean
   pane?: string
-  health_selected: number
   refused_selected?: number
   images?: Array<SafetyImageRow>
   images_selected?: number
   images_busy?: boolean
   lane_label?: string
-  health_fetching: boolean
-  health_frame: number
+  catalog?: Array<CatalogRow>
+  catalog_filter?: string
+  catalog_query?: string
+  catalog_searching?: boolean
+  /** Composition id. Empty or missing = all. */
+  map_filter?: string
+  agent_mode_label?: string
 }
 
 export interface HelpSnapshot {

@@ -31,12 +31,19 @@ def _catalog_root() -> Path:
 
 
 def _load_packs() -> dict[str, dict]:
-    """id -> pack row. Later packs override earlier on same id."""
+    """id -> pack row. Later packs override earlier on same id.
+
+    `debian.json` is the legacy flat pack. It sorts after the domain shards and
+    would reset those rows to `image_or_pack: debian`, which skips the guest
+    gate. Domain shards + `minimal.json` + `smoke.json` are the product catalog.
+    """
     root = _catalog_root() / "packs"
     by_id: dict[str, dict] = {}
     if not root.is_dir():
         return by_id
     for path in sorted(root.glob("*.json")):
+        if path.name == "debian.json":
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -448,6 +455,29 @@ def lane_allows(name: str, lane: str) -> bool:
     return lane in (tool.get("lanes") or [])
 
 
+def index_rows() -> list[dict]:
+    """Compact dashboard rows from pack files. No `how_to`, no host `which()`.
+
+    Readiness is overlaid by the panel from the active pin + local images.
+    """
+    rows: list[dict] = []
+    for tid, row in sorted(_load_packs().items()):
+        img = str(row.get("image_or_pack") or "")
+        if img.lower() == "debian":
+            continue
+        domain = _comp_base(img) or str((row.get("categories") or ["other"])[0])
+        rows.append(
+            {
+                "id": tid,
+                "blurb": str(row.get("summary") or "")[:160],
+                "image": img,
+                "exec": str(row.get("exec") or ""),
+                "domain": domain,
+            }
+        )
+    return rows
+
+
 def handle(op: str, args: dict | None = None) -> dict:
     args = args or {}
     op = (op or "").strip().lower()
@@ -500,8 +530,15 @@ def handle(op: str, args: dict | None = None) -> dict:
             "not_ready": len(rows) - ready_n,
             "domains": by_dom,
         }
+    if op == "index":
+        rows = index_rows()
+        return {"tools": rows, "total": len(rows)}
     if op == "packs":
         root = _catalog_root() / "packs"
-        names = sorted(p.stem for p in root.glob("*.json")) if root.is_dir() else []
+        names = (
+            sorted(p.stem for p in root.glob("*.json") if p.name != "debian.json")
+            if root.is_dir()
+            else []
+        )
         return {"packs": names, "root": str(_catalog_root())}
     raise ValueError(f"unknown catalog op: {op!r}")

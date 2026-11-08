@@ -47,7 +47,10 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "ExtStore") return mode === "install_confirm" ? [ { ...char("Install", "y"), disabled: !!b.installing }, back ] : mode === "detail" ? [char("Install", "i"), back] : [enter("Details"), char("Refresh", "r"), back]
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
   if (name === "Security") {
-    const pane = String(b.pane || (b.health_view ? "deps" : "tools"))
+    const pane = String(b.pane || "tools")
+    const running = !!(b.status as { running?: boolean } | undefined)?.running
+    const armed = !!b.yolo_armed
+    const mode = String(b.agent_mode_label || "auto")
     const paneJump = (label: string, id: string, primary = false): ActionDescriptor => ({
       label,
       primary,
@@ -56,7 +59,6 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
     const tabs = [
       paneJump("Dashboard", "tools", pane === "tools"),
       paneJump("Images", "images", pane === "images"),
-      paneJump("Deps", "deps", pane === "deps"),
       paneJump("Refused", "refused", pane === "refused"),
     ]
     if (pane === "images") {
@@ -69,18 +71,17 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
         back,
       ]
     }
-    if (pane === "deps") {
-      return [...tabs, char("Install", "i"), char("Restart", "r"), back]
-    }
     if (pane === "refused") {
-      return [...tabs, char("Refresh", "u"), char("Restart", "r"), back]
+      return [...tabs, char("Refresh", "u"), back]
     }
     return [
       ...tabs,
-      enter("Toggle"),
+      char(running ? "Stop" : "Start", "s"),
       char("Runtime", "c"),
       char("Refresh", "u"),
-      char("Restart", "r"),
+      char(armed ? "Disarm" : "Arm", "o"),
+      { ...char(mode === "yolo" ? "Leave" : "Enter", "e"), disabled: !(running && armed) },
+      char("Lane", "l"),
       back,
     ]
   }

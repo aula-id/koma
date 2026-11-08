@@ -272,8 +272,14 @@
   {
     "id": "minimal",
     "domain": "minimal",
-    "channels": [],
-    "blurb": "Daemon-only guest (no bulk tool bake)",
+    "channels": [
+      "apt",
+      "npm",
+      "from-source",
+      "pip",
+      "gem"
+    ],
+    "blurb": "Daemon plus the handler binaries no domain image bakes",
     "base_hint": "debian"
   }
 ]

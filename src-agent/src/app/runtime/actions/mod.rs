@@ -389,6 +389,22 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_toggle_tool(state)?;
         }
 
+        Action::SecurityToggleDaemon => {
+            security::handle_security_toggle_daemon(state)?;
+        }
+
+        Action::SecurityToggleYolo => {
+            security::handle_security_toggle_yolo(state)?;
+        }
+
+        Action::SecurityEnterYolo => {
+            security::handle_security_enter_yolo(state)?;
+        }
+
+        Action::SecurityRefreshDashboard => {
+            security::handle_security_refresh_dashboard(state)?;
+        }
+
         Action::SecurityToggleDomain => {
             security::handle_security_toggle_domain(state)?;
         }
