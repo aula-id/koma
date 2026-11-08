@@ -100,7 +100,14 @@ for (const [width, height] of [[50, 24], [80, 18], [100, 40]]) {
           expect(frame).not.toContain("type the key")
         }
         if (body.picker) expect(frame).toContain("Item 30")
-        if (name === "Security") expect(frame).toContain("Security daemon")
+        if (name === "Security") {
+          // Dashboard chrome is always painted; the daemon toggle row can clip
+          // under tabs + status meters on short fixtures (50×24 / 80×18).
+          expect(frame).toContain("Dashboard")
+          expect(frame).toContain("Images")
+          expect(frame).toContain("Deps")
+          expect(frame).toMatch(/running|stopped/i)
+        }
         if (name === "OnboardProvider" && body.step === "login") expect(frame).toContain("Command Code (paste key)")
         if (name === "Usage") expect(frame).toContain("42 tokens")
         if (name === "SessionHub") {

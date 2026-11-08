@@ -226,7 +226,10 @@ test("all toggle families share the switch glyph and keep their selection handle
   for (const fixture of fixtures) {
     const requests: unknown[] = []
     const moved: number[] = []
-    const view = await testRender(<ModeSurface mode={fixture.mode} theme={themeFor("dark")} columns={80} onMove={(index) => moved.push(index)} send={(request) => requests.push(request)} />, { width: 80, height: 24 })
+    // Security packs tabs + status meters above the toggle list; need height
+    // so "Security daemon" stays in the Controls panel for the click hit-test.
+    const height = fixture.label === "Security daemon" ? 40 : 24
+    const view = await testRender(<ModeSurface mode={fixture.mode} theme={themeFor("dark")} columns={80} onMove={(index) => moved.push(index)} send={(request) => requests.push(request)} />, { width: 80, height })
     try {
       for (let pass = 0; pass < 4; pass++) await act(async () => { await view.waitForVisualIdle() })
       const frame = view.captureCharFrame()
