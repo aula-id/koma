@@ -211,7 +211,7 @@ fn classify_path_binary(bin: &Path) -> PathBinary {
         ["version"].as_slice(),
         ["-V"].as_slice(),
     ] {
-        let Ok(output) = Command::new(bin).args(args.iter().copied()).output() else {
+        let Ok(output) = probe_output(bin, args) else {
             continue;
         };
         let text = combined_output(&output);
@@ -237,7 +237,7 @@ fn classify_path_binary(bin: &Path) -> PathBinary {
     // No version string, but no broken-proxy signal either. Accept the PATH hit
     // (some servers are quiet or use nonstandard flags). One more --help probe
     // to catch proxies that only error on real invocation.
-    if let Ok(output) = Command::new(bin).arg("--help").output() {
+    if let Ok(output) = probe_output(bin, &["--help"]) {
         let text = combined_output(&output);
         if looks_like_broken_toolchain_proxy(&text) {
             return PathBinary::Broken;
@@ -245,6 +245,28 @@ fn classify_path_binary(bin: &Path) -> PathBinary {
     }
 
     PathBinary::Usable { version: None }
+}
+
+/// Run `bin` and collect output. Linux returns `ETXTBSY` if the inode is still
+/// open for writing (a probe racing an installer, or a test that just wrote the
+/// file). Retry that briefly; other spawn errors stay errors.
+fn probe_output(bin: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+    const ATTEMPTS: usize = 5;
+    let mut last = None;
+    for attempt in 0..ATTEMPTS {
+        match Command::new(bin).args(args).output() {
+            Ok(output) => return Ok(output),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < ATTEMPTS =>
+            {
+                last = Some(err);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last.expect("busy retry records the last error"))
 }
 
 fn combined_output(output: &std::process::Output) -> String {
@@ -299,7 +321,7 @@ fn probe_version(bin: &Path) -> Option<String> {
         ["version"].as_slice(),
         ["-V"].as_slice(),
     ] {
-        let output = Command::new(bin).args(args.iter().copied()).output().ok()?;
+        let output = probe_output(bin, args).ok()?;
         if !output.status.success() {
             continue;
         }
@@ -363,6 +385,31 @@ mod tests {
         let _ = text;
     }
 
+    #[cfg(unix)]
+    fn write_exec_script(path: &std::path::Path, body: &str) {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        // Write a sibling inode, close it, then rename. Linux will not exec a
+        // file that is still open for writing (ETXTBSY), and OpenOptions::mode
+        // is masked by the process umask so the execute bit has to be forced.
+        let tmp = path.with_extension("writing");
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o755)
+                .open(&tmp)
+                .unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+        let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&tmp, perms).unwrap();
+        std::fs::rename(&tmp, path).unwrap();
+    }
+
     #[test]
     fn classify_broken_script() {
         let tmp = std::env::temp_dir().join(format!(
@@ -375,23 +422,11 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         #[cfg(unix)]
         {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
             let bin = tmp.join("rust-analyzer");
-            {
-                let mut f = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o755)
-                    .open(&bin)
-                    .unwrap();
-                writeln!(
-                    f,
-                    "#!/bin/sh\necho \"error: Unknown binary 'rust-analyzer' in official toolchain 'stable-aarch64-apple-darwin'.\" >&2\nexit 1"
-                )
-                .unwrap();
-            }
+            write_exec_script(
+                &bin,
+                "#!/bin/sh\necho \"error: Unknown binary 'rust-analyzer' in official toolchain 'stable-aarch64-apple-darwin'.\" >&2\nexit 1\n",
+            );
             assert_eq!(classify_path_binary(&bin), PathBinary::Broken);
         }
         #[cfg(not(unix))]
@@ -419,24 +454,31 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         #[cfg(unix)]
         {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
             let bin = tmp.join("fake-ls");
-            {
-                let mut f = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o755)
-                    .open(&bin)
-                    .unwrap();
-                writeln!(f, "#!/bin/sh\necho 'fake-ls 1.2.3'\nexit 0").unwrap();
-            }
-            match classify_path_binary(&bin) {
-                PathBinary::Usable { version } => {
-                    assert_eq!(version.as_deref(), Some("fake-ls 1.2.3"));
+            // Print on stdout and stderr. The classifier keeps the first useful
+            // line from either stream of a successful probe.
+            write_exec_script(
+                &bin,
+                "#!/bin/sh\necho \"fake-ls 1.2.3\"\necho \"fake-ls 1.2.3\" >&2\nexit 0\n",
+            );
+            let mut ok = false;
+            let mut last = None;
+            for _ in 0..5 {
+                match classify_path_binary(&bin) {
+                    PathBinary::Usable { version }
+                        if version.as_deref() == Some("fake-ls 1.2.3") =>
+                    {
+                        ok = true;
+                        break;
+                    }
+                    other => last = Some(format!("{other:?}")),
                 }
-                PathBinary::Broken => panic!("expected usable"),
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            if !ok {
+                let probe = std::process::Command::new(&bin).arg("--version").output();
+                let _ = std::fs::remove_dir_all(&tmp);
+                panic!("expected version Some(\"fake-ls 1.2.3\"), last={last:?}, probe={probe:?}");
             }
         }
         #[cfg(not(unix))]
