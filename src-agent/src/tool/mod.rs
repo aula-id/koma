@@ -1130,8 +1130,6 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
     )
 }
 
-/// Dispatch one of the four security meta-tools.
-
 /// Update the session security working set after a successful catalog/run touch.
 fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str) {
     let Some(dir) = ctx.session_dir.as_ref() else {
@@ -1163,19 +1161,13 @@ fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str
         "get" => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
                 if let Some(tool) = v.get("tool") {
-                    let name = tool
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
                     let blurb = tool
                         .get("description")
                         .or_else(|| tool.get("blurb"))
                         .and_then(|n| n.as_str())
                         .unwrap_or("");
-                    let effect = tool
-                        .get("effect")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
+                    let effect = tool.get("effect").and_then(|n| n.as_str()).unwrap_or("");
                     if !name.is_empty() {
                         ws.pin(name, blurb, effect);
                     }
@@ -1229,10 +1221,7 @@ fn dispatch_sec_meta(
 
     let typed = match name {
         "sec_catalog" => {
-            let op = args
-                .get("op")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = args.clone();
             if let Some(obj) = payload.as_object_mut() {
                 obj.remove("op");
@@ -1271,10 +1260,7 @@ fn dispatch_sec_meta(
             }
         }
         "sec_runtime" => {
-            let op = args
-                .get("op")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = serde_json::json!({});
             if let Some(obj) = args.as_object() {
                 let mut map = serde_json::Map::new();
@@ -1336,10 +1322,7 @@ fn dispatch_sec_meta(
             }
         }
         "sec_fs" => {
-            let op = args
-                .get("op")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = args.clone();
             if let Some(obj) = payload.as_object_mut() {
                 obj.remove("op");

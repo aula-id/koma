@@ -7,14 +7,10 @@
 
 use crate::app::sec::{InstallHealthEntry, SecStatus};
 
-/// One navigable row in the TOOLS pane.
+/// One navigable row in the TOOLS (dashboard) pane.
 ///
-/// The pane is a single flat list the cursor walks, but it mixes three kinds of row: the
-/// daemon-running checkbox at the very top, then the YOLO-arm checkbox, then the tool
-/// inventory grouped by domain. This enum names which kind a given cursor position is so
-/// render and nav agree on the layout. `Tool(usize)` carries an index into `status.tools`
-/// (the flat storage vector), NOT a position in the rendered list — the position is the
-/// index into [`SecurityState::tool_items`].
+/// The pane is a short list: daemon-running checkbox, then YOLO-arm checkbox.
+/// Concrete tools are discovered via `sec_catalog` / `sec_run`, not toggled here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecSel {
     /// The daemon start/stop checkbox row (always rendered first). Toggling it starts the
@@ -23,8 +19,6 @@ pub enum SecSel {
     Daemon,
     /// The YOLO-arm checkbox row (rendered second, after the daemon checkbox).
     Yolo,
-    /// Legacy tool-row index (no longer navigable on the dashboard; kept for IPC).
-    Tool(usize),
 }
 
 /// Which body pane the `/security` panel is showing.
@@ -234,10 +228,7 @@ impl SecurityState {
     /// what is on screen).
     ///
     /// Order: the daemon checkbox first (`SecSel::Daemon`), then the YOLO checkbox
-    /// (`SecSel::Yolo`), then the tools grouped by domain. Domains are taken in first-seen
-    /// (insertion) order, exactly as the renderer groups them; within each domain the tools
-    /// keep their `status.tools` iteration order. The returned `usize` in each
-    /// `SecSel::Tool(i)` indexes back into `status.tools`.
+    /// (`SecSel::Yolo`). Concrete tools are not navigable on this dashboard.
     pub fn tool_items(&self) -> Vec<SecSel> {
         // Dashboard only: daemon + YOLO. Concrete tools are dynamic (sec_catalog);
         // they are summarized below the controls, not toggled here.

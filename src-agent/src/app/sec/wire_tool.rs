@@ -148,7 +148,10 @@ pub(super) fn parse_tools(
             .map(str::to_owned)
             .filter(|n| !n.is_empty())
         else {
-            refused.push(("<unnamed>".to_owned(), "descriptor carried no name".to_owned()));
+            refused.push((
+                "<unnamed>".to_owned(),
+                "descriptor carried no name".to_owned(),
+            ));
             continue;
         };
         let tool: WireTool = match serde_json::from_value(entry.clone()) {
@@ -181,9 +184,9 @@ impl WireTool {
         // unreachable through the enforced egress path, so it is not safe to
         // advertise — unless it is a fixed-host tool (destination is constant
         // in the handler, not an argument).
-        let network_param = if matches!(risk, super::SecRisk::Static | super::SecRisk::Local) {
-            None
-        } else if crate::security::fixed_host(&self.name) {
+        let network_param = if matches!(risk, super::SecRisk::Static | super::SecRisk::Local)
+            || crate::security::fixed_host(&self.name)
+        {
             None
         } else {
             match network_parameter(&self.parameters) {

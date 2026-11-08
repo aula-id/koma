@@ -102,7 +102,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
 }
 
 fn bar_line(label: &str, done: usize, total: usize, width: usize) -> String {
-    let t = total.max(0);
+    let t = total;
     let d = done.min(if t == 0 { done } else { t });
     let pct = if t > 0 {
         d as f64 / t as f64
@@ -144,7 +144,12 @@ fn render_tools(
 
     // Pane tabs (keyboard: h cycles; client can MenuReplace pane=…)
     lines.push(Line::from(vec![
-        Span::styled("▸ Dashboard", Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "▸ Dashboard",
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  Images  Deps  Refused", dim_style),
         Span::styled("   (h cycle · click tabs in TUI)", dim_style),
     ]));
@@ -206,8 +211,7 @@ fn render_tools(
                     ));
                 }
                 if st.health_fetching {
-                    const SPINNER: [&str; 10] =
-                        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
                     let spinner = SPINNER[(st.health_frame % 10) as usize];
                     info_spans.push(Span::styled(" · ", dim_style));
                     info_spans.push(Span::styled(
@@ -274,7 +278,6 @@ fn render_tools(
                 }
                 lines.push(Line::from(""));
             }
-            SecSel::Tool(_) => {}
         }
     }
 
@@ -320,7 +323,12 @@ fn render_tools(
         lines.push(Line::from(Span::styled(
             format!(
                 "  {}",
-                bar_line("refused", st.status.refused.len(), st.status.refused.len(), 16)
+                bar_line(
+                    "refused",
+                    st.status.refused.len(),
+                    st.status.refused.len(),
+                    16
+                )
             ),
             Style::default().fg(palette.error),
         )));
@@ -332,7 +340,9 @@ fn render_tools(
         let cat = if st.status.catalog_total > 0 {
             format!(
                 "  catalog ready {}/{} · handshake {}",
-                st.status.catalog_ready, st.status.catalog_total, st.status.tools.len()
+                st.status.catalog_ready,
+                st.status.catalog_total,
+                st.status.tools.len()
             )
         } else {
             format!(
@@ -399,7 +409,10 @@ fn render_images(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
     lines.push(Line::from(""));
 
     if st.images.is_empty() {
-        lines.push(Line::from(Span::styled("no compositions catalogued", dim_style)));
+        lines.push(Line::from(Span::styled(
+            "no compositions catalogued",
+            dim_style,
+        )));
         return;
     }
 

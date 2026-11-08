@@ -122,21 +122,16 @@ pub(super) fn handle_security_restart(state: &mut AppState) -> Result<()> {
 }
 
 /// What `Action::SecurityToggleTool` resolved the selected row to, lifted out of the
-/// panel before any `rest` mutation so the borrow is released. Mirrors [`SecSel`] but
-/// carries the tool's resolved *name* (not its index) for the tool case.
+/// panel before any `rest` mutation so the borrow is released.
 enum ToggleTarget {
     /// The daemon checkbox: start the daemon if stopped, stop it if running.
     Daemon,
     /// The YOLO checkbox: arm/disarm (gated on the daemon running).
     Yolo,
-    /// A tool row, resolved to its name.
-    Tool(String),
 }
 
 /// Handle `Action::SecurityToggleTool`: toggle whatever row is selected in the tools
-/// pane. The pane mixes the daemon checkbox (row 0) and the YOLO checkbox (row 1) with the
-/// tool inventory, so this reads the selected [`SecSel`] (resolved through the panel's
-/// render-ordered item list) and branches:
+/// pane (daemon or YOLO checkboxes only — concrete tools live in `sec_catalog`).
 ///
 /// - `SecSel::Daemon` → toggle the daemon: STOP it when running, START it when stopped,
 ///   reusing the existing stop/start handlers (so the stop path also enforces the
@@ -146,23 +141,13 @@ enum ToggleTarget {
 ///   merely UNLOCKS the `Yolo` agent mode (the user still switches in via `/mode yolo` /
 ///   Shift+Tab); disarming while currently in `Yolo` drops `agent_mode` back to `Auto` so
 ///   the harness-bypass can never outlive its arm.
-/// - `SecSel::Tool(i)` → flip `status.tools[i]`'s membership in `state.rest.sec_inactive`
-///   (active → disabled, disabled → active).
 ///
 /// A no-op when nothing is selected. Refreshes the panel after.
 pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
-    // Resolve the selected row (and, for a tool, its name) out of the open panel BEFORE
-    // mutating `rest` — `selected_sec()` walks the same render-ordered list the cursor and
-    // view use, so this targets exactly the highlighted row.
     let target = if let Mode::Security(s) = state.mode() {
         match s.selected_sec() {
             Some(SecSel::Daemon) => Some(ToggleTarget::Daemon),
             Some(SecSel::Yolo) => Some(ToggleTarget::Yolo),
-            Some(SecSel::Tool(i)) => s
-                .status
-                .tools
-                .get(i)
-                .map(|t| ToggleTarget::Tool(t.name.clone())),
             None => None,
         }
     } else {
@@ -170,10 +155,6 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
     };
 
     match target {
-        // Daemon checkbox row: toggle the daemon via the existing start/stop handlers.
-        // Branch on the LIVE manager running flag (authoritative), not the mode-state copy.
-        // The stop handler enforces the YOLO-disarm invariant; both handlers refresh the
-        // panel, so the trailing refresh below is just belt-and-suspenders.
         Some(ToggleTarget::Daemon) => {
             let running = state
                 .rest
@@ -188,7 +169,6 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
             }
             return Ok(());
         }
-        // YOLO checkbox row: arm/disarm — GATED on the daemon running.
         Some(ToggleTarget::Yolo) => {
             let running = state
                 .rest
@@ -197,83 +177,24 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
                 .map(|m| m.status().running)
                 .unwrap_or(false);
             if !running {
-                // Daemon stopped: refuse the arm (YOLO requires a running daemon). Leave
-                // `yolo_armed` untouched and tell the user what to do.
                 state.rest.fg_mut().status = "yolo locked — start the daemon first".into();
             } else {
-                // Delegate both directions to `handle_set_yolo_armed`, which owns the
-                // disarm side effect (leave Yolo mode, drop back to Auto) and both status
-                // lines. Flipping the flag inline here made this row the only disarm path
-                // able to drift from `/yolo` and the YOLO checkbox.
                 handle_set_yolo_armed(state, !state.rest.yolo_armed)?;
             }
         }
-        // Tool row: flip its active state.
-        Some(ToggleTarget::Tool(name)) => {
-            if state.rest.sec_inactive.contains(&name) {
-                state.rest.sec_inactive.remove(&name);
-                state.rest.fg_mut().status = format!("security: {name} enabled");
-            } else {
-                state.rest.sec_inactive.insert(name.clone());
-                state.rest.fg_mut().status = format!("security: {name} disabled");
-            }
-        }
-        // Tool row whose index didn't resolve (stale cursor), or nothing selected: no-op.
         None => {}
     }
     refresh_security_state(state, None);
     Ok(())
 }
 
-/// Handle `Action::SecurityToggleDomain`: toggle every tool sharing the selected
-/// tool's domain.
+/// Handle `Action::SecurityToggleDomain`: no per-tool grid on the dashboard.
 ///
-/// If ALL tools in that domain are currently active, disable them all; otherwise (any
-/// already disabled) enable them all. Resolves the selected row through the panel's
-/// render-ordered item list and acts ONLY on a `SecSel::Tool(i)` (using `status.tools[i]`
-/// for the domain); when the daemon or YOLO checkbox is selected it has no domain, so this
-/// is a no-op with an explanatory status. Refreshes the panel after.
+/// Domain enable/disable is not exposed from the dashboard (tools are catalog-driven).
+/// Kept as a key binding for compatibility; reports a short status.
 pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> {
-    // Resolve the selected tool's domain + every tool name in it out of the panel. Only a
-    // tool row has a domain; the daemon and YOLO checkboxes resolve to `None` here.
-    let domain_tools: Option<(String, Vec<String>)> = if let Mode::Security(s) = state.mode() {
-        match s.selected_sec() {
-            Some(SecSel::Tool(i)) => s.status.tools.get(i).map(|sel| {
-                let domain = sel.domain.clone();
-                let names = s
-                    .status
-                    .tools
-                    .iter()
-                    .filter(|t| t.domain == domain)
-                    .map(|t| t.name.clone())
-                    .collect::<Vec<_>>();
-                (domain, names)
-            }),
-            // Daemon/YOLO checkbox (or nothing) selected: no domain to toggle.
-            _ => None,
-        }
-    } else {
-        None
-    };
-    if let Some((domain, names)) = domain_tools {
-        // Disable the whole domain only when every member is currently active;
-        // otherwise enable all (so a mixed/partly-disabled domain flips fully on).
-        let all_active = names.iter().all(|n| !state.rest.sec_inactive.contains(n));
-        if all_active {
-            for n in &names {
-                state.rest.sec_inactive.insert(n.clone());
-            }
-            state.rest.fg_mut().status = format!("security: domain [{domain}] disabled");
-        } else {
-            for n in &names {
-                state.rest.sec_inactive.remove(n);
-            }
-            state.rest.fg_mut().status = format!("security: domain [{domain}] enabled");
-        }
-    } else {
-        // No tool row selected (the YOLO checkbox has no domain).
-        state.rest.fg_mut().status = "security: no domain selected".into();
-    }
+    state.rest.fg_mut().status =
+        "security: domain toggle is catalog-driven (use sec_catalog / Images pane)".into();
     refresh_security_state(state, None);
     Ok(())
 }
@@ -423,12 +344,9 @@ pub(crate) fn apply_lane(
             LaneOutcome::Cleared
         }
         Some(l) => {
-            let resolves = crate::app::resolve::resolve_role(
-                &state.rest.config,
-                &session.settings,
-                l.role(),
-            )
-            .is_some();
+            let resolves =
+                crate::app::resolve::resolve_role(&state.rest.config, &session.settings, l.role())
+                    .is_some();
             if resolves {
                 session.settings.cyber_lane = Some(l);
                 LaneOutcome::Set(l)
@@ -537,8 +455,7 @@ pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -
         Ok(()) => {
             // Reuse the stop+start path so the child picks up the new pin.
             handle_security_restart(state)?;
-            state.rest.fg_mut().status =
-                format!("security: activated '{id}'; daemon restarted");
+            state.rest.fg_mut().status = format!("security: activated '{id}'; daemon restarted");
         }
         Err(e) => {
             state.rest.fg_mut().status = format!("security: activate '{id}' failed: {e}");
