@@ -1,4 +1,15 @@
 //! Runtime: the synchronous event loop that ties the whole app together.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 //!
 //! Owns the terminal, the tokio runtime handle, and the `AppState`. Its job is
 //! the central cycle: drain the active request's [`StreamEvent`]s -> read

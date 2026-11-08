@@ -252,21 +252,19 @@ fn classify_path_binary(bin: &Path) -> PathBinary {
 /// file). Retry that briefly; other spawn errors stay errors.
 fn probe_output(bin: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
     const ATTEMPTS: usize = 5;
-    let mut last = None;
-    for attempt in 0..ATTEMPTS {
+    let mut attempt = 0;
+    loop {
         match Command::new(bin).args(args).output() {
             Ok(output) => return Ok(output),
             Err(err)
-                if err.kind() == std::io::ErrorKind::ExecutableFileBusy
-                    && attempt + 1 < ATTEMPTS =>
+                if err.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt + 1 < ATTEMPTS =>
             {
-                last = Some(err);
+                attempt += 1;
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Err(err) => return Err(err),
         }
     }
-    Err(last.expect("busy retry records the last error"))
 }
 
 fn combined_output(output: &std::process::Output) -> String {

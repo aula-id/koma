@@ -341,7 +341,7 @@ async fn dispatch(
                     _ => false,
                 })
                 .await?;
-            Ok(turn_result(event))
+            Ok(turn_result(&c.projection.id, event)?)
         }
         "approve" => {
             let p: Decision = params(r.params)?;
@@ -377,7 +377,14 @@ async fn dispatch(
             .await?;
             Ok(json!({"approved":p.approve}))
         }
-        _ => unreachable!(),
+        other => {
+            let message = format!("SDK method `{other}` is not implemented.");
+            crate::model::notifications::record(
+                Some(c.projection.id.clone()),
+                crate::model::notifications::Entry::new(message.clone(), "error", "sdk"),
+            );
+            Err(RpcError::new("unsupported_method", message))
+        }
     }
 }
 async fn configure_call(
@@ -397,7 +404,7 @@ async fn configure_call(
         Ok(applied.reply)
     }
 }
-fn turn_result(e: E) -> Value {
+fn turn_result(session_id: &str, e: E) -> Result<Value, RpcError> {
     let (d, id, reason, interrupted) = match e {
         E::TurnResult {
             disposition,
@@ -412,7 +419,14 @@ fn turn_result(e: E) -> Value {
             interrupted_turn_id,
             ..
         } => (disposition, turn_id, reason, Some(interrupted_turn_id)),
-        _ => unreachable!(),
+        _ => {
+            let message = "Turn reply was not a turn result.".to_string();
+            crate::model::notifications::record(
+                Some(session_id.to_string()),
+                crate::model::notifications::Entry::new(message.clone(), "error", "sdk"),
+            );
+            return Err(RpcError::new("unavailable", message));
+        }
     };
     let reason = reason.map(|message| {
         let code = if message.contains("stale_turn") {
@@ -436,5 +450,5 @@ fn turn_result(e: E) -> Value {
     if let Some(id) = interrupted {
         v["interrupted_turn_id"] = json!(id)
     }
-    v
+    Ok(v)
 }

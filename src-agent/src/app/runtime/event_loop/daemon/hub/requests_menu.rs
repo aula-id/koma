@@ -142,7 +142,9 @@ fn menu_action(
         }
         MenuAction::Discard if matches!(state.mode(), Mode::Settings(_)) => {
             let Mode::Settings(s) = state.mode_mut() else {
-                unreachable!()
+                let message = "Settings closed before the form could be cancelled.".to_string();
+                state.rest.fg_mut().set_toast(message.clone());
+                bail!("{message}");
             };
             if s.search_editor.is_some() {
                 s.search_editor = None;

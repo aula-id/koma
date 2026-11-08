@@ -42,13 +42,14 @@ fn owned_attachment_validation_and_defaults() {
 
 #[test]
 fn replacement_partial_failure_is_not_erased() {
-    let value = turn_result(E::InterruptAndSubmitResult {
+    let value = turn_result("session", E::InterruptAndSubmitResult {
         request_id: "r".into(),
         disposition: TurnDisposition::Rejected,
         interrupted_turn_id: Some("old".into()),
         turn_id: None,
         reason: Some("startup failed".into()),
-    });
+    })
+    .expect("turn result");
     assert_eq!(value["interrupted_turn_id"], "old");
     assert_eq!(value["disposition"], "rejected");
     assert!(value["turn_id"].is_null());
