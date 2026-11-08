@@ -125,7 +125,7 @@ DOMAIN_BLURB = {
     "pxn": "System exploitation, red team, wireless, adversary sim",
     "dfir": "Digital forensics, IR, defensive, threat intel",
     "lab": "Lab/dev utilities, databases, virtualization, other",
-    "minimal": "Daemon-only guest (no bulk tool bake)",
+    "minimal": "Daemon plus the handler binaries no domain image bakes",
 }
 
 CHANNEL_FILES = ("apt", "go", "npm", "cargo", "src")
@@ -491,8 +491,51 @@ def main() -> int:
                 spec = src_spec(entry["channel_body"], entry["tool"])
                 add_tool_to_comp(src_id, entry, "from-source", spec or entry["bin"])
 
-    # minimal: empty buckets (daemon only)
+    # minimal: not a bulk catalog shard. Pin the handler binaries that no domain
+    # image bakes, so a regen cannot wipe the guest back to "daemon only".
+    # requests / pwntools / lief stay in the Dockerfile base (every composition).
+    # playwright is intentionally absent — sec_browser is not a guest tool.
     ensure_comp("minimal")
+    buckets["minimal"]["apt"] = [
+        "file",
+        "hashcat",
+        "wabt",
+        "ruby",
+        "nodejs",
+        "npm",
+        "unzip",
+        "openjdk-17-jre-headless",
+        "libfplll-dev",
+        "libgmp-dev",
+        "libmpfr-dev",
+    ]
+    buckets["minimal"]["npm"] = ["webcrack"]
+    buckets["minimal"]["src"] = ["https://github.com/RsaCtfTool/RsaCtfTool.git"]
+    buckets["minimal"]["pip"] = [
+        "z3-solver",
+        "ROPgadget",
+        "hashid",
+        "name-that-hash",
+        "checksec.py",
+        "jsbeautifier",
+        "cryptography",
+        "fpylll",
+    ]
+    buckets["minimal"]["gem"] = ["one_gadget"]
+    buckets["minimal"]["bins"] = [
+        "file",
+        "hashcat",
+        "wasm-decompile",
+        "wasm2wat",
+        "ROPgadget",
+        "hashid",
+        "nth",
+        "checksec",
+        "one_gadget",
+        "RsaCtfTool",
+        "zap.sh",
+        "webcrack",
+    ]
 
     # compositions metadata (stable order: domains then shards, minimal last)
     def comp_sort_key(cid: str) -> tuple:
@@ -517,8 +560,10 @@ def main() -> int:
             ("npm", "npm"),
             ("cargo", "cargo"),
             ("from-source", "src"),
+            ("pip", "pip"),
+            ("gem", "gem"),
         ):
-            if b[key]:
+            if b.get(key):
                 channels_present.append(ch)
         domain = comp_id.split("-")[0] if comp_id != "minimal" else "minimal"
         if domain not in DOMAIN_ORDER and domain != "minimal":
@@ -552,6 +597,13 @@ def main() -> int:
         write_lines(BUCKETS / f"{comp_id}.cargo.txt", b["cargo"])
         write_lines(BUCKETS / f"{comp_id}.src.txt", b["src"])
         write_lines(BUCKETS / f"{comp_id}.bins.txt", b["bins"])
+        for extra in ("pip", "gem"):
+            if b.get(extra):
+                write_lines(BUCKETS / f"{comp_id}.{extra}.txt", b[extra])
+    (BUCKETS / "minimal.zap.url").write_text(
+        "https://github.com/zaproxy/zaproxy/releases/download/v2.17.0/ZAP_2.17.0_Crossplatform.zip\n",
+        encoding="utf-8",
+    )
 
     COMPOSITIONS_OUT.write_text(
         json.dumps(compositions, indent=2) + "\n", encoding="utf-8"
@@ -625,7 +677,7 @@ def main() -> int:
             "",
             "Shard rules: `{domain}` = apt(≤75)+go; `{domain}-2` = apt overflow; "
             "`{domain}-ext` = npm+cargo; `{domain}-src` = from-source allowlist ≤40; "
-            "`minimal` = empty (daemon only). Snap skipped.",
+            "`minimal` = handler binaries missing from every domain image. Snap skipped.",
             "",
         ]
     )

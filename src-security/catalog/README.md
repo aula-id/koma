@@ -39,7 +39,7 @@ Research should keep rules empty. Agent does not unilaterally open the internet.
 
 | Composition | Tag suffix | Role |
 |-------------|------------|------|
-| **minimal** | `-minimal` (also bare `:version` / `:latest`) | Basic install only — daemon + proxy + smoke |
+| **minimal** | `-minimal` (also bare `:version` / `:latest`) | Daemon plus handler binaries no domain image bakes |
 | recon, recon-2, recon-ext, recon-src | `-recon…` | OSINT / enum / network |
 | web, web-ext, web-src | `-web…` | App / API / CMS / vulns |
 | identity, identity-ext, identity-src | `-identity…` | Auth / passwords / cracking |

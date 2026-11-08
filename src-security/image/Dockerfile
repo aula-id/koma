@@ -2,6 +2,7 @@
 # koma-safety guest image — CD build context: src-security/image
 #
 # Domain compositions (KOMA_COMPOSITION) install from install_recipes/buckets/${C}.*
+# minimal is not skipped: it bakes the handler binaries no domain image contains.
 # Base (KOMA_BASE_IMAGE): debian bookworm by default; kali for recon/identity (see compositions.json).
 # Do NOT mix Kali packages into Debian (breaks libc/curl).
 #
@@ -96,9 +97,9 @@ RUN set -eux; \
       [ -f "$f" ] && [ -s "$f" ] && grep -vE '^\s*(#|$)' "$f" | grep -q .; \
     }; \
     if [ "${C}" = "minimal" ]; then \
-      echo "composition=minimal (no bulk tools)" | tee -a "$REPORT"; \
-    else \
-      apt-get update; \
+      echo "composition=minimal (handler bins, not bulk catalog)" | tee -a "$REPORT"; \
+    fi; \
+    apt-get update; \
       # --- apt ---
       if file_nonempty "$B/${C}.apt.txt"; then \
         install_list "$B/${C}.apt.txt" apt; \
@@ -199,8 +200,71 @@ RUN set -eux; \
           fi; \
         done < "$B/${C}.src.txt"; \
       fi; \
+      # --- pip (handler libs; venv, not system python) --- \
+      if file_nonempty "$B/${C}.pip.txt"; then \
+        while IFS= read -r line || [ -n "$line" ]; do \
+          line=$(printf '%s' "$line" | tr -d '\r' | sed 's/#.*//' | xargs || true); \
+          [ -n "$line" ] || continue; \
+          if /opt/koma/venv/bin/pip install --no-cache-dir "$line"; then \
+            echo "ok_pip $line" >> "$REPORT"; \
+          else \
+            echo "miss_pip $line" >> "$REPORT"; \
+          fi; \
+        done < "$B/${C}.pip.txt"; \
+      fi; \
+      # --- gem --- \
+      if file_nonempty "$B/${C}.gem.txt"; then \
+        if ! command -v gem >/dev/null 2>&1; then \
+          apt-get install -y --no-install-recommends ruby \
+            || echo "miss ruby" >> "$REPORT"; \
+        fi; \
+        if command -v gem >/dev/null 2>&1; then \
+          while IFS= read -r line || [ -n "$line" ]; do \
+            line=$(printf '%s' "$line" | tr -d '\r' | sed 's/#.*//' | xargs || true); \
+            [ -n "$line" ] || continue; \
+            if gem install --no-document "$line"; then \
+              echo "ok_gem $line" >> "$REPORT"; \
+            else \
+              echo "miss_gem $line" >> "$REPORT"; \
+            fi; \
+          done < "$B/${C}.gem.txt"; \
+        fi; \
+      fi; \
+      # --- ZAP (cross-platform zip; zap.sh is what sec_zap's detect looks for) --- \
+      if [ -f "$B/${C}.zap.url" ]; then \
+        zap_url=$(grep -vE '^\s*(#|$)' "$B/${C}.zap.url" | head -1 || true); \
+        if [ -n "$zap_url" ]; then \
+          mkdir -p /opt/zaproxy; \
+          if curl -fsSL -o /tmp/zap.zip "$zap_url" \
+             && unzip -q /tmp/zap.zip -d /opt/zaproxy; then \
+            zap_sh=$(find /opt/zaproxy -name zap.sh -type f | head -1 || true); \
+            if [ -n "$zap_sh" ]; then \
+              chmod 0755 "$zap_sh" || true; \
+              ln -sf "$zap_sh" /opt/koma/bin/zap.sh; \
+              echo "ok_zap $zap_url" >> "$REPORT"; \
+            else \
+              echo "miss_zap no zap.sh" >> "$REPORT"; \
+            fi; \
+          else \
+            echo "miss_zap $zap_url" >> "$REPORT"; \
+          fi; \
+          rm -f /tmp/zap.zip; \
+        fi; \
+      fi; \
+      # RsaCtfTool clones but does not install a PATH entry. \
+      rsa=/opt/koma/src-tools/RsaCtfTool; \
+      if [ -f "$rsa/RsaCtfTool.py" ]; then \
+        if [ -f "$rsa/requirements.txt" ]; then \
+          /opt/koma/venv/bin/pip install --no-cache-dir -r "$rsa/requirements.txt" \
+            && echo "ok_rsa_req" >> "$REPORT" \
+            || echo "soft_rsa_req" >> "$REPORT"; \
+        fi; \
+        printf '%s\n' '#!/bin/sh' "exec /opt/koma/venv/bin/python $rsa/RsaCtfTool.py \"\$@\"" \
+          > /opt/koma/bin/RsaCtfTool; \
+        chmod 0755 /opt/koma/bin/RsaCtfTool; \
+        echo "ok_rsa_wrap" >> "$REPORT"; \
+      fi; \
       rm -rf /var/lib/apt/lists/*; \
-    fi; \
     cp "$REPORT" /tmp/install_report_final.txt
 
 RUN set -eux; \
