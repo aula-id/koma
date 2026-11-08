@@ -1,0 +1,279 @@
+[
+  {
+    "id": "recon",
+    "domain": "recon",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "OSINT, network recon, scanning, enumeration",
+    "base_hint": "kali"
+  },
+  {
+    "id": "recon-2",
+    "domain": "recon",
+    "channels": [
+      "apt"
+    ],
+    "blurb": "OSINT, network recon, scanning, enumeration (apt overflow shard)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "recon-ext",
+    "domain": "recon",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "OSINT, network recon, scanning, enumeration (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "recon-src",
+    "domain": "recon",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "OSINT, network recon, scanning, enumeration (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "web",
+    "domain": "web",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Web app exploitation, CMS, bug bounty, vuln assessment",
+    "base_hint": "debian"
+  },
+  {
+    "id": "web-ext",
+    "domain": "web",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Web app exploitation, CMS, bug bounty, vuln assessment (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "web-src",
+    "domain": "web",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Web app exploitation, CMS, bug bounty, vuln assessment (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "identity",
+    "domain": "identity",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Auth, permissions, password cracking",
+    "base_hint": "kali"
+  },
+  {
+    "id": "identity-ext",
+    "domain": "identity",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Auth, permissions, password cracking (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "identity-src",
+    "domain": "identity",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Auth, permissions, password cracking (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "cloud",
+    "domain": "cloud",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Cloud services and cloud-native security",
+    "base_hint": "debian"
+  },
+  {
+    "id": "cloud-ext",
+    "domain": "cloud",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Cloud services and cloud-native security (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "cloud-src",
+    "domain": "cloud",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Cloud services and cloud-native security (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "rev",
+    "domain": "rev",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Reverse engineering, binary/code analysis, mobile",
+    "base_hint": "debian"
+  },
+  {
+    "id": "rev-ext",
+    "domain": "rev",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Reverse engineering, binary/code analysis, mobile (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "rev-src",
+    "domain": "rev",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Reverse engineering, binary/code analysis, mobile (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "crypto",
+    "domain": "crypto",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Cryptanalysis, cryptography, steganography",
+    "base_hint": "debian"
+  },
+  {
+    "id": "crypto-ext",
+    "domain": "crypto",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Cryptanalysis, cryptography, steganography (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "crypto-src",
+    "domain": "crypto",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Cryptanalysis, cryptography, steganography (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "pxn",
+    "domain": "pxn",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "System exploitation, red team, wireless, adversary sim",
+    "base_hint": "debian"
+  },
+  {
+    "id": "pxn-ext",
+    "domain": "pxn",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "System exploitation, red team, wireless, adversary sim (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "pxn-src",
+    "domain": "pxn",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "System exploitation, red team, wireless, adversary sim (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "dfir",
+    "domain": "dfir",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Digital forensics, IR, defensive, threat intel",
+    "base_hint": "debian"
+  },
+  {
+    "id": "dfir-ext",
+    "domain": "dfir",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Digital forensics, IR, defensive, threat intel (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "dfir-src",
+    "domain": "dfir",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Digital forensics, IR, defensive, threat intel (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "lab",
+    "domain": "lab",
+    "channels": [
+      "apt",
+      "go"
+    ],
+    "blurb": "Lab/dev utilities, databases, virtualization, other",
+    "base_hint": "debian"
+  },
+  {
+    "id": "lab-ext",
+    "domain": "lab",
+    "channels": [
+      "npm",
+      "cargo"
+    ],
+    "blurb": "Lab/dev utilities, databases, virtualization, other (npm/cargo)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "lab-src",
+    "domain": "lab",
+    "channels": [
+      "from-source"
+    ],
+    "blurb": "Lab/dev utilities, databases, virtualization, other (from-source allowlist \u226440)",
+    "base_hint": "debian"
+  },
+  {
+    "id": "minimal",
+    "domain": "minimal",
+    "channels": [],
+    "blurb": "Daemon-only guest (no bulk tool bake)",
+    "base_hint": "debian"
+  }
+]

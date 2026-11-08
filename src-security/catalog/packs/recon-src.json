@@ -1,0 +1,776 @@
+{
+  "version": 1,
+  "pack": "recon-src",
+  "tools": [
+    {
+      "id": "adeleg",
+      "name": "adeleg",
+      "summary": "Active Directory delegation management tool allowing to make a detailed inventory of delegations set up so far in a forest",
+      "categories": [
+        "reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "adeleg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=adeleg"
+    },
+    {
+      "id": "adrt",
+      "name": "adrt",
+      "summary": "Active Directory Report Tool.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "adrt"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=adrt"
+    },
+    {
+      "id": "advancedkeyhacks",
+      "name": "advancedkeyhacks",
+      "summary": "API key/token exploitation made easy.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "advancedkeyhacks"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=advancedkeyhacks"
+    },
+    {
+      "id": "aort",
+      "name": "aort",
+      "summary": "All in one recon tool for bug bounty.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "aort"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=aort"
+    },
+    {
+      "id": "archaeologit",
+      "name": "archaeologit",
+      "summary": "Scans the history of GitHub repositories to find sensitive things.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "archaeologit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=archaeologit"
+    },
+    {
+      "id": "archtorify",
+      "name": "archtorify",
+      "summary": "Script for Arch Linux which use iptables settings to create a transparent proxy through Tor Network",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "archtorify"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=archtorify"
+    },
+    {
+      "id": "autosubtakeover",
+      "name": "autosubtakeover",
+      "summary": "A tool used to check if a CNAME resolves to the scope address.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "autosubtakeover"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=autosubtakeover"
+    },
+    {
+      "id": "backupkiller",
+      "name": "backupkiller",
+      "summary": "Generate wordlist based on the URLs to check for backup, installation, etc files.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "backupkiller"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=backupkiller"
+    },
+    {
+      "id": "belati",
+      "name": "belati",
+      "summary": "OSINT tool, collect data and document actively or passively",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "belati"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=belati"
+    },
+    {
+      "id": "bfac",
+      "name": "bfac",
+      "summary": "Check for backup artifacts that may disclose the web-application's source code.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bfac"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=bfac"
+    },
+    {
+      "id": "catphish",
+      "name": "catphish",
+      "summary": "Generate similar-looking domains for phishing attacks.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "catphish"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=catphish"
+    },
+    {
+      "id": "certmon",
+      "name": "certmon",
+      "summary": "A simple certificate expiration monitor script.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "certmon"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=certmon"
+    },
+    {
+      "id": "certsniff",
+      "name": "certsniff",
+      "summary": "A certificate transparency log keyword sniffer written in Python.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "certsniff"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=certsniff"
+    },
+    {
+      "id": "certsync",
+      "name": "certsync",
+      "summary": "Dump NTDS with golden certificates and UnPAC the hash",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "certsync"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=certsync"
+    },
+    {
+      "id": "cloudflare_origin_ip",
+      "name": "cloudflare_origin_ip",
+      "summary": "Try to find the origin IP of a webapp protected by Cloudflare.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cloudflare-origin-ip"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cloudflare-origin-ip"
+    },
+    {
+      "id": "comperio",
+      "name": "comperio",
+      "summary": "OSINT tool to find usernames across 80+ social media and social networking sites.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "comperio"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=comperio"
+    },
+    {
+      "id": "creepycrawler",
+      "name": "creepycrawler",
+      "summary": "Crawl a site and extract useful informations for recon.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "creepycrawler"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=creepycrawler"
+    },
+    {
+      "id": "crtndtry",
+      "name": "crtndtry",
+      "summary": "Yet another subdomain finder.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "crtndtry"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=crtndtry"
+    },
+    {
+      "id": "dataleaks",
+      "name": "dataleaks",
+      "summary": "Self-hosted data breach search engine",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dataleaks"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dataleaks"
+    },
+    {
+      "id": "datasploit",
+      "name": "datasploit",
+      "summary": "OSINT framework, find, aggregate and export data",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "datasploit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=datasploit"
+    },
+    {
+      "id": "dc_detector",
+      "name": "dc_detector",
+      "summary": "Spot all domain controllers in a Microsoft Active Directory environment, find computer name, FQDN, and IP address(es) of all DCs",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dc-detector"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dc-detector"
+    },
+    {
+      "id": "deadtrap",
+      "name": "deadtrap",
+      "summary": "Track down footprints of a phone number",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "deadtrap"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=deadtrap"
+    },
+    {
+      "id": "dnsenum2",
+      "name": "dnsenum2",
+      "summary": "Continuation of dnsenum project",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dnsenum2"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dnsenum2"
+    },
+    {
+      "id": "domain_hunter_2",
+      "name": "domain_hunter_2",
+      "summary": "Try to find all subdomains, similar-domains and related-domains of an organization.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "domain_hunter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=domain_hunter"
+    },
+    {
+      "id": "domainim",
+      "name": "domainim",
+      "summary": "Domain reconnaissance for organizational network scanning",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "domainim"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=domainim"
+    },
+    {
+      "id": "domlink",
+      "name": "domlink",
+      "summary": "Link a domain with registered organisation names and emails, to other domains.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "domlink"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=domlink"
+    },
+    {
+      "id": "dvrf",
+      "name": "dvrf",
+      "summary": "The Damn Vulnerable Router Firmware project.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dvrf"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dvrf"
+    },
+    {
+      "id": "evilclippy",
+      "name": "evilclippy",
+      "summary": "Create malicious MS Office documents to hide VBA macros, stomp VBA code.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "evilclippy"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=evilclippy"
+    },
+    {
+      "id": "extract_endpoints",
+      "name": "extract_endpoints",
+      "summary": "Extract endpoints from source files.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "extract-endpoints"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=extract-endpoints"
+    },
+    {
+      "id": "eyeballer",
+      "name": "eyeballer",
+      "summary": "Convolutional neural network for analyzing pentest screenshots and automatically label them",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "eyeballer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=eyeballer"
+    },
+    {
+      "id": "facebook_osint_dump",
+      "name": "facebook_osint_dump",
+      "summary": "OSINT tool, facebook profile dumper, windows and chrome only",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "facebook_osint_dump"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=facebook_osint_dump"
+    },
+    {
+      "id": "favfreak",
+      "name": "favfreak",
+      "summary": "Favicon fingerprinting",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "favfreak"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=favfreak"
+    },
+    {
+      "id": "scanless",
+      "name": "scanless",
+      "summary": "This is a Python 3 command-line utility and library for using websites that can perform port scans on your behalf.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "scanless"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=scanless"
+    },
+    {
+      "id": "sniff_paste",
+      "name": "sniff_paste",
+      "summary": "Sniff-Paste is a multithreaded pastebin scraper, scrapes to mysql database, then reads pastes for noteworthy information.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sniff-paste"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=sniff-paste"
+    },
+    {
+      "id": "yet_another_sniffer",
+      "name": "yet_another_sniffer",
+      "summary": "A network analyzer that make easy to extract informations about network traffic.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "yet-another-sniffer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=yet-another-sniffer"
+    }
+  ]
+}

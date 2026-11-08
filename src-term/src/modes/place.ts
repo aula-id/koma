@@ -66,6 +66,7 @@ export function selectedOf(mode: unknown): number {
       const pane = str(body.pane) || (flag(body.health_view) ? "deps" : "tools")
       if (pane === "deps") return num(body.health_selected)
       if (pane === "refused") return num(body.refused_selected)
+      if (pane === "images") return num(body.images_selected)
       return num(body.selected)
     }
     case "Remote": {

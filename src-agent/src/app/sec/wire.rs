@@ -62,6 +62,7 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    // Prefer the active composition digest from images.json (fallback: image-ref).
     if let Some(image) = crate::security::pinned_safety_image() {
         cmd.env("KOMA_SEC_IMAGE", image);
     }

@@ -153,6 +153,16 @@ export interface ExtScreenSnapshot {
   error: string | null
 }
 
+export interface SafetyImageRow {
+  id: string
+  blurb: string
+  tag: string
+  size_label: string
+  local: boolean
+  active: boolean
+  status?: string
+}
+
 export interface SecuritySnapshot {
   status: SecStatus
   selected: number
@@ -163,6 +173,9 @@ export interface SecuritySnapshot {
   pane?: string
   health_selected: number
   refused_selected?: number
+  images?: Array<SafetyImageRow>
+  images_selected?: number
+  images_busy?: boolean
   lane_label?: string
   health_fetching: boolean
   health_frame: number

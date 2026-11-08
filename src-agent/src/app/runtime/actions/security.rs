@@ -511,6 +511,63 @@ pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()
     Ok(())
 }
 
+/// `p` on Images — pull the selected composition (blocking, like install).
+pub(super) fn handle_security_image_pull(id: String, state: &mut AppState) -> Result<()> {
+    state.rest.fg_mut().status = format!("security: pulling image '{id}'…");
+    if let Mode::Security(s) = state.mode_mut() {
+        s.images_busy = true;
+    }
+    let outcome = match crate::security::pull_composition(&id, false) {
+        Ok(()) => format!("security: pulled '{id}'"),
+        Err(e) => format!("security: pull '{id}' failed: {e}"),
+    };
+    state.rest.fg_mut().status = outcome;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.images_busy = false;
+        s.refresh_images();
+    }
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// Enter/`a` on Images — activate a previously pulled composition.
+pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -> Result<()> {
+    let outcome = match crate::security::activate_composition(&id) {
+        Ok(()) => format!("security: activated '{id}' (restart daemon to apply)"),
+        Err(e) => format!("security: activate '{id}' failed: {e}"),
+    };
+    state.rest.fg_mut().status = outcome;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// `x`/Delete on Images — drop a non-active local composition.
+pub(super) fn handle_security_image_remove(id: String, state: &mut AppState) -> Result<()> {
+    let outcome = match crate::security::remove_composition(&id) {
+        Ok(()) => format!("security: removed '{id}'"),
+        Err(e) => format!("security: remove '{id}' failed: {e}"),
+    };
+    state.rest.fg_mut().status = outcome;
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// `r` on Images — rebuild the composition list from inventory.
+pub(super) fn handle_security_image_refresh(state: &mut AppState) -> Result<()> {
+    if let Mode::Security(s) = state.mode_mut() {
+        s.refresh_images();
+    }
+    state.rest.fg_mut().status = "security: images list refreshed".into();
+    refresh_security_state(state, None);
+    Ok(())
+}
+
 /// `c` — try to bring Docker up via Colima when present; otherwise surface a hint.
 pub(super) fn handle_security_ensure_runtime(state: &mut AppState) -> Result<()> {
     // Force a blocking probe: the user asked for a runtime check/start.

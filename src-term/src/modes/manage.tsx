@@ -186,6 +186,7 @@ export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onM
   const inactive = new Set(strings(body.inactive))
   const health = rows(body.install_health)
   const refused = rows(status.refused)
+  const images = rows(body.images)
   const pane = str(body.pane) || (flag(body.health_view) ? "deps" : "tools")
   const domains = [...new Set(tools.map((row) => str(row.domain)))]
   const groupedTools = domains.flatMap((domain) => tools.filter((row) => str(row.domain) === domain))
@@ -194,24 +195,45 @@ export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onM
       ? [...health].sort((a, b) => num(a.tier) - num(b.tier)).map((row) => ({ label: str(row.name) || str(row.key), detail: `tier ${num(row.tier)}`, badge: { text: flag(row.present) ? "present" : "missing", role: flag(row.present) ? "success" : "warn" } }))
       : pane === "refused"
         ? refused.map((row) => ({ label: str(row.name), detail: str(row.reason), badge: { text: "refused", role: "warn" } }))
-        : [
-          { label: "Security daemon", toggle: flag(status.running), badge: { text: flag(status.running) ? "running" : "stopped", role: flag(status.running) ? "success" : "dim" } },
-          { label: "YOLO mode", toggle: flag(body.yolo_armed), badge: { text: flag(body.yolo_armed) ? "armed" : "locked", role: flag(body.yolo_armed) ? "warn" : "dim" } },
-          ...groupedTools.map((row): Line => ({
-            label: str(row.name),
-            toggle: !inactive.has(str(row.name)),
-            detail: [str(row.compute), str(row.effect)].filter(Boolean).join(" · "),
-            badge: { text: str(row.domain), role: "info" },
-          })),
-        ]
+        : pane === "images"
+          ? images.map((row) => ({
+            label: `${flag(row.active) ? "* " : "  "}${str(row.id)}`,
+            detail: `${str(row.size_label) || "—"} · ${str(row.blurb)}`,
+            badge: {
+              text: flag(row.active) ? "active" : flag(row.local) ? "local" : "remote",
+              role: flag(row.active) ? "success" : flag(row.local) ? "info" : "dim",
+            },
+          }))
+          : [
+            { label: "Security daemon", toggle: flag(status.running), badge: { text: flag(status.running) ? "running" : "stopped", role: flag(status.running) ? "success" : "dim" } },
+            { label: "YOLO mode", toggle: flag(body.yolo_armed), badge: { text: flag(body.yolo_armed) ? "armed" : "locked", role: flag(body.yolo_armed) ? "warn" : "dim" } },
+            ...groupedTools.map((row): Line => ({
+              label: str(row.name),
+              toggle: !inactive.has(str(row.name)),
+              detail: [str(row.compute), str(row.effect)].filter(Boolean).join(" · "),
+              badge: { text: str(row.domain), role: "info" },
+            })),
+          ]
   const selected =
-    pane === "deps" ? num(body.health_selected) : pane === "refused" ? num(body.refused_selected) : num(body.selected)
+    pane === "deps"
+      ? num(body.health_selected)
+      : pane === "refused"
+        ? num(body.refused_selected)
+        : pane === "images"
+          ? num(body.images_selected)
+          : num(body.selected)
   const runtime = str(status.runtime) || (flag(status.runtime_ok) ? "docker ready" : "runtime unknown")
   const lane = str(body.lane_label) || "none"
   const refusedN = refused.length
+  const paneTitle =
+    pane === "deps" ? "Dependencies" : pane === "refused" ? "Refused" : pane === "images" ? "Images" : "Tools"
+  const hint =
+    pane === "images"
+      ? "p pull · enter activate · x remove · r refresh · h panes · esc"
+      : "enter toggle · a all · n none · u refresh · c runtime · d domain · h panes · i install · r restart · esc"
   return {
     title: "security",
-    hint: "enter toggle · a all · n none · u refresh · c runtime · d domain · h panes · i install · r restart · esc",
+    hint,
     children: (
       <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
         <Note
@@ -220,8 +242,9 @@ export function securityView(body: MenuData["Security"] & Rec, theme: Theme, onM
         />
         {pane === "deps" && health.length ? <Note text={[...health].sort((a,b)=>num(a.tier)-num(b.tier))[selected]?.hint ? `${str([...health].sort((a,b)=>num(a.tier)-num(b.tier))[selected]?.method)} · ${str([...health].sort((a,b)=>num(a.tier)-num(b.tier))[selected]?.hint)}` : ""} theme={theme} color={theme.info} /> : null}
         {pane === "refused" && !refused.length ? <Note text={flag(status.running) ? "none — every descriptor passed" : "no data (daemon stopped)"} theme={theme} /> : null}
+        {pane === "images" && flag(body.images_busy) ? <Note text="pulling image…" theme={theme} color={theme.info} /> : null}
         {body.health_fetching ? <Note text="checking dependencies…" theme={theme} /> : null}
-        <Panel title={pane === "deps" ? "Dependencies" : pane === "refused" ? "Refused" : "Tools"} hot theme={theme}><Lines rows={lines} selected={selected} theme={theme} onPress={onMove} /></Panel>
+        <Panel title={paneTitle} hot theme={theme}><Lines rows={lines} selected={selected} theme={theme} onPress={onMove} /></Panel>
       </box>
     ),
   }

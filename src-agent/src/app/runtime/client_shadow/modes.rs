@@ -656,6 +656,7 @@ fn shadow_agent_field(f: &str) -> AgentEditField {
 pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
     use crate::app::mode::SecPane;
     let pane = match s.pane.as_str() {
+        "images" => SecPane::Images,
         "deps" => SecPane::Deps,
         "refused" => SecPane::Refused,
         // Fall back to the legacy bool when pane token is absent/unknown.
@@ -673,6 +674,9 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         // Install-health + the pane toggle + its cursor ride verbatim so the client
         // renders the same dependency pane the daemon would.
         install_health: s.install_health,
+        images: s.images,
+        images_selected: s.images_selected,
+        images_busy: s.images_busy,
         pane,
         health_selected: s.health_selected,
         refused_selected: s.refused_selected,

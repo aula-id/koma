@@ -185,7 +185,7 @@ pub struct SecuritySnapshot {
     /// Kept for older clients; prefer [`Self::pane`] when present.
     #[serde(default)]
     pub health_view: bool,
-    /// Active pane token: `"tools"` | `"deps"` | `"refused"`. Default tools.
+    /// Active pane token: `"tools"` | `"images"` | `"deps"` | `"refused"`. Default tools.
     #[serde(default)]
     pub pane: String,
     /// Selected index into `install_health` (the dependency-pane cursor).
@@ -194,6 +194,15 @@ pub struct SecuritySnapshot {
     /// Selected index into `status.refused` (the refused-pane cursor).
     #[serde(default)]
     pub refused_selected: usize,
+    /// Guest composition rows for the Images pane (catalogue + inventory).
+    #[serde(default)]
+    pub images: Vec<crate::app::mode::SafetyImageRow>,
+    /// Selected index into `images`.
+    #[serde(default)]
+    pub images_selected: usize,
+    /// Optional busy flag while a long image op runs (v1 pull is blocking).
+    #[serde(default)]
+    pub images_busy: bool,
     /// Session cyber-lane label for the status strip.
     #[serde(default)]
     pub lane_label: String,

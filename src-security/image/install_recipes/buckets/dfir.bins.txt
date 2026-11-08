@@ -1,0 +1,8 @@
+exiftool
+extundelete
+fenrir
+foremost
+loki
+yara
+falconhound
+fibratus

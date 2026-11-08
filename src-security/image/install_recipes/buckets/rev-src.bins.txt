@@ -1,0 +1,15 @@
+adhrit
+androbugs-framework
+apkhunt
+apkleaks
+arm_now
+aslray
+binbloom
+cifrex
+dbgshell
+de4dot
+decompiler-explorer
+droidefense
+flutter-spy
+pastis
+xxxpwn_smart

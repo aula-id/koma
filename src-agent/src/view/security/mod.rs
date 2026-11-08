@@ -4,7 +4,7 @@
 //! - Header: label "security" with BOTTOM border only.
 //! - Control block: navigable `[x] Daemon running` checkbox, status strip
 //!   (installed / runtime / lane / refused), YOLO checkbox.
-//! - Body (cycled by `h`): TOOLS | DEPENDENCIES | REFUSED panes.
+//! - Body (cycled by `h`): TOOLS | IMAGES | DEPENDENCIES | REFUSED panes.
 //! - Footer: full-width inverse hint bar (per active pane).
 
 use ratatui::{
@@ -59,6 +59,9 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
         SecPane::Tools => {
             render_tools(&mut lines, st, palette, active, dim_style);
         }
+        SecPane::Images => {
+            render_images(&mut lines, st, palette);
+        }
         SecPane::Deps => {
             render_deps(&mut lines, st, palette);
         }
@@ -76,6 +79,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
             SecPane::Tools => {
                 "↑↓ · Space toggle · d domain · a all · n none · u refresh · c runtime · l lane · h panes · r restart · Esc"
             }
+            SecPane::Images => "↑↓ · p pull · enter activate · x remove · r refresh · h panes · Esc",
             SecPane::Deps => "↑↓ · i install · h panes · r restart · Esc",
             SecPane::Refused => "↑↓ · u refresh toolkit · h panes · r restart · Esc",
         };
@@ -294,6 +298,73 @@ fn render_tools(
             "  start daemon to load catalog + boundary status",
             dim_style,
         )));
+    }
+}
+
+fn render_images(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
+    let dim_style = Style::default().fg(palette.dim);
+    let sel_style = Style::default()
+        .fg(palette.sel_fg)
+        .bg(palette.sel_bg)
+        .add_modifier(Modifier::BOLD);
+
+    lines.push(Line::from(Span::styled(
+        "guest compositions — pull domain images; activate pins image-ref",
+        dim_style,
+    )));
+    if st.images_busy {
+        lines.push(Line::from(Span::styled(
+            "working…",
+            Style::default().fg(palette.accent),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    if st.images.is_empty() {
+        lines.push(Line::from(Span::styled("no compositions catalogued", dim_style)));
+        return;
+    }
+
+    for (pos, row) in st.images.iter().enumerate() {
+        let is_selected = pos == st.images_selected;
+        let marker = if row.active { "*" } else { " " };
+        let where_label = if row.active {
+            "active"
+        } else if row.local {
+            "local "
+        } else {
+            "remote"
+        };
+        let name_style = if is_selected {
+            sel_style
+        } else if row.active {
+            Style::default()
+                .fg(palette.success)
+                .add_modifier(Modifier::BOLD)
+        } else if row.local {
+            Style::default().fg(palette.accent)
+        } else {
+            Style::default().fg(palette.fg)
+        };
+        let where_style = if row.active {
+            Style::default()
+                .fg(palette.success)
+                .add_modifier(Modifier::BOLD)
+        } else if row.local {
+            Style::default().fg(palette.accent)
+        } else {
+            dim_style
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), name_style),
+            Span::styled(format!("{:<14}", row.id), name_style),
+            Span::raw(" "),
+            Span::styled(format!("{:>5}", row.size_label), dim_style),
+            Span::raw("  "),
+            Span::styled(where_label, where_style),
+            Span::raw("  "),
+            Span::styled(row.blurb.clone(), dim_style),
+        ]));
     }
 }
 

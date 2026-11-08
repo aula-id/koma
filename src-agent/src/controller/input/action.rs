@@ -299,6 +299,14 @@ pub enum Action {
     /// `c` in the `/security` panel — try to bring the container runtime up
     /// (Colima start when installed; otherwise a status hint only).
     SecurityEnsureRuntime,
+    /// `p` on the Images pane — pull the selected composition (blocking; status line updates).
+    SecurityImagePull(String),
+    /// Enter/`a` on the Images pane — activate a previously pulled composition.
+    SecurityImageActivate(String),
+    /// `x`/Delete on the Images pane — remove a non-active local composition.
+    SecurityImageRemove(String),
+    /// `r` on the Images pane — rebuild the composition list from inventory.
+    SecurityImageRefresh,
     // --- Bash job panel actions ---
     /// Esc from the `/bash` panel — return to Chat.
     CloseBash,

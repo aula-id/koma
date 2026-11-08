@@ -418,6 +418,22 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_ensure_runtime(state)?;
         }
 
+        Action::SecurityImagePull(id) => {
+            security::handle_security_image_pull(id, state)?;
+        }
+
+        Action::SecurityImageActivate(id) => {
+            security::handle_security_image_activate(id, state)?;
+        }
+
+        Action::SecurityImageRemove(id) => {
+            security::handle_security_image_remove(id, state)?;
+        }
+
+        Action::SecurityImageRefresh => {
+            security::handle_security_image_refresh(state)?;
+        }
+
         Action::CloseBash => {
             bash::handle_close_bash(state)?;
         }

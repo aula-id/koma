@@ -1,0 +1,5 @@
+github.com/bm402/apidor@latest
+github.com/sw33tLie/bbscope@latest
+github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+github.com/musana/mx-takeover@latest
+github.com/hueristiq/xurlfind3r@latest

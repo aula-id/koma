@@ -1,0 +1,424 @@
+{
+  "version": 1,
+  "pack": "recon-2",
+  "tools": [
+    {
+      "id": "routersploit",
+      "name": "routersploit",
+      "summary": "Exploitation framework for embedded devices: exploits, default credentials, scanners, payloads",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "routersploit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y routersploit; detect=routersploit"
+    },
+    {
+      "id": "rubeus",
+      "name": "rubeus",
+      "summary": "Kerberos interaction and abuses",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "rubeus"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y rubeus; detect=rubeus"
+    },
+    {
+      "id": "scapy",
+      "name": "scapy",
+      "summary": "Powerful and interactive packet manipulation program and library.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "scapy"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y scapy; detect=scapy"
+    },
+    {
+      "id": "sherlock",
+      "name": "sherlock",
+      "summary": "Hunt down social media accounts by username across social networks",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sherlock"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sherlock; detect=sherlock"
+    },
+    {
+      "id": "singularity",
+      "name": "singularity",
+      "summary": "DNS rebinding attack framework",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "singularity"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y singularity; detect=singularity"
+    },
+    {
+      "id": "snort",
+      "name": "snort",
+      "summary": "Intrusion detection system that monitors network traffic for suspicious activities and threats",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "snort"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y snort; detect=snort"
+    },
+    {
+      "id": "spiderfoot",
+      "name": "spiderfoot",
+      "summary": "OSINT framework, collect and manage data, scan target",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "spiderfoot"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y spiderfoot; detect=spiderfoot"
+    },
+    {
+      "id": "sprayhound",
+      "name": "sprayhound",
+      "summary": "Password spraying in Active Directory checking the default domain password policy and the badpwdcount LDAP attribute to avoid account locking, set pwned users as owned in Bloodhound and detect path to Domain Admins",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sprayhound"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sprayhound; detect=sprayhound"
+    },
+    {
+      "id": "subfinder",
+      "name": "subfinder",
+      "summary": "Discovers valid subdomains for websites, designed as a passive framework to be useful for bug bounties and safe for penetration testing",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "subfinder"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y subfinder; detect=subfinder"
+    },
+    {
+      "id": "sublist3r",
+      "name": "sublist3r",
+      "summary": "Subdomains enumeration tool",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sublist3r"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y sublist3r; detect=sublist3r"
+    },
+    {
+      "id": "theharvester",
+      "name": "theharvester",
+      "summary": "Multi-purpose information gathering tool: emails, names, subdomains, IPs, URLs",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "theharvester"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y theharvester; detect=theharvester"
+    },
+    {
+      "id": "trufflehog",
+      "name": "trufflehog",
+      "summary": "Find secret information in git repositories",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "trufflehog"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y trufflehog; detect=trufflehog"
+    },
+    {
+      "id": "wafw00f",
+      "name": "wafw00f",
+      "summary": "Identify and fingerprint Web Application Firewall products protecting a website.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "wafw00f"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y wafw00f; detect=wafw00f"
+    },
+    {
+      "id": "waymore",
+      "name": "waymore",
+      "summary": "Find links from Wayback Machine, Common Crawl, Alien Vault OTX and URLScan; download the archived responses for URLs on Wayback Machine",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "waymore"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y waymore; detect=waymore"
+    },
+    {
+      "id": "webscarab",
+      "name": "webscarab",
+      "summary": "Framework for analysing applications that communicate using the HTTP and HTTPS protocols.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "webscarab"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y webscarab; detect=webscarab"
+    },
+    {
+      "id": "wifiphisher",
+      "name": "wifiphisher",
+      "summary": "The rogue access point framework.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "wifiphisher"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y wifiphisher; detect=wifiphisher"
+    },
+    {
+      "id": "wifipumpkin3",
+      "name": "wifipumpkin3",
+      "summary": "Powerful framework for rogue access point attack.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "wifipumpkin3"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y wifipumpkin3; detect=wifipumpkin3"
+    },
+    {
+      "id": "yersinia",
+      "name": "yersinia",
+      "summary": "A framework for layer 2 attacks.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "yersinia"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y yersinia; detect=yersinia"
+    },
+    {
+      "id": "zmap",
+      "name": "zmap",
+      "summary": "Collection of tools to scan and study massive networks",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "zmap"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-2",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y zmap; detect=zmap"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+aws_pwn
+awsbucketdump
+azureadrecon
+cc.py
+cloudfrunt
+cloudtracker
+dnsreaper
+dork-search-files
+eagleeye
+festin
+firebase-extractor
+offensive-azure
+teh-s3-bucketeers

@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "pack": "cloud-ext",
+  "tools": [
+    {
+      "id": "bucket_stream",
+      "name": "bucket_stream",
+      "summary": "Find interesting Amazon S3 Buckets by watching certificate transparency logs.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bucket-stream"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g bucket-stream; detect=bucket-stream"
+    },
+    {
+      "id": "cloudgpt",
+      "name": "cloudgpt",
+      "summary": "Vulnerability scanner for AWS customer managed policies using ChatGPT",
+      "categories": [
+        "cloud"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cloudgpt"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g cloudgpt; detect=cloudgpt"
+    },
+    {
+      "id": "cloudscraper",
+      "name": "cloudscraper",
+      "summary": "Tool to enumerate targets in search of cloud resources.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cloudscraper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g cloudscraper; detect=cloudscraper"
+    },
+    {
+      "id": "cloudsploit",
+      "name": "cloudsploit",
+      "summary": "Cloud Security Posture Management (CSPM).",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cloudsploit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g cloudsploit; detect=cloudsploit"
+    },
+    {
+      "id": "curate",
+      "name": "curate",
+      "summary": "A tool for fetching archived URLs.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "curate"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g curate; detect=curate"
+    },
+    {
+      "id": "linkedindumper",
+      "name": "linkedindumper",
+      "summary": "Script that dumps employee data from the LinkedIn social networking platform.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "linkedindumper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g linkedindumper; detect=linkedindumper"
+    },
+    {
+      "id": "prowler",
+      "name": "prowler",
+      "summary": "Open Source Security tool to perform Cloud Security best practices",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "prowler"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=npm; primary=npm install -g prowler; detect=prowler"
+    },
+    {
+      "id": "barq",
+      "name": "barq",
+      "summary": "The AWS Cloud Post Exploitation framework!",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "barq"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=cargo; primary=cargo install barq; detect=barq"
+    },
+    {
+      "id": "nsdetect",
+      "name": "nsdetect",
+      "summary": "Utility to detect AWS NS Takeover.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "nsdetect"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=cargo; primary=cargo install nsdetect; detect=nsdetect"
+    },
+    {
+      "id": "sandcastle",
+      "name": "sandcastle",
+      "summary": "A Python script for AWS S3 bucket enumeration.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sandcastle"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-ext",
+      "how_to": "channel=cargo; primary=cargo install sandcastle; detect=sandcastle"
+    }
+  ]
+}

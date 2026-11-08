@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "pack": "pxn-src",
+  "tools": [
+    {
+      "id": "aclpwn",
+      "name": "aclpwn",
+      "summary": "Interacts with BloodHound to identify and exploit ACL based privilege escalation paths",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "aclpwn"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=aclpwn"
+    },
+    {
+      "id": "adfsdump",
+      "name": "adfsdump",
+      "summary": "Read information from Active Directory and ADFS Configuration Database; fed information into ADFSpoof to generate security tokens",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "adfsdump"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=adfsdump"
+    },
+    {
+      "id": "adfspoof",
+      "name": "adfspoof",
+      "summary": "Using ADFSDump information, produce a usable key/cert pair for token signing, produce a signed security token that can be used to access a federated application",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "adfspoof"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=adfspoof"
+    },
+    {
+      "id": "android_emuroot",
+      "name": "android_emuroot",
+      "summary": "Grants root privileges on the fly to shells running on Android virtual machines that use google-provided emulator images called Google API Playstore",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "android_emuroot"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=android_emuroot"
+    },
+    {
+      "id": "bofnet",
+      "name": "bofnet",
+      "summary": "A .NET Runtime for Cobalt Strike's Beacon Object Files",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bofnet"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=bofnet"
+    },
+    {
+      "id": "broneypote",
+      "name": "broneypote",
+      "summary": "Honeypot",
+      "categories": [
+        "honeypot-and-decoy"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "broneypote"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=broneypote"
+    },
+    {
+      "id": "btlejack",
+      "name": "btlejack",
+      "summary": "Bluetooth Low Energy Swiss-army knife",
+      "categories": [
+        "wireless"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "btlejack"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=btlejack"
+    },
+    {
+      "id": "chipwhisperer",
+      "name": "chipwhisperer",
+      "summary": "Toolchain for side-channel power analysis and glitching attacks",
+      "categories": [
+        "hardware"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "chipwhisperer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=chipwhisperer"
+    },
+    {
+      "id": "cookiecrimesjs",
+      "name": "cookiecrimesjs",
+      "summary": "Read local Chrome cookies without root or decrypting and display then in JSON; Javascript implementation of cookie\\_crimes",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cookiecrimesjs"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cookiecrimesjs"
+    },
+    {
+      "id": "cortex_xdr_config_extractor",
+      "name": "cortex_xdr_config_extractor",
+      "summary": "Parse the Database Lock Files of the Cortex XDR Agent by Palo Alto Networks and extract Agent Settings, the Hash and Salt of the Uninstall Password, as well as possible Exclusions",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cortex-xdr-config-extractor"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cortex-xdr-config-extractor"
+    },
+    {
+      "id": "creddump",
+      "name": "creddump",
+      "summary": "Dump windows credentials",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "creddump"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=creddump"
+    },
+    {
+      "id": "credmaster",
+      "name": "credmaster",
+      "summary": "Password spraying, uses FireProx APIs to rotate IP addresses, stay anonymous, and beat throttling",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "credmaster"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=credmaster"
+    },
+    {
+      "id": "dllpasswordfilterimplant",
+      "name": "dllpasswordfilterimplant",
+      "summary": "Password filter DLL, triggered on password change to exfiltrate credentials",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dllpasswordfilterimplant"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dllpasswordfilterimplant"
+    },
+    {
+      "id": "donpapi",
+      "name": "donpapi",
+      "summary": "Dumping DPAPI credentials remotely; dumps relevant information on compromised targets without AV detection",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "donpapi"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=donpapi"
+    },
+    {
+      "id": "edrsilencer",
+      "name": "edrsilencer",
+      "summary": "Uses Windows Filtering Platform (WFP) to block Endpoint Detection and Response (EDR) agents from reporting security events to the server",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "edrsilencer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=edrsilencer"
+    },
+    {
+      "id": "fireelf",
+      "name": "fireelf",
+      "summary": "Fileless linux malware framework",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "fireelf"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=fireelf"
+    },
+    {
+      "id": "flutterguard",
+      "name": "flutterguard",
+      "summary": "Know and see everything an attacker can extract and get from your published Flutter app",
+      "categories": [
+        "adversary-simulation"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "flutterguard"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=flutterguard"
+    },
+    {
+      "id": "pypykatz",
+      "name": "pypykatz",
+      "summary": "Platform idependent Mimikatz implementation",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pypykatz"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=pypykatz"
+    },
+    {
+      "id": "quadrainspect",
+      "name": "quadrainspect",
+      "summary": "A comprehensive approach to the vulnerability analysis of Android application.",
+      "categories": [
+        "configuration-audit"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "quadrainspect"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=quadrainspect"
+    },
+    {
+      "id": "sweetpotato",
+      "name": "sweetpotato",
+      "summary": "A collection of various Windows privilege escalation techniques from service accounts to SYSTEM.",
+      "categories": [
+        "honeypot-and-decoy"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "sweetpotato"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=sweetpotato"
+    }
+  ]
+}

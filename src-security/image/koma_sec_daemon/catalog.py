@@ -330,6 +330,8 @@ def get_tool(name: str, lane: str | None = None) -> dict | None:
             "ready": bool(r.get("ready", True)),
             "scope_needed": bool(r.get("scope_needed", False)),
             "image_or_pack": r.get("image_or_pack"),
+            "image": r.get("image_or_pack"),
+            "ready_on_active": bool(r.get("ready", True)),
             **(
                 {"missing": r.get("missing"), "hint": r.get("hint")}
                 if not r.get("ready", True)
@@ -362,7 +364,19 @@ def gate_run(name: str, lane: str | None = None) -> str | None:
     if not row.get("ready", True):
         miss = row.get("missing") or "dependency"
         hint = row.get("hint") or ""
-        return f"{n} not ready ({miss})" + (f": {hint}" if hint else "")
+        img = row.get("image_or_pack") or ""
+        msg = f"{n} not ready ({miss})"
+        extras: list[str] = []
+        if hint:
+            extras.append(str(hint))
+        if img and img not in ("smoke", "external", "debian"):
+            extras.append(
+                f"needs guest image '{img}' — pull/activate in /security → Images "
+                f"(koma-safety:…-{img})"
+            )
+        if extras:
+            msg = msg + ": " + "; ".join(extras)
+        return msg
     return None
 
 def lane_allows(name: str, lane: str) -> bool:

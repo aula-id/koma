@@ -583,6 +583,9 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
                 crate::app::mode::SecPane::Refused => {
                     s.refused_selected = index;
                 }
+                crate::app::mode::SecPane::Images => {
+                    s.images_selected = index;
+                }
                 crate::app::mode::SecPane::Tools => {
                     s.selected = index;
                 }

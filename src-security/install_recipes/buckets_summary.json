@@ -1,0 +1,522 @@
+{
+  "tools_in": 723,
+  "skipped_snap": 14,
+  "skipped_other": 0,
+  "domain_tool_counts": {
+    "cloud": 37,
+    "crypto": 22,
+    "dfir": 24,
+    "identity": 78,
+    "lab": 168,
+    "pxn": 51,
+    "recon": 203,
+    "rev": 36,
+    "web": 104
+  },
+  "category_counts": {
+    "informations-gathering": 114,
+    "other": 114,
+    "auth-perms": 65,
+    "web-application-exploitation": 45,
+    "networking": 36,
+    "vulnerabilities": 35,
+    "cloud-services": 32,
+    "development": 32,
+    "network": 27,
+    "osint-and-reconnaissance": 25,
+    "system-exploitation": 20,
+    "red-teaming": 16,
+    "reverse-engineering": 16,
+    "cryptanalysis": 15,
+    "bug-bounty": 13,
+    "cracking": 13,
+    "code-analysis": 12,
+    "digital-forensics": 10,
+    "virtualization": 8,
+    "cms": 7,
+    "cryptography": 6,
+    "incident-response": 6,
+    "cloud": 5,
+    "defensive": 5,
+    "source-code-management": 5,
+    "wireless": 5,
+    "honeypot-and-decoy": 4,
+    "operating-systems": 4,
+    "vulnerability-assessment": 4,
+    "adversary-simulation": 3,
+    "binary-exploitation": 3,
+    "databases": 3,
+    "ai": 2,
+    "ai-skills": 2,
+    "configuration-audit": 2,
+    "crisis-management": 2,
+    "plugins": 2,
+    "hardware": 1,
+    "mobile": 1,
+    "reconnaissance": 1,
+    "steganography": 1,
+    "threat-intelligence": 1
+  },
+  "compositions": {
+    "recon": {
+      "apt": 73,
+      "go": 16,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 91,
+      "tools_in_pack": 91,
+      "base_hint": "kali",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "recon-2": {
+      "apt": 19,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 19,
+      "tools_in_pack": 19,
+      "base_hint": "debian",
+      "channels": [
+        "apt"
+      ]
+    },
+    "recon-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 31,
+      "cargo": 19,
+      "src": 0,
+      "bins": 50,
+      "tools_in_pack": 50,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "recon-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 35,
+      "bins": 35,
+      "tools_in_pack": 35,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "web": {
+      "apt": 24,
+      "go": 5,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 29,
+      "tools_in_pack": 29,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "web-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 33,
+      "cargo": 7,
+      "src": 0,
+      "bins": 40,
+      "tools_in_pack": 40,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "web-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 33,
+      "bins": 33,
+      "tools_in_pack": 33,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "identity": {
+      "apt": 28,
+      "go": 3,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 31,
+      "tools_in_pack": 31,
+      "base_hint": "kali",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "identity-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 14,
+      "cargo": 9,
+      "src": 0,
+      "bins": 23,
+      "tools_in_pack": 23,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "identity-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 23,
+      "bins": 23,
+      "tools_in_pack": 23,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "cloud": {
+      "apt": 8,
+      "go": 5,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 13,
+      "tools_in_pack": 13,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "cloud-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 7,
+      "cargo": 3,
+      "src": 0,
+      "bins": 10,
+      "tools_in_pack": 10,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "cloud-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 13,
+      "bins": 13,
+      "tools_in_pack": 13,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "rev": {
+      "apt": 6,
+      "go": 1,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 7,
+      "tools_in_pack": 7,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "rev-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 12,
+      "cargo": 1,
+      "src": 0,
+      "bins": 13,
+      "tools_in_pack": 13,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "rev-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 15,
+      "bins": 15,
+      "tools_in_pack": 15,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "crypto": {
+      "apt": 7,
+      "go": 2,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 9,
+      "tools_in_pack": 9,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "crypto-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 5,
+      "cargo": 3,
+      "src": 0,
+      "bins": 8,
+      "tools_in_pack": 8,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "crypto-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 5,
+      "bins": 5,
+      "tools_in_pack": 5,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "pxn": {
+      "apt": 13,
+      "go": 3,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 16,
+      "tools_in_pack": 16,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "pxn-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 7,
+      "cargo": 7,
+      "src": 0,
+      "bins": 14,
+      "tools_in_pack": 14,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "pxn-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 20,
+      "bins": 20,
+      "tools_in_pack": 20,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "dfir": {
+      "apt": 6,
+      "go": 2,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 8,
+      "tools_in_pack": 8,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "dfir-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 6,
+      "cargo": 4,
+      "src": 0,
+      "bins": 10,
+      "tools_in_pack": 10,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "dfir-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 6,
+      "bins": 6,
+      "tools_in_pack": 6,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "lab": {
+      "apt": 16,
+      "go": 27,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 43,
+      "tools_in_pack": 43,
+      "base_hint": "debian",
+      "channels": [
+        "apt",
+        "go"
+      ]
+    },
+    "lab-ext": {
+      "apt": 0,
+      "go": 0,
+      "npm": 36,
+      "cargo": 9,
+      "src": 0,
+      "bins": 45,
+      "tools_in_pack": 45,
+      "base_hint": "debian",
+      "channels": [
+        "npm",
+        "cargo"
+      ]
+    },
+    "lab-src": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 40,
+      "bins": 40,
+      "tools_in_pack": 40,
+      "base_hint": "debian",
+      "channels": [
+        "from-source"
+      ]
+    },
+    "minimal": {
+      "apt": 0,
+      "go": 0,
+      "npm": 0,
+      "cargo": 0,
+      "src": 0,
+      "bins": 0,
+      "tools_in_pack": 0,
+      "base_hint": "debian",
+      "channels": []
+    }
+  },
+  "composition_ids": [
+    "recon",
+    "recon-2",
+    "recon-ext",
+    "recon-src",
+    "web",
+    "web-ext",
+    "web-src",
+    "identity",
+    "identity-ext",
+    "identity-src",
+    "cloud",
+    "cloud-ext",
+    "cloud-src",
+    "rev",
+    "rev-ext",
+    "rev-src",
+    "crypto",
+    "crypto-ext",
+    "crypto-src",
+    "pxn",
+    "pxn-ext",
+    "pxn-src",
+    "dfir",
+    "dfir-ext",
+    "dfir-src",
+    "lab",
+    "lab-ext",
+    "lab-src",
+    "minimal"
+  ],
+  "packs_written": [
+    "cloud",
+    "cloud-ext",
+    "cloud-src",
+    "crypto",
+    "crypto-ext",
+    "crypto-src",
+    "dfir",
+    "dfir-ext",
+    "dfir-src",
+    "identity",
+    "identity-ext",
+    "identity-src",
+    "lab",
+    "lab-ext",
+    "lab-src",
+    "pxn",
+    "pxn-ext",
+    "pxn-src",
+    "recon",
+    "recon-2",
+    "recon-ext",
+    "recon-src",
+    "rev",
+    "rev-ext",
+    "rev-src",
+    "web",
+    "web-ext",
+    "web-src"
+  ],
+  "rules": {
+    "apt_max_per_domain_image": 75,
+    "src_allowlist_max": 40,
+    "snap": "skipped",
+    "channel": "preferred_order[0]; source\u2192from-source"
+  }
+}

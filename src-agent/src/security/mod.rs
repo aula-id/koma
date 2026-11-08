@@ -13,6 +13,9 @@
 //! | [`venv_python`] | path to the venv Python; used as "installed" marker |
 //! | [`is_installed`] | non-panicking predicate consumed by gating logic |
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
+//! | [`safety_image_tag`] / [`safety_image_tag_for`] | GHCR tag (minimal by default) |
+//! | [`read_images_inventory`] | `images.json` composition inventory |
+//! | [`pull_composition`] / [`activate_composition`] / [`remove_composition`] | Images pane backend |
 
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
@@ -29,6 +32,17 @@ use crate::model::store::base_dir;
 /// so `../src-security` resolves to the sibling directory that holds the
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
+
+// Inventory/pull APIs are consumed by the Phase 3 Images pane; keep them public now.
+#[allow(dead_code)]
+mod images;
+#[allow(unused_imports)]
+pub use images::{
+    activate_composition, composition_tag, list_known_compositions, pull_composition,
+    read_images_inventory, remove_composition, safety_image_tag_for, ImageEntry,
+    ImagesInventory,
+};
+use images::pull_safety_image;
 
 /// How long a runtime probe answer is served before a refresh is allowed.
 ///
@@ -412,37 +426,35 @@ pub fn install(force: bool) -> Result<()> {
         )?;
     }
 
-    bar.tick("downloading koma-safety");
+    bar.tick("downloading koma-safety (minimal)");
     pull_safety_image(&dest, force)?;
     bar.done();
     Ok(())
 }
 
-/// GHCR name of the guest image. The tag is this build's crate version.
+/// GHCR name of the guest image. Tags are `{version}-{composition}`.
 pub const SAFETY_IMAGE: &str = "ghcr.io/aula-id/koma-safety";
 
-/// Tag the installer pulls. `KOMA_SEC_IMAGE` overrides it for a local build.
+/// Tag the installer pulls (`…:{version}-minimal`). `KOMA_SEC_IMAGE` overrides it
+/// for a local build.
 #[must_use]
 pub fn safety_image_tag() -> String {
     match std::env::var("KOMA_SEC_IMAGE") {
         Ok(over) if !over.is_empty() => over,
-        _ => format!("{SAFETY_IMAGE}:{}", env!("CARGO_PKG_VERSION")),
+        _ => safety_image_tag_for("minimal"),
     }
 }
 
-fn image_ref_path(dest: &std::path::Path) -> PathBuf {
+pub(super) fn image_ref_path(dest: &std::path::Path) -> PathBuf {
     dest.join("image-ref")
 }
 
-/// Digest reference written by the last successful pull for this version.
+/// Digest reference of the **active** composition for this version.
+///
+/// Prefers `images.json` active digest; falls back to legacy `image-ref` line 2.
 #[must_use]
 pub fn pinned_safety_image() -> Option<String> {
-    let dest = security_dir().ok()?;
-    let text = std::fs::read_to_string(image_ref_path(&dest)).ok()?;
-    let mut lines = text.lines();
-    let version = lines.next()?.trim();
-    let reference = lines.next()?.trim();
-    (version == env!("CARGO_PKG_VERSION") && !reference.is_empty()).then(|| reference.to_string())
+    images::pinned_from_inventory_or_ref()
 }
 
 fn ships_to_the_user(path: &std::path::Path) -> bool {
@@ -867,7 +879,7 @@ fn ensure_container_runtime() -> Result<()> {
     }
 }
 
-fn quiet(program: &str, args: &[&str]) -> Result<()> {
+pub(super) fn quiet(program: &str, args: &[&str]) -> Result<()> {
     let out = std::process::Command::new(program)
         .args(args)
         .output()
@@ -882,49 +894,6 @@ fn quiet(program: &str, args: &[&str]) -> Result<()> {
         "{program} exited with status {}\n{tail}",
         out.status
     ))
-}
-
-fn pull_safety_image(dest: &std::path::Path, force: bool) -> Result<()> {
-    let version = env!("CARGO_PKG_VERSION");
-    if !force && pinned_safety_image().is_some() {
-        return Ok(());
-    }
-    let docker = std::process::Command::new("docker")
-        .args(["info", "--format", "{{.ServerVersion}}"])
-        .output();
-    if !docker.map(|o| o.status.success()).unwrap_or(false) {
-        return Err(anyhow!(
-            "docker is not installed or not running — security install downloads {SAFETY_IMAGE}:{version} from GHCR"
-        ));
-    }
-    let tag = safety_image_tag();
-    quiet("docker", &["pull", "--quiet", &tag])?;
-    let inspect = std::process::Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            "{{json .RepoDigests}}",
-            &tag,
-        ])
-        .output()
-        .context("failed to inspect the pulled image")?;
-    if !inspect.status.success() {
-        return Err(anyhow!("docker image inspect {tag} failed"));
-    }
-    let digests: Vec<String> = serde_json::from_slice(&inspect.stdout).unwrap_or_default();
-    let reference = if tag.starts_with(SAFETY_IMAGE) {
-        digests
-            .into_iter()
-            .find(|d| d.starts_with(SAFETY_IMAGE) && d.contains("@sha256:"))
-            .ok_or_else(|| anyhow!("pull of {tag} did not record a ghcr digest"))?
-    } else {
-        tag
-    };
-    let body = format!("{version}\n{reference}\n");
-    std::fs::write(image_ref_path(dest), body)
-        .with_context(|| format!("write {}", image_ref_path(dest).display()))?;
-    Ok(())
 }
 
 #[cfg(test)]

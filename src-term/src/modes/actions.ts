@@ -48,6 +48,16 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
   if (name === "Security") {
     const pane = String(b.pane || (b.health_view ? "deps" : "tools"))
+    if (pane === "images") {
+      return [
+        enter("Activate"),
+        char("Pull", "p"),
+        char("Remove", "x"),
+        char("Refresh list", "r"),
+        char("Pane (Images)", "h"),
+        back,
+      ]
+    }
     const paneLabel = pane === "deps" ? "Deps" : pane === "refused" ? "Refused" : "Tools"
     return [
       enter("Toggle"),

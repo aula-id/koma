@@ -1,9 +1,9 @@
 //! Security mode state: the working state for the `/security` daemon control panel.
 //!
-//! A control view (no editor) with THREE body panes: the isolation **dashboard**
-//! (default: daemon + YOLO + runtime summary), Dependency install-health, and
-//! Refused-descriptors. Tools are loaded dynamically via sec_catalog/sec_run —
-//! this panel is not a per-tool enable grid.
+//! A control view (no editor) with FOUR body panes: the isolation **dashboard**
+//! (default: daemon + YOLO + runtime summary), **Images** (guest compositions),
+//! Dependency install-health, and Refused-descriptors. Tools are loaded dynamically
+//! via sec_catalog/sec_run — this panel is not a per-tool enable grid.
 
 use crate::app::sec::{InstallHealthEntry, SecStatus};
 
@@ -33,6 +33,8 @@ pub enum SecPane {
     /// Isolation dashboard (default): daemon, YOLO, runtime/catalog summary.
     #[default]
     Tools,
+    /// Guest composition images (pull / activate / remove).
+    Images,
     /// Dependency install-health.
     Deps,
     /// Handshake refusals (malformed / ungated descriptors).
@@ -40,14 +42,35 @@ pub enum SecPane {
 }
 
 impl SecPane {
-    /// Cycle Tools → Deps → Refused → Tools.
+    /// Cycle Tools → Images → Deps → Refused → Tools.
     pub fn next(self) -> Self {
         match self {
-            SecPane::Tools => SecPane::Deps,
+            SecPane::Tools => SecPane::Images,
+            SecPane::Images => SecPane::Deps,
             SecPane::Deps => SecPane::Refused,
             SecPane::Refused => SecPane::Tools,
         }
     }
+}
+
+/// One row in the Images pane (known composition + local inventory).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SafetyImageRow {
+    /// Composition id (e.g. `minimal`, `recon`).
+    pub id: String,
+    /// Short UI blurb from the static catalogue.
+    pub blurb: String,
+    /// Full docker tag for this composition.
+    pub tag: String,
+    /// Human-readable size (`1.2G`, `—`, …).
+    pub size_label: String,
+    /// Present in local `images.json` with a non-empty digest.
+    pub local: bool,
+    /// Currently active guest composition.
+    pub active: bool,
+    /// Compact status token: `active` / `local` / `remote` (or a busy note).
+    #[serde(default)]
+    pub status: String,
 }
 
 /// Working state for the `/security` daemon control panel.
@@ -55,7 +78,8 @@ impl SecPane {
 /// Holds a snapshot of the daemon status (refreshed on open + after each control key),
 /// the per-dependency install-health list (fetched ONCE on open and after an install —
 /// it is a heavy IPC round-trip, so it is carried, never re-fetched on a plain refresh),
-/// and a cursor for each pane. No drafts, no editor — control panel only.
+/// the guest-image composition list, and a cursor for each pane. No drafts, no editor —
+/// control panel only.
 #[derive(Debug, Clone)]
 pub struct SecurityState {
     /// Latest status snapshot from the daemon manager (or a default when no manager).
@@ -79,6 +103,12 @@ pub struct SecurityState {
     /// Per-dependency install-health, fetched once on panel open (and re-fetched after
     /// an install). Empty when the daemon is stopped / no health data is available.
     pub install_health: Vec<InstallHealthEntry>,
+    /// Known guest compositions + local inventory for the Images pane.
+    pub images: Vec<SafetyImageRow>,
+    /// Images-pane cursor: index into [`Self::images`].
+    pub images_selected: usize,
+    /// `true` while a long-running image op is in flight (optional; pull is blocking in v1).
+    pub images_busy: bool,
     /// Active body pane.
     pub pane: SecPane,
     /// Dependency-pane cursor: an index into [`SecurityState::health_items`] (the
@@ -104,31 +134,78 @@ pub struct SecurityState {
 impl SecurityState {
     /// Build from a live status snapshot, the disabled-tool set, the YOLO arm flag, and
     /// the install-health list, both cursors at the top, showing the tools pane by
-    /// default.
+    /// default. Seeds the Images list from disk inventory.
     pub fn new(
         status: SecStatus,
         inactive: std::collections::HashSet<String>,
         yolo_armed: bool,
         install_health: Vec<InstallHealthEntry>,
     ) -> Self {
-        Self {
+        let mut st = Self {
             status,
             selected: 0,
             inactive,
             yolo_armed,
             install_health,
+            images: Vec::new(),
+            images_selected: 0,
+            images_busy: false,
             pane: SecPane::Tools,
             health_selected: 0,
             refused_selected: 0,
             health_fetching: false,
             health_frame: 0,
             lane_label: "none".into(),
-        }
+        };
+        st.refresh_images();
+        st
     }
 
     /// Compatibility: true when the deps pane is showing (old `health_view` bool).
     pub fn health_view(&self) -> bool {
         self.pane == SecPane::Deps
+    }
+
+    /// Rebuild [`Self::images`] from the static catalogue + `images.json` inventory.
+    ///
+    /// Size labels come from inventory `size_bytes` when present (recorded at pull time).
+    pub fn refresh_images(&mut self) {
+        let inv = crate::security::read_images_inventory();
+        let version = env!("CARGO_PKG_VERSION");
+        // Stale inventory from another agent version: treat nothing as local/active.
+        let version_ok = inv.version.is_empty() || inv.version == version;
+        let mut rows = Vec::with_capacity(crate::security::list_known_compositions().len());
+        for (id, blurb) in crate::security::list_known_compositions() {
+            let tag = crate::security::composition_tag(id);
+            let entry = if version_ok {
+                inv.images.get(*id)
+            } else {
+                None
+            };
+            let local = entry.map(|e| !e.digest.is_empty()).unwrap_or(false);
+            let active = version_ok && inv.active == *id && local;
+            let size_label = entry
+                .map(|e| format_image_size(e.size_bytes))
+                .unwrap_or_else(|| "—".into());
+            let status = if active {
+                "active".into()
+            } else if local {
+                "local".into()
+            } else {
+                "remote".into()
+            };
+            rows.push(SafetyImageRow {
+                id: (*id).to_string(),
+                blurb: (*blurb).to_string(),
+                tag,
+                size_label,
+                local,
+                active,
+                status,
+            });
+        }
+        self.images = rows;
+        self.clamp_cursors();
     }
 
     /// The navigable rows of the TOOLS pane, IN RENDER ORDER — the single source of truth
@@ -177,6 +254,11 @@ impl SecurityState {
         self.tool_items().get(self.selected).copied()
     }
 
+    /// Currently selected Images row, if any.
+    pub fn selected_image(&self) -> Option<&SafetyImageRow> {
+        self.images.get(self.images_selected)
+    }
+
     /// Move the cursor up by one (saturating at 0) in the ACTIVE pane.
     pub fn move_up(&mut self) {
         match self.pane {
@@ -185,6 +267,9 @@ impl SecurityState {
             }
             SecPane::Refused => {
                 self.refused_selected = self.refused_selected.saturating_sub(1);
+            }
+            SecPane::Images => {
+                self.images_selected = self.images_selected.saturating_sub(1);
             }
             SecPane::Tools => {
                 self.selected = self.selected.saturating_sub(1);
@@ -207,6 +292,12 @@ impl SecurityState {
                     self.refused_selected += 1;
                 }
             }
+            SecPane::Images => {
+                let max = self.images.len().saturating_sub(1);
+                if self.images_selected < max {
+                    self.images_selected += 1;
+                }
+            }
             SecPane::Tools => {
                 let max = self.tool_items().len().saturating_sub(1);
                 if self.selected < max {
@@ -216,7 +307,7 @@ impl SecurityState {
         }
     }
 
-    /// Cycle Tools → Deps → Refused → Tools, re-clamping the newly active cursor.
+    /// Cycle Tools → Images → Deps → Refused → Tools, re-clamping the newly active cursor.
     pub fn cycle_pane(&mut self) {
         self.pane = self.pane.next();
         self.clamp_cursors();
@@ -235,6 +326,8 @@ impl SecurityState {
     /// PRESERVES `install_health` (carried from `&self`): re-fetching it is a heavy IPC
     /// round-trip, so a plain lifecycle refresh must not pay it. The install path seeds
     /// fresh health out-of-band (see `refresh_security_state`).
+    ///
+    /// PRESERVES `images` the same way — image ops call [`Self::refresh_images`] explicitly.
     pub fn refresh(
         &mut self,
         status: SecStatus,
@@ -244,7 +337,7 @@ impl SecurityState {
         self.status = status;
         self.inactive = inactive;
         self.yolo_armed = yolo_armed;
-        // `install_health` is intentionally untouched here — it is carried across refreshes.
+        // `install_health` / `images` intentionally untouched here.
         self.clamp_cursors();
     }
 
@@ -268,5 +361,30 @@ impl SecurityState {
         } else if self.refused_selected >= refused_len {
             self.refused_selected = refused_len - 1;
         }
+        let images_len = self.images.len();
+        if images_len == 0 {
+            self.images_selected = 0;
+        } else if self.images_selected >= images_len {
+            self.images_selected = images_len - 1;
+        }
+    }
+}
+
+fn format_image_size(bytes: u64) -> String {
+    if bytes == 0 {
+        return "—".into();
+    }
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1}G", b / GB)
+    } else if b >= MB {
+        format!("{:.0}M", b / MB)
+    } else if b >= KB {
+        format!("{:.0}K", b / KB)
+    } else {
+        format!("{bytes}B")
     }
 }

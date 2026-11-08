@@ -73,6 +73,9 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         Vec::new(),
     );
     st.health_fetching = fetching;
+    // `SecurityState::new` already seeds images; refresh again in case inventory changed
+    // while the panel was closed.
+    st.refresh_images();
     st.lane_label = state
         .rest
         .fg()

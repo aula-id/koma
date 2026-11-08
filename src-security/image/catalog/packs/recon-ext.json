@@ -1,0 +1,1106 @@
+{
+  "version": 1,
+  "pack": "recon-ext",
+  "tools": [
+    {
+      "id": "apk_mitm",
+      "name": "apk_mitm",
+      "summary": "A CLI application that automatically prepares Android APK files for HTTPS inspection.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "apk-mitm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g apk-mitm; detect=apk-mitm"
+    },
+    {
+      "id": "aranea",
+      "name": "aranea",
+      "summary": "OSINT tool used for web crawling or examining JavaScript files for likely useful data.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "aranea"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g aranea; detect=aranea"
+    },
+    {
+      "id": "asnlookup",
+      "name": "asnlookup",
+      "summary": "Leverage ASN to look up IP addresses (IPv4 & IPv6) owned by a specific organization for reconnaissance purposes, then run port scanning on it",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "asnlookup"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g asnlookup; detect=asnlookup"
+    },
+    {
+      "id": "badkarma",
+      "name": "badkarma",
+      "summary": "Advanced network reconnaissance tool",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "badkarma"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g badkarma; detect=badkarma"
+    },
+    {
+      "id": "bbot",
+      "name": "bbot",
+      "summary": "OSINT automation for hackers.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bbot"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g bbot; detect=bbot"
+    },
+    {
+      "id": "blackwidow",
+      "name": "blackwidow",
+      "summary": "Web application scanner to gather OSINT and fuzz for OWASP vulnerabilities on a target website.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "blackwidow"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g blackwidow; detect=blackwidow"
+    },
+    {
+      "id": "brutex",
+      "name": "brutex",
+      "summary": "Automatically brute force all services running on a target.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "brutex"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g brutex; detect=brutex"
+    },
+    {
+      "id": "carnivore",
+      "name": "carnivore",
+      "summary": "Assessment of on-premises Microsoft servers such as ADFS, Skype, Exchange, and RDWeb",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "carnivore"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g carnivore; detect=carnivore"
+    },
+    {
+      "id": "cloudshark",
+      "name": "cloudshark",
+      "summary": "PCAP analyzer",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cloudshark"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g cloudshark; detect=cloudshark"
+    },
+    {
+      "id": "commit_stream",
+      "name": "commit_stream",
+      "summary": "OSINT tool for finding Github repositories by extracting commit logs in real time.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "commit-stream"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g commit-stream; detect=commit-stream"
+    },
+    {
+      "id": "detect_secrets",
+      "name": "detect_secrets",
+      "summary": "An enterprise friendly way of detecting and preventing secrets in code.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "detect-secrets"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g detect-secrets; detect=detect-secrets"
+    },
+    {
+      "id": "domain_hunter",
+      "name": "domain_hunter",
+      "summary": "Checks expired domains to determine good candidates for phishing and C2 domain names.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "domain-hunter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g domain-hunter; detect=domain-hunter"
+    },
+    {
+      "id": "domainfinder",
+      "name": "domainfinder",
+      "summary": "Find a domain from an IP address",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "domainfinder"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g domainfinder; detect=domainfinder"
+    },
+    {
+      "id": "dome",
+      "name": "dome",
+      "summary": "Script that makes active and/or passive scan to obtain subdomains and search for open ports.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dome"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g dome; detect=dome"
+    },
+    {
+      "id": "espionage",
+      "name": "espionage",
+      "summary": "Domain information gathering: whois, history, dns records, web technologies, records",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "espionage"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g espionage; detect=espionage"
+    },
+    {
+      "id": "fastsub",
+      "name": "fastsub",
+      "summary": "A DNS bruteforcer with multi-threading, and handling of bad resolvers.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "fastsub"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g fastsub; detect=fastsub"
+    },
+    {
+      "id": "fiercephish",
+      "name": "fiercephish",
+      "summary": "Full-fledged phishing framework to manage all phishing engagements.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "fiercephish"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g fiercephish; detect=fiercephish"
+    },
+    {
+      "id": "frida",
+      "name": "frida",
+      "summary": "Dynamic code instrumentation toolkit",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "frida"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g frida; detect=frida"
+    },
+    {
+      "id": "harpoon",
+      "name": "harpoon",
+      "summary": "CLI tool; collect data and document actively or passively",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "harpoon"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g harpoon; detect=harpoon"
+    },
+    {
+      "id": "hash_buster",
+      "name": "hash_buster",
+      "summary": "Crack hashes in seconds.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hash-buster"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g hashbuster; detect=hash-buster"
+    },
+    {
+      "id": "http_traceroute",
+      "name": "http_traceroute",
+      "summary": "HTTP-traceroute in Go.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "http-traceroute"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g http-traceroute; detect=http-traceroute"
+    },
+    {
+      "id": "jaqen",
+      "name": "jaqen",
+      "summary": "Abstracts away the complex steps required to perform a DNS rebind and exposes a HTML5 Fetch interface which transparently triggers a DNS rebind",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "jaqen"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g jaqen; detect=jaqen"
+    },
+    {
+      "id": "js_scan",
+      "name": "js_scan",
+      "summary": "A .js scanner, built in PHP, designed to scrape urls and other info.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "js-scan"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g jsscan; detect=js-scan"
+    },
+    {
+      "id": "jsparser",
+      "name": "jsparser",
+      "summary": "Python script to parse relative URLs from JavaScript files.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "jsparser"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g jsparser; detect=jsparser"
+    },
+    {
+      "id": "netcap",
+      "name": "netcap",
+      "summary": "A framework for secure and scalable network traffic analysis.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "netcap"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g netcap; detect=netcap"
+    },
+    {
+      "id": "nipe",
+      "name": "nipe",
+      "summary": "Script to make TOR as default gateway",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "nipe"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g nipe; detect=nipe"
+    },
+    {
+      "id": "spamscanner",
+      "name": "spamscanner",
+      "summary": "Spam Scanner is a tool and service created after hitting countless roadblocks with existing spam-detection solutions.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "spamscanner"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g spamscanner; detect=spamscanner"
+    },
+    {
+      "id": "tsunami",
+      "name": "tsunami",
+      "summary": "Network security scanner with an extensible plugin system",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "tsunami"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g tsunami; detect=tsunami"
+    },
+    {
+      "id": "turner",
+      "name": "turner",
+      "summary": "Tunnels HTTP over a permissive/open TURN server; supports HTTP and SOCKS5 proxy",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "turner"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g turner; detect=turner"
+    },
+    {
+      "id": "wappalyzer",
+      "name": "wappalyzer",
+      "summary": "Wappalyzer",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "wappalyzer"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g wappalyzer; detect=wappalyzer"
+    },
+    {
+      "id": "whonow",
+      "name": "whonow",
+      "summary": "DNS Server for executing DNS Rebinding attacks",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "whonow"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=npm; primary=npm install -g whonow; detect=whonow"
+    },
+    {
+      "id": "arecibo",
+      "name": "arecibo",
+      "summary": "Endpoint for Out-of-Band Exfiltration (DNS & HTTP)",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "arecibo"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install arecibo; detect=arecibo"
+    },
+    {
+      "id": "boomerang",
+      "name": "boomerang",
+      "summary": "Client/Server HTTP pivoting tool",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "boomerang"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install boomerang; detect=boomerang"
+    },
+    {
+      "id": "bore",
+      "name": "bore",
+      "summary": "A simple CLI tool for making tunnels to localhost.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bore"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install bore; detect=bore"
+    },
+    {
+      "id": "ctfr",
+      "name": "ctfr",
+      "summary": "Abusing Certificate Transparency logs for getting HTTPS websites subdomains.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ctfr"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install ctfr; detect=ctfr"
+    },
+    {
+      "id": "edd",
+      "name": "edd",
+      "summary": "Ultimate domain enumeration tool.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "edd"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install edd; detect=edd"
+    },
+    {
+      "id": "flan",
+      "name": "flan",
+      "summary": "A pretty sweet vulnerability scanner.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "flan"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install flan; detect=flan"
+    },
+    {
+      "id": "garfield",
+      "name": "garfield",
+      "summary": "Attack framework for distributed systems",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "garfield"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install garfield; detect=garfield"
+    },
+    {
+      "id": "gorgo",
+      "name": "gorgo",
+      "summary": "The vertasile multi-threaded password sprayer built on the shoulders of giants.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "gorgo"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install gorgo; detect=gorgo"
+    },
+    {
+      "id": "hassh",
+      "name": "hassh",
+      "summary": "Network fingerprinting standard which can be used to identify specific client and server SSH implementations",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hassh"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install hassh; detect=hassh"
+    },
+    {
+      "id": "hawk",
+      "name": "hawk",
+      "summary": "Network, recon and offensive-security tool for Linux.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hawk"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install hawk; detect=hawk"
+    },
+    {
+      "id": "mantis",
+      "name": "mantis",
+      "summary": "Command-line framework designed to automate the workflow of asset discovery, reconnaissance, and scanning",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "mantis"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install mantis; detect=mantis"
+    },
+    {
+      "id": "nemesis",
+      "name": "nemesis",
+      "summary": "Packet manipulation CLI tool; craft and inject packets of several protocols",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "nemesis"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install nemesis; detect=nemesis"
+    },
+    {
+      "id": "omnibus",
+      "name": "omnibus",
+      "summary": "OSINT framework; collection of tools",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "omnibus"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install omnibus; detect=omnibus"
+    },
+    {
+      "id": "osintui",
+      "name": "osintui",
+      "summary": "OSINT from your favorite services in a friendly terminal user interface.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "osintui"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install osintui; detect=osintui"
+    },
+    {
+      "id": "pipedream",
+      "name": "pipedream",
+      "summary": "Collect HTTP or webhook requests and inspect them in a human-friendly way.",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "pipedream"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install pipedream; detect=pipedream"
+    },
+    {
+      "id": "polymorph",
+      "name": "polymorph",
+      "summary": "Real-time network packet manipulation framework",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "polymorph"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install polymorph; detect=polymorph"
+    },
+    {
+      "id": "ps2",
+      "name": "ps2",
+      "summary": "A port scanner written purely in PowerShell.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ps2"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install ps2; detect=ps2"
+    },
+    {
+      "id": "rengine",
+      "name": "rengine",
+      "summary": "Automated recon framework for web applications; customizable scan engines & pipeline of reconnaissance",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "rengine"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install rengine; detect=rengine"
+    },
+    {
+      "id": "ruler",
+      "name": "ruler",
+      "summary": "Interact with Exchange servers remotely, through either the MAPI/HTTP or RPC/HTTP to abuse the client-side Outlook features and gain a shell",
+      "categories": [
+        "network"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ruler"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-ext",
+      "how_to": "channel=cargo; primary=cargo install ruler; detect=ruler"
+    }
+  ]
+}

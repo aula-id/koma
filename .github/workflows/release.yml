@@ -318,18 +318,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # standard is the default tag (:version / :latest).
-        # minimal/extended get suffix tags only.
+        # Wave-1 domain compositions only (not all 28 shards).
+        # Bare :version / :latest is minimal; others get -${composition} suffix.
+        # identity uses Kali per compositions.json base_hint; rest bookworm.
         include:
+          - composition: minimal
+            tag_suffix: ""
+            base_image: python:3.11-slim-bookworm
           - composition: minimal
             tag_suffix: -minimal
             base_image: python:3.11-slim-bookworm
-          - composition: standard
-            tag_suffix: ""
+          - composition: rev
+            tag_suffix: -rev
+            base_image: python:3.11-slim-bookworm
+          - composition: crypto
+            tag_suffix: -crypto
+            base_image: python:3.11-slim-bookworm
+          - composition: dfir
+            tag_suffix: -dfir
+            base_image: python:3.11-slim-bookworm
+          - composition: pxn
+            tag_suffix: -pxn
+            base_image: python:3.11-slim-bookworm
+          - composition: web
+            tag_suffix: -web
+            base_image: python:3.11-slim-bookworm
+          - composition: identity
+            tag_suffix: -identity
             base_image: kalilinux/kali-rolling
-          - composition: extended
-            tag_suffix: -extended
-            base_image: kalilinux/kali-rolling
+          - composition: cloud
+            tag_suffix: -cloud
+            base_image: python:3.11-slim-bookworm
     steps:
       - uses: actions/checkout@v4
       - name: Sync image build context

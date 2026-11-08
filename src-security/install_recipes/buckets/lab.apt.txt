@@ -1,0 +1,16 @@
+b374k
+dex2jar
+donut
+hakrawler
+httprobe
+js-beautify
+phpggc
+pipal
+qsreplace
+rush
+smbmap
+sprayingtoolkit
+spraykatz
+trurl
+unicorn
+uro

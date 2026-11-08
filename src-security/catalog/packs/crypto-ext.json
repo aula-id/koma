@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "pack": "crypto-ext",
+  "tools": [
+    {
+      "id": "avet",
+      "name": "avet",
+      "summary": "AntiVirus Evasion Tool; targeting windows machines with executable files",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "avet"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=npm; primary=npm install -g avet; detect=avet"
+    },
+    {
+      "id": "cero",
+      "name": "cero",
+      "summary": "Scrape domain names from SSL certificates of arbitrary hosts.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cero"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=npm; primary=npm install -g cero; detect=cero"
+    },
+    {
+      "id": "cstc",
+      "name": "cstc",
+      "summary": "Cyber Security Transformation Chef; chaining simple operations and formatting on each incoming or outgoing HTTP message",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cstc"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=npm; primary=npm install -g cstc; detect=cstc"
+    },
+    {
+      "id": "depix",
+      "name": "depix",
+      "summary": "Recovers passwords from pixelized screenshots.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "depix"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=npm; primary=npm install -g depix; detect=depix"
+    },
+    {
+      "id": "haiti",
+      "name": "haiti",
+      "summary": "Hash type identifier (CLI & lib)",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "haiti"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=npm; primary=npm install -g haiti; detect=haiti"
+    },
+    {
+      "id": "chimera",
+      "name": "chimera",
+      "summary": "Obfuscation script designed to bypass AMSI and commercial antivirus solution.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "chimera"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=cargo; primary=cargo install chimera; detect=chimera"
+    },
+    {
+      "id": "floss",
+      "name": "floss",
+      "summary": "Automatically extract obfuscated strings from malware.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "floss"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=cargo; primary=cargo install floss; detect=floss"
+    },
+    {
+      "id": "ja3",
+      "name": "ja3",
+      "summary": "Create SSL client fingerprints in an easy to produce and shareable way.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ja3"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-ext",
+      "how_to": "channel=cargo; primary=cargo install ja3; detect=ja3"
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "pack": "rev",
+  "tools": [
+    {
+      "id": "apktool",
+      "name": "apktool",
+      "summary": "A tool for reverse engineering Android APK files.",
+      "categories": [
+        "operating-systems"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "apktool"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y apktool; detect=apktool"
+    },
+    {
+      "id": "bandit",
+      "name": "bandit",
+      "summary": "Bandit is a tool designed to find common security issues in Python code.",
+      "categories": [
+        "code-analysis"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bandit"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y bandit; detect=bandit"
+    },
+    {
+      "id": "enum4linux",
+      "name": "enum4linux",
+      "summary": "Windows Samba enumeration tool",
+      "categories": [
+        "operating-systems"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "enum4linux"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y enum4linux; detect=enum4linux"
+    },
+    {
+      "id": "jadx",
+      "name": "jadx",
+      "summary": "DEX to Java decompiler",
+      "categories": [
+        "operating-systems"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "jadx"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y jadx; detect=jadx"
+    },
+    {
+      "id": "radare2",
+      "name": "radare2",
+      "summary": "Crossplatform binary analysis framework, disassembler, decompiler and debugger, support collaborative analysis",
+      "categories": [
+        "reverse-engineering"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "radare2"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y radare2; detect=radare2"
+    },
+    {
+      "id": "trivy",
+      "name": "trivy",
+      "summary": "Vulnerability and misconfiguration scanner for containers (OS and language-specific packages)",
+      "categories": [
+        "code-analysis"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "trivy"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev",
+      "how_to": "channel=apt; primary=sudo apt-get update && sudo apt-get install -y trivy; detect=trivy"
+    },
+    {
+      "id": "bearer",
+      "name": "bearer",
+      "summary": "Static application security testing tool that helps discover, filter, and prioritize security risks and vulnerabilities",
+      "categories": [
+        "code-analysis"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bearer"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev",
+      "how_to": "channel=go; primary=go install github.com/bearer/bearer@latest; detect=bearer"
+    }
+  ]
+}

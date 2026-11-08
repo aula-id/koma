@@ -2,9 +2,56 @@ use super::*;
 
 #[test]
 fn the_release_image_is_koma_safety_at_this_version() {
-    let tag = format!("{SAFETY_IMAGE}:{}", env!("CARGO_PKG_VERSION"));
+    let tag = format!("{SAFETY_IMAGE}:{}-minimal", env!("CARGO_PKG_VERSION"));
     assert!(tag.starts_with("ghcr.io/aula-id/koma-safety:"));
+    assert!(tag.ends_with("-minimal"));
     assert!(!tag.contains("cyber"));
+}
+
+#[test]
+fn safety_image_tag_ends_with_minimal() {
+    let prev = std::env::var_os("KOMA_SEC_IMAGE");
+    std::env::remove_var("KOMA_SEC_IMAGE");
+    let tag = safety_image_tag();
+    assert!(
+        tag.ends_with("-minimal"),
+        "expected default tag to end with -minimal, got {tag}"
+    );
+    assert_eq!(tag, safety_image_tag_for("minimal"));
+    assert_eq!(
+        safety_image_tag_for("web"),
+        format!("{SAFETY_IMAGE}:{}-web", env!("CARGO_PKG_VERSION"))
+    );
+    match prev {
+        Some(v) => std::env::set_var("KOMA_SEC_IMAGE", v),
+        None => std::env::remove_var("KOMA_SEC_IMAGE"),
+    }
+}
+
+#[test]
+fn known_compositions_include_minimal_and_domain_shards() {
+    let ids: Vec<&str> = list_known_compositions().iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids.first().copied(), Some("minimal"));
+    for need in [
+        "recon",
+        "recon-2",
+        "recon-ext",
+        "recon-src",
+        "web",
+        "web-ext",
+        "web-src",
+        "identity",
+        "cloud",
+        "rev",
+        "crypto",
+        "pxn",
+        "dfir",
+        "lab",
+        "lab-src",
+    ] {
+        assert!(ids.contains(&need), "missing {need}");
+    }
+    assert_eq!(ids.len(), 29);
 }
 
 #[test]

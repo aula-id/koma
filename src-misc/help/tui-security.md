@@ -17,10 +17,13 @@ Isolation and security-runtime dashboard (not a per-tool enable list).
 Working-set pins survive chat compaction (session `sec_working_set.json`).
 
 ## Path
-1. `koma --security-install` once  
+1. `koma --security-install` once (pulls **minimal** guest only)  
 2. `/security` start daemon  
 3. Scope + lane  
 4. Optional YOLO arm → `/mode yolo`  
 5. catalog → run inside guest  
 
-Image: `ghcr.io/aula-id/koma-safety` (`minimal` / `standard` / `extended` compositions).
+## Images
+- Install writes `~/.koma/security/images.json` and pins active `minimal`.
+- Domain compositions (`recon`, `web`, `…`, `*-ext`, `*-src`) are pulled/activated from the `/security` **Images** pane — not by `--security-install`.
+- Image: `ghcr.io/aula-id/koma-safety:{version}-{composition}` (active digest via `KOMA_SEC_IMAGE` when the daemon starts).

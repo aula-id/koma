@@ -3,12 +3,14 @@
 //! Key map:
 //! - `Esc`      → `Action::CloseSecurity`
 //! - `Up`/`Down` → move cursor in the active pane
-//! - `h`/`H`    → cycle body panes (tools → deps → refused)
+//! - `h`/`H`    → cycle body panes (tools → images → deps → refused)
 //! - `i`/`I`    → (deps pane) install selected dependency
-//! - `r`        → restart daemon
-//! - `Enter`/`Space` → toggle selected row (daemon / YOLO / tool)
+//! - `p`        → (images pane) pull selected composition
+//! - `a`        → (images) activate selected · (tools) enable all tools
+//! - Enter      → (images) activate selected · (tools) toggle selected row
+//! - `x`/Delete → (images pane) remove selected composition
+//! - `r`        → (images) refresh list · (other panes) restart daemon
 //! - `d`        → toggle selected tool's domain
-//! - `a`        → enable all tools
 //! - `n`        → disable all tools
 //! - `u`        → refresh embedded daemon sources + restart
 //! - `c`        → try start container runtime (colima when present)
@@ -56,9 +58,27 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
             s.move_down();
             Action::None
         }
-        KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if s.pane == SecPane::Images {
+                match s.selected_image() {
+                    Some(row) => Action::SecurityImageActivate(row.id.clone()),
+                    None => Action::None,
+                }
+            } else {
+                Action::SecurityToggleTool
+            }
+        }
         KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
-        KeyCode::Char('a') | KeyCode::Char('A') => Action::SecurityEnableAllTools,
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            if s.pane == SecPane::Images {
+                match s.selected_image() {
+                    Some(row) => Action::SecurityImageActivate(row.id.clone()),
+                    None => Action::None,
+                }
+            } else {
+                Action::SecurityEnableAllTools
+            }
+        }
         KeyCode::Char('n') | KeyCode::Char('N') => Action::SecurityDisableAllTools,
         KeyCode::Char('u') | KeyCode::Char('U') => Action::SecurityRefreshToolkit,
         KeyCode::Char('c') | KeyCode::Char('C') => Action::SecurityEnsureRuntime,
@@ -90,7 +110,34 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => Action::SecurityRestart,
+        KeyCode::Char('p') | KeyCode::Char('P') => {
+            if s.pane == SecPane::Images {
+                match s.selected_image() {
+                    Some(row) => Action::SecurityImagePull(row.id.clone()),
+                    None => Action::None,
+                }
+            } else {
+                Action::None
+            }
+        }
+        KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Delete => {
+            if s.pane == SecPane::Images {
+                match s.selected_image() {
+                    Some(row) => Action::SecurityImageRemove(row.id.clone()),
+                    None => Action::None,
+                }
+            } else {
+                Action::None
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            if s.pane == SecPane::Images {
+                Action::SecurityImageRefresh
+            } else {
+                // Restart remains on Tools / Deps / Refused (not Images).
+                Action::SecurityRestart
+            }
+        }
         _ => Action::None,
     }
 }

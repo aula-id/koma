@@ -1167,11 +1167,15 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         health_view: s.health_view(),
         pane: match s.pane {
             crate::app::mode::SecPane::Tools => "tools".into(),
+            crate::app::mode::SecPane::Images => "images".into(),
             crate::app::mode::SecPane::Deps => "deps".into(),
             crate::app::mode::SecPane::Refused => "refused".into(),
         },
         health_selected: s.health_selected,
         refused_selected: s.refused_selected,
+        images: s.images.clone(),
+        images_selected: s.images_selected,
+        images_busy: s.images_busy,
         lane_label: s.lane_label.clone(),
         // Spinner state for the in-flight health probe — projected so the client renders
         // the same "checking dependencies…" line and ANIMATES it from `health_frame`
