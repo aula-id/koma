@@ -77,11 +77,13 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
     if footer_rect.width > 0 {
         let hint = match st.pane {
             SecPane::Tools => {
-                "↑↓ · Space toggle · d domain · a all · n none · u refresh · c runtime · l lane · h panes · r restart · Esc"
+                "click tabs · ↑↓ · Space toggle · u refresh · c runtime · h panes · r restart · Esc"
             }
-            SecPane::Images => "↑↓ · p pull · enter activate · x remove · r refresh · h panes · Esc",
-            SecPane::Deps => "↑↓ · i install · h panes · r restart · Esc",
-            SecPane::Refused => "↑↓ · u refresh toolkit · h panes · r restart · Esc",
+            SecPane::Images => {
+                "click tabs · ↑↓ scroll · p pull · enter activate · x remove · r refresh · Esc"
+            }
+            SecPane::Deps => "click tabs · ↑↓ scroll · i install · h panes · r restart · Esc",
+            SecPane::Refused => "click tabs · ↑↓ · u refresh · h panes · r restart · Esc",
         };
         let bar_style = Style::default()
             .fg(palette.sel_fg)
@@ -97,6 +99,30 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
             footer_rect,
         );
     }
+}
+
+fn bar_line(label: &str, done: usize, total: usize, width: usize) -> String {
+    let t = total.max(0);
+    let d = done.min(if t == 0 { done } else { t });
+    let pct = if t > 0 {
+        d as f64 / t as f64
+    } else if done > 0 {
+        1.0
+    } else {
+        0.0
+    };
+    let fill = ((pct * width as f64).round() as usize).min(width);
+    let empty = width.saturating_sub(fill);
+    let counts = if t > 0 {
+        format!("{d}/{t}")
+    } else {
+        format!("{d}")
+    };
+    format!(
+        "{label:<10}{}{}  {counts}",
+        "█".repeat(fill),
+        "░".repeat(empty)
+    )
 }
 
 fn render_tools(
@@ -116,6 +142,14 @@ fn render_tools(
         .bg(palette.sel_bg)
         .add_modifier(Modifier::BOLD);
 
+    // Pane tabs (keyboard: h cycles; client can MenuReplace pane=…)
+    lines.push(Line::from(vec![
+        Span::styled("▸ Dashboard", Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)),
+        Span::styled("  Images  Deps  Refused", dim_style),
+        Span::styled("   (h cycle · click tabs in TUI)", dim_style),
+    ]));
+    lines.push(Line::from(""));
+
     let items = st.tool_items();
     for (pos, item) in items.iter().enumerate() {
         let is_selected = pos == st.selected;
@@ -134,7 +168,6 @@ fn render_tools(
                 let row_style = if is_selected { sel_style } else { base_style };
                 lines.push(Line::from(Span::styled(box_label, row_style)));
 
-                // Status strip: installed · tools · runtime · lane · refused
                 let installed_label = if st.status.installed { "yes" } else { "no" };
                 let runtime_style = if st.status.runtime_ok {
                     Style::default().fg(palette.success)
@@ -161,10 +194,7 @@ fn render_tools(
                         },
                         runtime_style,
                     ),
-                    Span::styled(
-                        format!(" · lane: {}", st.lane_label),
-                        dim_style,
-                    ),
+                    Span::styled(format!(" · lane: {}", st.lane_label), dim_style),
                 ];
                 if !st.status.refused.is_empty() {
                     info_spans.push(Span::styled(" · ", dim_style));
@@ -174,7 +204,6 @@ fn render_tools(
                             .fg(palette.error)
                             .add_modifier(Modifier::BOLD),
                     ));
-                    info_spans.push(Span::styled(" (h → refused)", dim_style));
                 }
                 if st.health_fetching {
                     const SPINNER: [&str; 10] =
@@ -245,13 +274,59 @@ fn render_tools(
                 }
                 lines.push(Line::from(""));
             }
-            SecSel::Tool(_) => {
-                // Not navigable on the dashboard (kept for IPC/compat).
-            }
+            SecSel::Tool(_) => {}
         }
     }
 
-    // Catalog + boundary summary — live fields from enrich_status on panel refresh.
+    // Progress dashboard
+    lines.push(Line::from(Span::styled("progress", dim_style)));
+    let cat_total = if st.status.catalog_total > 0 {
+        st.status.catalog_total as usize
+    } else {
+        st.status.tools.len()
+    };
+    let cat_ready = st.status.catalog_ready as usize;
+    lines.push(Line::from(Span::styled(
+        format!("  {}", bar_line("catalog", cat_ready, cat_total, 16)),
+        Style::default().fg(palette.success),
+    )));
+    let deps_ok = st.install_health.iter().filter(|e| e.present).count();
+    let deps_n = st.install_health.len();
+    if deps_n > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", bar_line("deps ok", deps_ok, deps_n, 16)),
+            if deps_ok == deps_n {
+                Style::default().fg(palette.success)
+            } else {
+                Style::default().fg(palette.warn)
+            },
+        )));
+    }
+    let img_local = st.images.iter().filter(|r| r.local).count();
+    let img_n = st.images.len();
+    if img_n > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", bar_line("images", img_local, img_n, 16)),
+            Style::default().fg(palette.accent),
+        )));
+        if let Some(active) = st.images.iter().find(|r| r.active) {
+            lines.push(Line::from(Span::styled(
+                format!("  active image: {}", active.id),
+                dim_style,
+            )));
+        }
+    }
+    if !st.status.refused.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                bar_line("refused", st.status.refused.len(), st.status.refused.len(), 16)
+            ),
+            Style::default().fg(palette.error),
+        )));
+    }
+    lines.push(Line::from(""));
+
     lines.push(Line::from(Span::styled("catalog + boundary", dim_style)));
     if st.status.running {
         let cat = if st.status.catalog_total > 0 {
@@ -260,14 +335,21 @@ fn render_tools(
                 st.status.catalog_ready, st.status.catalog_total, st.status.tools.len()
             )
         } else {
-            format!("  handshake {} tools · agent: sec_catalog → sec_run", st.status.tools.len())
+            format!(
+                "  handshake {} tools · agent: sec_catalog → sec_run",
+                st.status.tools.len()
+            )
         };
         lines.push(Line::from(Span::styled(
             cat,
             if active { tool_style } else { dim_style },
         )));
         let net = if st.status.net.is_empty() {
-            if st.status.boundary_up { "unknown" } else { "down" }
+            if st.status.boundary_up {
+                "unknown"
+            } else {
+                "down"
+            }
         } else {
             st.status.net.as_str()
         };
@@ -288,10 +370,6 @@ fn render_tools(
                 rules_preview
             ),
             if active { tool_style } else { dim_style },
-        )));
-        lines.push(Line::from(Span::styled(
-            "  working set pins survive compact · plan: catalog only",
-            dim_style,
         )));
     } else {
         lines.push(Line::from(Span::styled(

@@ -712,6 +712,13 @@ fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
                 s.result_sel = 0;
             }
         }
+        Mode::Security(s) => match field {
+            "pane" => {
+                s.pane = crate::app::mode::SecPane::parse(&value)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown security pane"))?;
+            }
+            _ => bail!("Unknown security field"),
+        },
         Mode::KeyInput(s) => match field {
             "endpoint" => s.endpoint = value,
             "api_key" => s.api_key = value,

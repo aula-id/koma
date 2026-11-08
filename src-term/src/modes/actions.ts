@@ -48,26 +48,38 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
   if (name === "Security") {
     const pane = String(b.pane || (b.health_view ? "deps" : "tools"))
+    const paneJump = (label: string, id: string, primary = false): ActionDescriptor => ({
+      label,
+      primary,
+      action: { Replace: { field: "pane", value: id } },
+    })
+    const tabs = [
+      paneJump("Dashboard", "tools", pane === "tools"),
+      paneJump("Images", "images", pane === "images"),
+      paneJump("Deps", "deps", pane === "deps"),
+      paneJump("Refused", "refused", pane === "refused"),
+    ]
     if (pane === "images") {
       return [
+        ...tabs,
         enter("Activate"),
         char("Pull", "p"),
         char("Remove", "x"),
         char("Refresh list", "r"),
-        char("Pane (Images)", "h"),
         back,
       ]
     }
-    const paneLabel = pane === "deps" ? "Deps" : pane === "refused" ? "Refused" : "Tools"
+    if (pane === "deps") {
+      return [...tabs, char("Install", "i"), char("Restart", "r"), back]
+    }
+    if (pane === "refused") {
+      return [...tabs, char("Refresh", "u"), char("Restart", "r"), back]
+    }
     return [
+      ...tabs,
       enter("Toggle"),
-      char("Domain", "d"),
-      char("All on", "a"),
-      char("All off", "n"),
-      char("Refresh", "u"),
       char("Runtime", "c"),
-      char(`Pane (${paneLabel})`, "h"),
-      char("Install", "i"),
+      char("Refresh", "u"),
       char("Restart", "r"),
       back,
     ]

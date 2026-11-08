@@ -1165,12 +1165,7 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         // frame; the mode seeds it once on open and after an install.
         install_health: s.install_health.clone(),
         health_view: s.health_view(),
-        pane: match s.pane {
-            crate::app::mode::SecPane::Tools => "tools".into(),
-            crate::app::mode::SecPane::Images => "images".into(),
-            crate::app::mode::SecPane::Deps => "deps".into(),
-            crate::app::mode::SecPane::Refused => "refused".into(),
-        },
+        pane: s.pane.as_str().into(),
         health_selected: s.health_selected,
         refused_selected: s.refused_selected,
         images: s.images.clone(),

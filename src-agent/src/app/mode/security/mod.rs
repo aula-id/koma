@@ -51,6 +51,27 @@ impl SecPane {
             SecPane::Refused => SecPane::Tools,
         }
     }
+
+    /// Parse pane id from client (`tools` / `images` / `deps` / `refused`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "tools" | "tool" | "dashboard" | "home" => Some(Self::Tools),
+            "images" | "image" | "guest" => Some(Self::Images),
+            "deps" | "dependencies" | "dependency" | "health" => Some(Self::Deps),
+            "refused" | "refuse" => Some(Self::Refused),
+            _ => None,
+        }
+    }
+
+    /// Wire / UI id.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tools => "tools",
+            Self::Images => "images",
+            Self::Deps => "deps",
+            Self::Refused => "refused",
+        }
+    }
 }
 
 /// One row in the Images pane (known composition + local inventory).

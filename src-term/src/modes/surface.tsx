@@ -124,7 +124,7 @@ function viewOf(name: string, body: Rec, theme: Theme, wide: boolean, onMove: (i
     case "ExtScreen":
       return extScreenView(body as MenuData["ExtScreen"] & Rec, theme, onMove)
     case "Security":
-      return securityView(body as MenuData["Security"] & Rec, theme, onMove)
+      return securityView(body as MenuData["Security"] & Rec, theme, onMove, send)
     case "Remote":
       return remoteView(body as MenuData["Remote"] & Rec, theme, wide, onMove, send)
     case "Onboard":
