@@ -1,5 +1,5 @@
 import { agentFields, mcpFields } from "./manage.tsx"
-import { modeParts, num, rec, str, type Rec } from "./read.ts"
+import { flag, modeParts, num, rec, str, type Rec } from "./read.ts"
 
 /** Where a daemon mode is drawn. Chat, quit, rewind, and loading are handled elsewhere. */
 export function placeOf(mode: unknown): "overlay" | "full" | null {
