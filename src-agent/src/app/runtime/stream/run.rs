@@ -331,7 +331,7 @@ for raw requests.\n",
                         if active_domains.contains("crypto") {
                             first.content.push_str(
                                 "\n### CRYPTO\n\
-sec_run sec_hashid/sec_decode → sec_rsa/sec_factor → sec_lattice → sec_z3/sec_sage → \
+sec_run sec_hashid/sec_decode → sec_rsa/sec_factor → sec_lattice → sec_z3 → \
 sec_crack as needed.\n",
                             );
                         }

@@ -290,16 +290,6 @@ MANIFEST: list[dict] = [
         "hint": "apt install file  (usually preinstalled on Unix)",
     },
     {
-        "key": "sage",
-        "name": "SageMath",
-        "tier": 3,
-        "method": "manual",
-        "detect": "sage",
-        "detect_kind": "which",
-        "tools": ["sec_sage"],
-        "hint": "apt install sagemath  or  https://www.sagemath.org/",
-    },
-    {
         "key": "hashcat",
         "name": "hashcat",
         "tier": 3,

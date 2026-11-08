@@ -380,27 +380,6 @@
       "how_to": "RSA arithmetic"
     },
     {
-      "id": "sec_sage",
-      "name": "sec_sage",
-      "summary": "Execute an agent-written SageMath snippet via the sage CLI and return its output.",
-      "categories": [
-        "crypto"
-      ],
-      "effect": "static",
-      "exec": "cpu",
-      "lanes": [
-        "research",
-        "red",
-        "blue"
-      ],
-      "plan_ok": false,
-      "ready": true,
-      "requires": [],
-      "scope_needed": false,
-      "image_or_pack": "smoke",
-      "how_to": "SageMath solve"
-    },
-    {
       "id": "sec_sourcemap",
       "name": "sec_sourcemap",
       "summary": "Parse a JavaScript source map and recover the original source files. Reads the 'sources' and 'sourcesContent' arrays from the .map JSON and returns either all recovered files (name + content) or a single entry selected by index.",

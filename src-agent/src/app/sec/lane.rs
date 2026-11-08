@@ -46,7 +46,7 @@ pub const RESEARCH_SURFACE: &[&str] = &[
     "read", "grep", "glob", "dir_list",
     // Local analysis only; nothing in the matrix lets research open a socket.
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice",
     // NOT sec_crack / sec_factor: both LOOK local but the daemon's effect manifest
     // ties them to an external fetch (a hashcat download, a fixed factordb.com
@@ -61,14 +61,14 @@ pub const RED_SURFACE: &[&str] = &[
     "sec_zap", "sec_xss_confirm", "sec_remote", "sec_replay", "sec_recording",
     // Local analysis, because a red turn reads what it just pulled back.
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice", "sec_crack", "sec_factor",
 ];
 
 pub const BLUE_SURFACE: &[&str] = &[
     "read", "grep", "glob", "dir_list",
     "sec_decode", "sec_triage", "sec_hashid", "sec_jsdeobf", "sec_unmin",
-    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_sage", "sec_rsa",
+    "sec_sourcemap", "sec_wasm", "sec_rop", "sec_z3", "sec_rsa",
     "sec_lattice",
     "sec_http",
     "edit", "write",
@@ -222,7 +222,7 @@ impl Lane {
             "edit" | "write" => Cap::Edit,
             "sec_http" => Cap::Observe,
             "sec_decode" | "sec_triage" | "sec_sourcemap" | "sec_unmin" | "sec_jsdeobf"
-            | "sec_wasm" | "sec_rop" | "sec_z3" | "sec_sage" | "sec_rsa" | "sec_lattice"
+            | "sec_wasm" | "sec_rop" | "sec_z3" | "sec_rsa" | "sec_lattice"
             | "sec_hashid" => Cap::Read,
             "sec_browser" | "sec_remote" | "sec_ffuf" | "sec_nuclei" | "sec_dalfox"
             | "sec_sqlmap" | "sec_zap" | "sec_xss" | "sec_xss_confirm" | "sec_replay"
