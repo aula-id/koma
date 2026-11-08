@@ -176,12 +176,30 @@ pub fn runtime_status_refresh(force: bool) -> (bool, String) {
         RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
         return (ok, label);
     }
-    // Another probe owns the lock — wait briefly for it rather than stacking.
-    for _ in 0..100 {
+    // Another probe owns the lock. Wait for it — `docker info` can take several
+    // seconds on slow arm CI, and returning the pre-probe `ok=false` default here
+    // made sec_refusal flip false→true across back-to-back calls (baseline tests).
+    for _ in 0..500 {
         std::thread::sleep(Duration::from_millis(20));
         if !RUNTIME_PROBE_REFRESHING.load(Ordering::Acquire) {
+            let guard = runtime_probe_cache()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if guard.at.is_some() && (force || !runtime_probe_stale(&guard)) {
+                return (guard.ok, guard.label.clone());
+            }
             break;
         }
+    }
+    // Peer never published a fresh answer — take over rather than serve stale.
+    if RUNTIME_PROBE_REFRESHING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let (ok, label) = probe_runtime_now();
+        store_runtime_probe(ok, label.clone());
+        RUNTIME_PROBE_REFRESHING.store(false, Ordering::Release);
+        return (ok, label);
     }
     read_runtime_probe()
 }

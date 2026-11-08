@@ -59,12 +59,16 @@ sec_nope -> refused: cyber lane off — enable security mode in /security first"
     fn a_signalled_tool_is_never_refused_while_on() {
         // Availability is the LAST check, so with a lane on and a real name the
         // verdict follows the machine's runtime, not the fixture.
+        let _ = crate::security::runtime_status_refresh(true);
         let rows = refusals(true, &["sec_http"]);
         assert_eq!(rows[0].1.is_none(), crate::security::cyber_execution_available());
     }
 
     #[test]
     fn the_fake_advertises_deterministically() {
+        // Pin the runtime probe once so a mid-test docker cache flip cannot
+        // change the refusal between the two samples.
+        let _ = crate::security::runtime_status_refresh(true);
         let a = refusals(true, &["sec_http"]);
         let b = refusals(true, &["sec_http"]);
         assert_eq!(a, b);
@@ -74,9 +78,11 @@ sec_nope -> refused: cyber lane off — enable security mode in /security first"
     fn lane_state_does_not_leak_into_the_fixture() {
         // `Lane` is per-session; the refusal predicate takes only `enabled`. If a
         // future change makes it lane-aware, this fixture is where that shows up.
-        let lanes = [Lane::Research, Lane::Red, Lane::Blue];
+        // Force one probe first: back-to-back refusals() used to race the process
+        // docker cache (ok=false default → ok=true) on slow linux-arm64 runners.
+        let _ = crate::security::runtime_status_refresh(true);
         let first = refusals(true, &["sec_http"]);
-        for _ in &lanes {
+        for _lane in [Lane::Research, Lane::Red, Lane::Blue] {
             assert_eq!(refusals(true, &["sec_http"]), first);
         }
     }
