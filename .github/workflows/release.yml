@@ -320,7 +320,8 @@ jobs:
       matrix:
         # Wave-1 domain compositions only (not all 28 shards).
         # Bare :version / :latest is minimal; others get -${composition} suffix.
-        # identity uses Kali per compositions.json base_hint; rest bookworm.
+        # recon + identity use Kali per compositions.json base_hint; rest bookworm.
+        # Local/CD size ceiling is 9GB (decimal) via scripts/build-koma-safety.sh.
         include:
           - composition: minimal
             tag_suffix: ""
@@ -328,6 +329,9 @@ jobs:
           - composition: minimal
             tag_suffix: -minimal
             base_image: python:3.11-slim-bookworm
+          - composition: recon
+            tag_suffix: -recon
+            base_image: kalilinux/kali-rolling
           - composition: rev
             tag_suffix: -rev
             base_image: python:3.11-slim-bookworm
@@ -398,6 +402,16 @@ jobs:
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             com.koma.composition=${{ matrix.composition }}
             com.koma.base=${{ matrix.base_image }}
+
+      # Multi-arch buildx push does not leave one local image to `docker inspect`.
+      # Hard 9GB ceiling is enforced by scripts/build-koma-safety.sh for local/CD.
+      # Optional single-arch check: bash scripts/build-koma-safety.sh <composition>
+      - name: Size gate
+        run: |
+          set -euo pipefail
+          echo "size gate: 9GB ceiling documented in scripts/build-koma-safety.sh (MAX_BYTES)"
+          echo "composition=${{ matrix.composition }} pushed multi-arch; local size check:"
+          echo "  bash scripts/build-koma-safety.sh ${{ matrix.composition }}"
       # No visibility call. PUT /orgs/{org}/packages/container/{name} is not
       # a GitHub endpoint and returns 404, which failed this job after the
       # image was already pushed. A new package stays private until someone

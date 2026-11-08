@@ -7,6 +7,7 @@ registry supplies schemas and readiness when present.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from koma_sec_daemon import effects, registry
 _LANES = frozenset({"research", "red", "blue"})
 _EFFECTS = frozenset({"static", "local", "remote", "exploit"})
 _EXECS = frozenset({"cpu", "binary", "net", "browser"})
+# Pack/image markers that do not require a domain composition match.
+_SKIP_IMAGE_GATE = frozenset({"", "smoke", "external", "debian", "none"})
 
 
 def _catalog_root() -> Path:
@@ -198,24 +201,22 @@ def list_tools(
             ).lower()
             if query not in blob:
                 continue
-        out.append(
-            {
-                "name": r["name"],
-                "domain": r.get("domain") or domains[0],
-                "categories": r.get("categories") or domains,
-                "blurb": r.get("blurb") or "",
-                "effect": r.get("effect"),
-                "exec": r.get("exec"),
-                "lanes": r.get("lanes") or [],
-                "ready": bool(r.get("ready", True)),
-                "scope_needed": bool(r.get("scope_needed", False)),
-                **(
-                    {"missing": r["missing"], "hint": r.get("hint")}
-                    if not r.get("ready", True) and r.get("missing")
-                    else {}
-                ),
-            }
-        )
+        row_out = {
+            "name": r["name"],
+            "domain": r.get("domain") or domains[0],
+            "categories": r.get("categories") or domains,
+            "blurb": r.get("blurb") or "",
+            "effect": r.get("effect"),
+            "exec": r.get("exec"),
+            "lanes": r.get("lanes") or [],
+            "ready": bool(r.get("ready", True)),
+            "scope_needed": bool(r.get("scope_needed", False)),
+            "image_or_pack": r.get("image_or_pack") or "smoke",
+        }
+        if not r.get("ready", True) and r.get("missing"):
+            row_out["missing"] = r["missing"]
+            row_out["hint"] = r.get("hint")
+        out.append(row_out)
     start = max(0, int(cursor or 0))
     if limit is None:
         # Default page size keeps model context small at 2k scale.
@@ -266,6 +267,7 @@ def list_tools_page(
                 "lanes": r.get("lanes") or [],
                 "ready": bool(r.get("ready", True)),
                 "scope_needed": bool(r.get("scope_needed", False)),
+                "image_or_pack": r.get("image_or_pack") or "smoke",
             }
         )
     start = max(0, int(cursor or 0))
@@ -342,10 +344,51 @@ def get_tool(name: str, lane: str | None = None) -> dict | None:
 
 
 
+def _comp_base(s: str) -> str:
+    """Domain base of a composition id (`recon-ext` → `recon`)."""
+    s = (s or "").strip().lower()
+    if not s:
+        return ""
+    return s.split("-", 1)[0]
+
+
+def _active_composition() -> str:
+    """Guest composition the daemon was started with (parent sets env)."""
+    for key in ("KOMA_SEC_COMPOSITION", "KOMA_SEC_ACTIVE_IMAGE"):
+        val = (os.environ.get(key) or "").strip().lower()
+        if val:
+            return val
+    return "minimal"
+
+
+def _composition_satisfies(required: str | None, active: str | None) -> bool:
+    """True when the active guest image covers the tool's required composition.
+
+    Skip gate for smoke/external/debian/empty. Otherwise allow when the domain
+    base matches (`recon-ext` satisfies `recon`), exact id matches, or active
+    is the special `full` composition.
+    """
+    req_raw = (required or "").strip().lower()
+    act = (active or "").strip().lower() or "minimal"
+    if act == "full":
+        return True
+    # Legacy multi-value fields ("minimal,standard") — any token may satisfy.
+    parts = [p.strip() for p in req_raw.split(",") if p.strip()] or [""]
+    for req in parts:
+        if req in _SKIP_IMAGE_GATE:
+            return True
+        if req == act:
+            return True
+        if _comp_base(req) and _comp_base(req) == _comp_base(act):
+            return True
+    return False
+
+
 def gate_run(name: str, lane: str | None = None) -> str | None:
     """Refuse a concrete run when pack policy or readiness fails. None = admit.
 
     Complements parent surfaces: pack `lanes` + `ready` are the scale-out contract.
+    Also refuses when the active guest composition does not cover `image_or_pack`.
     """
     n = (name or "").strip()
     if not n:
@@ -361,6 +404,19 @@ def gate_run(name: str, lane: str | None = None) -> str | None:
         lanes = row.get("lanes") or []
         if lanes and lane_n not in lanes:
             return f"{n} not allowed on {lane_n} lane (pack lanes={lanes})"
+    required = row.get("image_or_pack") or ""
+    active = _active_composition()
+    if not _composition_satisfies(str(required) if required is not None else "", active):
+        # Prefer a single composition token for the message (first non-skip part).
+        need = str(required).strip()
+        for part in (p.strip() for p in need.split(",")):
+            if part and part.lower() not in _SKIP_IMAGE_GATE:
+                need = part
+                break
+        return (
+            f"{n} needs guest image '{need}' (active='{active}') "
+            f"— pull/activate in /security → Images"
+        )
     if not row.get("ready", True):
         miss = row.get("missing") or "dependency"
         hint = row.get("hint") or ""
@@ -369,10 +425,11 @@ def gate_run(name: str, lane: str | None = None) -> str | None:
         extras: list[str] = []
         if hint:
             extras.append(str(hint))
-        if img and img not in ("smoke", "external", "debian"):
+        img_s = str(img)
+        if img_s and img_s.lower() not in _SKIP_IMAGE_GATE:
             extras.append(
-                f"needs guest image '{img}' — pull/activate in /security → Images "
-                f"(koma-safety:…-{img})"
+                f"needs guest image '{img_s}' — pull/activate in /security → Images "
+                f"(koma-safety:…-{img_s})"
             )
         if extras:
             msg = msg + ": " + "; ".join(extras)

@@ -160,6 +160,30 @@ pub fn pinned_from_inventory_or_ref() -> Option<String> {
     (file_version == version && !reference.is_empty()).then(|| reference.to_string())
 }
 
+/// Active composition id (`minimal`, `recon`, …) for daemon spawn env.
+///
+/// Prefers `images.json` `active`; falls back to the `composition=` line in
+/// `image-ref`. Returns `None` when neither is set.
+#[must_use]
+pub fn active_composition_id() -> Option<String> {
+    let dest = security_dir().ok()?;
+    let version = env!("CARGO_PKG_VERSION");
+    let inv = read_images_inventory_at(&dest);
+    if inv.version == version && !inv.active.is_empty() {
+        return Some(inv.active);
+    }
+    let text = std::fs::read_to_string(image_ref_path(&dest)).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("composition=") {
+            let id = rest.trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn utc_iso_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -366,11 +390,9 @@ pub fn remove_composition(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Install path: pull `minimal` only and pin it as active.
+/// Install path: pull `minimal` (no-op when already local unless `force`) and
+/// **always** activate it — even when another composition or pin already exists.
 pub(super) fn pull_safety_image(_dest: &Path, force: bool) -> Result<()> {
-    if !force && pinned_from_inventory_or_ref().is_some() {
-        return Ok(());
-    }
     pull_composition("minimal", force)?;
     activate_composition("minimal")?;
     Ok(())

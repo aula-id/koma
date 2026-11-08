@@ -530,13 +530,20 @@ pub(super) fn handle_security_image_pull(id: String, state: &mut AppState) -> Re
     Ok(())
 }
 
-/// Enter/`a` on Images — activate a previously pulled composition.
+/// Enter/`a` on Images — activate a previously pulled composition and restart
+/// the daemon so `KOMA_SEC_IMAGE` / `KOMA_SEC_COMPOSITION` are re-read.
 pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -> Result<()> {
-    let outcome = match crate::security::activate_composition(&id) {
-        Ok(()) => format!("security: activated '{id}' (restart daemon to apply)"),
-        Err(e) => format!("security: activate '{id}' failed: {e}"),
-    };
-    state.rest.fg_mut().status = outcome;
+    match crate::security::activate_composition(&id) {
+        Ok(()) => {
+            // Reuse the stop+start path so the child picks up the new pin.
+            handle_security_restart(state)?;
+            state.rest.fg_mut().status =
+                format!("security: activated '{id}'; daemon restarted");
+        }
+        Err(e) => {
+            state.rest.fg_mut().status = format!("security: activate '{id}' failed: {e}");
+        }
+    }
     if let Mode::Security(s) = state.mode_mut() {
         s.refresh_images();
     }

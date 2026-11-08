@@ -19,7 +19,7 @@ def main() -> int:
             continue
         rows.append(json.loads(line))
 
-    by_pack: dict[str, list] = {"minimal": [], "standard": [], "extended": []}
+    by_pack: dict[str, list] = {"minimal": []}  # domain packs are bucket-generated; no standard/extended
     for r in rows:
         method = r.get("method") or "skip"
         ready = method != "skip"
@@ -35,14 +35,14 @@ def main() -> int:
             "ready": ready,
             "requires": [] if ready else [r.get("detect") or r["slug"]],
             "scope_needed": r["effect"] in ("remote", "exploit"),
-            "image_or_pack": ",".join(r.get("packs") or ["standard"]),
+            "image_or_pack": ",".join(r.get("packs") or ["minimal"]),
             "how_to": f"detect={r.get('detect')}; method={method}; source={r.get('source','')}",
         }
         # Prefer sec_ names when slug already is a daemon tool
         if r["slug"].startswith("sec_"):
             tool["id"] = r["slug"]
             tool["name"] = r["slug"]
-        for pack in r.get("packs") or ["standard"]:
+        for pack in r.get("packs") or ["minimal"]:
             if pack in by_pack:
                 by_pack[pack].append(dict(tool))
 

@@ -33,15 +33,14 @@ use crate::model::store::base_dir;
 /// vendored `koma_sec_daemon` package and `requirements.txt`.
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
-// Inventory/pull APIs are consumed by the Phase 3 Images pane; keep them public now.
-#[allow(dead_code)]
+// Inventory/pull APIs are consumed by the Images pane and daemon spawn path.
 mod images;
-#[allow(unused_imports)]
 pub use images::{
-    activate_composition, composition_tag, list_known_compositions, pull_composition,
-    read_images_inventory, remove_composition, safety_image_tag_for, ImageEntry,
-    ImagesInventory,
+    activate_composition, active_composition_id, composition_tag, list_known_compositions,
+    pull_composition, read_images_inventory, remove_composition, safety_image_tag_for,
 };
+#[allow(unused_imports)] // public inventory types for callers/tests
+pub use images::{ImageEntry, ImagesInventory};
 use images::pull_safety_image;
 
 /// How long a runtime probe answer is served before a refresh is allowed.

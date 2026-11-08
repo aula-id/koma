@@ -879,11 +879,25 @@ fn check_security_daemon() -> CheckResult {
     #[cfg(not(windows))]
     {
         if crate::security::is_installed() {
-            CheckResult::ok("Security daemon (optional, installed)")
+            let active = crate::security::active_composition_id()
+                .unwrap_or_else(|| "minimal".to_string());
+            CheckResult {
+                status: Status::Ok,
+                headline: "Security daemon (optional, installed)".to_string(),
+                details: vec![
+                    format!("active guest composition: {active}"),
+                    "install pulls minimal only — domain images via /security → Images"
+                        .to_string(),
+                ],
+            }
         } else {
             CheckResult::warn(
                 "Security daemon (optional, not installed)",
-                vec!["optional — install with: koma --security-install".to_string()],
+                vec![
+                    "optional — install with: koma --security-install (pulls minimal guest)"
+                        .to_string(),
+                    "domain images (recon, web, …): /security → Images after install".to_string(),
+                ],
             )
         }
     }

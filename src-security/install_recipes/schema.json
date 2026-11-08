@@ -17,7 +17,7 @@
     "detect": { "type": "string", "description": "which(1) name or import path" },
     "packs": {
       "type": "array",
-      "items": { "type": "string", "enum": ["minimal", "standard", "extended"] },
+      "items": { "type": "string", "minLength": 1, "description": "composition id: minimal|recon|web|… (legacy standard/extended removed)" },
       "minItems": 1
     },
     "lanes": {

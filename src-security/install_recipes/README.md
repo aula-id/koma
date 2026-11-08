@@ -4,10 +4,9 @@ Taxonomy (2345 names) ≠ installable. Each Linux CLI needs a recipe, then a pac
 
 ```
 categorizer / manual
-  → recipes.jsonl (this dir)
-  → scripts/gen_pack_from_recipes.py
-  → catalog/packs/{smoke,standard,extended}.json
-  → image build TARGET=minimal|standard|extended
+  → recipes + install_recipes/buckets/*.bins.txt
+  → catalog/packs/{smoke,minimal,<domain>}.json  (no standard/extended)
+  → image build KOMA_COMPOSITION=minimal|recon|web|…
 ```
 
 `skip` method = catalog-only (`ready: false`). Never apt-as-root at guest runtime (RO root).

@@ -20,7 +20,7 @@
       "ready": true,
       "requires": [],
       "scope_needed": true,
-      "image_or_pack": "minimal,standard,extended",
+      "image_or_pack": "minimal",
       "how_to": "detect=curl; method=apt; source=curl"
     },
     {
@@ -41,7 +41,7 @@
       "ready": true,
       "requires": [],
       "scope_needed": false,
-      "image_or_pack": "minimal,standard,extended",
+      "image_or_pack": "minimal",
       "how_to": "detect=jq; method=apt; source=jq"
     }
   ]

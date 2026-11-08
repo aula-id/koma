@@ -66,6 +66,10 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
     if let Some(image) = crate::security::pinned_safety_image() {
         cmd.env("KOMA_SEC_IMAGE", image);
     }
+    // Composition id the catalog uses for image-mismatch gating (gate_run).
+    let composition = crate::security::active_composition_id()
+        .unwrap_or_else(|| "minimal".to_string());
+    cmd.env("KOMA_SEC_COMPOSITION", composition);
     // No console flash on Windows — see `tool::shell::no_console_window_tokio`'s
     // docs for the `FreeConsole()` causal chain this guards against.
     crate::tool::shell::no_console_window_tokio(&mut cmd);
