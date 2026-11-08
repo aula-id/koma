@@ -1,63 +1,86 @@
 # syntax=docker/dockerfile:1
 # koma-safety guest image — CD build context: src-security/image
 #
-# Compositions (KOMA_COMPOSITION):
-#   minimal  — daemon + curl/jq (smoke / CI)
-#   standard — core CLIs + high-confidence apt list (soft-fail missing)
-#   extended — standard + medium apt list (soft-fail)
+# Compositions (KOMA_COMPOSITION) + base (KOMA_BASE_IMAGE):
+#   minimal  — python:3.11-slim-bookworm (no Kali; CI/smoke)
+#   standard — kalilinux/kali-rolling (native Kali apt — do NOT mix into Debian)
+#   extended — same Kali base + medium apt list
 #
-# Local: bash scripts/sync-security-image.sh && bash scripts/build-koma-safety.sh standard
+# Mixing Kali packages into Debian bookworm breaks libc/curl (see failed hybrid bake).
+# Kali docs: never add kali.sources to a non-Kali OS.
+#
+# Local:
+#   bash scripts/build-koma-safety.sh minimal
+#   bash scripts/build-koma-safety.sh standard
 
-FROM python:3.11-slim-bookworm
+ARG KOMA_BASE_IMAGE=python:3.11-slim-bookworm
+FROM ${KOMA_BASE_IMAGE}
 
 ARG KOMA_COMPOSITION=standard
 ARG KOMA_VERSION=0.0.0
+ARG KOMA_BASE_IMAGE
 
 LABEL org.opencontainers.image.title="koma-safety" \
       org.opencontainers.image.description="Koma security guest runtime (isolated tools)" \
       org.opencontainers.image.source="https://github.com/aula-id/koma" \
       org.opencontainers.image.vendor="aula-id" \
       org.opencontainers.image.version="${KOMA_VERSION}" \
-      com.koma.composition="${KOMA_COMPOSITION}"
+      com.koma.composition="${KOMA_COMPOSITION}" \
+      com.koma.base="${KOMA_BASE_IMAGE}"
 
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates jq \
-    && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-        requests==2.32.3 \
-        pwntools==4.13.1 \
-        lief==0.16.6 \
-        unicorn==2.1.1
+# Base OS tools + Python deps in a venv (Kali is PEP 668 / externally managed).
+RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      curl ca-certificates jq \
+      python3 python3-pip python3-venv python3-dev \
+      gcc build-essential cmake pkg-config; \
+    mkdir -p /opt/koma/bin; \
+    python3 -m venv /opt/koma/venv; \
+    /opt/koma/venv/bin/pip install --no-cache-dir -U pip wheel; \
+    /opt/koma/venv/bin/pip install --no-cache-dir \
+      'requests>=2.32,<3' \
+      'pwntools>=4.13,<5' \
+      'lief>=0.16'; \
+    # unicorn may lack a manylinux wheel on some arches — soft-fail
+    /opt/koma/venv/bin/pip install --no-cache-dir 'unicorn>=2.1' \
+      || echo "warn: unicorn pip install skipped"; \
+    ln -sf /opt/koma/venv/bin/python /opt/koma/bin/python3; \
+    ln -sf /opt/koma/venv/bin/python /usr/local/bin/python3-koma || true; \
+    rm -rf /var/lib/apt/lists/*
 
-# Install recipe lists (synced into image context). Empty files are OK for minimal.
 COPY install_recipes/apt_packages_high.txt /tmp/apt_packages_high.txt
 COPY install_recipes/apt_packages_medium.txt /tmp/apt_packages_medium.txt
 COPY install_recipes/detect_bins.txt /tmp/detect_bins.txt
 
-# Composition packages: core hard-fail on standard/extended; bulk apt soft-fail in batches.
+# Composition packages — all from the *native* base repos only (Debian or Kali).
+# Soft-fail per package/batch; never pull a second distro's libc.
 RUN set -eux; \
+    export DEBIAN_FRONTEND=noninteractive; \
     REPORT=/tmp/install_report.txt; \
     : > "$REPORT"; \
+    echo "base=${KOMA_BASE_IMAGE}" >> "$REPORT"; \
+    echo "composition=${KOMA_COMPOSITION}" >> "$REPORT"; \
     install_list() { \
       list_file="$1"; \
       tag="$2"; \
       [ -s "$list_file" ] || return 0; \
-      # filter empties/comments
       pkgs=$(grep -vE '^\s*(#|$)' "$list_file" | tr -d '\r' | tr '\n' ' '); \
       [ -n "$pkgs" ] || return 0; \
-      # batch of 20 to keep layers recoverable and logs readable
       set -- $pkgs; \
       while [ "$#" -gt 0 ]; do \
         batch=""; n=0; \
-        while [ "$#" -gt 0 ] && [ "$n" -lt 20 ]; do \
+        while [ "$#" -gt 0 ] && [ "$n" -lt 15 ]; do \
           batch="$batch $1"; shift; n=$((n+1)); \
         done; \
         if apt-get install -y --no-install-recommends $batch; then \
           echo "ok_batch $tag$batch" >> "$REPORT"; \
         else \
           echo "soft_batch $tag$batch" >> "$REPORT"; \
+          apt-get -y -f install >/dev/null 2>&1 || true; \
           for p in $batch; do \
             if apt-get install -y --no-install-recommends "$p"; then \
               echo "ok $p" >> "$REPORT"; \
@@ -71,11 +94,12 @@ RUN set -eux; \
     }; \
     case "${KOMA_COMPOSITION}" in \
       minimal) \
-        echo "composition=minimal" | tee -a "$REPORT" ;; \
+        echo "composition=minimal (no bulk tools)" | tee -a "$REPORT" ;; \
       standard|extended) \
         apt-get update; \
         apt-get install -y --no-install-recommends \
-          nmap sqlmap file gdb binutils; \
+          nmap sqlmap file gdb binutils \
+          || true; \
         apt-get install -y --no-install-recommends radare2 \
           || apt-get install -y --no-install-recommends radare2-cutter \
           || true; \
@@ -90,20 +114,23 @@ RUN set -eux; \
     esac; \
     cp "$REPORT" /tmp/install_report_final.txt
 
-RUN useradd --create-home --uid 10001 koma && \
-    mkdir -p /work /artifacts /opt/koma/bin /opt/koma/catalog && \
-    chown -R koma:koma /work /artifacts /opt/koma && \
+RUN set -eux; \
+    if ! id -u koma >/dev/null 2>&1; then \
+      useradd --create-home --uid 10001 koma || useradd --create-home koma; \
+    fi; \
+    mkdir -p /work /artifacts /opt/koma/bin /opt/koma/catalog; \
+    chown -R koma:koma /work /artifacts /opt/koma || true; \
     cp /tmp/install_report_final.txt /opt/koma/install_report.txt || true
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY koma_proxy.py /opt/koma/koma_proxy.py
 COPY koma_sec_daemon /opt/koma/koma_sec_daemon
 COPY catalog /opt/koma/catalog
-# Keep detect list next to catalog for runtime report regeneration if needed.
 COPY install_recipes/detect_bins.txt /opt/koma/catalog/detect_bins.txt
 
 ENV PYTHONPATH=/opt/koma \
-    PATH="/opt/koma/bin:${PATH}" \
+    PATH="/opt/koma/bin:/opt/koma/venv/bin:${PATH}" \
+    VIRTUAL_ENV=/opt/koma/venv \
     KOMA_STATE=/tmp/koma-state \
     KOMA_SEC_COMPOSITION=${KOMA_COMPOSITION} \
     KOMA_VERSION=${KOMA_VERSION} \
@@ -112,7 +139,7 @@ ENV PYTHONPATH=/opt/koma \
 RUN chmod 0755 /usr/local/bin/entrypoint.sh \
     && python3 -c "import koma_sec_daemon, koma_sec_daemon.catalog; print('daemon_ok', koma_sec_daemon.catalog.handle('summary'))" \
     && python3 - <<'PY'
-import json, shutil
+import json, shutil, os
 from pathlib import Path
 bins = []
 p = Path("/opt/koma/catalog/detect_bins.txt")
@@ -125,7 +152,7 @@ for b in bins:
     else:
         missing.append(b)
 report = {
-    "composition": __import__("os").environ.get("KOMA_SEC_COMPOSITION", ""),
+    "composition": os.environ.get("KOMA_SEC_COMPOSITION", ""),
     "bins_total": len(bins),
     "present_count": len(present),
     "missing_count": len(missing),
@@ -136,6 +163,12 @@ report = {
 }
 Path("/opt/koma/catalog/detect_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 print("detect", report["present_count"], "/", report["bins_total"])
+# install report counters
+ir = Path("/opt/koma/install_report.txt")
+if ir.is_file():
+    text = ir.read_text(encoding="utf-8", errors="replace")
+    for key in ("ok ", "ok_batch ", "miss ", "ok_kali "):
+        print("report", key.strip(), text.count("\n" + key) + (1 if text.startswith(key) else 0))
 PY
 
 USER koma

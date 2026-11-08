@@ -323,10 +323,13 @@ jobs:
         include:
           - composition: minimal
             tag_suffix: -minimal
+            base_image: python:3.11-slim-bookworm
           - composition: standard
             tag_suffix: ""
+            base_image: kalilinux/kali-rolling
           - composition: extended
             tag_suffix: -extended
+            base_image: kalilinux/kali-rolling
     steps:
       - uses: actions/checkout@v4
       - name: Sync image build context
@@ -369,11 +372,13 @@ jobs:
           build-args: |
             KOMA_COMPOSITION=${{ matrix.composition }}
             KOMA_VERSION=${{ steps.ver.outputs.version }}
+            KOMA_BASE_IMAGE=${{ matrix.base_image }}
           labels: |
             org.opencontainers.image.source=https://github.com/aula-id/koma
             org.opencontainers.image.title=koma-safety
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             com.koma.composition=${{ matrix.composition }}
+            com.koma.base=${{ matrix.base_image }}
       # No visibility call. PUT /orgs/{org}/packages/container/{name} is not
       # a GitHub endpoint and returns 404, which failed this job after the
       # image was already pushed. A new package stays private until someone
