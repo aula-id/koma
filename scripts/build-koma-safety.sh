@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG="$ROOT/src-security/image"
 COMP="${1:-minimal}"
 TAG="${2:-koma-safety:local-${COMP}}"
+
 if [[ -z "${KOMA_VERSION:-}" && -f "$ROOT/version.json" ]]; then
   KOMA_VERSION="$(python3 -c "import json; print(json.load(open('$ROOT/version.json'))['version'])" 2>/dev/null || true)"
 fi
@@ -18,20 +19,22 @@ docker build \
   -t "$TAG" \
   "$IMG"
 
-echo "== image inspect labels =="
-docker image inspect "$TAG" --format '{{json .Config.Labels}}' | head -c 500; echo
+echo "== image size =="
+docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.ID}}' "$TAG"
 
-echo "== smoke: import + catalog summary =="
+echo "== labels =="
+docker image inspect "$TAG" --format '{{json .Config.Labels}}' | head -c 600; echo
+
+echo "== catalog summary =="
 docker run --rm --entrypoint python3 "$TAG" -c \
-  'from koma_sec_daemon import catalog; import json; print(json.dumps(catalog.handle("summary"), indent=2)[:800])'
+  'from koma_sec_daemon import catalog; import json; print(json.dumps(catalog.handle("summary"), indent=2)[:1200])'
 
-echo "== smoke: composition env =="
-docker run --rm --entrypoint sh "$TAG" -c 'echo composition=$KOMA_SEC_COMPOSITION version=$KOMA_VERSION; which curl jq; id'
-
-echo "== smoke: detect common bins (best-effort) =="
+echo "== detect_report =="
 docker run --rm --entrypoint sh "$TAG" -c \
-  'for b in curl jq python3 nmap sqlmap gdb file; do
-     if command -v "$b" >/dev/null 2>&1; then echo "ok $b"; else echo "missing $b"; fi
-   done'
+  'if [ -f /opt/koma/catalog/detect_report.json ]; then head -c 2500 /opt/koma/catalog/detect_report.json; echo; else echo missing_detect_report; fi'
+
+echo "== composition env =="
+docker run --rm --entrypoint sh "$TAG" -c \
+  'echo composition=$KOMA_SEC_COMPOSITION version=$KOMA_VERSION; id; which curl jq nmap 2>/dev/null || true'
 
 echo "OK $TAG"

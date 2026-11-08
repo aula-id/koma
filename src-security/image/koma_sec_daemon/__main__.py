@@ -338,13 +338,31 @@ def main() -> None:
                 lane = frame.get("lane") if isinstance(frame.get("lane"), str) else None
                 if not lane:
                     lane = os.environ.get("KOMA_SEC_LANE") or None
+                # Allow pack-only / generic CLI tools that are not in REGISTRY.
+                # gate_run admits unknown soft; registry.call resolves packs.
                 if tool_name not in registry.REGISTRY:
-                    write_frame(real_stdout, {
-                        "id": frame_id,
-                        "ok": False,
-                        "error": f"unknown tool: {tool_name}",
-                    })
-                    continue
+                    try:
+                        from koma_sec_daemon import catalog as catalog_mod
+                        from koma_sec_daemon.registry import _pack_row
+
+                        gate_early = catalog_mod.gate_run(tool_name, lane)
+                        if gate_early:
+                            write_frame(real_stdout, {
+                                "id": frame_id,
+                                "ok": True,
+                                "result": verdict.typed(verdict.BLOCKED, gate_early),
+                            })
+                            continue
+                        if _pack_row(tool_name) is None:
+                            write_frame(real_stdout, {
+                                "id": frame_id,
+                                "ok": False,
+                                "error": f"unknown tool: {tool_name}",
+                            })
+                            continue
+                    except Exception:
+                        # Fall through and let call handle resolution.
+                        pass
                 try:
                     from koma_sec_daemon import catalog as catalog_mod
                     gate = catalog_mod.gate_run(tool_name, lane)

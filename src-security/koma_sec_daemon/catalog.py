@@ -7,6 +7,7 @@ registry supplies schemas and readiness when present.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from koma_sec_daemon import effects, registry
@@ -119,23 +120,34 @@ def _merged_rows() -> list[dict]:
             effect = pack.get("effect") or "remote"
             exec_cls = pack.get("exec") or "binary"
             lanes = [x for x in (pack.get("lanes") or ["red"]) if x in _LANES] or ["red"]
-            rows.append(
-                {
-                    "name": name,
-                    "id": pack.get("id") or name,
-                    "domain": (pack.get("categories") or ["other"])[0],
-                    "categories": list(pack.get("categories") or ["other"]),
-                    "blurb": str(pack.get("summary") or "")[:160],
-                    "effect": effect if effect in _EFFECTS else "remote",
-                    "exec": exec_cls if exec_cls in _EXECS else "binary",
-                    "lanes": lanes,
-                    "plan_ok": bool(pack.get("plan_ok", False)),
-                    "ready": bool(pack.get("ready", False)),
-                    "scope_needed": bool(pack.get("scope_needed", True)),
-                    "image_or_pack": str(pack.get("image_or_pack") or "external"),
-                    "requires": list(pack.get("requires") or []),
-                }
-            )
+            requires = list(pack.get("requires") or [])
+            ready_pack = bool(pack.get("ready", False))
+            if not ready_pack and requires:
+                bin0 = requires[0]
+                if isinstance(bin0, str) and bin0.strip() and shutil.which(bin0.strip()):
+                    ready_pack = True
+            missing = None
+            if not ready_pack and requires:
+                missing = requires[0]
+            row = {
+                "name": name,
+                "id": pack.get("id") or name,
+                "domain": (pack.get("categories") or ["other"])[0],
+                "categories": list(pack.get("categories") or ["other"]),
+                "blurb": str(pack.get("summary") or "")[:160],
+                "effect": effect if effect in _EFFECTS else "remote",
+                "exec": exec_cls if exec_cls in _EXECS else "binary",
+                "lanes": lanes,
+                "plan_ok": bool(pack.get("plan_ok", False)),
+                "ready": ready_pack,
+                "scope_needed": bool(pack.get("scope_needed", True)),
+                "image_or_pack": str(pack.get("image_or_pack") or "external"),
+                "requires": requires,
+                "pack_only": True,
+            }
+            if missing:
+                row["missing"] = missing
+            rows.append(row)
             continue
         if not d:
             continue
@@ -278,7 +290,28 @@ def get_tool(name: str, lane: str | None = None) -> dict | None:
         if lane_n and lane_n in _LANES and lane_n not in (r.get("lanes") or []):
             return None
         d = registry.REGISTRY.get(name) or {}
-        params = d.get("parameters") or {"type": "object", "properties": {}}
+        params = d.get("parameters")
+        if not params and r.get("pack_only"):
+            params = {
+                "type": "object",
+                "properties": {
+                    "argv": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Argument vector after the binary name",
+                    },
+                    "raw": {
+                        "type": "string",
+                        "description": "Shell-style args string (shlex-split); alternative to argv",
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Seconds (default 120, max 600)",
+                    },
+                },
+            }
+        if not params:
+            params = {"type": "object", "properties": {}}
         packs = _load_packs()
         how = (packs.get(name) or {}).get("how_to") or (
             effects.MANIFEST[name][3] if name in effects.MANIFEST else ""

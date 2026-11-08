@@ -38,6 +38,19 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(str(exc))
         return 0
     except KeyError:
+        # Pack-only / generic CLI path (registry.call already tries packs; this
+        # is a last-chance direct resolve when call raised before the fallback).
+        try:
+            from koma_sec_daemon import generic_cli
+            from koma_sec_daemon.registry import _generic_from_pack
+
+            generic = _generic_from_pack(tool, args)
+            if generic is not None:
+                sys.stdout.write(generic)
+                return 0
+        except Exception as exc:  # noqa: BLE001
+            print(str(exc), file=sys.stderr)
+            return 1
         print(f"unknown tool: {tool}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001
