@@ -34,7 +34,7 @@ import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-pai
 import { scrollbars, type Theme } from "./theme.ts"
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
-import { CALM, CLEANUP_FLASH_MS, IDLE_COLLECT_MS, ramTone, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
+import { CALM, IDLE_COLLECT_MS, ramTone, useCleaning, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -102,34 +102,17 @@ export function Chat({
   void _onRecycle
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
   const [pressure, setPressure] = useState(CALM)
-  const [cleanupUntil, setCleanupUntil] = useState(0)
   const session = snap.sessions.find((row) => row.id === snap.foreground_id) ?? snap.sessions[0]
   const turnRef = useRef({ session, status: snap.global.status })
   turnRef.current = { session, status: snap.global.status }
-  const flashCleanup = useRef(() => {})
-  flashCleanup.current = () => setCleanupUntil(Date.now() + CLEANUP_FLASH_MS)
-  const cleanups = useRef(pressure.cleanups)
   useIdleCollect(
     () => {
       const turn = turnRef.current
       return !turn.session || !isThinking(turn.status, turn.session)
     },
     IDLE_COLLECT_MS,
-    () => process.memoryUsage().rss,
-    () => flashCleanup.current(),
   )
-  useEffect(() => {
-    if (pressure.cleanups <= cleanups.current) return
-    cleanups.current = pressure.cleanups
-    flashCleanup.current()
-  }, [pressure.cleanups])
-  useEffect(() => {
-    if (cleanupUntil <= 0) return
-    const wait = Math.max(0, cleanupUntil - Date.now())
-    const timer = setTimeout(() => setCleanupUntil(0), wait)
-    return () => clearTimeout(timer)
-  }, [cleanupUntil])
-  const cleaning = cleanupUntil > 0
+  const cleaning = useCleaning()
   if (!session) {
     return (
       <box flexGrow={1}>
@@ -1533,8 +1516,9 @@ function Tips({ theme, width }: { theme: Theme; width: number }) {
 
 function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; session: SessionSnap; theme: Theme; cleaning?: boolean }) {
   const thinking = isThinking(snap.global.status, session)
+  // Quiet: "Cleanup…" takes the ready slot. Live: it rides after the turn timer.
   const showCleanup = cleaning && !thinking
-  const label = showCleanup ? "cleanup" : statusLabel(snap.global.status)
+  const label = showCleanup ? CLEANUP_LABEL : statusLabel(snap.global.status)
   const live = thinking || showCleanup
   const elapsed = useWorkElapsed(showCleanup ? 0 : snap.global.work_elapsed_ms, live)
   const readout = usageReadout(session)
@@ -1548,6 +1532,7 @@ function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; se
             <span key="spin" fg={theme.accent}>{` ${SPINNER[Math.floor(elapsed / 80) % SPINNER.length] ?? "⠋"} `}</span>,
             <span key="status" fg={theme.fg}>{label}</span>,
             showCleanup ? null : <span key="time" fg={theme.dim}>{`  ${(elapsed / 1000).toFixed(1)}s `}</span>,
+            cleaning && thinking ? <span key="cleanup" fg={theme.dim}>{`· ${CLEANUP_LABEL} `}</span> : null,
           ]
         )}
       </text>
@@ -1601,6 +1586,8 @@ function DrssMark({ active, theme }: { active: boolean; theme: Theme }) {
 }
 
 /** Turn failures are already a toast and stay in /notification. */
+export const CLEANUP_LABEL = "cleanup…"
+
 export function statusLabel(status: string): string {
   if (/^\s*error:/i.test(status)) return "ready"
   return status
