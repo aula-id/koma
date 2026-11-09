@@ -7,6 +7,21 @@ import { HistoryPane } from "./chat.tsx"
 import { fold } from "./protocol.ts"
 import { themeFor } from "./theme.ts"
 
+/**
+ * Read the test screen. On a slow runner the renderer can still be writing a
+ * frame (OutputBusy); wait for it to settle and read again.
+ */
+async function frame(view: { captureCharFrame: () => string; waitForVisualIdle: () => Promise<unknown> }): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return view.captureCharFrame()
+    } catch (err) {
+      if (attempt >= 50 || !String(err).includes("OutputBusy")) throw err
+      await act(async () => { await Bun.sleep(10); await view.waitForVisualIdle() })
+    }
+  }
+}
+
 test("soak: progress appends, paging, and rewind keep mounts, anchors, and RSS bounded", async () => {
   let snap = fold(null, { Snapshot: { sessions: [{ id: "s", messages: [{ role: "system", content: "sys" }] }], global: {} } })!
   let turn = 0
@@ -33,14 +48,14 @@ test("soak: progress appends, paging, and rewind keep mounts, anchors, and RSS b
   const find = (node: any): ScrollBoxRenderable | undefined => node instanceof ScrollBoxRenderable ? node : node.getChildren().map(find).find(Boolean)
   const turns = (box: ScrollBoxRenderable) => box.getChildren()[0].getChildren().filter((n) => String(n.id).startsWith("turn-"))
   const shows = async (text: string) => {
-    for (let i = 0; i < 100 && !view.captureCharFrame().includes(text); i++) {
+    for (let i = 0; i < 100 && !(await frame(view)).includes(text); i++) {
       await act(async () => { await Bun.sleep(10); await view.waitForVisualIdle() })
     }
-    return view.captureCharFrame()
+    return await frame(view)
   }
   let box: ScrollBoxRenderable
   const toTail = async () => {
-    for (let i = 0; i < 12 && !view.captureCharFrame().includes(`Prompt ${turn - 1}`); i++) {
+    for (let i = 0; i < 12 && !(await frame(view)).includes(`Prompt ${turn - 1}`); i++) {
       await act(async () => {
         box.scrollTo(box.scrollHeight)
         await view.mockMouse.scroll(box.x + 2, Math.max(box.y + 2, box.y + box.height - 3), "down")
@@ -88,7 +103,7 @@ test("soak: progress appends, paging, and rewind keep mounts, anchors, and RSS b
     const ids = turns(box).map((n) => Number(String(n.id).slice("turn-".length)))
     expect(Math.max(...ids)).toBeLessThan(kept.length)
     expect(await shows("Prompt 149")).toContain("Prompt 149")
-    expect(view.captureCharFrame()).not.toContain("Reading history")
+    expect(await frame(view)).not.toContain("Reading history")
   } finally { await act(async () => { await view.dispose() }) }
 }, 120_000)
 
@@ -121,12 +136,12 @@ test("thousands of turns page both ways with bounded native mounts and footprint
       await idle()
       expect(count()).toBeLessThanOrEqual(90)
     }
-    expect(view.captureCharFrame()).not.toContain("Prompt 2999")
+    expect(await frame(view)).not.toContain("Prompt 2999")
     const first = box.getChildren()[0].getChildren()[0]
     await act(async () => { updateSession({ ...session, streaming: "LIVE UPDATE" }) })
     await idle()
     expect(box.getChildren()[0].getChildren()[0]).toBe(first)
-    expect(view.captureCharFrame()).not.toContain("LIVE UPDATE")
+    expect(await frame(view)).not.toContain("LIVE UPDATE")
     if (process.platform !== "win32") {
       await act(async () => { process.emit("SIGUSR2") })
       await idle()
@@ -137,7 +152,7 @@ test("thousands of turns page both ways with bounded native mounts and footprint
       await idle()
       expect(count()).toBeLessThanOrEqual(90)
     }
-    expect(view.captureCharFrame()).toContain("LIVE UPDATE")
+    expect(await frame(view)).toContain("LIVE UPDATE")
     Bun.gc(true)
     expect(process.memoryUsage().rss - baseline).toBeLessThan(160 * 1024 * 1024)
   } finally { await act(async () => { await view.dispose() }) }
@@ -171,13 +186,13 @@ test("a reduced window stays on the tail when the reader reaches the bottom", as
     await idle()
     await act(async () => { box.scrollTo(0); await view.mockMouse.scroll(box.x + 2, box.y + 2, "up") })
     await idle()
-    expect(view.captureCharFrame()).not.toContain("Prompt 199")
+    expect(await frame(view)).not.toContain("Prompt 199")
     for (let i = 0; i < 16; i++) {
       await act(async () => { box.scrollTo(box.scrollHeight); await view.mockMouse.scroll(box.x + 2, box.y + box.height - 3, "down") })
       await idle()
     }
-    const frame = view.captureCharFrame()
-    expect(frame).toContain("Prompt 199")
-    expect(frame).not.toContain("Prompt 0\n")
+    const tail = await frame(view)
+    expect(tail).toContain("Prompt 199")
+    expect(tail).not.toContain("Prompt 0\n")
   } finally { await act(async () => { await view.dispose() }) }
 }, 30_000)
