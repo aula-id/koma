@@ -1,7 +1,7 @@
 import { useRef } from "react"
 import { useKeyboard } from "@opentui/react"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { scrollbars, type Theme } from "../theme.ts"
+import { BORDER_BOTTOM, scrollbars, type Theme } from "../theme.ts"
 import { Lines, Note, OVERLAY_BODY, OVERLAY_HEIGHT, Paragraphs, type Line } from "./bits.tsx"
 import { clip, flag, num, rec, rows, str, type Rec } from "./read.ts"
 
@@ -59,7 +59,7 @@ export function AgentViewer({ agent, theme }: { agent: Rec | null; theme: Theme 
   return (
     <box flexGrow={1} flexDirection="column" backgroundColor={theme.bg}>
       <text fg={theme.dim}>{` ${str(agent?.label) || str(agent?.name) || "sub-agent"}`}</text>
-      <box height={1} border={["bottom"]} borderColor={theme.dim} />
+      <box height={1} border={BORDER_BOTTOM} borderColor={theme.dim} />
       <box flexGrow={1} flexDirection="column" paddingLeft={1} paddingTop={1}>
 <scrollbox ref={scroll} flexGrow={1} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>{lines.map((line, i) => <text key={i} fg={theme.fg}>{line}</text>)}{live ? <text fg={theme.fg}>{live}</text> : null}</scrollbox>
       </box>

@@ -80,9 +80,27 @@ sec_nope -> refused: cyber lane off — enable security mode in /security first"
         // future change makes it lane-aware, this fixture is where that shows up.
         // Force one probe first: back-to-back refusals() used to race the process
         // docker cache (ok=false default → ok=true) on slow linux-arm64 runners.
+        //
+        // The docker probe expires after a few seconds and can flip under load,
+        // so each sample is checked against the availability seen around it:
+        // the verdict must follow availability alone, never the lane.
         let _ = crate::security::runtime_status_refresh(true);
-        let first = refusals(true, &["sec_http"]);
         for _lane in [Lane::Research, Lane::Red, Lane::Blue] {
-            assert_eq!(refusals(true, &["sec_http"]), first);
+            let (available, got) = sample_with_stable_runtime();
+            let want = (!available)
+                .then(|| "security execution unavailable: isolated runtime not configured".to_string());
+            assert_eq!(got, vec![("sec_http".to_string(), want)]);
         }
+    }
+
+    /// Refusals for `sec_http` taken while the runtime probe held still.
+    fn sample_with_stable_runtime() -> (bool, Vec<(String, Option<String>)>) {
+        for _ in 0..20 {
+            let before = crate::security::cyber_execution_available();
+            let got = refusals(true, &["sec_http"]);
+            if crate::security::cyber_execution_available() == before {
+                return (before, got);
+            }
+        }
+        panic!("the runtime probe never held still for one sample");
     }

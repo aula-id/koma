@@ -31,7 +31,9 @@ import {
 } from "./protocol.ts"
 import { SolidScrollBar } from "./modes/bits.tsx"
 import { nextStreamPaint, STREAM_PAINT_MS, type StreamPaint } from "./stream-paint.ts"
-import { scrollbars, type Theme } from "./theme.ts"
+import { BORDER_LEFT, BORDER_TOP, scrollbars, type Theme } from "./theme.ts"
+
+const ATTACHMENT_ROW = { flexDirection: "row", flexWrap: "wrap" } as const
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
 import { CALM, IDLE_COLLECT_MS, ramTone, useCleaning, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
@@ -337,9 +339,15 @@ export function HistoryPane({
     if (box.scrollTop < 2) expand()
   }
 
+  // Stable handlers: a fresh closure per render is a prop change OpenTUI must apply.
+  const syncRef = useRef(syncScroll)
+  syncRef.current = syncScroll
+  const onScrollEvent = useRef(() => queueMicrotask(() => syncRef.current())).current
+
   const start = rows[from]?.sourceIndex ?? rows[visibleFromTurn(rows, CHAT_TURNS_DEFAULT, CHAT_WINDOW_BYTES)]?.sourceIndex ?? 0
   const stop = rows[end]?.sourceIndex ?? session.messages.length
-  const mounted = { ...session, messages: session.messages.slice(start, stop),
+  const mountedMessages = useMemo(() => session.messages.slice(start, stop), [session.messages, start, stop])
+  const mounted = { ...session, messages: mountedMessages,
     ...(end < rows.length ? { streaming: null, stream_reasoning: "", pending_tool_calls: [] } : {}) }
   const memory = useRef({ session, rows, from, end, start, stop, cleanups: pressure.cleanups })
   memory.current = { session, rows, from, end, start, stop, cleanups: pressure.cleanups }
@@ -380,8 +388,8 @@ export function HistoryPane({
           stickyStart="bottom"
           scrollY
           focusable={false}
-          onMouseScroll={() => queueMicrotask(syncScroll)}
-          onMouseUp={() => queueMicrotask(syncScroll)}
+          onMouseScroll={onScrollEvent}
+          onMouseUp={onScrollEvent}
           scrollbarOptions={scrollbars(theme)}
         >
           <Transcript
@@ -437,15 +445,18 @@ function Transcript({
   theme: Theme
   syntaxStyle: SyntaxStyle
 }) {
-  const results = new Map<string, ChatMessage>()
-  for (const message of session.messages) {
-    if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message)
-  }
-  const used = new Set<string>()
-  for (const message of session.messages) {
-    if (message.role === "system" || message.role === "tool") continue
-    for (const call of message.tool_calls ?? []) used.add(call.id)
-  }
+  // Same identity while the history is unchanged, so memoized turns skip the
+  // re-render. Each needless turn re-render costs native memory in OpenTUI.
+  const { results, used } = useMemo(() => {
+    const results = new Map<string, ChatMessage>()
+    const used = new Set<string>()
+    for (const message of session.messages) {
+      if (message.role === "tool" && message.tool_call_id) results.set(message.tool_call_id, message)
+      if (message.role === "system" || message.role === "tool") continue
+      for (const call of message.tool_calls ?? []) used.add(call.id)
+    }
+    return { results, used }
+  }, [session.messages])
   const live = Boolean(session.streaming || session.stream_reasoning)
   const pending = session.pending_tool_calls.filter((call) => !used.has(call.id))
   const turns = groupTurns(session.messages, sourceOffset)
@@ -663,7 +674,7 @@ const DOTTED_RAIL = {
 function AssistantCard({ theme, children }: { theme: Theme; children: ReactNode }) {
   return (
     <box flexDirection="row">
-      <box width={1} border={["left"]} borderColor={theme.fg} customBorderChars={DOTTED_RAIL} />
+      <box width={1} border={BORDER_LEFT} borderColor={theme.fg} customBorderChars={DOTTED_RAIL} />
       <box flexGrow={1} flexDirection="column" paddingLeft={1} gap={1}>
         {children}
       </box>
@@ -835,7 +846,7 @@ function Reasoning({
         <text fg={theme.dim}>{`${open ? "▾" : "▸"} reasoning`}</text>
       </box>
       {open ? (
-        <box border={["left"]} borderColor={theme.dim} paddingLeft={1}>
+        <box border={BORDER_LEFT} borderColor={theme.dim} paddingLeft={1}>
           <MarkdownBody content={text} syntaxStyle={syntaxStyle} fg={theme.dim} bg={theme.bg} streaming={streaming} />
         </box>
       ) : null}
@@ -894,7 +905,7 @@ function ToolCard({
         <text fg={theme.dim}>{open ? "▾" : "▸"}</text>
       </box>
       {open ? (
-        <box border={["top"]} borderColor={theme.dim} paddingLeft={1} paddingRight={1} flexDirection="column">
+        <box border={BORDER_TOP} borderColor={theme.dim} paddingLeft={1} paddingRight={1} flexDirection="column">
           {digest ? (
             <MarkdownBody content={digest} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} />
           ) : (
@@ -923,7 +934,7 @@ function ToolCard({
 export function Steers({ session, theme, selected, focused }: { session: SessionSnap; theme: Theme; selected: number; focused: boolean }) {
   if (session.pending_steer.length === 0) return null
   return (
-    <box border={["top"]} borderColor={theme.dim} paddingLeft={2} paddingRight={2} flexDirection="column">
+    <box border={BORDER_TOP} borderColor={theme.dim} paddingLeft={2} paddingRight={2} flexDirection="column">
       {session.pending_steer.map((text, index) => (
         <text key={`${index}-${text.slice(0, 12)}`} fg={focused && index === selected ? theme.accent : theme.dim}>
           {`${focused && index === selected ? "●" : "○"} ${steerPreview(text, session.pending_steer_attachments[index]?.length ?? 0)}`}
@@ -1333,7 +1344,7 @@ function Composer({
   const modeColor = mode.color === "success" ? theme.success : mode.color === "warn" ? theme.warn : mode.color === "error" ? theme.error : theme.info
   return (
     <box flexDirection="column" flexShrink={0}>
-      {!session.awaiting_approval && snap.global.pending_attachments.length ? <scrollbox height={3} flexShrink={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)} contentOptions={{ flexDirection: "row", flexWrap: "wrap" }}>
+      {!session.awaiting_approval && snap.global.pending_attachments.length ? <scrollbox height={3} flexShrink={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)} contentOptions={ATTACHMENT_ROW}>
         {snap.global.pending_attachments.map((attachment) => <box key={`${attachment.kind}-${attachment.marker_n}`} flexDirection="row" border borderStyle="rounded" borderColor={theme.dim}>
           <Choice neutral label={previewLine(attachment.label || `${attachment.kind === "pasted_text" ? "Pasted Text" : "Image"} #${attachment.marker_n}`, Math.max(8, Math.floor((width - 12) / 2)))} theme={theme} onPress={() => {
             if (!focused) return

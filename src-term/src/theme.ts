@@ -1,3 +1,4 @@
+import type { BorderSides } from "@opentui/core"
 /** Colour roles shared with `view/theme.rs`. */
 
 export interface Theme {
@@ -17,14 +18,28 @@ export interface Theme {
 }
 
 /** Scrollbar track follows the panel, and the thumb follows dim text. */
-export function scrollbars(theme: Theme) {
-  return {
-    trackOptions: {
-      backgroundColor: theme.panel,
-      foregroundColor: theme.dim,
-    },
+type ScrollbarOptions = { trackOptions: { backgroundColor: string; foregroundColor: string } }
+const scrollbarCache = new Map<string, ScrollbarOptions>()
+
+/**
+ * Scrollbar options, one object per color pair. OpenTUI rebuilds the native
+ * scrollbars whenever this prop changes identity, and every render used to
+ * pass a fresh object, which leaked native memory on each repaint.
+ */
+export function scrollbars(theme: Pick<Theme, "panel" | "dim">): ScrollbarOptions {
+  const key = `${theme.panel}|${theme.dim}`
+  let options = scrollbarCache.get(key)
+  if (!options) {
+    options = { trackOptions: { backgroundColor: theme.panel, foregroundColor: theme.dim } }
+    scrollbarCache.set(key, options)
   }
+  return options
 }
+
+/** Stable border-side lists. A fresh array per render makes OpenTUI redo the border. */
+export const BORDER_LEFT: BorderSides[] = ["left"]
+export const BORDER_TOP: BorderSides[] = ["top"]
+export const BORDER_BOTTOM: BorderSides[] = ["bottom"]
 
 type Paint = Omit<Theme, "name">
 
@@ -175,8 +190,19 @@ const PALETTES: Record<string, Paint> = {
 export const PALETTE_NAMES = Object.keys(PALETTES)
 
 /** Resolve a snapshot palette name. An unknown name paints dark and keeps its name. */
+const themeCache = new Map<string, Theme>()
+
+/**
+ * One frozen object per palette name. Callers run this every render, and memoized
+ * history turns compare `theme` by identity; a fresh object re-rendered every turn.
+ */
 export function themeFor(name: string | null | undefined): Theme {
   const requested = name && name.trim().length > 0 ? name : "dark"
-  const paint = PALETTES[requested] ?? PALETTES.dark
-  return { name: requested, ...paint }
+  let theme = themeCache.get(requested)
+  if (!theme) {
+    const paint = PALETTES[requested] ?? PALETTES.dark
+    theme = Object.freeze({ name: requested, ...paint })
+    themeCache.set(requested, theme)
+  }
+  return theme
 }

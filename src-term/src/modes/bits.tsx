@@ -5,6 +5,8 @@ import { composerIsAhead } from "../caret.ts"
 import { paletteWindow } from "../palette.ts"
 import { scrollbars, type Theme } from "../theme.ts"
 
+const FLUSH_CONTENT = { paddingLeft: 0, paddingRight: 0 } as const
+
 import { select, type ActionDescriptor } from "./actions.ts"
 
 export const InputSuspendedContext = createContext(false)
@@ -345,7 +347,7 @@ export function nudge(send: (request: unknown) => void, _from: number, to: numbe
 
 export function Paragraphs({ lines, theme }: { lines: string[]; theme: Theme }) {
   return (
-    <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)} contentOptions={{ paddingLeft: 0, paddingRight: 0 }}>
+    <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)} contentOptions={FLUSH_CONTENT}>
       {lines.map((line, index) => (
         <text key={index} fg={theme.fg}>
           {line || " "}
@@ -519,7 +521,7 @@ export function Document({ children, target, theme }: { children: ReactNode; tar
     return () => { renderer.off("frame", follow) }
   }, [renderer, target])
   return <box flexGrow={1} flexBasis={0} minHeight={0}>
-    <scrollbox ref={ref} flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={theme ? scrollbars(theme) : undefined} contentOptions={{ paddingLeft: 0, paddingRight: 0 }}>{children}</scrollbox>
+    <scrollbox ref={ref} flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={theme ? scrollbars(theme) : undefined} contentOptions={FLUSH_CONTENT}>{children}</scrollbox>
     {theme ? <SolidScrollBar source={ref} theme={theme} /> : null}
   </box>
 }

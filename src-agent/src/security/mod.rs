@@ -453,7 +453,7 @@ pub fn install(force: bool) -> Result<()> {
     Ok(())
 }
 
-/// GHCR name of the guest image. Domain tags are `{version}-{composition}`.
+/// GHCR name of the guest image. Tags float: `latest` (minimal), `latest-{composition}`.
 /// The installer pulls `:latest` (the minimal image).
 pub const SAFETY_IMAGE: &str = "ghcr.io/aula-id/koma-safety";
 
@@ -555,7 +555,7 @@ pub(super) fn inherit(program: &str, args: &[&str]) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow!("{program} exited with status {status}"))
+        Err(anyhow!("{}", quiet_failure(program, args, status.code(), "")))
     }
 }
 
@@ -941,12 +941,25 @@ pub(super) fn quiet(program: &str, args: &[&str]) -> Result<()> {
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr);
-    let tail: Vec<&str> = err.lines().rev().take(6).collect();
-    let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
-    Err(anyhow!(
-        "{program} exited with status {}\n{tail}",
-        out.status
-    ))
+    Err(anyhow!("{}", quiet_failure(program, args, out.status.code(), &err)))
+}
+
+/// `docker pull failed (exit 1): <last stderr line>`, then up to five earlier lines.
+/// The reason leads, so a one-line view still says why.
+pub(super) fn quiet_failure(program: &str, args: &[&str], code: Option<i32>, stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let verb = args.first().map(|a| format!("{program} {a}")).unwrap_or_else(|| program.to_string());
+    let code = code.map_or_else(|| "killed by a signal".to_string(), |c| format!("exit {c}"));
+    let Some((reason, earlier)) = lines.split_last() else {
+        return format!("{verb} failed ({code})");
+    };
+    let earlier = &earlier[earlier.len().saturating_sub(5)..];
+    let mut text = format!("{verb} failed ({code}): {reason}");
+    for line in earlier {
+        text.push('\n');
+        text.push_str(line);
+    }
+    text
 }
 
 /// One compact catalog row from `index.json` or the daemon `catalog index` op.

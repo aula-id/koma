@@ -219,9 +219,8 @@ impl SecurityState {
     /// then recompute catalog marks (readiness rides the inventory, not the payload).
     pub fn refresh_images(&mut self) {
         let inv = crate::security::read_images_inventory();
-        let version = env!("CARGO_PKG_VERSION");
-        // Stale inventory from another agent version: treat nothing as local/active.
-        let version_ok = inv.version.is_empty() || inv.version == version;
+        // Images float on `latest`; a pull from another koma version still counts.
+        let version_ok = true;
         let mut rows = Vec::with_capacity(crate::security::list_known_compositions().len());
         for (id, blurb) in crate::security::list_known_compositions() {
             let tag = crate::security::composition_tag(id);
