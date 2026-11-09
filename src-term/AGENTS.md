@@ -313,3 +313,11 @@ future image renderer. Keep the existing daemon harness and Rust protocol checks
   gets the non-blocking `Bun.gc(false)` hint. The full sweep runs once the turn
   ends and on the quiet interval. `fullSweep` calls `Bun.shrink()` so freed heap
   pages leave RSS. The valve turns GC back on after RSS grows `GC_REARM_BYTES`.
+
+- Keep props stable across renders in the history. OpenTUI keeps native memory
+  each time a mounted turn re-renders, even when nothing on screen changes. A
+  live turn re-renders many times a second, and a long session reached 2 GB this
+  way. `themeFor` and `scrollbars` return one object per palette. Border lists
+  are the shared `BORDER_*` constants. `Transcript` memoizes the mounted slice
+  and the tool-result map so `HistoryTurn` memo holds. Do not pass a fresh
+  object, array or closure to a history widget on each render.

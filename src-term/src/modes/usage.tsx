@@ -2,7 +2,7 @@ import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "r
 import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core"
 import { UsageContext } from "../usage-reader.ts"
 import { useKeyboard, useRenderer } from "@opentui/react"
-import type { Theme } from "../theme.ts"
+import { scrollbars, type Theme } from "../theme.ts"
 import { Action, InputSuspendedContext } from "./bits.tsx"
 import { num, rec, rows, str, type Rec } from "./read.ts"
 
@@ -166,7 +166,7 @@ export function UsageBoard({ body, theme, send = () => {} }: { body: Rec; theme:
       <text fg={theme.fg}>{`In ${groupInt(input)} · cached ${groupInt(cached)} (${pct(cached, input)}) · out ${groupInt(output)} · avg ${money(calls ? cost / calls : 0)}/call`}</text>
       {session && body.session_totals ? <text fg={theme.dim}>{`Live session ${money(num(live.cost))} · ${groupInt(num(live.tokens_in) + num(live.tokens_out))} tokens · ledger updates after calls`}</text> : null}
     </box>
-    <scrollbox ref={scroll} flexGrow={1} flexBasis={0} minHeight={0} scrollbarOptions={{ trackOptions: { backgroundColor: theme.panel, foregroundColor: theme.dim } }}>
+    <scrollbox ref={scroll} flexGrow={1} flexBasis={0} minHeight={0} scrollbarOptions={scrollbars(theme)}>
       <box flexDirection={side ? "row" : "column"} gap={0} flexShrink={0} minWidth={0}>{chart}{table}</box>
     </scrollbox>
     <box height={width < 75 ? 2 : 1} flexShrink={0} flexDirection="column">
