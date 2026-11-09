@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare or validate the complete, target-specific offline terminal payload."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -24,10 +26,18 @@ TARGETS = {
     'aarch64-apple-darwin': ('darwin', 'arm64', 'bun-darwin-aarch64', '80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403'),
     'x86_64-pc-windows-msvc': ('win32', 'x64', 'bun-windows-x64-baseline', 'd7a7d3eb216614544aab0cde2d8d9f2e4e87839bf5a30a1cd11d077f02d84e0c'),
 }
-# GitHub release CDN flakes (504 / read timeout) are common on Actions; retry hard.
-DOWNLOAD_ATTEMPTS = 8
+# @oven/<asset>@1.4.3 dist.integrity. Same binary as the GitHub zip; used when releases 504.
+NPM_SHA512 = {
+    'bun-linux-x64-baseline': '4kW2iuLPQLv3N6o21tLwD1ALhI75LFT9YvlpoHrkM6IalbuS3LNKcHc9ex5kAHifJEFFm0ExGx1Zj75wdDux7w==',
+    'bun-linux-aarch64': 'ylogDFxDD+aRKO0TJauwDzCWM+rULvc85gRNZQ9CnY6rm2BU4GC2XUDi20bh67CIuB4Wt/0PL1xpsJ2hqplMww==',
+    'bun-darwin-x64-baseline': 'LNaPWD3+5CEUvwapA0x6pmSZQxIliytv8sJuwf0M/FRn94D87UTxbwBeBDDXEVIuATzldk9qiMc4iG+ge91N4A==',
+    'bun-darwin-aarch64': 'u2wAM9RzqyF4baO5oFVhcFUVWO1CCMLG6yC5/aPWCYGZPfL5ULMbeHt+0/3I0h3yaPx1m+PKSANO/61jPtDZcQ==',
+    'bun-windows-x64-baseline': 'DmgHjPFgRNiGg7DMOz0SEnaE9wCjhoTfHmpDmII/Xxl5IF8pKEG5QzsxuQ2re75oH8Hp1aYyPDQXeIhzRknD3A==',
+}
+# Two tries per host, then the other host. A GitHub 504 is usually immediate, so this fails over in seconds.
+ATTEMPTS_PER_SOURCE = 2
 DOWNLOAD_TIMEOUT_S = 180
-DOWNLOAD_BACKOFF_S = (2, 4, 8, 12, 16, 20, 30)
+DOWNLOAD_BACKOFF_S = (2, 4)
 
 
 def require(condition, message):
@@ -53,10 +63,46 @@ def host_target():
     return f'{arch}-{os_name}'
 
 
-def _fetch_url(url, destination, checksum):
-    """Stream url → destination; verify sha256. Raises on transport or checksum errors."""
+def _hasher(algo):
+    if algo == 'sha256':
+        return hashlib.sha256()
+    if algo == 'sha512':
+        return hashlib.sha512()
+    raise ValueError(f'unknown checksum {algo}')
+
+
+def _digest_matches(hasher, algo, expected):
+    if algo == 'sha256':
+        return hasher.hexdigest() == expected
+    if algo == 'sha512':
+        return base64.b64encode(hasher.digest()).decode() == expected
+    raise ValueError(f'unknown checksum {algo}')
+
+
+def _file_digest_ok(path, algo, expected):
+    hasher = _hasher(algo)
+    with path.open('rb') as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return _digest_matches(hasher, algo, expected)
+
+
+def bun_sources(target):
+    _, _, asset, zip_sha256 = TARGETS[target]
+    tag = f'bun-v{VERSION}'
+    return (
+        (f'https://github.com/oven-sh/bun/releases/download/{tag}/{asset}.zip', 'sha256', zip_sha256),
+        (f'https://registry.npmjs.org/@oven/{asset}/-/{asset}-{VERSION}.tgz', 'sha512', NPM_SHA512[asset]),
+    )
+
+
+def _fetch_url(url, destination, algo, checksum):
+    """Stream url to destination and require the pinned digest."""
     request = urllib.request.Request(url, headers={'User-Agent': 'koma-prepare-terminal'})
-    hasher = hashlib.sha256()
+    hasher = _hasher(algo)
     partial = destination.with_suffix(destination.suffix + '.partial')
     try:
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_S) as response:
@@ -70,7 +116,7 @@ def _fetch_url(url, destination, checksum):
                         break
                     hasher.update(chunk)
                     out.write(chunk)
-        if hasher.hexdigest() != checksum:
+        if not _digest_matches(hasher, algo, checksum):
             raise ValueError(f'Bun checksum mismatch: {url}')
         os.replace(partial, destination)
     finally:
@@ -79,38 +125,62 @@ def _fetch_url(url, destination, checksum):
 
 
 def download_bun(target, cache):
-    _, _, asset, checksum = TARGETS[target]
-    archive = cache / f'{asset}-{VERSION}.zip'
-    if archive.exists() and digest(archive) == checksum:
-        return archive
-    if archive.exists():
-        archive.unlink()
-    url = f'https://github.com/oven-sh/bun/releases/download/bun-v{VERSION}/{asset}.zip'
+    _, _, asset, _ = TARGETS[target]
     last_error = None
-    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
-        try:
-            print(f'downloading Bun {VERSION} ({asset}) attempt {attempt}/{DOWNLOAD_ATTEMPTS}', flush=True)
-            _fetch_url(url, archive, checksum)
+    for url, algo, checksum in bun_sources(target):
+        suffix = '.tgz' if url.endswith('.tgz') else '.zip'
+        archive = cache / f'{asset}-{VERSION}{suffix}'
+        if archive.exists() and _file_digest_ok(archive, algo, checksum):
             return archive
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
-            last_error = error
-            if archive.exists():
-                archive.unlink(missing_ok=True)
-            if attempt >= DOWNLOAD_ATTEMPTS:
-                break
-            delay = DOWNLOAD_BACKOFF_S[min(attempt - 1, len(DOWNLOAD_BACKOFF_S) - 1)]
-            print(f'  retry in {delay}s after: {error}', flush=True)
-            time.sleep(delay)
-    raise OSError(f'Bun download failed after {DOWNLOAD_ATTEMPTS} attempts: {url} ({last_error})')
+        if archive.exists():
+            archive.unlink()
+        host = url.split('/', 3)[2]
+        for attempt in range(1, ATTEMPTS_PER_SOURCE + 1):
+            try:
+                print(
+                    f'downloading Bun {VERSION} ({asset}) via {host} attempt {attempt}/{ATTEMPTS_PER_SOURCE}',
+                    flush=True,
+                )
+                _fetch_url(url, archive, algo, checksum)
+                return archive
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+                last_error = error
+                if archive.exists():
+                    archive.unlink(missing_ok=True)
+                if attempt >= ATTEMPTS_PER_SOURCE:
+                    break
+                delay = DOWNLOAD_BACKOFF_S[min(attempt - 1, len(DOWNLOAD_BACKOFF_S) - 1)]
+                print(f'  retry in {delay}s after: {error}', flush=True)
+                time.sleep(delay)
+    raise OSError(f'Bun download failed ({asset}): {last_error}')
+
+
+def archive_binary(archive, filename):
+    wanted = '/' + filename
+    if archive.suffix == '.zip':
+        with zipfile.ZipFile(archive) as bundle:
+            name = next((item for item in bundle.namelist() if item == filename or item.endswith(wanted)), None)
+            if name is None:
+                raise ValueError(f'missing {filename} in {archive.name}')
+            return bundle.read(name)
+    with tarfile.open(archive, 'r:*') as bundle:
+        member = next(
+            (item for item in bundle.getmembers() if item.name == filename or item.name.endswith(wanted)),
+            None,
+        )
+        if member is None:
+            raise ValueError(f'missing {filename} in {archive.name}')
+        extracted = bundle.extractfile(member)
+        if extracted is None:
+            raise ValueError(f'missing {filename} in {archive.name}')
+        return extracted.read()
 
 
 def unpack_bun(archive, destination, target):
     filename = 'bun.exe' if TARGETS[target][0] == 'win32' else 'bun'
     destination.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive) as z:
-        data = z.read(next(n for n in z.namelist() if n.endswith('/' + filename)))
     exe = destination / filename
-    exe.write_bytes(data)
+    exe.write_bytes(archive_binary(archive, filename))
     exe.chmod(0o755)
     return exe
 

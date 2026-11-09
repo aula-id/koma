@@ -310,7 +310,8 @@ jobs:
 
   safety-image:
     name: publish koma-safety
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Docker images build only for security tags (e.g. v0.4.11-security), not every v* tag.
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -418,7 +419,14 @@ jobs:
       # sets koma-safety public once in the package settings. Later tags keep it.
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # safety-image is skipped on plain v* tags; a skipped need would otherwise skip publish.
+    if: >-
+      ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
+      && needs.build.result == 'success'
+      && needs.windows-package.result == 'success'
+      && needs.verify.result == 'success'
+      && needs.terminal-tests.result == 'success'
+      && contains(fromJSON('["success","skipped"]'), needs.safety-image.result) }}
     needs: [build, windows-package, verify, terminal-tests, safety-image]
     runs-on: ubuntu-latest
     permissions:

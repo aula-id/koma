@@ -19,6 +19,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -35,13 +36,15 @@ static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security"
 
 // Inventory/pull APIs are consumed by the Images pane and daemon spawn path.
 mod images;
+mod progress;
+mod pull;
+use images::pull_safety_image;
 pub use images::{
     activate_composition, active_composition_id, composition_tag, list_known_compositions,
     pull_composition, read_images_inventory, remove_composition, safety_image_tag_for,
 };
 #[allow(unused_imports)] // public inventory types for callers/tests
 pub use images::{ImageEntry, ImagesInventory};
-use images::pull_safety_image;
 
 /// How long a runtime probe answer is served before a refresh is allowed.
 ///
@@ -326,9 +329,10 @@ pub fn is_installed() -> bool {
 /// `include_dir 0.7` refuses to overwrite existing files (returns an `Err` if
 /// a file already exists). Walking entries manually lets us call
 /// [`std::fs::write`] unconditionally, which is idempotent.
-fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
+fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<usize> {
     use include_dir::DirEntry;
 
+    let mut written = 0usize;
     for entry in dir.entries() {
         match entry {
             DirEntry::Dir(sub) => {
@@ -340,7 +344,7 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
                 let sub_dest = dest.join(sub.path());
                 std::fs::create_dir_all(&sub_dest)
                     .with_context(|| format!("create dir {}", sub_dest.display()))?;
-                extract_assets(sub, dest)?;
+                written += extract_assets(sub, dest)?;
             }
             DirEntry::File(f) => {
                 if !ships_to_the_user(f.path()) {
@@ -353,25 +357,26 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
                 }
                 std::fs::write(&file_dest, f.contents())
                     .with_context(|| format!("write {}", file_dest.display()))?;
+                written += 1;
             }
         }
     }
-    Ok(())
+    Ok(written)
 }
 
-/// Provision the Python security daemon environment.
+/// Provision the host security environment and pull the minimal guest image.
 ///
-/// This runs in CLI command mode (before the TUI starts), so progress is
-/// printed to stdout/stderr via [`println!`] / [`eprintln!`].
+/// Does not start the daemon, set a lane, or arm YOLO. Progress is written to
+/// stderr in the same shape as `install.sh`: a named step, then a live bar
+/// while the guest image downloads.
 ///
-/// # Steps
-/// 1. Confirm `python3` is available.
-/// 2. Early-exit if already installed and `force` is false.
-/// 3. On `force`, remove the existing `venv/` so pip rebuilds it cleanly,
-///    then overwrite the Python source files.
-/// 4. Extract embedded assets into `security_dir()`.
-/// 5. Create the venv.
-/// 6. Install Python deps from `requirements.txt`.
+/// 1. Refuse on Windows.
+/// 2. Ensure `python3`, offering a package-manager install on a TTY.
+/// 3. Ensure a container runtime. A running Docker daemon wins.
+/// 4. Re-extract embedded `src-security/` into `~/.koma/security/`, skipping `image/`.
+/// 5. Create the venv and install Python packages, unless the venv exists and
+///    `force` is false.
+/// 6. Pull `ghcr.io/aula-id/koma-safety:{version}-minimal` and mark it active.
 #[allow(unreachable_code)]
 pub fn install(force: bool) -> Result<()> {
     #[cfg(windows)]
@@ -381,71 +386,64 @@ pub fn install(force: bool) -> Result<()> {
     }
 
     let dest = security_dir()?;
+    let ui = progress::InstallUi::new();
+    let image = safety_image_tag();
+    ui.banner(&host_label(), &dest.display().to_string(), &image);
 
-    // Step 2: idempotency guard. The venv can already be present while the
-    // guest image is not, so a repeat install still pulls.
-    let mut bar = Bar::new(5);
-    bar.tick("checking requirements");
-    ensure_requirement("python3")?;
-    ensure_container_runtime()?;
+    // The venv can already be present while the guest image is not, so a repeat
+    // install still pulls. The embedded package is always rewritten: skipping
+    // that when the venv existed left users on a stale wire vocabulary.
+    ui.step("Python");
+    ensure_requirement(&ui, "python3")?;
+    ui.ok(&python_version());
 
-    // Always re-extract the embedded daemon package. Skipping this when the venv
-    // already existed left users on a stale wire vocabulary (bool `risk`) after
-    // the agent moved to effect/exec — every tool refused at handshake with no
-    // install path to recover except `--force`.
-    bar.tick("writing security files");
+    ui.step("Container runtime");
+    ensure_container_runtime(&ui)?;
+    ui.ok("docker ready");
+
+    ui.step("Security files");
     std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
-    extract_assets(&SECURITY_ASSETS, &dest)?;
+    let written = extract_assets(&SECURITY_ASSETS, &dest)?;
+    ui.ok(&format!("{written} files in {}", dest.display()));
 
     let venv_ready = is_installed() && !force;
     if venv_ready {
-        bar.tick("creating the Python environment");
-        bar.tick("installing Python packages");
+        ui.step("Python environment");
+        ui.ok("already present");
     } else {
-        // On force, remove the venv so it is rebuilt from scratch.
-        if force {
-            let venv = dest.join("venv");
-            if venv.exists() {
-                std::fs::remove_dir_all(&venv)
-                    .with_context(|| format!("remove {}", venv.display()))?;
-            }
+        let venv = dest.join("venv");
+        ui.step("Python environment");
+        if force && venv.exists() {
+            ui.info("replacing the existing environment");
+            std::fs::remove_dir_all(&venv).with_context(|| format!("remove {}", venv.display()))?;
         }
+        let venv_dir = venv.display().to_string();
+        ui.info(&venv_dir);
+        inherit("python3", &["-m", "venv", &venv_dir])?;
+        ui.ok("created");
 
-        bar.tick("creating the Python environment");
-        let venv_dir = dest.join("venv").display().to_string();
-        quiet("python3", &["-m", "venv", &venv_dir])?;
-
-        // Install Python dependencies.
-        let pip = dest.join("venv").join("bin").join("pip");
+        let pip = venv.join("bin").join("pip");
+        let pip = pip
+            .to_str()
+            .ok_or_else(|| anyhow!("venv pip path is not valid UTF-8"))?;
         let requirements = dest.join("requirements.txt");
-
-        bar.tick("installing Python packages");
-        let _ = quiet(
-            pip.to_str().unwrap_or("pip"),
-            &[
-                "install",
-                "--upgrade",
-                "--quiet",
-                "pip",
-                "setuptools",
-                "wheel",
-            ],
-        );
-
         let req = requirements.display().to_string();
-        quiet(
-            pip.to_str().unwrap_or("pip"),
-            &["install", "--quiet", "-r", &req],
-        )?;
-        quiet(
-            pip.to_str().unwrap_or("pip"),
-            &["install", "--quiet", "--no-deps", "checksec.py"],
-        )?;
+
+        ui.step("Python packages");
+        ui.info("pip, setuptools, wheel");
+        let _ = inherit(pip, &["install", "--upgrade", "pip", "setuptools", "wheel"]);
+        ui.info(&req);
+        inherit(pip, &["install", "-r", &req])?;
+        ui.info("checksec.py");
+        inherit(pip, &["install", "--no-deps", "checksec.py"])?;
+        ui.ok("installed");
     }
 
-    bar.tick("downloading koma-safety (minimal)");
-    pull_safety_image(&dest, force)?;
-    bar.done();
+    ui.step("Guest image");
+    ui.info(&image);
+    let report = pull_safety_image(&dest, force, &ui)?;
+    ui.ok(&report.summary());
+    ui.finish(&["minimal is active", "Domain images install from /security."]);
     Ok(())
 }
 
@@ -478,31 +476,79 @@ fn ships_to_the_user(path: &std::path::Path) -> bool {
     !path.starts_with("image")
 }
 
-struct Bar {
-    step: u8,
-    total: u8,
+fn host_label() -> String {
+    let os = match host_os() {
+        "macos" => "darwin",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{os}/{arch}")
 }
 
-impl Bar {
-    fn new(total: u8) -> Self {
-        Self { step: 0, total }
-    }
+fn python_version() -> String {
+    let Ok(out) = std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+    else {
+        return "python3".to_string();
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let text = if stdout.trim().is_empty() {
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    } else {
+        stdout.into_owned()
+    };
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .unwrap_or("python3")
+        .to_string()
+}
 
-    fn tick(&mut self, label: &str) {
-        self.step = self.step.saturating_add(1).min(self.total);
-        let width = 24usize;
-        let filled = (self.step as usize * width) / self.total as usize;
-        println!(
-            "[{}{}] {}/{}  {label}",
-            "#".repeat(filled),
-            "-".repeat(width - filled),
-            self.step,
-            self.total
-        );
-    }
+fn runtime_summary(seen: RuntimeSeen) -> String {
+    let docker = if seen.docker_daemon {
+        "ready"
+    } else if seen.docker_cli {
+        "down"
+    } else {
+        "absent"
+    };
+    let colima = if seen.colima { "installed" } else { "absent" };
+    let podman = if seen.podman_engine {
+        "ready"
+    } else if seen.podman_cli {
+        "down"
+    } else {
+        "absent"
+    };
+    let kubernetes = if seen.kubernetes {
+        "configured"
+    } else {
+        "absent"
+    };
+    format!("docker {docker} · colima {colima} · podman {podman} · kubernetes {kubernetes}")
+}
 
-    fn done(self) {
-        println!("security install complete");
+/// Run a command with the terminal attached, so brew, pip, and colima show
+/// their own progress instead of looking frozen until they exit.
+pub(super) fn inherit(program: &str, args: &[&str]) -> Result<()> {
+    let _ = std::io::stderr().flush();
+    let _ = std::io::stdout().flush();
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .with_context(|| format!("failed to launch {program}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("{program} exited with status {status}"))
     }
 }
 
@@ -666,7 +712,7 @@ fn package_manager() -> &'static str {
     ""
 }
 
-fn ensure_requirement(tool: &str) -> Result<()> {
+fn ensure_requirement(ui: &progress::InstallUi, tool: &str) -> Result<()> {
     if tool_ok(tool) {
         return Ok(());
     }
@@ -681,21 +727,18 @@ fn ensure_requirement(tool: &str) -> Result<()> {
             "{tool} is missing. Install it, then rerun koma --security-install:\n  {shown}"
         ));
     }
-    println!();
-    print!("{tool} is missing. Install it with `{shown}`? [y/N] ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    if !accepts_yes(&line) {
+    if !confirm(&format!("{tool} is missing. Install it with `{shown}`?"))? {
         return Err(anyhow!("{tool} is required. Install was declined."));
     }
     let Some(argv) = argv else {
         return Err(anyhow!("no package manager can install {tool}"));
     };
     if host_os() == "linux" && package_manager() == "apt" {
-        quiet("sudo", &["apt-get", "update"])?;
+        ui.info("sudo apt-get update");
+        inherit("sudo", &["apt-get", "update"])?;
     }
-    quiet(argv[0], &argv[1..])?;
+    ui.info(&shown);
+    inherit(argv[0], &argv[1..])?;
     if !tool_ok(tool) {
         return Err(anyhow!(
             "{tool} was installed but is not running. Open it, then rerun koma --security-install."
@@ -704,7 +747,7 @@ fn ensure_requirement(tool: &str) -> Result<()> {
     Ok(())
 }
 
-fn offer_runtime() -> Result<()> {
+fn offer_runtime(ui: &progress::InstallUi) -> Result<()> {
     let os = host_os();
     if os == "other" {
         return Err(anyhow!("security mode is not supported on Windows"));
@@ -728,13 +771,17 @@ fn offer_runtime() -> Result<()> {
         return Err(anyhow!("no package manager can install a container engine"));
     };
     if os == "linux" && package_manager() == "apt" {
-        quiet("sudo", &["apt-get", "update"])?;
+        ui.info("sudo apt-get update");
+        inherit("sudo", &["apt-get", "update"])?;
     }
-    quiet(argv[0], &argv[1..])?;
+    ui.info(&shown);
+    inherit(argv[0], &argv[1..])?;
     if os == "macos" {
-        quiet("colima", &["start"])?;
+        ui.info("colima start");
+        inherit("colima", &["start"])?;
     } else {
-        quiet("sudo", &["systemctl", "enable", "--now", "docker"])?;
+        ui.info("sudo systemctl enable --now docker");
+        inherit("sudo", &["systemctl", "enable", "--now", "docker"])?;
     }
     if tool_ok("docker") {
         Ok(())
@@ -750,15 +797,16 @@ fn confirm(prompt: &str) -> Result<bool> {
     if !tty {
         return Ok(false);
     }
-    println!();
-    print!("{prompt} [y/N] ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    let mut err = std::io::stderr();
+    writeln!(err)?;
+    write!(err, "{prompt} [y/N] ")?;
+    err.flush().ok();
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(accepts_yes(&line))
 }
 
-fn install_docker_client() -> Result<()> {
+fn install_docker_client(ui: &progress::InstallUi) -> Result<()> {
     let argv = docker_client_argv(host_os(), package_manager());
     let shown = argv
         .as_ref()
@@ -774,7 +822,8 @@ fn install_docker_client() -> Result<()> {
     let Some(argv) = argv else {
         return Err(anyhow!("no package manager can install the docker client"));
     };
-    quiet(argv[0], &argv[1..])?;
+    ui.info(&shown);
+    inherit(argv[0], &argv[1..])?;
     if !command_ok("docker", &["--version"]) {
         return Err(anyhow!(
             "the docker client was installed but is not on PATH"
@@ -813,43 +862,22 @@ fn point_docker_at_podman(socket: &str) -> Result<()> {
 /// The security guest is started with the `docker` client. Colima and Podman
 /// count when they can make that client reach a local engine. A Kubernetes
 /// context does not.
-fn ensure_container_runtime() -> Result<()> {
+fn ensure_container_runtime(ui: &progress::InstallUi) -> Result<()> {
     let seen = probe_runtime();
-    println!(
-        "runtime: docker={} colima={} podman={} kubernetes={}",
-        if seen.docker_daemon {
-            "ready"
-        } else if seen.docker_cli {
-            "down"
-        } else {
-            "absent"
-        },
-        if seen.colima { "installed" } else { "absent" },
-        if seen.podman_engine {
-            "ready"
-        } else if seen.podman_cli {
-            "down"
-        } else {
-            "absent"
-        },
-        if seen.kubernetes {
-            "configured"
-        } else {
-            "absent"
-        },
-    );
+    ui.info(&runtime_summary(seen));
     match runtime_choice(seen) {
         RuntimeChoice::Ready => Ok(()),
         RuntimeChoice::StartColima { need_client } => {
             if need_client {
-                install_docker_client()?;
+                install_docker_client(ui)?;
             }
             if !confirm("Colima is installed but Docker is not running. Start it with `colima start`?")? {
                 return Err(anyhow!(
                     "Colima is installed but not running. Start it with `colima start`, then rerun koma --security-install."
                 ));
             }
-            quiet("colima", &["start"])?;
+            ui.info("colima start");
+            inherit("colima", &["start"])?;
             if tool_ok("docker") {
                 Ok(())
             } else {
@@ -860,7 +888,7 @@ fn ensure_container_runtime() -> Result<()> {
         }
         RuntimeChoice::UsePodman { need_client, need_machine } => {
             if need_client {
-                install_docker_client()?;
+                install_docker_client(ui)?;
             }
             if need_machine {
                 if !confirm("Podman is installed but not running. Start it with `podman machine start`?")? {
@@ -868,7 +896,8 @@ fn ensure_container_runtime() -> Result<()> {
                         "Podman is installed but not running. Start it with `podman machine start`, then rerun koma --security-install."
                     ));
                 }
-                quiet("podman", &["machine", "start"])?;
+                ui.info("podman machine start");
+                inherit("podman", &["machine", "start"])?;
             } else if !confirm("Podman is running but Docker is not. Use Podman's socket for the security guest?")? {
                 return Err(anyhow!(
                     "Podman is running, but the docker client is not pointed at it. Rerun koma --security-install and accept the prompt."
@@ -892,7 +921,7 @@ fn ensure_container_runtime() -> Result<()> {
         RuntimeChoice::DockerStopped => Err(anyhow!(
             "Docker is installed but not running. Open it, then rerun koma --security-install."
         )),
-        RuntimeChoice::InstallDocker => offer_runtime(),
+        RuntimeChoice::InstallDocker => offer_runtime(ui),
     }
 }
 
@@ -952,10 +981,8 @@ struct CatalogIndexJson {
 ///
 /// Marks start unset; callers overlay them. Empty if the file does not parse.
 pub fn embedded_catalog_rows() -> Vec<CatalogIndexRow> {
-    parse_catalog_index(include_str!(
-        "../../../src-security/catalog/index.json"
-    ))
-    .unwrap_or_default()
+    parse_catalog_index(include_str!("../../../src-security/catalog/index.json"))
+        .unwrap_or_default()
 }
 
 /// Parse a catalog index object (`{"tools":[...]}`). Accepts file `summary` or
