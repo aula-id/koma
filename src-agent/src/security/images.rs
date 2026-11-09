@@ -8,8 +8,9 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use super::progress::{InstallUi, PullReport};
 use super::{image_ref_path, quiet, security_dir, SAFETY_IMAGE};
 
 /// One locally-known composition pull recorded in `images.json`.
@@ -89,10 +90,7 @@ fn images_json_path(dest: &Path) -> PathBuf {
 /// GHCR tag for a composition. Always `{version}-{id}` (including `minimal`).
 #[must_use]
 pub fn safety_image_tag_for(composition: &str) -> String {
-    format!(
-        "{SAFETY_IMAGE}:{}-{composition}",
-        env!("CARGO_PKG_VERSION")
-    )
+    format!("{SAFETY_IMAGE}:{}-{composition}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Alias of [`safety_image_tag_for`] for panel call sites.
@@ -121,8 +119,7 @@ fn read_images_inventory_at(dest: &Path) -> ImagesInventory {
 fn write_images_inventory_at(dest: &Path, inv: &ImagesInventory) -> Result<()> {
     let path = images_json_path(dest);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let body = serde_json::to_string_pretty(inv).context("serialize images.json")?;
     std::fs::write(&path, format!("{body}\n"))
@@ -228,13 +225,7 @@ fn ensure_docker_running() -> Result<()> {
 
 fn inspect_digest_and_size(tag: &str) -> Result<(String, u64)> {
     let digests_out = std::process::Command::new("docker")
-        .args([
-            "image",
-            "inspect",
-            "--format",
-            "{{json .RepoDigests}}",
-            tag,
-        ])
+        .args(["image", "inspect", "--format", "{{json .RepoDigests}}", tag])
         .output()
         .context("failed to inspect the pulled image digests")?;
     if !digests_out.status.success() {
@@ -271,6 +262,10 @@ fn inspect_digest_and_size(tag: &str) -> Result<(String, u64)> {
 /// the pulled id is already active (digest refresh). Use [`activate_composition`]
 /// to switch.
 pub fn pull_composition(id: &str, force: bool) -> Result<()> {
+    pull_composition_inner(id, force, None).map(|_| ())
+}
+
+fn pull_composition_inner(id: &str, force: bool, ui: Option<&InstallUi>) -> Result<PullReport> {
     if !is_known_composition(id) {
         return Err(anyhow!("unknown composition '{id}'"));
     }
@@ -291,7 +286,12 @@ pub fn pull_composition(id: &str, force: bool) -> Result<()> {
     if !force {
         if let Some(entry) = inv.images.get(id) {
             if !entry.digest.is_empty() {
-                return Ok(());
+                return Ok(PullReport {
+                    skipped: true,
+                    up_to_date: true,
+                    bytes: entry.size_bytes,
+                    elapsed: Duration::ZERO,
+                });
             }
         }
     }
@@ -305,7 +305,14 @@ pub fn pull_composition(id: &str, force: bool) -> Result<()> {
         composition_tag(id)
     };
 
-    quiet("docker", &["pull", "--quiet", &tag])?;
+    let (transferred, up_to_date, elapsed) = if let Some(ui) = ui {
+        let stats = super::pull::fetch_showing(&tag, ui)?;
+        (stats.transferred, stats.up_to_date, stats.elapsed)
+    } else {
+        let started = Instant::now();
+        quiet("docker", &["pull", "--quiet", &tag])?;
+        (0, false, started.elapsed())
+    };
     let (digest, size_bytes) = inspect_digest_and_size(&tag)?;
     let entry = ImageEntry {
         tag: tag.clone(),
@@ -324,7 +331,17 @@ pub fn pull_composition(id: &str, force: bool) -> Result<()> {
     if become_active {
         write_image_ref(&dest, version, &digest, id)?;
     }
-    Ok(())
+    let bytes = if transferred > 0 {
+        transferred
+    } else {
+        size_bytes
+    };
+    Ok(PullReport {
+        skipped: false,
+        up_to_date,
+        bytes,
+        elapsed,
+    })
 }
 
 /// Make a previously pulled composition the active guest image.
@@ -392,8 +409,11 @@ pub fn remove_composition(id: &str) -> Result<()> {
 
 /// Install path: pull `minimal` (no-op when already local unless `force`) and
 /// **always** activate it — even when another composition or pin already exists.
-pub(super) fn pull_safety_image(_dest: &Path, force: bool) -> Result<()> {
-    pull_composition("minimal", force)?;
+///
+/// `ui` draws the download bar. The Images pane calls [`pull_composition`], which
+/// stays quiet so it does not write over the TUI.
+pub(super) fn pull_safety_image(_dest: &Path, force: bool, ui: &InstallUi) -> Result<PullReport> {
+    let report = pull_composition_inner("minimal", force, Some(ui))?;
     activate_composition("minimal")?;
-    Ok(())
+    Ok(report)
 }
