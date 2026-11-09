@@ -308,52 +308,54 @@ jobs:
       - working-directory: src-term
         run: bun node_modules/typescript/bin/tsc --noEmit
 
-  safety-image:
-    name: publish koma-safety
-    # Docker images build only for security tags (e.g. v0.4.11-security), not every v* tag.
+  safety-matrix:
+    name: plan koma-safety images
     if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
     runs-on: ubuntu-22.04
+    outputs:
+      include: ${{ steps.plan.outputs.include }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: One image per composition in compositions.json
+        id: plan
+        # Every composition the /security panel lists gets an image, so no row
+        # offers a pull that cannot succeed. Bare :version / :latest is minimal.
+        # The 10 core images gate the release; the rest (-2, -ext, -src, lab)
+        # are optional so one slow from-source build cannot block binaries.
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          comps = json.load(open("src-security/install_recipes/buckets/compositions.json"))
+          base = {"kali": "kalilinux/kali-rolling"}
+          core = {"minimal", "recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir"}
+          rows = [{"composition": "minimal", "tag_suffix": "", "base_image": "python:3.11-slim-bookworm", "optional": False}]
+          for c in comps:
+              rows.append({
+                  "composition": c["id"],
+                  "tag_suffix": f"-{c['id']}",
+                  "base_image": base.get(c.get("base_hint"), "python:3.11-slim-bookworm"),
+                  "optional": c["id"] not in core,
+              })
+          print("include=" + json.dumps(rows))
+          PY
+
+  safety-image:
+    name: publish koma-safety (${{ matrix.composition }}${{ matrix.tag_suffix == '' && ' bare' || '' }})
+    # Docker images build only for security tags (e.g. v0.4.14-security), not every v* tag.
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
+    needs: safety-matrix
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    continue-on-error: ${{ matrix.optional }}
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix:
-        # Wave-1 domain compositions only (not all 28 shards).
-        # Bare :version / :latest is minimal; others get -${composition} suffix.
-        # recon + identity use Kali per compositions.json base_hint; rest bookworm.
+        include: ${{ fromJSON(needs.safety-matrix.outputs.include) }}
         # Local/CD size ceiling is 9GB (decimal) via scripts/build-koma-safety.sh.
-        include:
-          - composition: minimal
-            tag_suffix: ""
-            base_image: python:3.11-slim-bookworm
-          - composition: minimal
-            tag_suffix: -minimal
-            base_image: python:3.11-slim-bookworm
-          - composition: recon
-            tag_suffix: -recon
-            base_image: kalilinux/kali-rolling
-          - composition: rev
-            tag_suffix: -rev
-            base_image: python:3.11-slim-bookworm
-          - composition: crypto
-            tag_suffix: -crypto
-            base_image: python:3.11-slim-bookworm
-          - composition: dfir
-            tag_suffix: -dfir
-            base_image: python:3.11-slim-bookworm
-          - composition: pxn
-            tag_suffix: -pxn
-            base_image: python:3.11-slim-bookworm
-          - composition: web
-            tag_suffix: -web
-            base_image: python:3.11-slim-bookworm
-          - composition: identity
-            tag_suffix: -identity
-            base_image: kalilinux/kali-rolling
-          - composition: cloud
-            tag_suffix: -cloud
-            base_image: python:3.11-slim-bookworm
     steps:
       - uses: actions/checkout@v4
       - name: Sync image build context
