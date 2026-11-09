@@ -9,7 +9,7 @@ fn the_installer_pulls_the_floating_minimal_image() {
 }
 
 #[test]
-fn safety_image_tag_is_latest_and_domains_stay_versioned() {
+fn safety_image_tag_is_latest_for_every_composition() {
     let prev = std::env::var_os("KOMA_SEC_IMAGE");
     std::env::remove_var("KOMA_SEC_IMAGE");
     let tag = safety_image_tag();
@@ -17,7 +17,7 @@ fn safety_image_tag_is_latest_and_domains_stay_versioned() {
     assert_eq!(tag, safety_image_tag_for("minimal"));
     assert_eq!(
         safety_image_tag_for("web"),
-        format!("{SAFETY_IMAGE}:{}-web", env!("CARGO_PKG_VERSION"))
+        format!("{SAFETY_IMAGE}:latest-web")
     );
     match prev {
         Some(v) => std::env::set_var("KOMA_SEC_IMAGE", v),
@@ -239,4 +239,26 @@ fn runtime_label_notes_installed_but_stopped_docker_cli() {
         runtime_label(false, false, false, true),
         "docker installed but not running"
     );
+}
+
+#[test]
+fn quiet_failure_leads_with_the_reason() {
+    let text = quiet_failure(
+        "docker",
+        &["pull", "--quiet", "x"],
+        Some(1),
+        "pulling\nError response from daemon: manifest unknown\n",
+    );
+    assert_eq!(
+        text.lines().next(),
+        Some("docker pull failed (exit 1): Error response from daemon: manifest unknown")
+    );
+    assert_eq!(quiet_failure("docker", &["pull"], Some(1), ""), "docker pull failed (exit 1)");
+}
+
+#[test]
+fn domain_images_always_pull_the_floating_tag() {
+    assert!(super::images::composition_tag("web").ends_with(":latest-web"));
+    assert!(super::images::is_missing_image("docker pull failed (exit 1): manifest unknown"));
+    assert!(!super::images::is_missing_image("docker pull failed (exit 1): connection refused"));
 }

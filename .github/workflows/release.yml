@@ -368,17 +368,18 @@ jobs:
       - name: Tag from the release
         id: ver
         run: |
+          # v0.4.13-security publishes 0.4.13-<composition>: the binary asks for
+          # its own version, never the -security trigger suffix.
           version="${GITHUB_REF_NAME#v}"
+          version="${version%-security}"
           test -n "$version"
           suffix="${{ matrix.tag_suffix }}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
             echo "ghcr.io/aula-id/koma-safety:${version}${suffix}"
-            if [[ "$version" != *-* && -z "$suffix" ]]; then
-              echo "ghcr.io/aula-id/koma-safety:latest"
-            fi
-            if [[ "$version" != *-* && -n "$suffix" ]]; then
+            # latest / latest-<composition> are what other versions fall back to.
+            if [[ "$version" != *-* ]]; then
               echo "ghcr.io/aula-id/koma-safety:latest${suffix}"
             fi
             echo "EOF"

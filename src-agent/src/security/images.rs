@@ -95,20 +95,32 @@ fn images_json_path(dest: &Path) -> PathBuf {
 
 /// GHCR tag for a composition.
 ///
-/// `minimal` is `:latest`. That image is not republished on every koma version.
-/// Domain images stay `{version}-{id}`.
+/// `minimal` is `:latest`.
+/// Domain images are `:latest-{id}`, whatever koma's version.
 #[must_use]
 pub fn safety_image_tag_for(composition: &str) -> String {
     if composition == "minimal" {
         return format!("{SAFETY_IMAGE}:latest");
     }
-    format!("{SAFETY_IMAGE}:{}-{composition}", env!("CARGO_PKG_VERSION"))
+    format!("{SAFETY_IMAGE}:latest-{composition}")
 }
 
 /// Alias of [`safety_image_tag_for`] for panel call sites.
 #[must_use]
 pub fn composition_tag(id: &str) -> String {
     safety_image_tag_for(id)
+}
+
+/// The registry has no such tag (as opposed to a network or auth failure).
+#[must_use]
+pub fn is_missing_image(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("manifest unknown") || m.contains("not found") || m.contains("no such image") || m.contains("404")
+}
+
+fn not_published(id: &str, tag: &str) -> anyhow::Error {
+    let short = tag.rsplit(':').next().unwrap_or(tag);
+    anyhow!("'{id}' has no published image (:{short}). Build it locally: bash scripts/build-koma-safety.sh {id}")
 }
 
 /// Read `images.json`, or an empty inventory when missing/unreadable.
@@ -146,27 +158,24 @@ fn write_image_ref(dest: &Path, version: &str, digest: &str, composition: &str) 
     Ok(())
 }
 
-/// Active guest digest for this crate version.
+/// Active guest digest. Images float on `latest`, so any koma version's pull counts.
 ///
 /// Prefers `images.json` (`active` entry digest); falls back to `image-ref` line 2
 /// so older installs keep working until the next pull.
 #[must_use]
 pub fn pinned_from_inventory_or_ref() -> Option<String> {
     let dest = security_dir().ok()?;
-    let version = env!("CARGO_PKG_VERSION");
     let inv = read_images_inventory_at(&dest);
-    if inv.version == version {
-        if let Some(entry) = inv.images.get(&inv.active) {
-            if !entry.digest.is_empty() {
-                return Some(entry.digest.clone());
-            }
+    if let Some(entry) = inv.images.get(&inv.active) {
+        if !entry.digest.is_empty() {
+            return Some(entry.digest.clone());
         }
     }
     let text = std::fs::read_to_string(image_ref_path(&dest)).ok()?;
     let mut lines = text.lines();
-    let file_version = lines.next()?.trim();
+    let _file_version = lines.next()?;
     let reference = lines.next()?.trim();
-    (file_version == version && !reference.is_empty()).then(|| reference.to_string())
+    (!reference.is_empty()).then(|| reference.to_string())
 }
 
 /// Active composition id (`minimal`, `recon`, …) for daemon spawn env.
@@ -176,9 +185,8 @@ pub fn pinned_from_inventory_or_ref() -> Option<String> {
 #[must_use]
 pub fn active_composition_id() -> Option<String> {
     let dest = security_dir().ok()?;
-    let version = env!("CARGO_PKG_VERSION");
     let inv = read_images_inventory_at(&dest);
-    if inv.version == version && !inv.active.is_empty() {
+    if !inv.active.is_empty() {
         return Some(inv.active);
     }
     let text = std::fs::read_to_string(image_ref_path(&dest)).ok()?;
@@ -281,15 +289,8 @@ pub(super) fn pull_composition_inner(id: &str, force: bool, feed: Feed<'_>) -> R
     std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
 
     let version = env!("CARGO_PKG_VERSION");
+    // Images float on `latest`, so entries from another koma version stay valid.
     let mut inv = read_images_inventory_at(&dest);
-    // Drop stale entries from another agent version.
-    if inv.version != version {
-        inv = ImagesInventory {
-            version: version.to_string(),
-            active: String::new(),
-            images: BTreeMap::new(),
-        };
-    }
 
     if !force {
         if let Some(entry) = inv.images.get(id) {
@@ -307,22 +308,22 @@ pub(super) fn pull_composition_inner(id: &str, force: bool, feed: Feed<'_>) -> R
     ensure_docker_running()?;
 
     // Install / default path may honour KOMA_SEC_IMAGE only for minimal.
+    // Always the floating tag, whatever koma's version: `latest` / `latest-<id>`.
     let tag = if id == "minimal" {
         super::safety_image_tag()
     } else {
         composition_tag(id)
     };
-
-    let (transferred, up_to_date, elapsed) = match feed {
-        Feed::Install(ui) => {
-            let stats = super::pull::fetch_showing(&tag, ui)?;
-            (stats.transferred, stats.up_to_date, stats.elapsed)
-        }
-        Feed::Track(sink) => {
-            let stats = super::pull::fetch_tracked(&tag, sink)?;
-            (stats.transferred, stats.up_to_date, stats.elapsed)
-        }
+    let fetched = match feed {
+        Feed::Install(ui) => super::pull::fetch_showing(&tag, ui),
+        Feed::Track(sink) => super::pull::fetch_tracked(&tag, sink),
     };
+    let stats = match fetched {
+        Ok(stats) => stats,
+        Err(err) if is_missing_image(&format!("{err:#}")) => return Err(not_published(id, &tag)),
+        Err(err) => return Err(err),
+    };
+    let (transferred, up_to_date, elapsed) = (stats.transferred, stats.up_to_date, stats.elapsed);
     let (digest, size_bytes) = inspect_digest_and_size(&tag)?;
     let entry = ImageEntry {
         tag: tag.clone(),
@@ -362,12 +363,6 @@ pub fn activate_composition(id: &str) -> Result<()> {
     let dest = security_dir()?;
     let version = env!("CARGO_PKG_VERSION");
     let mut inv = read_images_inventory_at(&dest);
-    if inv.version != version {
-        return Err(anyhow!(
-            "composition '{id}' is not local for this koma version (inventory version {})",
-            inv.version
-        ));
-    }
     let entry = inv
         .images
         .get(id)
