@@ -308,129 +308,15 @@ jobs:
       - working-directory: src-term
         run: bun node_modules/typescript/bin/tsc --noEmit
 
-  safety-matrix:
-    name: plan koma-safety images
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
-    runs-on: ubuntu-22.04
-    outputs:
-      include: ${{ steps.plan.outputs.include }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: One image per composition in compositions.json
-        id: plan
-        # Every composition the /security panel lists gets an image, so no row
-        # offers a pull that cannot succeed. Bare :version / :latest is minimal.
-        # The 10 core images gate the release; the rest (-2, -ext, -src, lab)
-        # are optional so one slow from-source build cannot block binaries.
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          comps = json.load(open("src-security/install_recipes/buckets/compositions.json"))
-          base = {"kali": "kalilinux/kali-rolling"}
-          core = {"minimal", "recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir"}
-          rows = [{"composition": "minimal", "tag_suffix": "", "base_image": "python:3.11-slim-bookworm", "optional": False}]
-          for c in comps:
-              rows.append({
-                  "composition": c["id"],
-                  "tag_suffix": f"-{c['id']}",
-                  "base_image": base.get(c.get("base_hint"), "python:3.11-slim-bookworm"),
-                  "optional": c["id"] not in core,
-              })
-          print("include=" + json.dumps(rows))
-          PY
-
-  safety-image:
-    name: publish koma-safety (${{ matrix.composition }}${{ matrix.tag_suffix == '' && ' bare' || '' }})
-    # Docker images build only for security tags (e.g. v0.4.14-security), not every v* tag.
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
-    needs: safety-matrix
-    runs-on: ubuntu-22.04
-    timeout-minutes: 360
-    continue-on-error: ${{ matrix.optional }}
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      max-parallel: 12
-      matrix:
-        include: ${{ fromJSON(needs.safety-matrix.outputs.include) }}
-        # Local/CD size ceiling is 9GB (decimal) via scripts/build-koma-safety.sh.
-    steps:
-      - uses: actions/checkout@v4
-      - name: Sync image build context
-        run: bash scripts/sync-security-image.sh
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Tag from the release
-        id: ver
-        run: |
-          # v0.4.13-security publishes 0.4.13-<composition>: the binary asks for
-          # its own version, never the -security trigger suffix.
-          version="${GITHUB_REF_NAME#v}"
-          version="${version%-security}"
-          test -n "$version"
-          suffix="${{ matrix.tag_suffix }}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          {
-            echo "tags<<EOF"
-            echo "ghcr.io/aula-id/koma-safety:${version}${suffix}"
-            # latest / latest-<composition> are what other versions fall back to.
-            if [[ "$version" != *-* ]]; then
-              echo "ghcr.io/aula-id/koma-safety:latest${suffix}"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
-        env:
-          # Skip the *.dockerbuild artifact. It is not a release file, and
-          # downloading it failed after five retries on the v0.4.9 run.
-          DOCKER_BUILD_RECORD_UPLOAD: false
-        with:
-          context: src-security/image
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.ver.outputs.tags }}
-          build-args: |
-            KOMA_COMPOSITION=${{ matrix.composition }}
-            KOMA_VERSION=${{ steps.ver.outputs.version }}
-            KOMA_BASE_IMAGE=${{ matrix.base_image }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/aula-id/koma
-            org.opencontainers.image.title=koma-safety
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
-            com.koma.composition=${{ matrix.composition }}
-            com.koma.base=${{ matrix.base_image }}
-
-      # Multi-arch buildx push does not leave one local image to `docker inspect`.
-      # Hard 9GB ceiling is enforced by scripts/build-koma-safety.sh for local/CD.
-      # Optional single-arch check: bash scripts/build-koma-safety.sh <composition>
-      - name: Size gate
-        run: |
-          set -euo pipefail
-          echo "size gate: 9GB ceiling documented in scripts/build-koma-safety.sh (MAX_BYTES)"
-          echo "composition=${{ matrix.composition }} pushed multi-arch; local size check:"
-          echo "  bash scripts/build-koma-safety.sh ${{ matrix.composition }}"
-      # No visibility call. PUT /orgs/{org}/packages/container/{name} is not
-      # a GitHub endpoint and returns 404, which failed this job after the
-      # image was already pushed. A new package stays private until someone
-      # sets koma-safety public once in the package settings. Later tags keep it.
-
   publish:
-    # safety-image is skipped on plain v* tags; a skipped need would otherwise skip publish.
+    # Binaries never wait for guest images; those build after this, tier by tier.
     if: >-
       ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
       && needs.build.result == 'success'
       && needs.windows-package.result == 'success'
       && needs.verify.result == 'success'
-      && needs.terminal-tests.result == 'success'
-      && contains(fromJSON('["success","skipped"]'), needs.safety-image.result) }}
-    needs: [build, windows-package, verify, terminal-tests, safety-image]
+      && needs.terminal-tests.result == 'success' }}
+    needs: [build, windows-package, verify, terminal-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -501,3 +387,76 @@ jobs:
           done
           test "$ok" = 1
           python3 scripts/check-release.py release-check.json "$version" "$GITHUB_SHA"
+
+  # Guest images (only on v*-security tags). They start after the binaries are
+  # published and run one tier at a time, so a release never has 30 builds at
+  # once. A failed tier does not stop the next; each build reports on its own.
+  safety-matrix:
+    name: plan koma-safety images
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
+    runs-on: ubuntu-22.04
+    outputs:
+      core: ${{ steps.plan.outputs.core }}
+      ext: ${{ steps.plan.outputs.ext }}
+      src: ${{ steps.plan.outputs.src }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: One image per composition in compositions.json
+        id: plan
+        # Every composition the /security panel lists gets an image, so no row
+        # offers a pull that cannot succeed. Bare :version / :latest is minimal.
+        # core: minimal + the 8 base domains. ext: npm/cargo shards, recon-2, lab.
+        # src: from-source shards, the slowest builds.
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          comps = json.load(open("src-security/install_recipes/buckets/compositions.json"))
+          base = {"kali": "kalilinux/kali-rolling"}
+          core_ids = {"minimal", "recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir"}
+          tiers = {"core": [{"composition": "minimal", "tag_suffix": "", "base_image": "python:3.11-slim-bookworm"}], "ext": [], "src": []}
+          for c in comps:
+              tier = "core" if c["id"] in core_ids else "src" if c["id"].endswith("-src") else "ext"
+              tiers[tier].append({
+                  "composition": c["id"],
+                  "tag_suffix": f"-{c['id']}",
+                  "base_image": base.get(c.get("base_hint"), "python:3.11-slim-bookworm"),
+              })
+          for name, rows in tiers.items():
+              print(f"{name}={json.dumps(rows)}")
+          PY
+
+  images-core:
+    name: images (core)
+    needs: [safety-matrix, publish]
+    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/safety-image.yml
+    with:
+      include: ${{ needs.safety-matrix.outputs.core }}
+      max-parallel: 5
+
+  images-ext:
+    name: images (ext)
+    needs: [safety-matrix, images-core]
+    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/safety-image.yml
+    with:
+      include: ${{ needs.safety-matrix.outputs.ext }}
+      max-parallel: 4
+
+  images-src:
+    name: images (src)
+    needs: [safety-matrix, images-ext]
+    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/safety-image.yml
+    with:
+      include: ${{ needs.safety-matrix.outputs.src }}
+      max-parallel: 3

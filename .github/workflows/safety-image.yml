@@ -1,0 +1,97 @@
+name: koma-safety image
+
+# One tier of guest images, called by release.yml on v*-security tags.
+# Tags come from the caller's ref: v0.4.14-security publishes 0.4.14-<composition>
+# and latest-<composition>.
+
+on:
+  workflow_call:
+    inputs:
+      include:
+        description: JSON list of {composition, tag_suffix, base_image}
+        required: true
+        type: string
+      max-parallel:
+        required: false
+        type: number
+        default: 4
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    name: ${{ matrix.composition }}${{ matrix.tag_suffix == '' && ' (bare)' || '' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max-parallel }}
+      matrix:
+        include: ${{ fromJSON(inputs.include) }}
+        # Local/CD size ceiling is 9GB (decimal) via scripts/build-koma-safety.sh.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync image build context
+        run: bash scripts/sync-security-image.sh
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag from the release
+        id: ver
+        run: |
+          # v0.4.13-security publishes 0.4.13-<composition>: the binary asks for
+          # its own version, never the -security trigger suffix.
+          version="${GITHUB_REF_NAME#v}"
+          version="${version%-security}"
+          test -n "$version"
+          suffix="${{ matrix.tag_suffix }}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/aula-id/koma-safety:${version}${suffix}"
+            # latest / latest-<composition> are what other versions fall back to.
+            if [[ "$version" != *-* ]]; then
+              echo "ghcr.io/aula-id/koma-safety:latest${suffix}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        env:
+          # Skip the *.dockerbuild artifact. It is not a release file, and
+          # downloading it failed after five retries on the v0.4.9 run.
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: src-security/image
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.ver.outputs.tags }}
+          build-args: |
+            KOMA_COMPOSITION=${{ matrix.composition }}
+            KOMA_VERSION=${{ steps.ver.outputs.version }}
+            KOMA_BASE_IMAGE=${{ matrix.base_image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/aula-id/koma
+            org.opencontainers.image.title=koma-safety
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            com.koma.composition=${{ matrix.composition }}
+            com.koma.base=${{ matrix.base_image }}
+
+      # Multi-arch buildx push does not leave one local image to `docker inspect`.
+      # Hard 9GB ceiling is enforced by scripts/build-koma-safety.sh for local/CD.
+      # Optional single-arch check: bash scripts/build-koma-safety.sh <composition>
+      - name: Size gate
+        run: |
+          set -euo pipefail
+          echo "size gate: 9GB ceiling documented in scripts/build-koma-safety.sh (MAX_BYTES)"
+          echo "composition=${{ matrix.composition }} pushed multi-arch; local size check:"
+          echo "  bash scripts/build-koma-safety.sh ${{ matrix.composition }}"
+      # No visibility call. PUT /orgs/{org}/packages/container/{name} is not
+      # a GitHub endpoint and returns 404, which failed this job after the
+      # image was already pushed. A new package stays private until someone
+      # sets koma-safety public once in the package settings. Later tags keep it.
