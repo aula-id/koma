@@ -8,9 +8,8 @@
 
 name: git-identity
 
+# Pull requests only: merges to main never trigger CI.
 on:
-  push:
-    branches: [main, master]
   pull_request:
     branches: [main, master]
 

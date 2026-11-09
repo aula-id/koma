@@ -3,22 +3,11 @@ name: gui-link
 # Links the real macOS GUI release executable for Apple Silicon and Intel.
 # cargo check and the headless test matrix cannot see missing GUI FFI archives
 # or frameworks, so this catches Darwin link breaks before a release tag does.
-# It is slow (two cold release builds), so it stays off the pull request path
-# and runs after merge when Rust or native build inputs change, or by hand.
+# It is slow (two cold release builds), so it stays off the pull request path.
+# Merges to main never trigger CI; run it by hand before tagging a release.
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "src-agent/**"
-      - "src-extension/**"
-      - "src-webgui/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".cargo/**"
-      - "scripts/prepare-terminal.py"
-      - ".github/workflows/gui-link.yml"
 
 concurrency:
   group: gui-link-${{ github.ref }}
