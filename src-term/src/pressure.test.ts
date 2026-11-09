@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { afterGc, CALM, CLEANUP_INTERVAL_MS, GC_MISSES, GC_USEFUL_BYTES, IDLE_COLLECT, IDLE_COLLECT_FLOOR, IDLE_COLLECT_MS, RECYCLE_GAP_MS, idleCollectDue, idleCollectResult, idleCollectStep, pressureLimits, pressureNotice, pressureTick, ramTone, recycleArmed, viewRecycleDue } from "./pressure.ts"
+import { afterGc, CALM, CLEANUP_INTERVAL_MS, collectStep, GC_MISSES, GC_REARM_BYTES, GC_USEFUL_BYTES, LIVE_COLLECT_MS, TURN_END_SWEEP_MS, IDLE_COLLECT, IDLE_COLLECT_FLOOR, IDLE_COLLECT_MS, RECYCLE_GAP_MS, idleCollectDue, idleCollectResult, idleCollectStep, pressureLimits, pressureNotice, pressureTick, ramTone, recycleArmed, viewRecycleDue } from "./pressure.ts"
 
 const MIB = 1024 * 1024
 const limits = { high: 768 * MIB, low: 512 * MIB, warn: 2048 * MIB }
@@ -49,6 +49,43 @@ describe("pressure valve", () => {
     expect(pressureNotice(warned)).toBe("Memory is high. History window reduced.")
     expect(pressureTick(warned, 600 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(true)
     expect(pressureTick(warned, 500 * MIB, 2 * CLEANUP_INTERVAL_MS, limits).warned).toBe(false)
+  })
+
+  test("GC that gave up turns back on once RSS grows past the re-arm margin", () => {
+    const hot = pressureTick(CALM, 800 * MIB, CLEANUP_INTERVAL_MS, limits)
+    const stuck = afterGc(afterGc(hot, 800 * MIB, 790 * MIB), 800 * MIB, 790 * MIB)
+    expect(stuck.gcUseful).toBe(false)
+    expect(stuck.stuckRss).toBe(790 * MIB)
+    expect(pressureTick(stuck, 790 * MIB + GC_REARM_BYTES - 1, CLEANUP_INTERVAL_MS + 1000, limits).gcUseful).toBe(false)
+    const rearmed = pressureTick(stuck, 790 * MIB + GC_REARM_BYTES, CLEANUP_INTERVAL_MS + 1000, limits)
+    expect(rearmed.gcUseful).toBe(true)
+    expect(rearmed.gcMisses).toBe(0)
+    expect(rearmed.hint).toBe(false)
+  })
+
+  test("a live turn hints on its interval, then the turn end gets one full sweep", () => {
+    const hot = IDLE_COLLECT_FLOOR + GC_USEFUL_BYTES
+    const t0 = LIVE_COLLECT_MS
+    const first = collectStep(IDLE_COLLECT, t0, false, hot)
+    expect(first.action).toBe("light")
+    expect(collectStep(first.state, t0 + 1000, false, hot).action).toBe("none")
+    const second = collectStep(first.state, t0 + LIVE_COLLECT_MS, false, hot)
+    expect(second.action).toBe("light")
+    expect(collectStep(IDLE_COLLECT, t0, false, IDLE_COLLECT_FLOOR - 1).action).toBe("none")
+    const quiet = collectStep(second.state, t0 + LIVE_COLLECT_MS + 1, true, hot)
+    expect(quiet.action).toBe("none")
+    const end = collectStep(quiet.state, quiet.state.quietSince + TURN_END_SWEEP_MS, true, hot)
+    expect(end.action).toBe("full")
+    expect(end.state.liveSeen).toBe(false)
+    expect(collectStep(end.state, end.state.lastAt + 1000, true, hot).action).toBe("none")
+  })
+
+  test("a turn end retries a paused sweep", () => {
+    const hot = IDLE_COLLECT_FLOOR + GC_USEFUL_BYTES
+    const paused = { ...IDLE_COLLECT, paused: true, misses: GC_MISSES, lastRss: hot, liveSeen: true, quietSince: 1 }
+    const end = collectStep(paused, 1 + TURN_END_SWEEP_MS, true, hot)
+    expect(end.action).toBe("full")
+    expect(end.state.paused).toBe(false)
   })
 
   test("a quiet turn collects on the interval, and a live turn never does", () => {

@@ -158,5 +158,4 @@ function menuStatus(name: string | undefined, b: Rec | undefined): string | unde
   if (name === "Settings" && b.page === "model_form") return (b.model_modal as {endpoints_loading?:boolean})?.endpoints_loading ? "Loading routes…" : b.model_loading ? "Loading models…" : ""
   if (name === "ExtStore") return b.installing ? "Installing…" : b.loading || b.detail_loading ? "Loading catalogue…" : ""
   if (name === "ExtScreen") return b.waiting ? "Loading…" : ""
-  if (name === "Security") return b.images_busy ? "Working on image…" : ""
 }

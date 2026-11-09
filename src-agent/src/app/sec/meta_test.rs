@@ -1,13 +1,16 @@
 use super::*;
 
 #[test]
-fn meta_tool_defs_are_exactly_four_fixed_names() {
+fn meta_tool_defs_are_exactly_the_fixed_names() {
     let defs = meta_tool_defs();
-    assert_eq!(defs.len(), 4);
-    let names: Vec<_> = defs.iter().map(|d| d.function.name.as_str()).collect();
+    let mut names: Vec<_> = defs.iter().map(|d| d.function.name.as_str()).collect();
+    names.sort_unstable();
+    let mut expected = META_TOOL_NAMES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(names, expected);
     assert_eq!(
-        names,
-        vec!["sec_catalog", "sec_run", "sec_fs", "sec_runtime"]
+        expected,
+        vec!["sec_catalog", "sec_fs", "sec_lane", "sec_run", "sec_runtime"]
     );
     for d in &defs {
         assert_eq!(d.kind, "function");

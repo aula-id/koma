@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::progress::{InstallUi, PullMeter};
+use super::progress::{InstallUi, PullMeter, PullSink};
 
 pub(super) struct FetchStats {
     pub transferred: u64,
@@ -42,7 +42,22 @@ pub(super) fn fetch_showing(tag: &str, ui: &InstallUi) -> Result<FetchStats> {
     })
 }
 
-fn pull_with_progress(tag: &str, ui: &InstallUi, started: Instant) -> Result<Option<FetchStats>> {
+/// Same stream for a non-terminal sink. Without the engine socket the pull
+/// still runs, quietly, and the sink stays on its last phase.
+pub(super) fn fetch_tracked(tag: &str, sink: &dyn PullSink) -> Result<FetchStats> {
+    let started = Instant::now();
+    if let Some(stats) = pull_with_progress(tag, sink, started)? {
+        return Ok(stats);
+    }
+    super::quiet("docker", &["pull", "--quiet", tag])?;
+    Ok(FetchStats {
+        transferred: 0,
+        up_to_date: false,
+        elapsed: started.elapsed(),
+    })
+}
+
+fn pull_with_progress(tag: &str, ui: &dyn PullSink, started: Instant) -> Result<Option<FetchStats>> {
     #[cfg(not(unix))]
     {
         let _ = (tag, ui, started);
@@ -75,7 +90,7 @@ fn pull_with_progress(tag: &str, ui: &InstallUi, started: Instant) -> Result<Opt
 fn api_pull(
     socket: &std::path::Path,
     tag: &str,
-    ui: &InstallUi,
+    ui: &dyn PullSink,
     started: Instant,
 ) -> Result<FetchStats, ApiError> {
     let meter = Mutex::new(PullMeter::new());
@@ -97,7 +112,7 @@ fn api_pull(
     })
 }
 
-fn heartbeat(stop: &AtomicBool, ui: &InstallUi, meter: &Mutex<PullMeter>, started: Instant) {
+fn heartbeat(stop: &AtomicBool, ui: &dyn PullSink, meter: &Mutex<PullMeter>, started: Instant) {
     while !stop.load(Ordering::Relaxed) {
         paint(ui, meter, started);
         for _ in 0..2 {
@@ -109,7 +124,7 @@ fn heartbeat(stop: &AtomicBool, ui: &InstallUi, meter: &Mutex<PullMeter>, starte
     }
 }
 
-fn paint(ui: &InstallUi, meter: &Mutex<PullMeter>, started: Instant) {
+fn paint(ui: &dyn PullSink, meter: &Mutex<PullMeter>, started: Instant) {
     let view = meter
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())

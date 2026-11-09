@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { MenuData } from "./data.ts"
 import type { Theme } from "../theme.ts"
 import { Action, Lines, Panel, Toggle, sendKey, useBodyHeight, type Line } from "./bits.tsx"
@@ -34,6 +34,114 @@ const READINESS: Record<string, { glyph: string; text: string; reason: string; r
   remote: { glyph: "·", text: "remote", reason: "not pulled", role: "dim" },
 }
 const readiness = (mark: string) => READINESS[mark] ?? READINESS.remote!
+
+// ─── Image pull activity ──────────────────────────────────────────────────────
+
+const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+/** Local animation clock: advances only while `active`, cleared on unmount. */
+function useTick(active: boolean, ms = 90): number {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(() => setTick((value) => (value + 1) % 1_000_000), ms)
+    return () => clearInterval(timer)
+  }, [active, ms])
+  return tick
+}
+
+type Pull = { id: string; phase: string; current: number; total: number; bps: number; layersDone: number; layers: number; elapsed: number }
+
+function pullOf(body: Rec): Pull | null {
+  const raw = body.image_pull
+  if (!raw || typeof raw !== "object") return null
+  const p = raw as Rec
+  if (!str(p.id)) return null
+  return { id: str(p.id), phase: str(p.phase) || "starting", current: num(p.current), total: num(p.total), bps: num(p.bps), layersDone: num(p.layers_done), layers: num(p.layers), elapsed: num(p.elapsed_ms) }
+}
+
+function pullResultOf(body: Rec): { id: string; ok: boolean; message: string } | null {
+  const raw = body.image_pull_result
+  if (!raw || typeof raw !== "object") return null
+  const r = raw as Rec
+  return { id: str(r.id), ok: flag(r.ok), message: str(r.message) }
+}
+
+const pullRatio = (pull: Pull) => pull.total > 0 ? Math.max(0, Math.min(1, pull.current / pull.total)) : null
+
+function bytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)} kB`
+  return `${n} B`
+}
+
+function clock(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = String(total % 60).padStart(2, "0")
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`
+}
+
+function phaseText(pull: Pull): string {
+  switch (pull.phase) {
+    case "starting": return "starting"
+    case "contacting": return "contacting registry"
+    case "waiting": return pull.layers ? `waiting for layers ${pull.layersDone}/${pull.layers}` : "waiting for layers"
+    case "downloading": return "downloading"
+    case "extracting": return pull.total ? "extracting" : `extracting ${pull.layersDone}/${Math.max(1, pull.layers)} layers`
+    case "verifying": return "verifying layers"
+    case "preparing": return "preparing image"
+    case "finishing": return "finishing"
+    default: return pull.phase
+  }
+}
+
+const EIGHTHS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
+
+/** Determinate bar with eighth-cell resolution, or a sweeping block when the size is unknown. */
+function PullBar({ pull, tick, cells, theme }: { pull: Pull; tick: number; cells: number; theme: Theme }) {
+  const ratio = pullRatio(pull)
+  if (ratio == null) {
+    const width = Math.max(2, Math.floor(cells / 4))
+    const span = cells + width
+    const head = tick % span
+    const chars = Array.from({ length: cells }, (_, i) => (i <= head && i > head - width ? "█" : "░")).join("")
+    return <span fg={theme.info}>{chars}</span>
+  }
+  const exact = ratio * cells
+  const full = Math.floor(exact)
+  const part = EIGHTHS[Math.floor((exact - full) * 8)] ?? ""
+  const rest = Math.max(0, cells - full - (part ? 1 : 0))
+  return <span><span fg={theme.success}>{"█".repeat(full)}{part}</span><span fg={theme.dim}>{"░".repeat(rest)}</span></span>
+}
+
+/** One-line live pull readout: spinner, id, bar, percent, bytes, rate, clock. */
+function PullLine({ pull, theme, width }: { pull: Pull; theme: Theme; width: number }) {
+  const tick = useTick(true)
+  const ratio = pullRatio(pull)
+  const cells = width >= 100 ? 24 : width >= 70 ? 16 : 10
+  const pct = ratio == null ? "" : ` ${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}%`
+  const amount = pull.total ? `${bytes(pull.current)} / ${bytes(pull.total)}` : pull.current ? bytes(pull.current) : ""
+  const rate = pull.bps ? `${bytes(pull.bps)}/s` : ""
+  const tail = [width >= 70 ? phaseText(pull) : "", amount, width >= 60 ? rate : "", clock(pull.elapsed)].filter(Boolean).join("  ")
+  return (
+    <text wrapMode="none">
+      <span fg={theme.accent}>{`${SPIN[tick % SPIN.length]} `}</span>
+      <span fg={theme.dim}>pulling </span><span fg={theme.fg}>{pull.id}</span><span>{"  "}</span>
+      <PullBar pull={pull} tick={tick} cells={cells} theme={theme} />
+      <span fg={theme.fg}>{pct}</span>
+      <span fg={theme.dim}>{`  ${tail}`}</span>
+    </text>
+  )
+}
+
+/** Short badge for a table row whose image is pulling. */
+function pullBadge(pull: Pull, tick: number): string {
+  const ratio = pullRatio(pull)
+  return `${SPIN[tick % SPIN.length]} ${ratio == null ? "pull" : `${Math.floor(ratio * 100)}%`}`.padEnd(8)
+}
 
 function posture(body: Rec): { text: string; role: Role } {
   const status = rec(body.status)
@@ -91,7 +199,7 @@ function Dashboard({ body, theme, onMove, send, width, height }: { body: Rec; th
   const short = height < 18
   return (
     <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} minWidth={0} gap={tiles ? 1 : 0}>
-      {tiles ? <StatusBoard body={body} theme={theme} /> : <StatusStrip body={body} theme={theme} />}
+      {tiles ? <StatusBoard body={body} theme={theme} /> : pullOf(body) ? <box height={1} flexShrink={0} minWidth={0} overflow="hidden"><PullLine pull={pullOf(body)!} theme={theme} width={width} /></box> : <StatusStrip body={body} theme={theme} />}
       {short ? <ControlBar body={body} theme={theme} send={send} /> : (
         <box flexDirection="row" flexShrink={0} columnGap={1} minWidth={0}>
           <box flexGrow={1} flexBasis={0} minWidth={0}><DockerControl body={body} theme={theme} send={send} /></box>
@@ -106,7 +214,7 @@ function Dashboard({ body, theme, onMove, send, width, height }: { body: Rec; th
   )
 }
 
-type Gauge = { title: string; up: boolean | null; value: string; detail: string; bar?: number }
+type Gauge = { title: string; up: boolean | null; value: string; detail: string; bar?: number; pull?: Pull }
 
 function gauges(body: Rec): Gauge[] {
   const status = rec(body.status)
@@ -121,7 +229,7 @@ function gauges(body: Rec): Gauge[] {
   return [
     { title: "Runtime", up: flag(status.runtime_ok), value: flag(status.runtime_ok) ? "up" : "down", detail: str(status.runtime) || "no container runtime" },
     { title: "Daemon", up: running, value: running ? "running" : "stopped", detail: flag(status.installed) ? `${rows(status.tools).length} tools advertised` : "not installed" },
-    { title: "Guest", up: !!active, value: active ? str(active.id) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled` },
+    { title: "Guest", up: !!active, value: active ? str(active.id) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
     { title: "Boundary", up: flag(status.boundary_up), value: flag(status.boundary_up) ? "up" : "down", detail: flag(status.boundary_up) ? "guest isolated" : "no boundary guest" },
     { title: "Egress", up: net === "off" || net === "scope" ? true : net === "down" ? false : null, value: net, detail: `${rules} allow rule${rules === 1 ? "" : "s"}` },
     { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: "", bar: total ? ready / total : 0 },
@@ -137,7 +245,7 @@ function StatusBoard({ body, theme }: { body: Rec; theme: Theme }) {
       {gauges(body).map((gauge) => (
         <box key={gauge.title} border borderStyle="rounded" borderColor={theme.dim} title={` ${gauge.title} `} titleColor={theme.dim} flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden" flexDirection="column" paddingLeft={1} paddingRight={1}>
           <text wrapMode="none"><span fg={gaugeColor(theme, gauge.up)}>{`${gaugeGlyph(gauge.up)} `}</span><span fg={theme.fg}>{gauge.value}</span></text>
-          {gauge.bar != null ? <Bar ratio={gauge.bar} theme={theme} /> : <text wrapMode="none" fg={theme.dim}>{gauge.detail}</text>}
+          {gauge.pull ? <TilePull pull={gauge.pull} theme={theme} /> : gauge.bar != null ? <Bar ratio={gauge.bar} theme={theme} /> : <text wrapMode="none" fg={theme.dim}>{gauge.detail}</text>}
         </box>
       ))}
     </box>
@@ -148,6 +256,19 @@ function Bar({ ratio, theme }: { ratio: number; theme: Theme }) {
   const cells = 10
   const filled = Math.round(Math.max(0, Math.min(1, ratio)) * cells)
   return <text wrapMode="none"><span fg={theme.success}>{"█".repeat(filled)}</span><span fg={theme.dim}>{"░".repeat(cells - filled)}</span><span fg={theme.dim}>{` ${Math.round(ratio * 100)}%`}</span></text>
+}
+
+/** Guest tile while pulling: spinner, target, compact bar. */
+function TilePull({ pull, theme }: { pull: Pull; theme: Theme }) {
+  const tick = useTick(true)
+  const ratio = pullRatio(pull)
+  return (
+    <text wrapMode="none">
+      <span fg={theme.accent}>{`${SPIN[tick % SPIN.length]} `}</span>
+      <PullBar pull={pull} tick={tick} cells={8} theme={theme} />
+      <span fg={theme.fg}>{ratio == null ? ` ${pull.id}` : ` ${Math.floor(ratio * 100)}% ${pull.id}`}</span>
+    </text>
+  )
 }
 
 function StatusStrip({ body, theme }: { body: Rec; theme: Theme }) {
@@ -199,11 +320,39 @@ function Operations({ body, theme, send }: { body: Rec; theme: Theme; send: Send
   const yolo = mode === "yolo"
   const locked = !(running && armed)
   return (
-    <Panel title="Operations" maxLines={3} hot={false} theme={theme}>
+    <Panel title="Operations" maxLines={3} hot={false} theme={theme} status={clipNotice(str(body.notice), 44)}>
       <ControlRow label="YOLO" value={armed ? "armed" : "locked"} color={armed ? theme.warn : theme.dim} theme={theme} onPress={() => sendKey(send, { Char: "o" })} control={<><Toggle checked={armed} theme={theme} /><text fg={theme.dim}> (o) </text></>} />
       <ControlRow label="Mode" value={locked && !yolo ? `${mode} · needs daemon + arm` : mode} color={yolo ? theme.error : theme.fg} theme={theme} control={<Action label={yolo ? "Leave (e)" : "Enter (e)"} plain disabled={locked} theme={theme} onPress={() => sendKey(send, { Char: "e" })} />} />
-      <ControlRow label="Lane" value={str(body.lane_label) || "none"} theme={theme} control={<Action label="Cycle (l)" plain theme={theme} onPress={() => sendKey(send, { Char: "l" })} />} />
+      <LaneRow body={body} theme={theme} send={send} />
     </Panel>
+  )
+}
+
+const LANES = [["none", "None"], ["research", "Research"], ["red", "Red"], ["blue", "Blue"]] as const
+
+/** Direct lane pick; the active lane uses the primary style. `l` still cycles. */
+function LaneChoices({ body, theme, send }: { body: Rec; theme: Theme; send: Send }) {
+  const current = (str(body.lane_label) || "none").toLowerCase()
+  return (
+    <box flexDirection="row" flexShrink={0}>
+      {LANES.map(([id, label], index) => (
+        <box key={id} flexDirection="row" flexShrink={0}>
+          {index ? <text fg={theme.dim}>·</text> : null}
+          <Action label={index === LANES.length - 1 ? `${label} (l)` : label} plain primary={current === id} theme={theme} onPress={() => { if (current !== id) send({ MenuReplace: { field: "lane", value: id } }) }} />
+        </box>
+      ))}
+    </box>
+  )
+}
+
+function LaneRow({ body, theme, send }: { body: Rec; theme: Theme; send: Send }) {
+  return (
+    <box height={1} flexDirection="row" flexShrink={0} minWidth={0} paddingLeft={1} paddingRight={1}>
+      <text width={8} flexShrink={0} fg={theme.dim} wrapMode="none">Lane</text>
+      <box flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden" flexDirection="row">
+        <LaneChoices body={body} theme={theme} send={send} />
+      </box>
+    </box>
   )
 }
 
@@ -226,10 +375,20 @@ function ControlBar({ body, theme, send }: { body: Rec; theme: Theme; send: Send
       <text fg={theme.dim}>|</text>
       {toggle("YOLO", armed, "o")}
       <Action label={mode === "yolo" ? "Leave (e)" : "Enter (e)"} plain disabled={!(running && armed)} theme={theme} onPress={key("e")} />
-      <Action label={`Lane ${str(body.lane_label) || "none"} (l)`} plain theme={theme} onPress={key("l")} />
+      <text fg={theme.dim}>{" Lane "}</text>
+      <LaneChoices body={body} theme={theme} send={send} />
+      {str(body.notice) ? <text fg={noticeColor(theme, str(body.notice))} wrapMode="none">{` ${clipNotice(str(body.notice), 60)}`}</text> : null}
     </box>
   )
 }
+
+function clipNotice(text: string, max: number): string | undefined {
+  if (!text) return undefined
+  const chars = [...text]
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text
+}
+
+const noticeColor = (theme: Theme, text: string) => /fail|refused|not set|error|cannot|could not/i.test(text) ? theme.warn : theme.dim
 
 function toolOps(body: Rec, tool: Rec | undefined): { label: string; key: string }[] {
   if (!tool) return []
@@ -245,6 +404,8 @@ function toolOps(body: Rec, tool: Rec | undefined): { label: string; key: string
 }
 
 function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; theme: Theme; onMove: (index: number) => void; send: Send; width: number; showMap: boolean }) {
+  const pull = pullOf(body)
+  const tick = useTick(!!pull)
   const catalog = catalogRows(body)
   const selected = Math.min(num(body.selected), Math.max(0, catalog.length - 1))
   const tool = catalog[selected]
@@ -257,8 +418,9 @@ function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; 
   const mapFilter = str(body.map_filter)
   const lines: Line[] = catalog.map((row) => {
     const state = readiness(str(row.ready_mark))
+    const pulling = !!pull && pull.id.toLowerCase() === str(row.image).toLowerCase()
     const cells = [str(row.id).padEnd(idWidth), str(row.image).padEnd(imageWidth), ...(wideCols ? [str(row.exec).padEnd(6)] : []), str(row.blurb)]
-    return { label: cells.join(" "), split: true, badge: { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
+    return { label: cells.join(" "), split: true, badge: pulling ? { text: pullBadge(pull!, tick), role: "info" } : { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
   })
   const header = ["TOOL".padEnd(idWidth), "IMAGE".padEnd(imageWidth), ...(wideCols ? ["EXEC  "] : []), "DESCRIPTION"].join(" ")
   const actions = (
@@ -269,7 +431,8 @@ function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; 
         : <Action label="Search (/)" theme={theme} onPress={() => sendKey(send, { Char: "/" })} />}
     </>
   )
-  const ops = toolOps(body, tool)
+  const toolPulling = !!pull && !!tool && pull.id.toLowerCase() === str(tool.image).toLowerCase()
+  const ops = pull ? toolOps(body, tool).filter((op) => op.key !== "p" && !(toolPulling && op.key === "x")) : toolOps(body, tool)
   const state = readiness(str(tool?.ready_mark))
   return (
     <Panel title={`Tools ${catalog.length}`} hot theme={theme} actions={actions} status={showMap ? `map ${mapFilter || "all"} ←→` : undefined}>
@@ -283,7 +446,7 @@ function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; 
       {tool ? (
         <box height={1} flexShrink={0} flexDirection="row" minWidth={0} paddingLeft={1} paddingRight={1} backgroundColor={theme.panel}>
           <box flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden">
-            <text wrapMode="none"><span fg={theme[state.role]}>{`${state.glyph} `}</span><span fg={theme.accent}>{str(tool.id)}</span><span fg={theme.dim}>{`  image ${str(tool.image) || "—"} · exec ${str(tool.exec) || "—"} · ${state.reason}`}</span></text>
+            <text wrapMode="none"><span fg={theme[state.role]}>{`${state.glyph} `}</span><span fg={theme.accent}>{str(tool.id)}</span><span fg={theme.dim}>{`  image ${str(tool.image) || "—"} · exec ${str(tool.exec) || "—"} · ${toolPulling ? `pulling ${pullRatio(pull!) == null ? "" : `${Math.floor(pullRatio(pull!)! * 100)}%`}` : state.reason}`}</span></text>
           </box>
           {ops.map((op) => <Action key={op.key} label={op.label} plain theme={theme} onPress={() => sendKey(send, { Char: op.key })} />)}
         </box>
@@ -325,6 +488,9 @@ function GuestMap({ body, theme }: { body: Rec; theme: Theme }) {
 // ─── Images & Refused ─────────────────────────────────────────────────────────
 
 function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Theme; onMove: (index: number) => void; send: Send; width: number }) {
+  const pull = pullOf(body)
+  const result = pullResultOf(body)
+  const tick = useTick(!!pull)
   const images = rows(body.images)
   const selected = num(body.images_selected)
   const active = images.find((row) => flag(row.active))
@@ -332,26 +498,32 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
   const sizeWidth = 8
   const idWidth = Math.min(16, Math.max(10, ...images.map((row) => str(row.id).length + 1)))
   const lines: Line[] = images.map((row) => {
-    const role: Role = flag(row.active) ? "success" : flag(row.local) ? "info" : "dim"
-    const text = flag(row.active) ? "● active" : flag(row.local) ? "▒ local" : "· remote"
+    const pulling = pull?.id === str(row.id)
+    const role: Role = pulling ? "info" : flag(row.active) ? "success" : flag(row.local) ? "info" : "dim"
+    const text = pulling ? pullBadge(pull!, tick) : flag(row.active) ? "● active" : flag(row.local) ? "▒ local" : "· remote"
     return { label: `${str(row.id).padEnd(idWidth)} ${(str(row.size_label) || "—").padEnd(sizeWidth)} ${str(row.blurb)}`, split: true, badge: { text: text.padEnd(8), role } }
   })
   const key = (c: string) => () => sendKey(send, { Char: c })
   const actions = images[selected] ? (
     <>
       <Action label="Activate (enter)" primary theme={theme} onPress={() => sendKey(send, "Enter")} />
-      <Action label="Pull (p)" theme={theme} onPress={key("p")} />
-      <Action label="Remove (x)" theme={theme} onPress={key("x")} />
+      <Action label="Pull (p)" disabled={!!pull} theme={theme} onPress={key("p")} />
+      <Action label="Remove (x)" disabled={pull?.id === str(images[selected]?.id)} theme={theme} onPress={key("x")} />
       {width >= 70 ? <Action label="Refresh (r)" theme={theme} onPress={key("r")} /> : null}
     </>
   ) : <Action label="Refresh (r)" theme={theme} onPress={key("r")} />
   return (
     <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} minWidth={0}>
-      <text flexShrink={0} wrapMode="none">
-        <span fg={active ? theme.success : theme.dim}>{active ? "● " : "○ "}</span>
-        <span fg={theme.dim}>active </span><span fg={theme.fg}>{active ? str(active.id) : "none"}</span>
-        <span fg={theme.dim}>{`   pulled ${pulled}/${images.length}`}</span>
-      </text>
+      <box height={1} flexShrink={0} flexDirection="row" minWidth={0} overflow="hidden">
+        {pull ? <PullLine pull={pull} theme={theme} width={width} /> : (
+          <text wrapMode="none">
+            <span fg={active ? theme.success : theme.dim}>{active ? "● " : "○ "}</span>
+            <span fg={theme.dim}>active </span><span fg={theme.fg}>{active ? str(active.id) : "none"}</span>
+            <span fg={theme.dim}>{`   pulled ${pulled}/${images.length}`}</span>
+            {result ? <span fg={result.ok ? theme.success : theme.error}>{`   ${result.ok ? "✓" : "✗"} ${result.message}`}</span> : null}
+          </text>
+        )}
+      </box>
       <Panel title="Guest images" hot theme={theme} actions={actions}>
         <box height={1} flexShrink={0} flexDirection="row" paddingLeft={3} paddingRight={1} minWidth={0}>
           <box flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden"><text fg={theme.dim} wrapMode="none">{`${"IMAGE".padEnd(idWidth)} ${"SIZE".padEnd(sizeWidth)} DESCRIPTION`}</text></box>

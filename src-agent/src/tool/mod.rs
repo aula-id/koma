@@ -1049,7 +1049,7 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                     denied.to_json(),
                 );
             }
-            if let Some(reason) = mgr.refusal(&call.function.name, ctx.cyber_lane.is_some()) {
+            if let Some(reason) = mgr.refusal(&call.function.name, scope::sec_enabled(ctx, &call.function.name)) {
                 // A refusal is the tool's own `error` verdict, not a transport
                 // failure: it becomes typed so the model sees the same shape it
                 // sees from every other outcome.
@@ -1136,7 +1136,7 @@ fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str
         return;
     };
     let mut ws = crate::app::sec::working_set::load(dir);
-    if let Some(lane) = ctx.cyber_lane {
+    if let Some(lane) = scope::lane_of(ctx) {
         ws.set_lane(lane.label());
     }
     match op {
@@ -1210,7 +1210,7 @@ fn dispatch_sec_meta(
         };
         return output::finish_tool_output(ctx, name, args, denied.to_json());
     }
-    if let Some(reason) = mgr.refusal(name, ctx.cyber_lane.is_some()) {
+    if let Some(reason) = mgr.refusal(name, scope::sec_enabled(ctx, name)) {
         let refusal = verdict::TypedResult {
             verdict: verdict::Verdict::Error,
             excerpt: reason,
@@ -1220,13 +1220,34 @@ fn dispatch_sec_meta(
     }
 
     let typed = match name {
+        "sec_lane" => {
+            let wanted = args.get("lane").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::app::sec::lane_switch::parse(wanted) {
+                Ok(lane) => {
+                    crate::app::sec::lane_switch::request(&ctx.session_id, lane);
+                    verdict::TypedResult {
+                        verdict: verdict::Verdict::Untyped,
+                        excerpt: format!(
+                            "lane set — {}",
+                            crate::app::sec::lane_switch::summary(lane)
+                        ),
+                        handle: None,
+                    }
+                }
+                Err(e) => verdict::TypedResult {
+                    verdict: verdict::Verdict::Error,
+                    excerpt: e,
+                    handle: None,
+                },
+            }
+        }
         "sec_catalog" => {
             let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = args.clone();
             if let Some(obj) = payload.as_object_mut() {
                 obj.remove("op");
                 if !obj.contains_key("lane") {
-                    if let Some(lane) = ctx.cyber_lane {
+                    if let Some(lane) = scope::lane_of(ctx) {
                         obj.insert(
                             "lane".into(),
                             serde_json::Value::String(lane.label().to_string()),
@@ -1275,7 +1296,7 @@ fn dispatch_sec_meta(
             // scope targets only when provided (empty up = deny-all offline guest).
             if let Some(obj) = payload.as_object_mut() {
                 use crate::app::sec::lane::Lane;
-                match ctx.cyber_lane {
+                match scope::lane_of(ctx) {
                     Some(Lane::Research) => {
                         obj.insert("targets".into(), serde_json::json!([]));
                         obj.insert("exclusions".into(), serde_json::json!([]));
@@ -1376,7 +1397,7 @@ fn dispatch_sec_meta(
                         excerpt: reason,
                         handle: None,
                     }
-                } else if let Some(reason) = mgr.refusal(&inner, ctx.cyber_lane.is_some()) {
+                } else if let Some(reason) = mgr.refusal(&inner, scope::lane_of(ctx).is_some()) {
                     verdict::TypedResult {
                         verdict: verdict::Verdict::Error,
                         excerpt: reason,
@@ -1389,7 +1410,7 @@ fn dispatch_sec_meta(
                         handle: None,
                     }
                 } else {
-                    let lane_s = ctx.cyber_lane.map(|l| l.label().to_string());
+                    let lane_s = scope::lane_of(ctx).map(|l| l.label().to_string());
                     let typed = match mgr.execute_blocking_in_lane(
                         &inner,
                         &inner_args,

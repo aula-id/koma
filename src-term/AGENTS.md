@@ -121,6 +121,12 @@ settings persistence.
   the Tools table (columns, readiness state, filter/search in the top-right
   border, selected-tool detail row with Pull/Activate/Remove) and a Guest map
   panel at ≥110 columns. Pane tabs and controls are not duplicated in the footer.
+  Operations has a direct lane chooser (None · Research · Red · Blue, `MenuReplace`
+  field `lane`; `l` still cycles). `security:` status lines arrive as `notice` and
+  show in the Operations bottom border (or inline in the compact bar). Image pulls
+  run in the background; `image_pull` drives an animated spinner/bar (local timer,
+  only while pulling) on the Images summary row, the pulling row, the Guest tile
+  and the Tools state column; `image_pull_result` keeps the last outcome visible.
 - Text editors fit their allocated height and retain the caret in view. Extension
   documents scroll to the selected action. Usage respects cost/token selection.
 - Hub, quit, loading, and the subagent viewer also have independent compositions
@@ -299,3 +305,11 @@ future image renderer. Keep the existing daemon harness and Rust protocol checks
   `Global · Session (tab) | Today (1) | Week (2) | Year (3) | Cost · Tokens (m) | Back (esc)`.
   Keep shortcuts/separators muted. Do not add selected-status dot suffixes or
   custom filled selection wrappers. Hide date controls in Session.
+
+- Memory cleanup never restarts the view (`viewRecycleDue` stays false). A
+  blocking sweep goes through `sweepVisibly`: it sets `cleanup…` in the status
+  slot, waits a frame so the label paints, then runs `fullSweep`. While a turn is
+  live the label follows the timer (`thinking 3.2s · cleanup…`). A live turn only
+  gets the non-blocking `Bun.gc(false)` hint. The full sweep runs once the turn
+  ends and on the quiet interval. `fullSweep` calls `Bun.shrink()` so freed heap
+  pages leave RSS. The valve turns GC back on after RSS grows `GC_REARM_BYTES`.

@@ -263,6 +263,39 @@ pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> O
     }
 }
 
+/// The lane in force for this call: a `sec_lane` choice made this turn wins over
+/// the lane resolved when the context was built.
+pub fn lane_of(ctx: &ToolCtx) -> Option<crate::app::sec::lane::Lane> {
+    match crate::app::sec::lane_switch::override_for(&ctx.session_id) {
+        Some(choice) if lane_choosable(ctx) => choice,
+        _ => ctx.cyber_lane,
+    }
+}
+
+/// A lane may be chosen when security mode is on and not in Plan: the only
+/// blocks left are "no lane yet" (or none at all).
+fn lane_choosable(ctx: &ToolCtx) -> bool {
+    use crate::app::sec::active::Inactive;
+    match ctx.sec_block.as_deref() {
+        None => true,
+        Some(reason) => reason == Inactive::NoLane.reason() || reason == Inactive::NoModel.reason(),
+    }
+}
+
+/// Is the `sec_` boundary open for `tool`? A lane is required, except for the
+/// lane-free meta tools: `sec_catalog` (also in Plan) and `sec_lane`.
+pub fn sec_enabled(ctx: &ToolCtx, tool: &str) -> bool {
+    if lane_of(ctx).is_some() {
+        return true;
+    }
+    if !crate::app::sec::meta::is_lane_free(tool) {
+        return false;
+    }
+    lane_choosable(ctx)
+        || (tool == "sec_catalog"
+            && ctx.sec_block.as_deref() == Some(crate::app::sec::active::Inactive::PlanMode.reason()))
+}
+
 /// Gate a call on the session's cyber lane, when one is set.
 ///
 /// Separate from [`admit_from_call`] because the lane applies to EVERY tool, not
@@ -273,7 +306,7 @@ pub fn admit_from_call(ctx: &ToolCtx, tool: &str, args: &serde_json::Value) -> O
 /// Ordinary tools stay ungated.
 pub fn lane_refusal(ctx: &ToolCtx, tool: &str, args: &mut serde_json::Value) -> Option<String> {
     use crate::app::sec::lane::Lane;
-    if crate::security::is_sec_tool(tool) && ctx.cyber_lane.is_none() {
+    if crate::security::is_sec_tool(tool) && !sec_enabled(ctx, tool) {
         return Some(
             ctx.sec_block
                 .clone()
@@ -283,8 +316,11 @@ pub fn lane_refusal(ctx: &ToolCtx, tool: &str, args: &mut serde_json::Value) -> 
     if ctx.sec_inactive.iter().any(|n| n == tool) {
         return Some(format!("{tool} is disabled for this session"));
     }
-    let lane = ctx.cyber_lane?;
-    if crate::security::is_sec_tool(tool) && !crate::app::sec::lane::surface(lane).contains(&tool) {
+    let lane = lane_of(ctx)?;
+    if crate::security::is_sec_tool(tool)
+        && !crate::app::sec::meta::is_lane_free(tool)
+        && !crate::app::sec::lane::surface(lane).contains(&tool)
+    {
         return Some(format!("{} lane: {tool} is not on this lane", lane.label()));
     }
     if lane == Lane::Blue && Lane::blue_blocks(tool) {
@@ -466,3 +502,7 @@ mod tests;
 #[path = "scope_forged_test.rs"]
 mod forged;
 
+
+#[cfg(test)]
+#[path = "scope_lane_switch_test.rs"]
+mod lane_switch_tests;

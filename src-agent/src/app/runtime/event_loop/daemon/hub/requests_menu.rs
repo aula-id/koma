@@ -624,6 +624,19 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
 }
 
 fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
+    // `/security` lane chooser: a direct pick, not a key replay of the `l` cycle.
+    if field == "lane" && matches!(state.mode(), Mode::Security(_)) {
+        use crate::app::sec::lane::Lane;
+        let lane = match value.trim().to_ascii_lowercase().as_str() {
+            "" | "none" => None,
+            "research" => Some(Lane::Research),
+            "red" => Some(Lane::Red),
+            "blue" => Some(Lane::Blue),
+            other => bail!("Unknown lane '{other}'"),
+        };
+        let fg = state.rest.foreground;
+        return crate::app::runtime::actions::security::handle_security_lane(state, fg, lane);
+    }
     if field == "editor" {
         let editor = match state.mode_mut() {
             Mode::Agents(s) => s.editor.as_mut().map(|(_, e)| e),

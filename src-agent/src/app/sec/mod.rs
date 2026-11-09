@@ -76,6 +76,7 @@ mod baseline;
 #[cfg(test)]
 pub(crate) mod fake_daemon;
 pub mod lane;
+pub mod lane_switch;
 pub mod meta;
 pub mod working_set;
 pub mod run;

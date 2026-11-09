@@ -573,7 +573,7 @@ pub async fn run_agent_loop(
                 if let Some(reason) = ctx
                     .sec_manager
                     .as_ref()
-                    .and_then(|m| m.refusal(&name, ctx.cyber_lane.is_some()))
+                    .and_then(|m| m.refusal(&name, crate::tool::scope::sec_enabled(&ctx, &name)))
                 {
                     convo.push_tool(call.id.clone(), format!("error: {reason}"));
                     continue;

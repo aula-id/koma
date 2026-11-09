@@ -142,6 +142,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // gated on the SAME answer. Resolved from live state rather than stamped into
     // the context earlier, because `security_enabled`, the agent mode and the role
     // assignment can all change under a running session.
+    // A model lane choice already saved to settings is read below; drop its override.
+    crate::app::sec::lane_switch::clear_applied(&session_id);
     let (cyber_lane, sec_block) = match crate::app::sec::active::effective(state, sess_idx) {
         Ok(lane) => (Some(lane), None),
         Err(why) => (None, Some(why.reason().to_string())),

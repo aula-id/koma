@@ -344,7 +344,7 @@ pub(crate) fn apply_lane(
 }
 
 /// `l` in the `/security` panel: set or clear this session's lane.
-pub(super) fn handle_security_lane(
+pub(crate) fn handle_security_lane(
     state: &mut AppState,
     sess_idx: usize,
     lane: Option<crate::app::sec::lane::Lane>,
@@ -355,6 +355,17 @@ pub(super) fn handle_security_lane(
         LaneOutcome::Refused(why) => format!("security: lane not set — {why}"),
     };
     state.rest.fg_mut().status = status;
+    // The panel label is otherwise refreshed only on the next key press.
+    let label = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .and_then(|x| x.settings.cyber_lane)
+        .map_or_else(|| "none".to_string(), |l| l.label().to_string());
+    if sess_idx == state.rest.foreground {
+        if let Mode::Security(s) = state.mode_mut() {
+            s.lane_label = label;
+        }
+    }
     refresh_security_state(state);
     Ok(())
 }
@@ -401,23 +412,52 @@ pub(super) fn handle_security_refresh_toolkit(state: &mut AppState) -> Result<()
     Ok(())
 }
 
-/// `p` on Images — pull the selected composition (blocking, like install).
+/// `p` on Images — pull the selected composition on a background thread so the
+/// loop keeps serving clients; [`poll_security_jobs`] applies the outcome.
 pub(super) fn handle_security_image_pull(id: String, state: &mut AppState) -> Result<()> {
-    state.rest.fg_mut().status = format!("security: pulling image '{id}'…");
-    if let Mode::Security(s) = state.mode_mut() {
-        s.images_busy = true;
+    match crate::security::start_image_pull(&id) {
+        Ok(()) => {
+            state.rest.fg_mut().status = format!("security: pulling image '{id}'…");
+            if let Mode::Security(s) = state.mode_mut() {
+                s.images_busy = true;
+            }
+        }
+        Err(e) => {
+            state.rest.fg_mut().status = format!("security: {e}");
+        }
     }
-    let outcome = match crate::security::pull_composition(&id, false) {
-        Ok(()) => format!("security: pulled '{id}'"),
-        Err(e) => format!("security: pull '{id}' failed: {e}"),
+    Ok(())
+}
+
+/// Once per loop tick: apply a finished background pull. Returns `true` when
+/// something changed, so a local loop can redraw.
+pub(crate) fn poll_security_jobs(state: &mut AppState) -> bool {
+    let mut changed = false;
+    // Lanes the model chose with `sec_lane`: persist through the panel's path.
+    for (session_id, lane) in crate::app::sec::lane_switch::drain_unapplied() {
+        let Some(idx) = state.rest.sessions.iter().position(|rt| rt.id == session_id) else {
+            continue;
+        };
+        if let Err(e) = handle_security_lane(state, idx, lane) {
+            state.rest.fg_mut().status = format!("security: lane not saved — {e}");
+        } else if idx == state.rest.foreground {
+            let status = &mut state.rest.fg_mut().status;
+            if status.starts_with("security: lane") {
+                status.push_str(" (chosen by the model)");
+            }
+        }
+        changed = true;
+    }
+    let Some(done) = crate::security::take_finished_image_pull() else {
+        return changed;
     };
-    state.rest.fg_mut().status = outcome;
+    state.rest.fg_mut().status = format!("security: {}", done.message);
     if let Mode::Security(s) = state.mode_mut() {
         s.images_busy = false;
         s.refresh_images();
     }
     refresh_security_state(state);
-    Ok(())
+    true
 }
 
 /// Enter/`a` on Images — activate a previously pulled composition and restart
@@ -442,6 +482,10 @@ pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -
 
 /// `x`/Delete on Images — drop a non-active local composition.
 pub(super) fn handle_security_image_remove(id: String, state: &mut AppState) -> Result<()> {
+    if crate::security::image_pull_busy_id().is_some_and(|busy| busy.eq_ignore_ascii_case(&id)) {
+        state.rest.fg_mut().status = format!("security: '{id}' is still pulling");
+        return Ok(());
+    }
     let outcome = match crate::security::remove_composition(&id) {
         Ok(()) => format!("security: removed '{id}'"),
         Err(e) => format!("security: remove '{id}' failed: {e}"),
