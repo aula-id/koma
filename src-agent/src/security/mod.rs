@@ -376,7 +376,7 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<usize> {
 /// 4. Re-extract embedded `src-security/` into `~/.koma/security/`, skipping `image/`.
 /// 5. Create the venv and install Python packages, unless the venv exists and
 ///    `force` is false.
-/// 6. Pull `ghcr.io/aula-id/koma-safety:{version}-minimal` and mark it active.
+/// 6. Pull `ghcr.io/aula-id/koma-safety:latest` and mark minimal active.
 #[allow(unreachable_code)]
 pub fn install(force: bool) -> Result<()> {
     #[cfg(windows)]
@@ -447,10 +447,11 @@ pub fn install(force: bool) -> Result<()> {
     Ok(())
 }
 
-/// GHCR name of the guest image. Tags are `{version}-{composition}`.
+/// GHCR name of the guest image. Domain tags are `{version}-{composition}`.
+/// The installer pulls `:latest` (the minimal image).
 pub const SAFETY_IMAGE: &str = "ghcr.io/aula-id/koma-safety";
 
-/// Tag the installer pulls (`…:{version}-minimal`). `KOMA_SEC_IMAGE` overrides it
+/// Tag `--security-install` pulls (`…:latest`). `KOMA_SEC_IMAGE` overrides it
 /// for a local build.
 #[must_use]
 pub fn safety_image_tag() -> String {

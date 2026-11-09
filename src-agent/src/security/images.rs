@@ -87,9 +87,15 @@ fn images_json_path(dest: &Path) -> PathBuf {
     dest.join("images.json")
 }
 
-/// GHCR tag for a composition. Always `{version}-{id}` (including `minimal`).
+/// GHCR tag for a composition.
+///
+/// `minimal` is `:latest`. That image is not republished on every koma version.
+/// Domain images stay `{version}-{id}`.
 #[must_use]
 pub fn safety_image_tag_for(composition: &str) -> String {
+    if composition == "minimal" {
+        return format!("{SAFETY_IMAGE}:latest");
+    }
     format!("{SAFETY_IMAGE}:{}-{composition}", env!("CARGO_PKG_VERSION"))
 }
 

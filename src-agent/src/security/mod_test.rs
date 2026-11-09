@@ -1,22 +1,19 @@
 use super::*;
 
 #[test]
-fn the_release_image_is_koma_safety_at_this_version() {
-    let tag = format!("{SAFETY_IMAGE}:{}-minimal", env!("CARGO_PKG_VERSION"));
-    assert!(tag.starts_with("ghcr.io/aula-id/koma-safety:"));
-    assert!(tag.ends_with("-minimal"));
+fn the_installer_pulls_the_floating_minimal_image() {
+    let tag = safety_image_tag_for("minimal");
+    assert_eq!(tag, format!("{SAFETY_IMAGE}:latest"));
+    assert!(!tag.contains(env!("CARGO_PKG_VERSION")));
     assert!(!tag.contains("cyber"));
 }
 
 #[test]
-fn safety_image_tag_ends_with_minimal() {
+fn safety_image_tag_is_latest_and_domains_stay_versioned() {
     let prev = std::env::var_os("KOMA_SEC_IMAGE");
     std::env::remove_var("KOMA_SEC_IMAGE");
     let tag = safety_image_tag();
-    assert!(
-        tag.ends_with("-minimal"),
-        "expected default tag to end with -minimal, got {tag}"
-    );
+    assert_eq!(tag, format!("{SAFETY_IMAGE}:latest"));
     assert_eq!(tag, safety_image_tag_for("minimal"));
     assert_eq!(
         safety_image_tag_for("web"),
