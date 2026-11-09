@@ -47,43 +47,10 @@ export function menuControls(name: string, b: Record<string, unknown>): ActionDe
   if (name === "ExtStore") return mode === "install_confirm" ? [ { ...char("Install", "y"), disabled: !!b.installing }, back ] : mode === "detail" ? [char("Install", "i"), back] : [enter("Details"), char("Refresh", "r"), back]
   if (name === "ExtScreen") return [{ ...enter("Select"), disabled: !!b.waiting }, back]
   if (name === "Security") {
-    const pane = String(b.pane || "tools")
-    const running = !!(b.status as { running?: boolean } | undefined)?.running
-    const armed = !!b.yolo_armed
-    const mode = String(b.agent_mode_label || "auto")
-    const paneJump = (label: string, id: string, primary = false): ActionDescriptor => ({
-      label,
-      primary,
-      action: { Replace: { field: "pane", value: id } },
-    })
-    const tabs = [
-      paneJump("Dashboard", "tools", pane === "tools"),
-      paneJump("Images", "images", pane === "images"),
-      paneJump("Refused", "refused", pane === "refused"),
-    ]
-    if (pane === "images") {
-      return [
-        ...tabs,
-        enter("Activate"),
-        char("Pull", "p"),
-        char("Remove", "x"),
-        char("Refresh list", "r"),
-        back,
-      ]
-    }
-    if (pane === "refused") {
-      return [...tabs, char("Refresh", "u"), back]
-    }
-    return [
-      ...tabs,
-      char(running ? "Stop" : "Start", "s"),
-      char("Runtime", "c"),
-      char("Refresh", "u"),
-      char(armed ? "Disarm" : "Arm", "o"),
-      { ...char(mode === "yolo" ? "Leave" : "Enter", "e"), disabled: !(running && armed) },
-      char("Lane", "l"),
-      back,
-    ]
+    // Pane tabs and daemon/YOLO/image controls live inside the console panels.
+    if (b.catalog_searching) return [enter("Done"), button("Clear search (esc)", "Esc")]
+    if (String(b.pane || "tools") === "tools") return [button("Map (→)", "Right"), button("Next pane (h)", { Char: "h" }), back]
+    return [button("Next pane (h)", { Char: "h" }), back]
   }
   if (name === "Remote") {
     const sub = String(b.sub)

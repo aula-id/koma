@@ -113,6 +113,14 @@ settings persistence.
   snapshot. Do not reconstruct OAuth membership or field indices in the client.
 - Security navigation starts with daemon and YOLO controls, then domain-grouped
   tools. Dependencies are grouped by tier. Rendering must match daemon ordering.
+- `/security` is a SOC-style console (`src/modes/security.tsx`): header pane tabs
+  with a posture badge (ONLINE/ARMED/YOLO ACTIVE/OFFLINE); a status board of six
+  gauge tiles (runtime, daemon, guest, boundary, egress, catalog) that collapses
+  to a one-line strip below 96×28; Docker control + Operations panels with Type B
+  switches (daemon `s`, YOLO `o`) folding into one wrapping bar when short; then
+  the Tools table (columns, readiness state, filter/search in the top-right
+  border, selected-tool detail row with Pull/Activate/Remove) and a Guest map
+  panel at ≥110 columns. Pane tabs and controls are not duplicated in the footer.
 - Text editors fit their allocated height and retain the caret in view. Extension
   documents scroll to the selected action. Usage respects cost/token selection.
 - Hub, quit, loading, and the subagent viewer also have independent compositions

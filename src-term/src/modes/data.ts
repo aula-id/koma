@@ -614,6 +614,12 @@ export interface SecStatus {
   refused?: Array<{ name: string; reason: string }>
   runtime_ok?: boolean
   runtime?: string
+  boundary_up?: boolean
+  /** Egress mode: off | scope | down | unknown. */
+  net?: string
+  rules?: Array<string>
+  catalog_ready?: number
+  catalog_total?: number
 }
 
 export interface InstallHealthEntry {
