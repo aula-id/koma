@@ -45,20 +45,24 @@ fn main_is_not_a_cyber_role() {
 }
 
 #[test]
-fn no_cyber_role_resolves_through_main() {
-    // Fail-closed by design: an unassigned cyber role must read as unassigned
-    // rather than being quietly served by the coding model.
+fn unassigned_cyber_roles_resolve_through_main() {
+    // The lane carries the capability rules, so an unassigned cyber role uses the
+    // Main route rather than blocking every lane.
     let mut config = crate::model::app_config::AppConfig::default();
     config.models.clear();
     let settings = crate::model::settings::Settings::default();
+    let main = crate::app::resolve::resolve_role(&config, &settings, ModelRole::Main);
+    assert!(main.is_some(), "Main always resolves");
     for role in [
         ModelRole::CyberRed,
         ModelRole::CyberBlue,
         ModelRole::CyberResearch,
     ] {
-        assert!(
-            crate::app::resolve::resolve_role(&config, &settings, role).is_none(),
-            "{role:?} fell back to a model it should not have"
+        let got = crate::app::resolve::resolve_role(&config, &settings, role);
+        assert_eq!(
+            got.as_ref().map(|r| (&r.model_id, &r.endpoint)),
+            main.as_ref().map(|r| (&r.model_id, &r.endpoint)),
+            "{role:?} should inherit Main"
         );
     }
 }

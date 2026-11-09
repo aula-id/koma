@@ -41,7 +41,7 @@ impl ModelRole {
     }
 
     /// Does this role exist only for cyber runs? Used to hide it from the picker
-    /// while security mode is off, and to keep it out of the Main fallback.
+    /// while security mode is off. Unassigned, these roles inherit Main.
     pub fn is_cyber(self) -> bool {
         matches!(
             self,

@@ -13,6 +13,30 @@ use std::time::{Duration, Instant};
 const BAR_WIDTH: usize = 32;
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 
+/// Where a streamed pull reports. The installer draws a stderr bar; the
+/// `/security` panel records it for the snapshot (see `image_job`).
+pub(super) trait PullSink: Sync {
+    fn next_spinner(&self) -> u8;
+    fn paint_pull(&self, view: &PullView);
+    fn end_live(&self);
+    fn info(&self, text: &str);
+}
+
+impl PullSink for InstallUi {
+    fn next_spinner(&self) -> u8 {
+        InstallUi::next_spinner(self)
+    }
+    fn paint_pull(&self, view: &PullView) {
+        InstallUi::paint_pull(self, view)
+    }
+    fn end_live(&self) {
+        InstallUi::end_live(self)
+    }
+    fn info(&self, text: &str) {
+        InstallUi::info(self, text)
+    }
+}
+
 pub(super) struct InstallUi {
     tty: bool,
     bold: &'static str,
@@ -275,6 +299,24 @@ pub(super) struct PullView {
 }
 
 impl PullView {
+    /// Stable wire name for the panel snapshot.
+    pub(super) fn phase_name(&self) -> &'static str {
+        match self.phase {
+            Phase::Contacting => "contacting",
+            Phase::Waiting => "waiting",
+            Phase::Downloading => "downloading",
+            Phase::Preparing => "preparing",
+            Phase::Verifying => "verifying",
+            Phase::Extracting => "extracting",
+            Phase::Ready => "finishing",
+        }
+    }
+
+    /// `(current, total, bytes/s, layers done, layers)`.
+    pub(super) fn counters(&self) -> (u64, u64, u64, u32, u32) {
+        (self.current, self.total, self.bps, self.layers_done, self.layers)
+    }
+
     fn percent_tenths(&self) -> Option<u16> {
         percent_tenths(self.current, self.total)
     }

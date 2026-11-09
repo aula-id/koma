@@ -190,6 +190,31 @@ export interface SecuritySnapshot {
   /** Composition id. Empty or missing = all. */
   map_filter?: string
   agent_mode_label?: string
+  /** Live background image pull. Missing/null when idle. */
+  image_pull?: ImagePullProgress | null
+  /** Last finished pull, until the next one starts. */
+  image_pull_result?: ImagePullResult | null
+  /** Latest `security:` status line (results and refusals). */
+  notice?: string
+}
+
+export interface ImagePullProgress {
+  id: string
+  /** starting | contacting | waiting | downloading | preparing | verifying | extracting | finishing */
+  phase: string
+  current: number
+  /** 0 = size not known yet. */
+  total: number
+  bps: number
+  layers_done: number
+  layers: number
+  elapsed_ms: number
+}
+
+export interface ImagePullResult {
+  id: string
+  ok: boolean
+  message: string
 }
 
 export interface HelpSnapshot {

@@ -358,9 +358,9 @@ pub enum ModelRole {
     Safeguard,
     Compactor,
     Planner,
-    /// Cyber lanes. Resolved fail-closed: no Main fallback, because a red turn
-    /// inheriting the coding model silently is exactly the "capabilities leak"
-    /// failure the role split exists to prevent.
+    /// Cyber lanes. Unassigned, they inherit Main's route: the capability rules
+    /// live on the lane (`app::sec::lane`), not on the model, so a lane is usable
+    /// without a dedicated model.
     CyberRed,
     CyberBlue,
     CyberResearch,

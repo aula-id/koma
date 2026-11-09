@@ -121,6 +121,12 @@ settings persistence.
   the Tools table (columns, readiness state, filter/search in the top-right
   border, selected-tool detail row with Pull/Activate/Remove) and a Guest map
   panel at ≥110 columns. Pane tabs and controls are not duplicated in the footer.
+  Operations has a direct lane chooser (None · Research · Red · Blue, `MenuReplace`
+  field `lane`; `l` still cycles). `security:` status lines arrive as `notice` and
+  show in the Operations bottom border (or inline in the compact bar). Image pulls
+  run in the background; `image_pull` drives an animated spinner/bar (local timer,
+  only while pulling) on the Images summary row, the pulling row, the Guest tile
+  and the Tools state column; `image_pull_result` keeps the last outcome visible.
 - Text editors fit their allocated height and retain the caret in view. Extension
   documents scroll to the selected action. Usage respects cost/token selection.
 - Hub, quit, loading, and the subagent viewer also have independent compositions

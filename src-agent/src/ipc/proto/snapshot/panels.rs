@@ -210,6 +210,16 @@ pub struct SecuritySnapshot {
     /// Foreground agent-mode label (`auto` / `yolo` / …).
     #[serde(default)]
     pub agent_mode_label: String,
+    /// Live progress of the background image pull. `None` when idle.
+    #[serde(default)]
+    pub image_pull: Option<crate::security::ImagePullProgress>,
+    /// How the last image pull ended, until the next one starts.
+    #[serde(default)]
+    pub image_pull_result: Option<crate::security::ImagePullResult>,
+    /// The latest `security:` status line (action results and refusals), which
+    /// the full-screen panel would otherwise hide behind the chat status bar.
+    #[serde(default)]
+    pub notice: String,
 }
 
 /// A serde-safe projection of ONE background bash job for the `/bash` panel.

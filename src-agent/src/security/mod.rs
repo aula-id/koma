@@ -15,7 +15,7 @@
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
 //! | [`safety_image_tag`] / [`safety_image_tag_for`] | GHCR tag (minimal by default) |
 //! | [`read_images_inventory`] | `images.json` composition inventory |
-//! | [`pull_composition`] / [`activate_composition`] / [`remove_composition`] | Images pane backend |
+//! | [`start_image_pull`] / [`activate_composition`] / [`remove_composition`] | Images pane backend |
 
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
@@ -35,16 +35,22 @@ use crate::model::store::base_dir;
 static SECURITY_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-security");
 
 // Inventory/pull APIs are consumed by the Images pane and daemon spawn path.
+mod image_job;
 mod images;
 mod progress;
 mod pull;
 use images::pull_safety_image;
 pub use images::{
     activate_composition, active_composition_id, composition_tag, list_known_compositions,
-    pull_composition, read_images_inventory, remove_composition, safety_image_tag_for,
+    read_images_inventory, remove_composition, safety_image_tag_for,
 };
 #[allow(unused_imports)] // public inventory types for callers/tests
 pub use images::{ImageEntry, ImagesInventory};
+pub use image_job::{
+    busy_id as image_pull_busy_id, last_result as image_pull_last_result,
+    progress as image_pull_progress, start as start_image_pull,
+    take_finished as take_finished_image_pull, ImagePullProgress, ImagePullResult,
+};
 
 /// How long a runtime probe answer is served before a refresh is allowed.
 ///

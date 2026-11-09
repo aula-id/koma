@@ -175,15 +175,30 @@ fn handle_catalog_search(s: &mut SecurityState, key: KeyEvent) -> Action {
     }
 }
 
+/// `l` cycles none → research → red → blue → none, skipping lanes whose role has
+/// no model (they would be refused and leave the cycle stuck on the first one).
+/// When no lane resolves at all, ask for research so the refusal names the reason.
 fn lane_action(rest: &crate::app::state::AppStateRest) -> Action {
     use crate::app::sec::lane::Lane;
-    let next = match rest.fg().session.as_ref().and_then(|x| x.settings.cyber_lane) {
-        None => Some(Lane::Research),
-        Some(Lane::Research) => Some(Lane::Red),
-        Some(Lane::Red) => Some(Lane::Blue),
-        Some(Lane::Blue) => None,
+    const ORDER: [Option<Lane>; 4] = [None, Some(Lane::Research), Some(Lane::Red), Some(Lane::Blue)];
+    let Some(session) = rest.fg().session.as_ref() else {
+        return Action::SecurityLane(Some(Lane::Research));
     };
-    Action::SecurityLane(next)
+    let resolves = |lane: Lane| {
+        crate::app::resolve::resolve_role(&rest.config, &session.settings, lane.role()).is_some()
+    };
+    let current = session.settings.cyber_lane;
+    if !ORDER.iter().flatten().any(|&lane| resolves(lane)) {
+        return Action::SecurityLane(Some(Lane::Research));
+    }
+    let at = ORDER.iter().position(|lane| *lane == current).unwrap_or(0);
+    for step in 1..=ORDER.len() {
+        let next = ORDER[(at + step) % ORDER.len()];
+        if next.is_none_or(resolves) {
+            return Action::SecurityLane(next);
+        }
+    }
+    Action::SecurityLane(None)
 }
 
 fn images_activate_or_none(s: &SecurityState) -> Action {

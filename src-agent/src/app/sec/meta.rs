@@ -7,9 +7,17 @@
 use crate::dto::openrouter::request::{ToolDef, ToolFunctionDef};
 
 /// Names advertised to the model when security mode is on (not Plan).
-pub const META_TOOL_NAMES: &[&str] = &["sec_catalog", "sec_run", "sec_fs", "sec_runtime"];
+pub const META_TOOL_NAMES: &[&str] = &["sec_catalog", "sec_run", "sec_fs", "sec_runtime", "sec_lane"];
 
-/// `true` when `name` is one of the four control-plane meta tools.
+/// Meta tools that work before a lane is chosen: discovery, and choosing the lane.
+pub const LANE_FREE: &[&str] = &["sec_catalog", "sec_lane"];
+
+/// `true` for [`LANE_FREE`] tools.
+pub fn is_lane_free(name: &str) -> bool {
+    LANE_FREE.contains(&name)
+}
+
+/// `true` when `name` is one of the control-plane meta tools.
 pub fn is_meta_tool(name: &str) -> bool {
     META_TOOL_NAMES.contains(&name)
 }
@@ -43,9 +51,27 @@ fn def(name: &str, description: &str, parameters: serde_json::Value) -> ToolDef 
     }
 }
 
-/// Fixed ToolDefs for the model tool list (≤4 entries).
+/// Fixed ToolDefs for the model tool list.
 pub fn meta_tool_defs() -> Vec<ToolDef> {
     vec![
+        def(
+            "sec_lane",
+            "Choose this session's cyber lane before using the security toolkit. \
+research = local analysis only (no network, no target probes); \
+red = may reach the network, probe in-scope targets and start listeners, no patches; \
+blue = may reach the network and probe in-scope targets, may propose patches, no listeners; \
+none = clear. Pick the narrowest lane the task needs. Takes effect for the next calls.",
+            object_schema(
+                serde_json::json!({
+                    "lane": {
+                        "type": "string",
+                        "enum": ["research", "red", "blue", "none"],
+                        "description": "Lane to switch to"
+                    }
+                }),
+                &["lane"],
+            ),
+        ),
         def(
             "sec_catalog",
             "Browse the security toolkit without dumping every schema into the prompt. \

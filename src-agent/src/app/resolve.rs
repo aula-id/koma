@@ -442,10 +442,8 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
         ModelRole::Compactor | ModelRole::Awareness => Some(legacy_main(settings)),
         // Planner has no legacy fallback by design — unassigned means "use Main".
         ModelRole::Planner => None,
-        // The cyber roles are FAIL-CLOSED too, and for a sharp reason: a red turn
-        // that quietly inherits the coding model would look configured while
-        // having no capability binding, so an unassigned cyber role must be visible
-        // as unassigned rather than silently served by Main.
+        // The cyber roles inherit Main in `resolve_role` (the lane, not the model,
+        // carries the capability rules), so these arms are unreachable in practice.
         ModelRole::CyberRed | ModelRole::CyberBlue | ModelRole::CyberResearch => None,
         ModelRole::Safeguard => {
             // FAIL-CLOSED: only the legacy classifier model rescues it; an empty
@@ -517,7 +515,8 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
     if matches!(
         role,
         ModelRole::Compactor | ModelRole::Awareness | ModelRole::Planner
-    ) {
+    ) || role.is_cyber()
+    {
         return resolve_role(config, settings, ModelRole::Main);
     }
     legacy_fallback(settings, role)
@@ -696,7 +695,8 @@ pub fn resolve_role_dispatch(
     if matches!(
         role,
         ModelRole::Awareness | ModelRole::Compactor | ModelRole::Planner
-    ) {
+    ) || role.is_cyber()
+    {
         return resolve_role_dispatch(config, settings, ModelRole::Main);
     }
     resolve_role(config, settings, role)

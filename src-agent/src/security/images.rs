@@ -8,10 +8,16 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::progress::{InstallUi, PullReport};
-use super::{image_ref_path, quiet, security_dir, SAFETY_IMAGE};
+use super::progress::{InstallUi, PullReport, PullSink};
+
+/// How a pull reports progress.
+pub(super) enum Feed<'a> {
+    Install(&'a InstallUi),
+    Track(&'a dyn PullSink),
+}
+use super::{image_ref_path, security_dir, SAFETY_IMAGE};
 
 /// One locally-known composition pull recorded in `images.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -266,12 +272,8 @@ fn inspect_digest_and_size(tag: &str) -> Result<(String, u64)> {
 ///
 /// Does not change `active` unless the inventory has no active composition yet, or
 /// the pulled id is already active (digest refresh). Use [`activate_composition`]
-/// to switch.
-pub fn pull_composition(id: &str, force: bool) -> Result<()> {
-    pull_composition_inner(id, force, None).map(|_| ())
-}
-
-fn pull_composition_inner(id: &str, force: bool, ui: Option<&InstallUi>) -> Result<PullReport> {
+/// to switch. The Images pane runs this in the background (see `image_job`).
+pub(super) fn pull_composition_inner(id: &str, force: bool, feed: Feed<'_>) -> Result<PullReport> {
     if !is_known_composition(id) {
         return Err(anyhow!("unknown composition '{id}'"));
     }
@@ -311,13 +313,15 @@ fn pull_composition_inner(id: &str, force: bool, ui: Option<&InstallUi>) -> Resu
         composition_tag(id)
     };
 
-    let (transferred, up_to_date, elapsed) = if let Some(ui) = ui {
-        let stats = super::pull::fetch_showing(&tag, ui)?;
-        (stats.transferred, stats.up_to_date, stats.elapsed)
-    } else {
-        let started = Instant::now();
-        quiet("docker", &["pull", "--quiet", &tag])?;
-        (0, false, started.elapsed())
+    let (transferred, up_to_date, elapsed) = match feed {
+        Feed::Install(ui) => {
+            let stats = super::pull::fetch_showing(&tag, ui)?;
+            (stats.transferred, stats.up_to_date, stats.elapsed)
+        }
+        Feed::Track(sink) => {
+            let stats = super::pull::fetch_tracked(&tag, sink)?;
+            (stats.transferred, stats.up_to_date, stats.elapsed)
+        }
     };
     let (digest, size_bytes) = inspect_digest_and_size(&tag)?;
     let entry = ImageEntry {
@@ -416,10 +420,10 @@ pub fn remove_composition(id: &str) -> Result<()> {
 /// Install path: pull `minimal` (no-op when already local unless `force`) and
 /// **always** activate it — even when another composition or pin already exists.
 ///
-/// `ui` draws the download bar. The Images pane calls [`pull_composition`], which
-/// stays quiet so it does not write over the TUI.
+/// `ui` draws the download bar. The Images pane pulls through `image_job`, which
+/// records progress for the panel instead of writing over the TUI.
 pub(super) fn pull_safety_image(_dest: &Path, force: bool, ui: &InstallUi) -> Result<PullReport> {
-    let report = pull_composition_inner("minimal", force, Some(ui))?;
+    let report = pull_composition_inner("minimal", force, Feed::Install(ui))?;
     activate_composition("minimal")?;
     Ok(report)
 }

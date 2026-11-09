@@ -1153,6 +1153,7 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
     // wire form is deterministic.
     let mut inactive: Vec<String> = state.rest.sec_inactive.iter().cloned().collect();
     inactive.sort();
+    let image_pull = crate::security::image_pull_progress();
     SecuritySnapshot {
         status,
         selected: s.selected,
@@ -1164,7 +1165,7 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         refused_selected: s.refused_selected,
         images: s.images.clone(),
         images_selected: s.images_selected,
-        images_busy: s.images_busy,
+        images_busy: s.images_busy || image_pull.is_some(),
         lane_label: s.lane_label.clone(),
         catalog: s.catalog.clone(),
         catalog_filter: s.catalog_filter.as_str().into(),
@@ -1172,6 +1173,15 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         catalog_searching: s.catalog_searching,
         map_filter: s.map_filter.clone().unwrap_or_default(),
         agent_mode_label: state.rest.agent_mode().label().to_string(),
+        image_pull,
+        image_pull_result: crate::security::image_pull_last_result(),
+        notice: state
+            .rest
+            .fg()
+            .status
+            .strip_prefix("security: ")
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
