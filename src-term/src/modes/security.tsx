@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { MenuData } from "./data.ts"
 import type { Theme } from "../theme.ts"
 import { Action, Lines, Panel, Toggle, sendKey, useBodyHeight, type Line } from "./bits.tsx"
@@ -417,7 +417,7 @@ function toolOps(body: Rec, tool: Rec | undefined): { label: string; key: string
 function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; theme: Theme; onMove: (index: number) => void; send: Send; width: number; showMap: boolean }) {
   const pull = pullOf(body)
   const tick = useTick(!!pull)
-  const catalog = catalogRows(body)
+  const catalog = useMemo(() => catalogRows(body), [body.catalog, body.catalog_filter, body.catalog_query, body.map_filter])
   const selected = Math.min(num(body.selected), Math.max(0, catalog.length - 1))
   const tool = catalog[selected]
   const wideCols = width >= 80
@@ -427,12 +427,22 @@ function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; 
   const searching = flag(body.catalog_searching)
   const query = str(body.catalog_query)
   const mapFilter = str(body.map_filter)
-  const lines: Line[] = catalog.map((row) => {
+  // Rows are built once per catalog change. The pull spinner ticks ~11 times a
+  // second and only swaps the badge on the rows of the image being pulled.
+  const base = useMemo(() => catalog.map((row): Line => {
     const state = readiness(str(row.ready_mark))
-    const pulling = !!pull && pull.id.toLowerCase() === str(row.image).toLowerCase()
     const cells = [str(row.id).padEnd(idWidth), str(row.image).padEnd(imageWidth), ...(wideCols ? [str(row.exec).padEnd(6)] : []), str(row.blurb)]
-    return { label: cells.join(" "), split: true, badge: pulling ? { text: pullBadge(pull!, tick), role: "info" } : { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
-  })
+    return { label: cells.join(" "), split: true, badge: { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
+  }), [catalog, idWidth, imageWidth, wideCols])
+  const pullingImage = pull ? pull.id.toLowerCase() : ""
+  const pullingRows = useMemo(() => pullingImage ? catalog.flatMap((row, index) => str(row.image).toLowerCase() === pullingImage ? [index] : []) : [], [catalog, pullingImage])
+  const badge = pull ? pullBadge(pull, tick) : ""
+  const lines = useMemo(() => {
+    if (!pullingRows.length) return base
+    const out = base.slice()
+    for (const index of pullingRows) out[index] = { ...base[index]!, badge: { text: badge, role: "info" } }
+    return out
+  }, [base, pullingRows, badge])
   const header = ["TOOL".padEnd(idWidth), "IMAGE".padEnd(imageWidth), ...(wideCols ? ["EXEC  "] : []), "DESCRIPTION"].join(" ")
   const actions = (
     <>

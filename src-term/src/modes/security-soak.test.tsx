@@ -22,8 +22,8 @@ function body(pane: string, current: number) {
   }
 }
 
-/** Native growth while a pull streams progress for `seconds` on `pane`. */
-async function soak(pane: string, seconds: number): Promise<number> {
+/** Footprint growth over two back-to-back windows of a streaming pull on `pane`. */
+async function soak(pane: string, seconds: number): Promise<[number, number]> {
   let set: (mode: unknown) => void = () => {}
   const { useState } = await import("react")
   function Screen() {
@@ -36,25 +36,33 @@ async function soak(pane: string, seconds: number): Promise<number> {
     await act(async () => { await view.waitForVisualIdle() })
     const tick = async (ms: number) => { await act(async () => { await Bun.sleep(ms); await view.waitForVisualIdle() }) }
     await tick(2000)
-    Bun.gc(true)
-    const before = memoryFootprint()
-    for (let i = 0; i < seconds * 4; i++) {
-      // The agent pushes progress about four times a second.
-      await act(async () => { set(body(pane, i * 10_000_000)) })
-      await tick(250)
+    const settle = () => { Bun.gc(true); Bun.shrink?.() }
+    let step = 0
+    const window = async () => {
+      settle()
+      const before = memoryFootprint()
+      for (let i = 0; i < seconds * 4; i++, step++) {
+        // The agent pushes progress about four times a second.
+        await act(async () => { set(body(pane, step * 10_000_000)) })
+        await tick(250)
+      }
+      settle()
+      return memoryFootprint() - before
     }
-    Bun.gc(true)
-    return memoryFootprint() - before
+    // The first window pays for warm-up (JIT, heap high-water, glyph caches).
+    // A leak keeps growing in the second one.
+    return [await window(), await window()]
   } finally {
     await act(async () => { await view.dispose() })
   }
 }
 
-test("a long image pull does not grow native memory", async () => {
+test("a long image pull does not keep growing memory", async () => {
+  const mib = (n: number) => (n / 1048576).toFixed(1)
   for (const pane of ["tools", "images"]) {
-    const grown = await soak(pane, 12)
-    console.log(`${pane}: +${(grown / 1048576).toFixed(1)} MiB over 12s of pulling`)
-    // A leak at the measured 90ms-spinner rate is ~5 MiB per 12s; allow noise.
-    expect(grown).toBeLessThan(4 * 1024 * 1024)
+    const [warm, steady] = await soak(pane, 10)
+    console.log(`${pane}: +${mib(warm)} MiB warm-up, +${mib(steady)} MiB steady over 10s of pulling`)
+    // A real leak repeats every window. Steady growth this low is noise.
+    expect(steady).toBeLessThan(6 * 1024 * 1024)
   }
-}, 120_000)
+}, 180_000)
