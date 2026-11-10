@@ -234,7 +234,7 @@ impl SecurityState {
                 None
             };
             let local = entry.map(|e| !e.digest.is_empty()).unwrap_or(false);
-            let active = version_ok && inv.active == *id && local;
+            let active = version_ok && local && inv.is_active(id);
             let size_label = entry
                 .map(|e| format_image_size(e.size_bytes))
                 .unwrap_or_else(|| "—".into());

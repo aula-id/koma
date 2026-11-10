@@ -15,7 +15,7 @@
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
 //! | [`safety_image_tag`] / [`safety_image_tag_for`] | GHCR tag (minimal by default) |
 //! | [`read_images_inventory`] | `images.json` composition inventory |
-//! | [`start_image_pull`] / [`activate_composition`] / [`remove_composition`] | Images pane backend |
+//! | [`start_image_pull`] / [`toggle_active_composition`] / [`remove_composition`] | Images pane backend |
 
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
@@ -41,8 +41,9 @@ mod progress;
 mod pull;
 use images::pull_safety_image;
 pub use images::{
-    activate_composition, active_composition_id, composition_tag, list_known_compositions,
-    read_images_inventory, remove_composition, safety_image_tag_for,
+    active_composition_id, active_guest_images, composition_tag,
+    list_known_compositions, read_images_inventory, remove_composition, safety_image_tag_for,
+    toggle_active_composition,
 };
 #[allow(unused_imports)] // public inventory types for callers/tests
 pub use images::{ImageEntry, ImagesInventory};

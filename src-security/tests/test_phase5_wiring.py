@@ -8,9 +8,20 @@ from pathlib import Path
 from koma_sec_daemon import catalog, runtime_ops
 
 
-def test_list_defaults_to_ready_filter():
+def test_list_without_a_category_answers_with_categories():
     page = catalog.handle("list", {})
+    assert "tools" not in page
+    assert isinstance(page["categories"], list)
+    assert page["hint"]
+
+
+def test_list_of_a_category_is_ready_only():
+    cats = catalog.handle("categories", {})["categories"]
+    if not cats:
+        return
+    page = catalog.handle("list", {"category": cats[0]["name"]})
     assert page.get("limit") == 40
+    assert page["total"] == cats[0]["tools"] or page["total"] <= cats[0]["tools"]
     for t in page["tools"]:
         assert t.get("ready") is True
 

@@ -229,7 +229,8 @@ type Gauge = { title: string; up: boolean | null; value: string; detail: string;
 function gauges(body: Rec): Gauge[] {
   const status = rec(body.status)
   const images = rows(body.images)
-  const active = images.find((row) => flag(row.active))
+  const actives = images.filter((row) => flag(row.active))
+  const active = actives[0]
   const catalog = rows(body.catalog)
   const total = num(status.catalog_total) || catalog.length
   const ready = num(status.catalog_ready) || catalog.filter((row) => str(row.ready_mark) === "ready").length
@@ -239,7 +240,7 @@ function gauges(body: Rec): Gauge[] {
   return [
     { title: "Runtime", up: flag(status.runtime_ok), value: flag(status.runtime_ok) ? "up" : "down", detail: str(status.runtime) || "no container runtime" },
     { title: "Daemon", up: running, value: running ? "running" : "stopped", detail: flag(status.installed) ? `${rows(status.tools).length} tools advertised` : "not installed" },
-    { title: "Guest", up: !!active, value: active ? str(active.id) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
+    { title: "Guest", up: !!active, value: active ? (actives.length > 1 ? `${str(active.id)} +${actives.length - 1}` : str(active.id)) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
     { title: "Boundary", up: flag(status.boundary_up), value: flag(status.boundary_up) ? "up" : "down", detail: flag(status.boundary_up) ? "guest isolated" : "no boundary guest" },
     { title: "Egress", up: net === "off" || net === "scope" ? true : net === "down" ? false : null, value: net, detail: `${rules} allow rule${rules === 1 ? "" : "s"}` },
     { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: catalogDetail(status), bar: total ? ready / total : 0 },
@@ -503,8 +504,10 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
   const tick = useTick(!!pull)
   const images = rows(body.images)
   const selected = num(body.images_selected)
-  const active = images.find((row) => flag(row.active))
+  const actives = images.filter((row) => flag(row.active))
+  const active = actives[0]
   const pulled = images.filter((row) => flag(row.local)).length
+  const selectedActive = flag(images[selected]?.active)
   const sizeWidth = 8
   const idWidth = Math.min(16, Math.max(10, ...images.map((row) => str(row.id).length + 1)))
   const lines: Line[] = images.map((row) => {
@@ -516,7 +519,7 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
   const key = (c: string) => () => sendKey(send, { Char: c })
   const actions = images[selected] ? (
     <>
-      <Action label="Activate (enter)" primary theme={theme} onPress={() => sendKey(send, "Enter")} />
+      <Action label={selectedActive ? "Deactivate (enter)" : "Activate (enter)"} primary={!selectedActive} theme={theme} onPress={() => sendKey(send, "Enter")} />
       <Action label="Pull (p)" disabled={!!pull} theme={theme} onPress={key("p")} />
       <Action label="Remove (x)" disabled={pull?.id === str(images[selected]?.id)} theme={theme} onPress={key("x")} />
       {width >= 70 ? <Action label="Refresh (r)" theme={theme} onPress={key("r")} /> : null}
@@ -528,7 +531,7 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
         {pull ? <PullLine pull={pull} theme={theme} width={width} /> : (
           <text wrapMode="none">
             <span fg={active ? theme.success : theme.dim}>{active ? "● " : "○ "}</span>
-            <span fg={theme.dim}>active </span><span fg={theme.fg}>{active ? str(active.id) : "none"}</span>
+            <span fg={theme.dim}>active </span><span fg={theme.fg}>{actives.length ? actives.map((row) => str(row.id)).join(", ") : "none"}</span>
             <span fg={theme.dim}>{`   pulled ${pulled}/${images.length}`}</span>
             {result ? <span fg={result.ok ? theme.success : theme.error}>{`   ${result.ok ? "✓" : "✗"} ${result.message}`}</span> : null}
           </text>

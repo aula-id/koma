@@ -74,6 +74,10 @@ def in_guest() -> bool:
 
 
 def active_image() -> str:
+    """The primary guest image (first of the active set)."""
+    images = [i.strip() for i in (os.environ.get("KOMA_SEC_IMAGES") or "").split(",") if i.strip()]
+    if images:
+        return images[0]
     return os.environ.get("KOMA_SEC_IMAGE") or "ghcr.io/aula-id/koma-safety:latest"
 
 

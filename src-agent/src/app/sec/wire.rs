@@ -46,6 +46,15 @@ pub(super) struct Connected {
 /// The handshake writes `{"v":1,"token":"<token>"}\n` to the child's stdin, then
 /// reads the FIRST line of its stdout, which must parse as `{"ok":true,"tools":[…]}`.
 /// Any spawn/IO/parse failure — or an `{"ok":false}` reply — is returned as `Err`.
+fn docker_has_image(reference: &str) -> bool {
+    let mut cmd = std::process::Command::new("docker");
+    cmd.args(["image", "inspect", "--format", "{{.Id}}", reference])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::tool::shell::no_console_window(&mut cmd);
+    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
 pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String> {
     let python = crate::security::venv_python()
         .map_err(|e| format!("cannot locate security venv python: {e}"))?;
@@ -78,6 +87,33 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
     let composition = crate::security::active_composition_id()
         .unwrap_or_else(|| "minimal".to_string());
     cmd.env("KOMA_SEC_COMPOSITION", composition);
+    // The whole active set, primary first: one guest per image, routed per tool.
+    // An image removed outside koma (`docker image prune`) would stop the whole
+    // boundary from starting, so only images Docker still has are passed on.
+    let set: Vec<(String, String)> = crate::security::active_guest_images()
+        .into_iter()
+        .filter(|(id, digest)| {
+            let present = docker_has_image(digest);
+            if !present {
+                crate::model::store::append_global_error_log(
+                    "security",
+                    &format!("active image '{id}' is not in Docker any more; pull it again"),
+                );
+            }
+            present
+        })
+        .collect();
+    if let Some((id, digest)) = set.first() {
+        // The primary is the first image that is really there.
+        cmd.env("KOMA_SEC_IMAGE", digest);
+        cmd.env("KOMA_SEC_COMPOSITION", id);
+    }
+    if !set.is_empty() {
+        let ids: Vec<&str> = set.iter().map(|(id, _)| id.as_str()).collect();
+        let refs: Vec<&str> = set.iter().map(|(_, digest)| digest.as_str()).collect();
+        cmd.env("KOMA_SEC_COMPOSITIONS", ids.join(","));
+        cmd.env("KOMA_SEC_IMAGES", refs.join(","));
+    }
     // No console flash on Windows — see `tool::shell::no_console_window_tokio`'s
     // docs for the `FreeConsole()` causal chain this guards against.
     crate::tool::shell::no_console_window_tokio(&mut cmd);

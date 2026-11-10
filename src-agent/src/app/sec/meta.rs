@@ -74,28 +74,24 @@ none = clear. Pick the narrowest lane the task needs. Takes effect for the next 
         ),
         def(
             "sec_catalog",
-            "Browse the security toolkit without dumping every schema into the prompt. \
-op=categories lists domains; op=list lists tools (optional category; filter defaults to ready); \
+            "Browse the tools you can run right now: only tools inside the active guest images \
+are listed. Start with op=categories (the default): each category with how many tools are ready. \
+Then op=list with a category (or q to search) to see that category's tools. \
 op=get returns one tool's full schema and how-to (requires name).",
             object_schema(
                 serde_json::json!({
                     "op": {
                         "type": "string",
                         "enum": ["categories", "list", "get"],
-                        "description": "Catalog sub-operation"
+                        "description": "categories (default) → list a category → get one tool"
                     },
                     "category": {
                         "type": "string",
-                        "description": "Domain filter for list (web, crypto, pwn, web-re, …)"
+                        "description": "Category name from op=categories; required for list unless q is given"
                     },
                     "name": {
                         "type": "string",
                         "description": "Concrete tool name for get (e.g. sec_http)"
-                    },
-                    "filter": {
-                        "type": "string",
-                        "enum": ["all", "ready"],
-                        "description": "list filter: default ready; pass all to include not-ready"
                     },
                     "limit": {
                         "type": "integer",
@@ -114,7 +110,7 @@ op=get returns one tool's full schema and how-to (requires name).",
                         "description": "optional lane filter (research|red|blue); default session lane"
                     }
                 }),
-                &["op"],
+                &[],
             ),
         ),
         def(

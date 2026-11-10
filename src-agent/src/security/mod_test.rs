@@ -284,3 +284,32 @@ fn stale_daemon_files_are_replaced_once_then_left_alone() {
     assert_eq!(std::fs::read_to_string(&catalog).unwrap(), "UNTOUCHED");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+fn entry(digest: &str) -> ImageEntry {
+    ImageEntry { tag: String::new(), digest: digest.into(), size_bytes: 1, pulled_at: String::new() }
+}
+
+#[test]
+fn an_old_inventory_with_one_active_image_still_reads() {
+    let inv: ImagesInventory = serde_json::from_str(
+        r#"{"version":"0.4.14","active":"recon","images":{"recon":{"tag":"t","digest":"d","size_bytes":1,"pulled_at":""}}}"#,
+    )
+    .unwrap();
+    assert_eq!(inv.active_ids(), vec!["recon".to_string()]);
+    assert!(inv.is_active("recon"));
+}
+
+#[test]
+fn the_active_set_keeps_order_and_skips_images_that_are_gone() {
+    let mut inv = ImagesInventory::default();
+    inv.images.insert("recon".into(), entry("d1"));
+    inv.images.insert("web".into(), entry("d2"));
+    inv.images.insert("pxn".into(), entry(""));
+    inv.active_set = vec!["web".into(), "pxn".into(), "recon".into(), "web".into()];
+    inv.active = "web".into();
+    assert_eq!(inv.active_ids(), vec!["web".to_string(), "recon".to_string()]);
+    assert!(!inv.is_active("pxn"));
+    // An older koma only reads `active`: it still finds the primary.
+    let json = serde_json::to_value(&inv).unwrap();
+    assert_eq!(json["active"], "web");
+}

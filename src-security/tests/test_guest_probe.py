@@ -55,7 +55,8 @@ def test_a_binary_in_the_guest_is_ready_and_admitted(guest, monkeypatch):
     guest({binary})
     assert catalog.get_tool(tid)["ready"] is True
     assert catalog.gate_run(tid, "red") is None
-    page = catalog.handle("list", {"filter": "ready", "lane": "red", "limit": 200})
+    category = (catalog._load_packs()[tid].get("categories") or ["other"])[0]
+    page = catalog.handle("list", {"category": category, "lane": "red", "limit": 200})
     assert tid in {t["name"] for t in page["tools"]}
 
 
@@ -127,3 +128,67 @@ def test_digest_pinned_probe_is_cached_on_disk(monkeypatch, tmp_path):
     guest_probe._probe_now("ghcr.io/x/y:latest", names)
     guest_probe._probe_now("ghcr.io/x/y:latest", names)
     assert len(runs) == 3
+
+
+@pytest.fixture
+def two_guests(monkeypatch, tmp_path):
+    """recon + web active; each guest has exactly the binaries given."""
+    monkeypatch.setenv("KOMA_SEC_PROBE_CACHE", str(tmp_path))
+    monkeypatch.setenv("KOMA_SEC_COMPOSITIONS", "recon,web")
+    monkeypatch.setenv("KOMA_SEC_IMAGES", "img-recon,img-web")
+    guest_probe.reset()
+
+    def use(have: dict[str, set[str]]):
+        def fake(image, names):
+            return guest_probe.Probe(image, present=frozenset(have.get(image, set())) & names, names=names)
+
+        monkeypatch.setattr(guest_probe, "_probe_now", fake)
+        guest_probe.reset()
+
+    yield use
+    guest_probe.reset()
+
+
+def _tool_of(image: str) -> tuple[str, str]:
+    for tid, row in sorted(catalog._load_packs().items()):
+        if row.get("image_or_pack") == image and row.get("requires") and "red" in (row.get("lanes") or []):
+            return tid, row["requires"][0]
+    raise AssertionError(f"no {image} tool")
+
+
+def test_two_active_images_both_count_and_route_to_their_guest(two_guests):
+    recon_tool, recon_bin = _tool_of("recon")
+    web_tool, web_bin = _tool_of("web")
+    two_guests({"img-recon": {recon_bin}, "img-web": {web_bin}})
+    assert catalog.get_tool(recon_tool)["guest_image"] == "img-recon"
+    assert catalog.get_tool(web_tool)["guest_image"] == "img-web"
+    assert catalog.gate_run(web_tool, "red") is None
+    cats = catalog.handle("categories", {"lane": "red"})
+    assert cats["images"] == ["recon", "web"]
+    assert cats["ready"] >= 2
+
+
+def test_categories_only_count_tools_the_guests_can_run(two_guests):
+    recon_tool, recon_bin = _tool_of("recon")
+    two_guests({"img-recon": {recon_bin}})
+    cats = catalog.handle("categories", {"lane": "red"})
+    names = {c["name"] for c in cats["categories"]}
+    tool_cats = set(catalog._load_packs()[recon_tool].get("categories") or [])
+    assert tool_cats & names
+    listed = set()
+    for c in cats["categories"]:
+        page = catalog.handle("list", {"category": c["name"], "lane": "red", "limit": 200})
+        assert page["total"] == c["tools"]
+        listed |= {t["name"] for t in page["tools"]}
+    assert recon_tool in listed
+    assert all(catalog.get_tool(n)["ready"] for n in listed)
+    # 600+ catalog rows, but the model only meets the ready handful.
+    assert len(listed) < 60
+
+
+def test_a_tool_in_no_active_image_says_which_images_were_checked(two_guests):
+    tid, _ = _tool_of("recon")
+    two_guests({})
+    tool = catalog.get_tool(tid)
+    assert tool["ready"] is False
+    assert "recon, web" in tool["hint"]

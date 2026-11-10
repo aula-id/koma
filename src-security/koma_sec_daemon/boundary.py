@@ -37,6 +37,15 @@ PROXY_PORT = 3128
 PROXY_ALIAS = "proxy"
 GUEST_NAME_PREFIX = "koma-guest-"
 
+# Every container and network carries the owning daemon's pid, so the next
+# daemon can remove what a killed one left running (see `reap_orphans`).
+OWNER_LABEL = "koma.sec.owner"
+
+
+def _owner_label() -> list[str]:
+    return ["--label", f"{OWNER_LABEL}={os.getpid()}"]
+
+
 # Containers are absent on some platforms and the honest answer there is to say so
 # rather than run on the host.
 DOCKER_MISSING = "docker is not installed"
@@ -59,6 +68,9 @@ class Boundary:
     artifacts: Path
     proxies: dict[str, str] = field(default_factory=dict)
     dns_addr: str = ""
+    # image ref -> guest container. Every active image gets its own guest on the
+    # same isolated network, behind the same proxy, sharing /artifacts.
+    guests: dict[str, str] = field(default_factory=dict)
 
     def _docker(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         return _run(["docker", *args], check=check)
@@ -89,12 +101,13 @@ class Boundary:
         # fails even though the file exists. (Both forms exist; only one is
         # visible to the daemon.)
         pass
-        self._docker("network", "create", "--internal", net_name)
+        self._docker("network", "create", "--internal", *_owner_label(), net_name)
 
         # The proxy sits on BOTH networks: the isolated one so the guest can see
         # it, the default one so it has a way out itself.
         self._docker(
             "run", "-d", "--name", self.proxy,
+            *_owner_label(),
             "--network", net_name,
             # Alias at RUN time: attaching a second network later replaces the
             # endpoint and drops an alias set here, so `proxy` would stop
@@ -112,9 +125,20 @@ class Boundary:
         # IP and container-name resolution does not work for it.
         self.dns_addr = self.network_addr(net_name, self.proxy)
 
+        self.guests = {}
+        self._start_guest(self.image, self.guest)
+        # The guest sees the proxy by its own name on the isolated network, so the
+        # env above matches the fact that `bridge` is the proxy's second leg.
+        self.proxies = {
+            "HTTP_PROXY": f"http://proxy:{PROXY_PORT}",
+            "HTTPS_PROXY": f"http://proxy:{PROXY_PORT}",
+        }
+
+    def _start_guest(self, image: str, name: str) -> None:
         self._docker(
-            "run", "-d", "--name", self.guest,
-            "--network", net_name,
+            "run", "-d", "--name", name,
+            *_owner_label(),
+            "--network", self.network,
             # Non-root, no capabilities, no escalation, no socket.
             # Resolver: the proxy's address. There is no gateway on an --internal
             # network, so without this NO name resolves at all. `--dns` takes an
@@ -138,19 +162,32 @@ class Boundary:
             "-e", f"HTTPS_PROXY=http://{PROXY_ALIAS}:{PROXY_PORT}",
             "-e", f"http_proxy=http://{PROXY_ALIAS}:{PROXY_PORT}",
             "-e", f"https_proxy=http://{PROXY_ALIAS}:{PROXY_PORT}",
-            self.image,
+            image,
         )
-        # The guest sees the proxy by its own name on the isolated network, so the
-        # env above matches the fact that `bridge` is the proxy's second leg.
-        self.proxies = {
-            "HTTP_PROXY": f"http://proxy:{PROXY_PORT}",
-            "HTTPS_PROXY": f"http://proxy:{PROXY_PORT}",
-        }
+        self.guests[image] = name
+
+    def guest_for(self, image: str | None) -> str:
+        """The guest container for `image`, started on first use.
+
+        The first guest (the boundary's own image) starts with `up`. Another
+        active image gets its guest the first time one of its tools runs.
+        """
+        if not image or image == self.image:
+            return self.guest
+        name = self.guests.get(image)
+        if name:
+            return name
+        name = f"{self.guest}-{len(self.guests)}"
+        self._docker("rm", "-f", name, check=False)
+        self._start_guest(image, name)
+        return name
 
     def down(self) -> None:
-        for name in (getattr(self, "guest", ""), getattr(self, "proxy", "")):
+        extra = [n for n in getattr(self, "guests", {}).values() if n != getattr(self, "guest", "")]
+        for name in (*extra, getattr(self, "guest", ""), getattr(self, "proxy", "")):
             if name:
                 self._docker("rm", "-f", name, check=False)
+        self.guests = {}
         if getattr(self, "network", ""):
             self._docker("network", "rm", self.network, check=False)
 
@@ -167,8 +204,10 @@ class Boundary:
             return ""
         return (nets.get(network) or {}).get("IPAddress", "")
 
-    def exec(self, argv: list[str], timeout: float, mem_mb: int | None = None) -> subprocess.CompletedProcess:
-        """Run one command in the guest.
+    def exec(
+        self, argv: list[str], timeout: float, mem_mb: int | None = None, image: str | None = None
+    ) -> subprocess.CompletedProcess:
+        """Run one command in the guest for `image` (default: the boundary's own).
 
         `timeout` kills the process group, not just the docker client: a tool that
         spawns children would otherwise survive its own timeout.
@@ -176,7 +215,7 @@ class Boundary:
         args = ["docker", "exec", "-i"]
         if mem_mb:
             args += ["-e", f"KOMA_MEM_MB={mem_mb}"]
-        args += [self.guest, *argv]
+        args += [self.guest_for(image), *argv]
         return _run(args, timeout=timeout, kill_group=True)
 
     def record(self) -> dict:
@@ -185,6 +224,7 @@ class Boundary:
             "image": _inspect(self.image, "Id"),
             "network": self.network,
             "guest": self.guest,
+            "guests": dict(self.guests),
             "proxy": self.proxy,
             "proxy_legs": ["isolated", "bridge"],
             "uid": GUEST_UID,
@@ -234,6 +274,48 @@ def _run_grouped(argv: list[str], timeout: float) -> subprocess.CompletedProcess
 def _inspect(ref: str, fmt: str) -> str:
     res = _run(["docker", "inspect", "--format", "{{." + fmt + "}}", ref])
     return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def reap_orphans() -> int:
+    """Remove guests, proxies and networks whose owning daemon is gone.
+
+    The parent stops a daemon with a hard kill, so its boundary never comes
+    down by itself. Anything owned by a live daemon (another koma window) is
+    left alone. Returns how many containers were removed.
+    """
+    if not shutil.which("docker"):
+        return 0
+    res = _run(["docker", "ps", "-a", "--filter", f"label={OWNER_LABEL}",
+                "--format", "{{.ID}} {{.Label \"" + OWNER_LABEL + "\"}}"])
+    if res.returncode != 0:
+        return 0
+    dead = []
+    for line in res.stdout.splitlines():
+        cid, _, owner = line.strip().partition(" ")
+        if cid and owner.isdigit() and not _alive(int(owner)) and int(owner) != os.getpid():
+            dead.append(cid)
+    if dead:
+        _run(["docker", "rm", "-f", *dead])
+    nets = _run(["docker", "network", "ls", "--filter", f"label={OWNER_LABEL}",
+                 "--format", "{{.Name}} {{.Label \"" + OWNER_LABEL + "\"}}"])
+    if nets.returncode == 0:
+        for line in nets.stdout.splitlines():
+            name, _, owner = line.strip().partition(" ")
+            if name and owner.isdigit() and not _alive(int(owner)) and int(owner) != os.getpid():
+                _run(["docker", "network", "rm", name])
+    return len(dead)
 
 
 def preflight() -> str | None:
