@@ -37,6 +37,7 @@ const ATTACHMENT_ROW = { flexDirection: "row", flexWrap: "wrap" } as const
 import { Toast, type LocalNotice } from "./toast.tsx"
 import { memlogEnabled, registerMemorySource } from "./memlog.ts"
 import { CALM, IDLE_COLLECT_MS, ramTone, useCleaning, useIdleCollect, usePressureValve, type Pressure } from "./pressure.ts"
+import { memoryFootprint } from "./footprint.ts"
 
 function useTerminalSize() {
   const renderer = useRenderer()
@@ -1553,9 +1554,9 @@ function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; se
 }
 
 function RamLine({ pressure, session, theme }: { pressure: Pressure; session: SessionSnap; theme: Theme }) {
-  const [rss, setRss] = useState(() => process.memoryUsage().rss)
+  const [rss, setRss] = useState(() => memoryFootprint())
   useEffect(() => {
-    const timer = setInterval(() => setRss(process.memoryUsage().rss), 1000)
+    const timer = setInterval(() => setRss(memoryFootprint()), 1000)
     return () => clearInterval(timer)
   }, [])
   const tone = ramTone(pressure)
