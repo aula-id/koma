@@ -621,16 +621,33 @@ impl Settings {
         }
     }
 
-    /// Deserialise from a `settings.json` file at `path`.
+    /// Deserialise from a `settings.json` file at `path`. A session key sealed
+    /// by [`Self::save`] is opened; a plain one from an older file is accepted.
     pub fn load(path: &Path) -> Result<Self> {
+        use crate::model::secret_box;
         let bytes = std::fs::read(path)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        let mut settings: Self = serde_json::from_slice(&bytes)?;
+        let mut opened = secret_box::Opened::default();
+        secret_box::open_field(
+            secret_box::key_for_read().as_ref(),
+            &mut settings.api_key,
+            &mut opened,
+        );
+        Ok(settings)
     }
 
     /// Serialise (pretty-printed) to `path`, creating or overwriting the file.
+    /// The session key is sealed and the file is readable by its owner only.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let json = serde_json::to_vec_pretty(self)?;
-        crate::model::memory::atomic_write(path, &json)?;
+        use crate::model::secret_box;
+        let json = if self.api_key.is_empty() {
+            serde_json::to_vec_pretty(self)?
+        } else {
+            let mut sealed = self.clone();
+            secret_box::seal_field(&secret_box::key_for_write()?, &mut sealed.api_key)?;
+            serde_json::to_vec_pretty(&sealed)?
+        };
+        secret_box::write_private(path, &json)?;
         Ok(())
     }
 }

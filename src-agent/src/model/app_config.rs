@@ -19,6 +19,7 @@
 //! permission denied — returns `AppConfig::default()` instead of propagating,
 //! so a corrupt or missing config never prevents startup.
 
+use crate::model::secret_box;
 use crate::model::store::base_dir;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -801,11 +802,25 @@ impl AppConfig {
     /// Reload without treating a corrupt/unreadable catalogue as deletion.
     pub(crate) fn try_load() -> Result<Self> {
         let path = base_dir()?.join("config.json");
-        let bytes = std::fs::read(path)?;
+        let bytes = std::fs::read(&path)?;
         let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
         let stripped = Self::strip_clinepass(&mut value);
-        let config: Self = serde_json::from_value(value)?;
-        if stripped {
+        let mut config: Self = serde_json::from_value(value)?;
+        let opened = config.open_secrets(secret_box::key_for_read().as_ref());
+        if opened.lost > 0 {
+            crate::model::store::append_global_error_log(
+                "config secrets",
+                &format!(
+                    "{} saved credential(s) could not be decrypted (machine key missing or \
+                     replaced); enter them again",
+                    opened.lost
+                ),
+            );
+        }
+        // Rewrite once when the file still carries plain-text credentials or a
+        // mode other users can read; `save` seals and writes it owner-only.
+        let exposed = secret_box::is_exposed(&path) == Some(true);
+        if stripped || opened.plain > 0 || exposed {
             if let Err(error) = config.save() {
                 crate::model::store::append_global_error_log(
                     "config migration",
@@ -814,6 +829,56 @@ impl AppConfig {
             }
         }
         Ok(config)
+    }
+
+    /// Parse a config document as stored on disk, opening its sealed credentials.
+    /// Every reader of `config.json` that uses the credentials goes through here
+    /// or [`Self::try_load`], so a sealed value never reaches a provider request.
+    pub(crate) fn from_disk_bytes(bytes: &[u8]) -> serde_json::Result<Self> {
+        let mut config: Self = serde_json::from_slice(bytes)?;
+        config.open_secrets(secret_box::key_for_read().as_ref());
+        Ok(config)
+    }
+
+    /// The document to store: this config with every credential sealed.
+    pub(crate) fn to_disk_bytes(&self, key: &secret_box::Key) -> Result<Vec<u8>> {
+        let mut sealed = self.clone();
+        sealed.seal_secrets(key)?;
+        Ok(serde_json::to_vec_pretty(&sealed)?)
+    }
+
+    /// Every field that holds a credential. One list, so sealing and opening
+    /// cannot drift apart. MCP `env` values are included because that is where
+    /// server tokens are configured.
+    fn secret_fields(&mut self) -> impl Iterator<Item = &mut String> {
+        let providers = self.providers.iter_mut().map(|p| &mut p.api_key);
+        let oauth = self
+            .oauth_conns
+            .iter_mut()
+            .flat_map(|c| [&mut c.access_token, &mut c.refresh_token, &mut c.id_token]);
+        let search = [
+            &mut self.web_search.firecrawl_key.0,
+            &mut self.web_search.tavily_key.0,
+            &mut self.web_search.exa_key.0,
+        ];
+        let mcp = self
+            .mcp_servers
+            .iter_mut()
+            .flat_map(|server| server.env.iter_mut().map(|(_, value)| value));
+        providers.chain(oauth).chain(search).chain(mcp)
+    }
+
+    fn seal_secrets(&mut self, key: &secret_box::Key) -> Result<()> {
+        self.secret_fields()
+            .try_for_each(|field| secret_box::seal_field(key, field))
+    }
+
+    fn open_secrets(&mut self, key: Option<&secret_box::Key>) -> secret_box::Opened {
+        let mut opened = secret_box::Opened::default();
+        for field in self.secret_fields() {
+            secret_box::open_field(key, field, &mut opened);
+        }
+        opened
     }
 
     /// Remove every OAuth conn whose `provider` field is `"clinepass"` and every
@@ -1222,16 +1287,14 @@ impl AppConfig {
         true
     }
 
-    /// Serialise (pretty-printed) to `~/.koma/config.json`.
-    ///
-    /// Called by the `/settings` dashboard when the user saves theme/accent
-    /// changes.
+    /// Serialise (pretty-printed) to `~/.koma/config.json`, credentials sealed
+    /// and the file readable by its owner only.
     pub fn save(&self) -> Result<()> {
         let directory = base_dir()?;
         std::fs::create_dir_all(&directory)?;
         let path = directory.join("config.json");
-        let json = serde_json::to_vec_pretty(self)?;
-        crate::model::memory::atomic_write(&path, &json)?;
+        let json = self.to_disk_bytes(&secret_box::key_for_write()?)?;
+        secret_box::write_private(&path, &json)?;
         Ok(())
     }
 }

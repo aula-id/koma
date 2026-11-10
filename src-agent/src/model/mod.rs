@@ -33,6 +33,7 @@ pub mod proc_win;
 pub mod procmem;
 pub mod screenshot_catalog;
 pub mod sdlc;
+pub(crate) mod secret_box;
 /// Process and host memory readings for the linker scan budget.
 #[cfg(feature = "linker")]
 pub mod selfmem;

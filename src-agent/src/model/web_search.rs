@@ -98,7 +98,7 @@ pub fn read_global_config() -> Result<Option<AppConfig>, String> {
 }
 fn read_config_at(path: &std::path::Path) -> Result<Option<AppConfig>, String> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
+        Ok(bytes) => AppConfig::from_disk_bytes(&bytes)
             .map(Some)
             .map_err(|_| "Could not read web search configuration".to_string()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
