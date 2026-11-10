@@ -808,19 +808,33 @@ impl AppConfig {
         let mut config: Self = serde_json::from_value(value)?;
         let opened = config.open_secrets(secret_box::key_for_read().as_ref());
         if opened.lost > 0 {
+            // The values now read as empty and the next save would write them
+            // out that way. Keep the file as it was, so they can be recovered
+            // if the key turns up.
+            let kept = secret_box::keep_unreadable_copy(&path);
             crate::model::store::append_global_error_log(
                 "config secrets",
                 &format!(
                     "{} saved credential(s) could not be decrypted (machine key missing or \
-                     replaced); enter them again",
-                    opened.lost
+                     replaced); enter them again. {}",
+                    opened.lost,
+                    match kept {
+                        Ok(copy) => format!("The previous file is kept at {}", copy.display()),
+                        Err(error) =>
+                            format!("Could not keep a copy of the previous file: {error}"),
+                    }
                 ),
             );
         }
         // Rewrite once when the file still carries plain-text credentials or a
         // mode other users can read; `save` seals and writes it owner-only.
+        //
+        // Never under `cfg(test)`: unit tests reach this through code that loads
+        // the developer's real config, and there the key is the fixed test key.
+        // Rewriting would seal real credentials under a key the installed
+        // binary does not have.
         let exposed = secret_box::is_exposed(&path) == Some(true);
-        if stripped || opened.plain > 0 || exposed {
+        if !cfg!(test) && (stripped || opened.plain > 0 || exposed) {
             if let Err(error) = config.save() {
                 crate::model::store::append_global_error_log(
                     "config migration",

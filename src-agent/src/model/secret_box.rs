@@ -108,12 +108,16 @@ pub(crate) fn open_field(key: Option<&Key>, field: &mut String, opened: &mut Ope
         opened.plain += 1;
         return;
     }
-    match key.and_then(|key| open_with(key, field)) {
-        Some(plain) => *field = plain,
-        None => {
-            field.clear();
-            opened.lost += 1;
-        }
+    if let Some(plain) = key.and_then(|key| open_with(key, field)) {
+        *field = plain;
+    } else if let Some(plain) = open_with(&TEST_KEY, field) {
+        // Sealed by a test run, not by this machine's key. Count it as plain
+        // so the caller rewrites the file under the real key.
+        *field = plain;
+        opened.plain += 1;
+    } else {
+        field.clear();
+        opened.lost += 1;
     }
 }
 
@@ -180,7 +184,13 @@ fn read_existing_key(path: &Path) -> Result<Option<Key>> {
 
 /// Fixed key for unit tests, so saving a config in a test never touches the
 /// real data directory and never races a test that swaps `HOME`.
-#[cfg(test)]
+///
+/// It is compiled into every build on purpose. For a short time the test suite
+/// could rewrite a developer's real `config.json` sealed under this key (see
+/// `try_load`). [`open_field`] still opens such values, so that config heals on
+/// its next load instead of losing its credentials. A value sealed under a
+/// published key is no better protected than plain text, and it is treated the
+/// same way: opened, then sealed again under the machine key.
 const TEST_KEY: Key = [0x4b; KEY_LEN];
 
 /// The key for reading. `None` when no key exists yet (nothing was ever sealed)
@@ -258,6 +268,24 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     written
+}
+
+/// Copy `path` to `<name>.undecrypted.bak` beside it, owner-only, and return
+/// the copy's path. An existing copy is left alone: it is the older one, from
+/// before anything was lost, and must not be replaced by a later, emptier file.
+pub(crate) fn keep_unreadable_copy(path: &Path) -> std::io::Result<PathBuf> {
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(".undecrypted.bak");
+    let copy = path.with_file_name(name);
+    if !copy.exists() {
+        let bytes = std::fs::read(path)?;
+        match write_new_private(&copy, &bytes) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(copy)
 }
 
 /// Whether anyone but the owner can read or write `path`. `None` when the file

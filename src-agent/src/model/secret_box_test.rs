@@ -224,3 +224,50 @@ fn a_session_key_is_sealed_on_disk_and_restored_on_load() {
     assert_eq!(Settings::load(&path).unwrap().api_key, "sk-or-OLD");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn an_unreadable_config_is_kept_once_and_never_replaced_by_a_later_one() {
+    let dir = temp_dir("keep");
+    let path = dir.join("config.json");
+    std::fs::write(&path, b"sealed under a lost key").unwrap();
+
+    let copy = keep_unreadable_copy(&path).unwrap();
+    assert_eq!(copy, dir.join("config.json.undecrypted.bak"));
+    assert_eq!(std::fs::read(&copy).unwrap(), b"sealed under a lost key");
+    assert!(!is_exposed(&copy).unwrap_or(false));
+
+    // The config is later saved with the lost values empty. The copy must
+    // still be the original.
+    std::fs::write(&path, b"saved again, credentials empty").unwrap();
+    keep_unreadable_copy(&path).unwrap();
+    assert_eq!(std::fs::read(&copy).unwrap(), b"sealed under a lost key");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Tests reach `AppConfig::try_load` through code that reads the developer's
+/// real config. With the fixed test key in play, a load must never write.
+#[test]
+fn loading_the_config_in_a_test_build_never_rewrites_it() {
+    let Ok(path) = crate::model::store::base_dir().map(|dir| dir.join("config.json")) else {
+        return;
+    };
+    let before = std::fs::read(&path).ok();
+    let _ = AppConfig::try_load();
+    assert_eq!(std::fs::read(&path).ok(), before);
+}
+
+#[test]
+fn a_value_sealed_by_a_test_run_is_recovered_and_flagged_for_resealing() {
+    let mut opened = Opened::default();
+    let mut field = seal_with(&TEST_KEY, "sk-real-credential").unwrap();
+
+    // The machine key is a different key, or does not exist yet.
+    open_field(Some(&KEY), &mut field, &mut opened);
+    assert_eq!(field, "sk-real-credential");
+    assert_eq!(opened, Opened { plain: 1, lost: 0 });
+
+    let mut keyless = seal_with(&TEST_KEY, "sk-real-credential").unwrap();
+    open_field(None, &mut keyless, &mut opened);
+    assert_eq!(keyless, "sk-real-credential");
+    assert_eq!(opened, Opened { plain: 2, lost: 0 });
+}
