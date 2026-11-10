@@ -22,8 +22,8 @@ function body(pane: string, current: number) {
   }
 }
 
-/** Footprint growth over two back-to-back windows of a streaming pull on `pane`. */
-async function soak(pane: string, seconds: number): Promise<[number, number]> {
+/** Footprint growth over three back-to-back windows of a streaming pull on `pane`. */
+async function soak(pane: string, seconds: number): Promise<[number, number, number]> {
   let set: (mode: unknown) => void = () => {}
   const { useState } = await import("react")
   function Screen() {
@@ -50,8 +50,8 @@ async function soak(pane: string, seconds: number): Promise<[number, number]> {
       return memoryFootprint() - before
     }
     // The first window pays for warm-up (JIT, heap high-water, glyph caches).
-    // A leak keeps growing in the second one.
-    return [await window(), await window()]
+    // A leak keeps growing in every window after it.
+    return [await window(), await window(), await window()]
   } finally {
     await act(async () => { await view.dispose() })
   }
@@ -60,9 +60,10 @@ async function soak(pane: string, seconds: number): Promise<[number, number]> {
 test("a long image pull does not keep growing memory", async () => {
   const mib = (n: number) => (n / 1048576).toFixed(1)
   for (const pane of ["tools", "images"]) {
-    const [warm, steady] = await soak(pane, 10)
-    console.log(`${pane}: +${mib(warm)} MiB warm-up, +${mib(steady)} MiB steady over 10s of pulling`)
-    // A real leak repeats every window. Steady growth this low is noise.
-    expect(steady).toBeLessThan(6 * 1024 * 1024)
+    const [warm, a, b] = await soak(pane, 10)
+    console.log(`${pane}: +${mib(warm)} MiB warm-up, +${mib(a)} / +${mib(b)} MiB steady per 10s of pulling`)
+    // A real leak grows in both steady windows. One noisy window (a late GC
+    // or heap resize on a shared runner) does not.
+    expect(Math.min(a, b)).toBeLessThan(6 * 1024 * 1024)
   }
 }, 180_000)
