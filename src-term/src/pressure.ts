@@ -1,5 +1,6 @@
 import { gcAndSweep } from "bun:jsc"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { memoryFootprint } from "./footprint.ts"
 
 const MIB = 1024 * 1024
 export const PRESSURE_CHECK_MS = 5000
@@ -232,7 +233,7 @@ export function sweepVisibly(work: () => void, paintMs = CLEANUP_PAINT_MS, minMs
 export function useIdleCollect(
   idle: () => boolean,
   intervalMs = IDLE_COLLECT_MS,
-  readRss: () => number = () => process.memoryUsage().rss,
+  readRss: () => number = () => memoryFootprint(),
   tickMs = COLLECT_TICK_MS,
   paintMs = CLEANUP_PAINT_MS,
 ): void {
@@ -307,7 +308,7 @@ export function usePressureValve(
 
   useEffect(() => {
     const check = (forced: boolean) => {
-      const rss = process.memoryUsage().rss
+      const rss = memoryFootprint()
       const prev = ref.current
       const next = pressureTick(prev, rss, Date.now(), limits, forced)
       if (next.cleanups !== prev.cleanups) {
@@ -331,7 +332,7 @@ export function usePressureValve(
     hooks.current.afterLayout(() => {
       sweepVisibly(() => {
         fullSweep()
-        update(afterGc(ref.current, before, process.memoryUsage().rss))
+        update(afterGc(ref.current, before, memoryFootprint()))
       })
     })
   }, [state.cleanups])

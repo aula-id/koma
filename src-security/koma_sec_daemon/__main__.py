@@ -133,8 +133,10 @@ def main() -> None:
     # Redirect print() / library output to stderr so the frame channel stays clean
     sys.stdout = sys.stderr
 
+    import json as _json
+
     from koma_sec_daemon.protocol import read_frame, write_frame
-    from koma_sec_daemon import registry
+    from koma_sec_daemon import effects, registry, runtime_ops
     from koma_sec_daemon import verdict
     from koma_sec_daemon.registry import descriptors, refused_descriptors, call
     from koma_sec_daemon.sessions import SessionStore
@@ -242,6 +244,16 @@ def main() -> None:
         desc = registry.REGISTRY.get(tool_name) or {}
         return desc.get("exec")
 
+    def _guest_image_for(tool_name: str) -> str | None:
+        """The active image whose guest has this tool; None = the primary guest."""
+        try:
+            from koma_sec_daemon import catalog as catalog_mod
+
+            row = catalog_mod.get_tool(tool_name)
+        except Exception:  # noqa: BLE001 - routing falls back to the primary guest
+            return None
+        return (row or {}).get("guest_image") or None
+
     def _call_in_guest(tool_name: str, tool_args: dict, frame_id, *, lane: str | None = None) -> str:
         """Run the tool inside the Boundary guest when up.
 
@@ -269,6 +281,7 @@ def main() -> None:
         res = b.exec(
             ["python3", "-m", "koma_sec_daemon.guest_run", tool_name, payload],
             timeout=300,
+            image=_guest_image_for(tool_name),
         )
         if res.returncode != 0:
             err = (res.stderr or res.stdout or f"guest exit {res.returncode}").strip()
@@ -316,6 +329,28 @@ def main() -> None:
             emit({"id": frame_id, "ok": True, "result": installer.install(key)})
         except Exception as exc:
             emit({"id": frame_id, "ok": False, "error": str(exc)})
+
+    # A killed daemon leaves its guests running; clear those (never a live one's).
+    def _reap() -> None:
+        try:
+            from koma_sec_daemon import boundary as boundary_mod
+
+            boundary_mod.reap_orphans()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[koma_sec_daemon] orphan cleanup failed: {exc}", file=sys.stderr)
+
+    import threading as _threading
+
+    _threading.Thread(target=_reap, name="sec-reap", daemon=True).start()
+
+    # Ask the active guest image what it ships, in the background, so the first
+    # catalog op does not pay for the `docker run`.
+    try:
+        from koma_sec_daemon import catalog as _catalog_warm
+
+        _catalog_warm.guest(0.0)
+    except Exception as exc:  # noqa: BLE001 - readiness falls back to the index
+        print(f"[koma_sec_daemon] guest probe not started: {exc}", file=sys.stderr)
 
     try:
         while True:
@@ -449,6 +484,11 @@ def main() -> None:
         installs.shutdown(wait=False)
         cancel_mod.cancel_all()
         sessions.close_all()
+        # A clean exit takes its guests down; a killed one is reaped next start.
+        try:
+            runtime_ops.down()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

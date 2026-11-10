@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { MenuData } from "./data.ts"
 import type { Theme } from "../theme.ts"
 import { Action, Lines, Panel, Toggle, sendKey, useBodyHeight, type Line } from "./bits.tsx"
@@ -29,7 +29,8 @@ export function catalogRows(body: Rec): Rec[] {
 }
 
 const READINESS: Record<string, { glyph: string; text: string; reason: string; role: Role }> = {
-  ready: { glyph: "●", text: "ready", reason: "image active", role: "success" },
+  ready: { glyph: "●", text: "ready", reason: "in the active guest", role: "success" },
+  missing: { glyph: "×", text: "missing", reason: "image active, binary not in it", role: "warn" },
   local: { glyph: "▒", text: "local", reason: "pulled, not active", role: "info" },
   remote: { glyph: "·", text: "remote", reason: "not pulled", role: "dim" },
 }
@@ -214,12 +215,22 @@ function Dashboard({ body, theme, onMove, send, width, height }: { body: Rec; th
   )
 }
 
+/** Where the ready count came from: the probed guest, or an estimate from the pin. */
+export function catalogDetail(status: Rec): string {
+  const source = str(status.catalog_source)
+  if (source === "guest") return "in guest"
+  if (source === "checking") return "checking…"
+  if (source === "index") return "estimate"
+  return ""
+}
+
 type Gauge = { title: string; up: boolean | null; value: string; detail: string; bar?: number; pull?: Pull }
 
 function gauges(body: Rec): Gauge[] {
   const status = rec(body.status)
   const images = rows(body.images)
-  const active = images.find((row) => flag(row.active))
+  const actives = images.filter((row) => flag(row.active))
+  const active = actives[0]
   const catalog = rows(body.catalog)
   const total = num(status.catalog_total) || catalog.length
   const ready = num(status.catalog_ready) || catalog.filter((row) => str(row.ready_mark) === "ready").length
@@ -229,10 +240,10 @@ function gauges(body: Rec): Gauge[] {
   return [
     { title: "Runtime", up: flag(status.runtime_ok), value: flag(status.runtime_ok) ? "up" : "down", detail: str(status.runtime) || "no container runtime" },
     { title: "Daemon", up: running, value: running ? "running" : "stopped", detail: flag(status.installed) ? `${rows(status.tools).length} tools advertised` : "not installed" },
-    { title: "Guest", up: !!active, value: active ? str(active.id) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
+    { title: "Guest", up: !!active, value: active ? (actives.length > 1 ? `${str(active.id)} +${actives.length - 1}` : str(active.id)) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
     { title: "Boundary", up: flag(status.boundary_up), value: flag(status.boundary_up) ? "up" : "down", detail: flag(status.boundary_up) ? "guest isolated" : "no boundary guest" },
     { title: "Egress", up: net === "off" || net === "scope" ? true : net === "down" ? false : null, value: net, detail: `${rules} allow rule${rules === 1 ? "" : "s"}` },
-    { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: "", bar: total ? ready / total : 0 },
+    { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: catalogDetail(status), bar: total ? ready / total : 0 },
   ]
 }
 
@@ -244,7 +255,7 @@ function StatusBoard({ body, theme }: { body: Rec; theme: Theme }) {
     <box flexDirection="row" flexShrink={0} height={4} columnGap={1} minWidth={0}>
       {gauges(body).map((gauge) => (
         <box key={gauge.title} border borderStyle="rounded" borderColor={theme.dim} title={` ${gauge.title} `} titleColor={theme.dim} flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden" flexDirection="column" paddingLeft={1} paddingRight={1}>
-          <text wrapMode="none"><span fg={gaugeColor(theme, gauge.up)}>{`${gaugeGlyph(gauge.up)} `}</span><span fg={theme.fg}>{gauge.value}</span></text>
+          <text wrapMode="none"><span fg={gaugeColor(theme, gauge.up)}>{`${gaugeGlyph(gauge.up)} `}</span><span fg={theme.fg}>{gauge.value}</span>{gauge.bar != null && gauge.detail ? <span fg={theme.dim}>{` · ${gauge.detail}`}</span> : null}</text>
           {gauge.pull ? <TilePull pull={gauge.pull} theme={theme} /> : gauge.bar != null ? <Bar ratio={gauge.bar} theme={theme} /> : <text wrapMode="none" fg={theme.dim}>{gauge.detail}</text>}
         </box>
       ))}
@@ -406,7 +417,7 @@ function toolOps(body: Rec, tool: Rec | undefined): { label: string; key: string
 function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; theme: Theme; onMove: (index: number) => void; send: Send; width: number; showMap: boolean }) {
   const pull = pullOf(body)
   const tick = useTick(!!pull)
-  const catalog = catalogRows(body)
+  const catalog = useMemo(() => catalogRows(body), [body.catalog, body.catalog_filter, body.catalog_query, body.map_filter])
   const selected = Math.min(num(body.selected), Math.max(0, catalog.length - 1))
   const tool = catalog[selected]
   const wideCols = width >= 80
@@ -416,12 +427,22 @@ function ToolsPanel({ body, theme, onMove, send, width, showMap }: { body: Rec; 
   const searching = flag(body.catalog_searching)
   const query = str(body.catalog_query)
   const mapFilter = str(body.map_filter)
-  const lines: Line[] = catalog.map((row) => {
+  // Rows are built once per catalog change. The pull spinner ticks ~11 times a
+  // second and only swaps the badge on the rows of the image being pulled.
+  const base = useMemo(() => catalog.map((row): Line => {
     const state = readiness(str(row.ready_mark))
-    const pulling = !!pull && pull.id.toLowerCase() === str(row.image).toLowerCase()
     const cells = [str(row.id).padEnd(idWidth), str(row.image).padEnd(imageWidth), ...(wideCols ? [str(row.exec).padEnd(6)] : []), str(row.blurb)]
-    return { label: cells.join(" "), split: true, badge: pulling ? { text: pullBadge(pull!, tick), role: "info" } : { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
-  })
+    return { label: cells.join(" "), split: true, badge: { text: `${state.glyph} ${state.text}`.padEnd(8), role: state.role } }
+  }), [catalog, idWidth, imageWidth, wideCols])
+  const pullingImage = pull ? pull.id.toLowerCase() : ""
+  const pullingRows = useMemo(() => pullingImage ? catalog.flatMap((row, index) => str(row.image).toLowerCase() === pullingImage ? [index] : []) : [], [catalog, pullingImage])
+  const badge = pull ? pullBadge(pull, tick) : ""
+  const lines = useMemo(() => {
+    if (!pullingRows.length) return base
+    const out = base.slice()
+    for (const index of pullingRows) out[index] = { ...base[index]!, badge: { text: badge, role: "info" } }
+    return out
+  }, [base, pullingRows, badge])
   const header = ["TOOL".padEnd(idWidth), "IMAGE".padEnd(imageWidth), ...(wideCols ? ["EXEC  "] : []), "DESCRIPTION"].join(" ")
   const actions = (
     <>
@@ -493,8 +514,10 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
   const tick = useTick(!!pull)
   const images = rows(body.images)
   const selected = num(body.images_selected)
-  const active = images.find((row) => flag(row.active))
+  const actives = images.filter((row) => flag(row.active))
+  const active = actives[0]
   const pulled = images.filter((row) => flag(row.local)).length
+  const selectedActive = flag(images[selected]?.active)
   const sizeWidth = 8
   const idWidth = Math.min(16, Math.max(10, ...images.map((row) => str(row.id).length + 1)))
   const lines: Line[] = images.map((row) => {
@@ -506,7 +529,7 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
   const key = (c: string) => () => sendKey(send, { Char: c })
   const actions = images[selected] ? (
     <>
-      <Action label="Activate (enter)" primary theme={theme} onPress={() => sendKey(send, "Enter")} />
+      <Action label={selectedActive ? "Deactivate (enter)" : "Activate (enter)"} primary={!selectedActive} theme={theme} onPress={() => sendKey(send, "Enter")} />
       <Action label="Pull (p)" disabled={!!pull} theme={theme} onPress={key("p")} />
       <Action label="Remove (x)" disabled={pull?.id === str(images[selected]?.id)} theme={theme} onPress={key("x")} />
       {width >= 70 ? <Action label="Refresh (r)" theme={theme} onPress={key("r")} /> : null}
@@ -518,7 +541,7 @@ function ImagesPane({ body, theme, onMove, send, width }: { body: Rec; theme: Th
         {pull ? <PullLine pull={pull} theme={theme} width={width} /> : (
           <text wrapMode="none">
             <span fg={active ? theme.success : theme.dim}>{active ? "● " : "○ "}</span>
-            <span fg={theme.dim}>active </span><span fg={theme.fg}>{active ? str(active.id) : "none"}</span>
+            <span fg={theme.dim}>active </span><span fg={theme.fg}>{actives.length ? actives.map((row) => str(row.id)).join(", ") : "none"}</span>
             <span fg={theme.dim}>{`   pulled ${pulled}/${images.length}`}</span>
             {result ? <span fg={result.ok ? theme.success : theme.error}>{`   ${result.ok ? "✓" : "✗"} ${result.message}`}</span> : null}
           </text>

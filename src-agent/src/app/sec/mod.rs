@@ -722,6 +722,8 @@ impl SecDaemonManager {
             rules: Vec::new(),
             catalog_ready: 0,
             catalog_total: 0,
+            catalog_source: String::new(),
+            catalog_error: String::new(),
         }
     }
 
@@ -750,6 +752,9 @@ impl SecDaemonManager {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
                 status.catalog_total = v.get("tools").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
                 status.catalog_ready = v.get("ready").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                status.catalog_source = text("source");
+                status.catalog_error = text("probe_error");
             }
         }
         status
@@ -803,6 +808,13 @@ pub struct SecStatus {
     /// Catalog tools total known to packs+registry.
     #[serde(default)]
     pub catalog_total: u32,
+    /// Where `catalog_ready` came from: `guest` (probed the active image),
+    /// `checking` (probe running), `index` (guest unreachable; pin estimate).
+    #[serde(default)]
+    pub catalog_source: String,
+    /// Why the guest could not be probed, when `catalog_source` is `index`.
+    #[serde(default)]
+    pub catalog_error: String,
 }
 
 /// Per-tool metadata surfaced in [`SecStatus`].

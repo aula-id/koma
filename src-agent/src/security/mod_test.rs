@@ -262,3 +262,54 @@ fn domain_images_always_pull_the_floating_tag() {
     assert!(super::images::is_missing_image("docker pull failed (exit 1): manifest unknown"));
     assert!(!super::images::is_missing_image("docker pull failed (exit 1): connection refused"));
 }
+
+#[test]
+fn stale_daemon_files_are_replaced_once_then_left_alone() {
+    let root = std::env::temp_dir().join(format!("koma-payload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dest = root.as_path();
+    let catalog = dest.join("koma_sec_daemon").join("catalog.py");
+
+    // A fresh home and an older version's files both get this binary's payload.
+    std::fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    std::fs::write(&catalog, "OLD").unwrap();
+    std::fs::write(dest.join(".payload"), "0.0.1-0000000000000000").unwrap();
+    assert!(ensure_daemon_sources_at(dest).unwrap());
+    assert_ne!(std::fs::read_to_string(&catalog).unwrap(), "OLD");
+    assert!(dest.join("koma_sec_daemon").join("guest_probe.py").is_file());
+
+    // Same payload: nothing is rewritten.
+    std::fs::write(&catalog, "UNTOUCHED").unwrap();
+    assert!(!ensure_daemon_sources_at(dest).unwrap());
+    assert_eq!(std::fs::read_to_string(&catalog).unwrap(), "UNTOUCHED");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn entry(digest: &str) -> ImageEntry {
+    ImageEntry { tag: String::new(), digest: digest.into(), size_bytes: 1, pulled_at: String::new() }
+}
+
+#[test]
+fn an_old_inventory_with_one_active_image_still_reads() {
+    let inv: ImagesInventory = serde_json::from_str(
+        r#"{"version":"0.4.14","active":"recon","images":{"recon":{"tag":"t","digest":"d","size_bytes":1,"pulled_at":""}}}"#,
+    )
+    .unwrap();
+    assert_eq!(inv.active_ids(), vec!["recon".to_string()]);
+    assert!(inv.is_active("recon"));
+}
+
+#[test]
+fn the_active_set_keeps_order_and_skips_images_that_are_gone() {
+    let mut inv = ImagesInventory::default();
+    inv.images.insert("recon".into(), entry("d1"));
+    inv.images.insert("web".into(), entry("d2"));
+    inv.images.insert("pxn".into(), entry(""));
+    inv.active_set = vec!["web".into(), "pxn".into(), "recon".into(), "web".into()];
+    inv.active = "web".into();
+    assert_eq!(inv.active_ids(), vec!["web".to_string(), "recon".to_string()]);
+    assert!(!inv.is_active("pxn"));
+    // An older koma only reads `active`: it still finds the primary.
+    let json = serde_json::to_value(&inv).unwrap();
+    assert_eq!(json["active"], "web");
+}

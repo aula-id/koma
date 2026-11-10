@@ -460,17 +460,20 @@ pub(crate) fn poll_security_jobs(state: &mut AppState) -> bool {
     true
 }
 
-/// Enter/`a` on Images — activate a previously pulled composition and restart
-/// the daemon so `KOMA_SEC_IMAGE` / `KOMA_SEC_COMPOSITION` are re-read.
+/// Enter/`a` on Images — add a pulled composition to the active set, or take it
+/// out, then restart the daemon so it re-reads the set (`KOMA_SEC_IMAGES`).
 pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -> Result<()> {
-    match crate::security::activate_composition(&id) {
-        Ok(()) => {
-            // Reuse the stop+start path so the child picks up the new pin.
+    match crate::security::toggle_active_composition(&id) {
+        Ok(now_active) => {
+            // Reuse the stop+start path so the child picks up the new set.
             handle_security_restart(state)?;
-            state.rest.fg_mut().status = format!("security: activated '{id}'; daemon restarted");
+            // The restarted daemon probes the new guests; take its readiness.
+            crate::app::runtime::commands::security::reload_security_catalog(state);
+            let verb = if now_active { "activated" } else { "deactivated" };
+            state.rest.fg_mut().status = format!("security: {verb} '{id}'; daemon restarted");
         }
         Err(e) => {
-            state.rest.fg_mut().status = format!("security: activate '{id}' failed: {e}");
+            state.rest.fg_mut().status = format!("security: '{id}': {e}");
         }
     }
     if let Mode::Security(s) = state.mode_mut() {

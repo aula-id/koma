@@ -314,6 +314,12 @@ future image renderer. Keep the existing daemon harness and Rust protocol checks
   ends and on the quiet interval. `fullSweep` calls `Bun.shrink()` so freed heap
   pages leave RSS. The valve turns GC back on after RSS grows `GC_REARM_BYTES`.
 
+- Every memory reading goes through `memoryFootprint()` (`footprint.ts`), never
+  `process.memoryUsage().rss`. macOS compresses and swaps idle pages, so RSS
+  undercounts: one terminal read 290 MB RSS at a 1.96 GB footprint, and the
+  valve (768 MB) and warning (2 GB) never fired. The footprint is
+  `phys_footprint` on macOS (what Activity Monitor shows) and RSS + swap on Linux.
+
 - Keep props stable across renders in the history. OpenTUI keeps native memory
   each time a mounted turn re-renders, even when nothing on screen changes. A
   live turn re-renders many times a second, and a long session reached 2 GB this

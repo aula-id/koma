@@ -1,0 +1,3 @@
+[test]
+# Screen reads retry on OutputBusy (slow CI runners). See test-preload.ts.
+preload = ["./test-preload.ts"]

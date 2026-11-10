@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from pathlib import Path
 
-from koma_sec_daemon import effects, registry
+from koma_sec_daemon import effects, guest_probe, registry
 
 _LANES = frozenset({"research", "red", "blue"})
 _EFFECTS = frozenset({"static", "local", "remote", "exploit"})
 _EXECS = frozenset({"cpu", "binary", "net", "browser"})
 # Pack/image markers that do not require a domain composition match.
 _SKIP_IMAGE_GATE = frozenset({"", "smoke", "external", "debian", "none"})
+# How long a model-facing op waits for the first guest probe of an image.
+PROBE_WAIT_S = 45.0
+# The dashboard index blocks the panel, so it waits less and falls back to the pin.
+INDEX_WAIT_S = 5.0
 
 
 def _catalog_root() -> Path:
@@ -70,7 +73,7 @@ def _default_lanes(effect: str, name: str) -> list[str]:
     return ["red"]
 
 
-def _row_from_registry(name: str, d: dict, pack: dict | None) -> dict:
+def _row_from_registry(name: str, d: dict, pack: dict | None, probe) -> dict:
     man = effects.MANIFEST.get(name)
     effect = (pack or {}).get("effect") or d.get("effect") or (man[0] if man else "static")
     exec_cls = (pack or {}).get("exec") or d.get("exec") or (man[1] if man else "cpu")
@@ -86,9 +89,11 @@ def _row_from_registry(name: str, d: dict, pack: dict | None) -> dict:
     cats = (pack or {}).get("categories")
     if not isinstance(cats, list) or not cats:
         cats = [domain]
-    ready_reg = d.get("available") is not False
-    ready_pack = (pack or {}).get("ready")
-    ready = ready_reg if ready_pack is None else bool(ready_pack) and ready_reg
+    needs = list((pack or {}).get("requires") or [])
+    if d.get("requires_module"):
+        needs.append(d["requires_module"])
+    image = str((pack or {}).get("image_or_pack") or "smoke")
+    ready, source, missing, hint, where = _readiness(needs, exec_cls, image, probe)
     desc = (pack or {}).get("summary") or (d.get("description") or "")
     blurb = str(desc).replace("\n", " ").strip()[:160]
     out = {
@@ -102,23 +107,26 @@ def _row_from_registry(name: str, d: dict, pack: dict | None) -> dict:
         "lanes": lanes,
         "plan_ok": bool((pack or {}).get("plan_ok", False)),
         "ready": ready,
+        "ready_source": source,
+        "guest_image": where,
         "scope_needed": bool(
             (pack or {}).get(
                 "scope_needed",
                 effect in ("remote", "exploit") and name not in effects.FIXED_HOST,
             )
         ),
-        "image_or_pack": str((pack or {}).get("image_or_pack") or "smoke"),
+        "image_or_pack": image,
     }
     if not ready:
-        out["missing"] = d.get("missing") or ((pack or {}).get("requires") or [None])[0]
-        out["hint"] = d.get("hint")
+        out["missing"] = missing
+        out["hint"] = hint
         if (pack or {}).get("requires"):
             out["requires"] = list((pack or {}).get("requires") or [])
     return out
 
 
-def _merged_rows() -> list[dict]:
+def _merged_rows(wait: float = PROBE_WAIT_S) -> list[dict]:
+    probe = guests(wait)
     packs = _load_packs()
     names = set(registry.REGISTRY) | set(packs)
     rows = []
@@ -131,14 +139,8 @@ def _merged_rows() -> list[dict]:
             exec_cls = pack.get("exec") or "binary"
             lanes = [x for x in (pack.get("lanes") or ["red"]) if x in _LANES] or ["red"]
             requires = list(pack.get("requires") or [])
-            ready_pack = bool(pack.get("ready", False))
-            if not ready_pack and requires:
-                bin0 = requires[0]
-                if isinstance(bin0, str) and bin0.strip() and shutil.which(bin0.strip()):
-                    ready_pack = True
-            missing = None
-            if not ready_pack and requires:
-                missing = requires[0]
+            image = str(pack.get("image_or_pack") or "external")
+            ready_pack, source, missing, hint, where = _readiness(requires, exec_cls, image, probe)
             row = {
                 "name": name,
                 "id": pack.get("id") or name,
@@ -150,29 +152,158 @@ def _merged_rows() -> list[dict]:
                 "lanes": lanes,
                 "plan_ok": bool(pack.get("plan_ok", False)),
                 "ready": ready_pack,
+                "ready_source": source,
+                "guest_image": where,
                 "scope_needed": bool(pack.get("scope_needed", True)),
-                "image_or_pack": str(pack.get("image_or_pack") or "external"),
+                "image_or_pack": image,
                 "requires": requires,
                 "pack_only": True,
             }
-            if missing:
+            if not ready_pack:
                 row["missing"] = missing
+                row["hint"] = hint
             rows.append(row)
             continue
         if not d:
             continue
-        rows.append(_row_from_registry(name, d, pack))
+        rows.append(_row_from_registry(name, d, pack, probe))
     return rows
 
 
+def _requirement_names() -> frozenset[str]:
+    """Every binary or module any catalog tool needs: what the probe asks the guest."""
+    names: set[str] = set()
+    for row in _load_packs().values():
+        for req in row.get("requires") or []:
+            if isinstance(req, str) and req.strip():
+                names.add(req.strip())
+    for d in registry.REGISTRY.values():
+        mod = d.get("requires_module")
+        if isinstance(mod, str) and mod:
+            names.add(mod)
+    return frozenset(names)
+
+
+def active_guests() -> list[tuple[str, str]]:
+    """(composition, image ref) for every active guest image, primary first.
+
+    The parent passes the active set as `KOMA_SEC_COMPOSITIONS` / `KOMA_SEC_IMAGES`
+    (comma-separated, same order). Without them, the single
+    `KOMA_SEC_COMPOSITION` / `KOMA_SEC_IMAGE` pair is the set.
+    """
+    comps = [c.strip().lower() for c in (os.environ.get("KOMA_SEC_COMPOSITIONS") or "").split(",") if c.strip()]
+    images = [i.strip() for i in (os.environ.get("KOMA_SEC_IMAGES") or "").split(",") if i.strip()]
+    if comps and len(comps) == len(images):
+        seen: set[str] = set()
+        out = []
+        for comp, image in zip(comps, images):
+            if image not in seen:
+                seen.add(image)
+                out.append((comp, image))
+        return out
+    return [(_active_composition(), guest_probe.active_image())]
+
+
+def _active_compositions() -> list[str]:
+    return [comp for comp, _ in active_guests()]
+
+
+def guests(wait: float = 0.0) -> list[tuple[str, str, object]]:
+    """(composition, image, probe) per active guest. A probe is None while running.
+
+    Every probe starts at once, then shares one `wait` budget.
+    """
+    import time
+
+    names = _requirement_names()
+    pairs = active_guests()
+    for _, image in pairs:
+        guest_probe.start(names, image)
+    deadline = time.monotonic() + max(0.0, wait)
+    out = []
+    for comp, image in pairs:
+        left = max(0.0, deadline - time.monotonic())
+        out.append((comp, image, guest_probe.current(names, wait=left, image=image)))
+    return out
+
+
+def guest(wait: float = 0.0):
+    """The primary guest's probe (first active image). Kept for callers of one."""
+    return guests(wait)[0][2]
+
+
+def _readiness(needs: list, exec_cls: str, image: str, probes):
+    """(ready, source, missing, hint, guest_image) for one tool.
+
+    Ready means every requirement exists where the tool RUNS: the host for
+    browser-class tools, otherwise ANY active guest image. `guest_image` is the
+    image ref to run it in: its own composition's image when that has it, else
+    the first active image that does. The host PATH never decides a guest tool.
+
+    Until the guests are probed (Docker down, image not pulled, probe still
+    running) the image index stands in: the tool is assumed present when its
+    image is in the active set.
+    """
+    needs = [str(n).strip() for n in needs if isinstance(n, str) and n.strip()]
+    if exec_cls == effects.BROWSER:
+        gone = next((n for n in needs if not guest_probe.local_has(n)), None)
+        return gone is None, "host", gone, (f"install {gone} on the host" if gone else None), None
+    want = (image or "").strip().lower()
+    ordered = sorted(probes, key=lambda g: g[0] != want)
+    known = [(c, i, pr) for c, i, pr in ordered if pr is not None and pr.ok]
+    for _comp, ref, pr in known:
+        if all(pr.has(n) for n in needs):
+            return True, "guest", None, None, ref
+    unknown = [(c, i, pr) for c, i, pr in ordered if pr is None or not pr.ok]
+    names = ", ".join(c for c, _, _ in probes) or "none"
+    if known and not unknown:
+        gone = next((n for n in needs if not any(pr.has(n) for _, _, pr in known)), needs[0] if needs else image)
+        return False, "guest", gone, f"'{gone}' is not in the active guest images ({names})", None
+    # Some guest could not be asked: estimate from the active set.
+    for comp, ref, _ in ordered:
+        if want in _SKIP_IMAGE_GATE or want == comp:
+            return True, "index", None, None, ref
+    pr = unknown[0][2] if unknown else None
+    why = "guest image still being checked" if pr is None else (pr.error or "guest image not checked")
+    return False, "index", (needs[0] if needs else image), why, None
+
+
 def categories(lane: str | None = None) -> list[str]:
+    """Every category name in the catalog (ready or not). Internal/tests."""
     cats: set[str] = set()
-    for r in _merged_rows():
+    for r in _merged_rows(wait=0.0):
         if lane and lane in _LANES and lane not in r.get("lanes", []):
             continue
         for c in r.get("categories") or [r.get("domain") or "other"]:
             cats.add(str(c).lower())
     return sorted(cats)
+
+
+def ready_categories(lane: str | None = None) -> dict:
+    """The model's entry point: categories that have tools ready in the active guests.
+
+    Only ready tools count, so a category appears once an active image can run
+    something in it. The model picks one and lists it; it never pages through
+    hundreds of tools it cannot run.
+    """
+    lane_n = (lane or "").strip().lower() or None
+    counts: dict[str, int] = {}
+    total = 0
+    for r in _merged_rows():
+        if not r.get("ready", True):
+            continue
+        if lane_n in _LANES and lane_n not in (r.get("lanes") or []):
+            continue
+        total += 1
+        for c in {str(c).lower() for c in (r.get("categories") or [r.get("domain") or "other"])}:
+            counts[c] = counts.get(c, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "categories": [{"name": name, "tools": n} for name, n in ordered],
+        "ready": total,
+        "images": _active_compositions(),
+        "next": "sec_catalog op=list category=<name> to see that category's tools",
+    }
 
 
 def list_tools(
@@ -275,6 +406,11 @@ def list_tools_page(
                 "ready": bool(r.get("ready", True)),
                 "scope_needed": bool(r.get("scope_needed", False)),
                 "image_or_pack": r.get("image_or_pack") or "smoke",
+                **(
+                    {"missing": r.get("missing"), "hint": r.get("hint")}
+                    if not r.get("ready", True)
+                    else {}
+                ),
             }
         )
     start = max(0, int(cursor or 0))
@@ -341,6 +477,8 @@ def get_tool(name: str, lane: str | None = None) -> dict | None:
             "image_or_pack": r.get("image_or_pack"),
             "image": r.get("image_or_pack"),
             "ready_on_active": bool(r.get("ready", True)),
+            "ready_source": r.get("ready_source"),
+            "guest_image": r.get("guest_image"),
             **(
                 {"missing": r.get("missing"), "hint": r.get("hint")}
                 if not r.get("ready", True)
@@ -412,8 +550,13 @@ def gate_run(name: str, lane: str | None = None) -> str | None:
         if lanes and lane_n not in lanes:
             return f"{n} not allowed on {lane_n} lane (pack lanes={lanes})"
     required = row.get("image_or_pack") or ""
-    active = _active_composition()
-    if not _composition_satisfies(str(required) if required is not None else "", active):
+    actives = _active_compositions()
+    active = ", ".join(actives)
+    if row.get("ready") and row.get("ready_source") in ("guest", "host"):
+        # A guest (or the host, for browser tools) was asked and has it.
+        return None
+    req_s = str(required) if required is not None else ""
+    if not any(_composition_satisfies(req_s, comp) for comp in actives):
         # Prefer a single composition token for the message (first non-skip part).
         need = str(required).strip()
         for part in (p.strip() for p in need.split(",")):
@@ -433,7 +576,9 @@ def gate_run(name: str, lane: str | None = None) -> str | None:
         if hint:
             extras.append(str(hint))
         img_s = str(img)
-        if img_s and img_s.lower() not in _SKIP_IMAGE_GATE:
+        # Only point at Images when another image would help; when the active
+        # one is meant to ship it, the hint already says it is not in there.
+        if img_s and img_s.lower() not in _SKIP_IMAGE_GATE and img_s.lower() not in actives:
             extras.append(
                 f"needs guest image '{img_s}' — pull/activate in /security → Images "
                 f"(koma-safety:…-{img_s})"
@@ -456,25 +601,37 @@ def lane_allows(name: str, lane: str) -> bool:
 
 
 def index_rows() -> list[dict]:
-    """Compact dashboard rows from pack files. No `how_to`, no host `which()`.
+    """Compact dashboard rows from pack files. No `how_to`, never the host PATH.
 
-    Readiness is overlaid by the panel from the active pin + local images.
+    `ready` is present once the active guest has been probed; until then the
+    panel overlays readiness from the active pin + local images.
     """
     rows: list[dict] = []
+    # The panel loads this once per daemon start; a cached probe answers at once.
+    probes = guests(INDEX_WAIT_S)
+    probed = all(pr is not None and pr.ok for _, _, pr in probes)
     for tid, row in sorted(_load_packs().items()):
         img = str(row.get("image_or_pack") or "")
         if img.lower() == "debian":
             continue
         domain = _comp_base(img) or str((row.get("categories") or ["other"])[0])
-        rows.append(
-            {
-                "id": tid,
-                "blurb": str(row.get("summary") or "")[:160],
-                "image": img,
-                "exec": str(row.get("exec") or ""),
-                "domain": domain,
-            }
-        )
+        out = {
+            "id": tid,
+            "blurb": str(row.get("summary") or "")[:160],
+            "image": img,
+            "exec": str(row.get("exec") or ""),
+            "domain": domain,
+        }
+        if probed:
+            # What the active guests can actually run, so the panel agrees with
+            # what the model sees from `sec_catalog`.
+            needs = list(row.get("requires") or [])
+            d = registry.REGISTRY.get(tid) or {}
+            if d.get("requires_module"):
+                needs.append(d["requires_module"])
+            ready = _readiness(needs, str(row.get("exec") or ""), img, probes)[0]
+            out["ready"] = ready
+        rows.append(out)
     return rows
 
 
@@ -484,9 +641,16 @@ def handle(op: str, args: dict | None = None) -> dict:
     lane = args.get("lane")
     if not isinstance(lane, str):
         lane = None
-    if op == "categories":
-        return {"categories": categories(lane=lane)}
+    if op in ("", "categories"):
+        return ready_categories(lane=lane)
     if op == "list":
+        filter_mode = str(args.get("filter") or "ready")
+        has_scope = any(isinstance(args.get(k), str) and args.get(k).strip() for k in ("category", "q"))
+        if filter_mode == "ready" and not has_scope:
+            # No category chosen yet: answer with the categories, not a wall of tools.
+            out = ready_categories(lane=lane)
+            out["hint"] = "pick a category (or pass q) to list tools"
+            return out
         lim = args.get("limit")
         cur = args.get("cursor") or 0
         try:
@@ -500,7 +664,7 @@ def handle(op: str, args: dict | None = None) -> dict:
         q = args.get("q") if isinstance(args.get("q"), str) else None
         return list_tools_page(
             category=args.get("category") if isinstance(args.get("category"), str) else None,
-            filter_mode=str(args.get("filter") or "ready"),
+            filter_mode=filter_mode,
             lane=lane,
             limit=lim_i,
             cursor=cur_i,
@@ -515,7 +679,15 @@ def handle(op: str, args: dict | None = None) -> dict:
             raise KeyError(f"unknown or lane-denied tool: {name}")
         return {"tool": tool}
     if op == "summary":
-        rows = _merged_rows()
+        rows = _merged_rows(wait=0.0)
+        probes = guests(0.0)
+        failed = [pr for _, _, pr in probes if pr is not None and not pr.ok]
+        if any(pr is None for _, _, pr in probes):
+            source = "checking"
+        elif failed:
+            source = "index"
+        else:
+            source = "guest"
         ready_n = sum(1 for r in rows if r.get("ready", True))
         by_dom: dict[str, dict] = {}
         for r in rows:
@@ -529,6 +701,11 @@ def handle(op: str, args: dict | None = None) -> dict:
             "ready": ready_n,
             "not_ready": len(rows) - ready_n,
             "domains": by_dom,
+            "image": guest_probe.active_image(),
+            "composition": _active_composition(),
+            "images": _active_compositions(),
+            "source": source,
+            **({"probe_error": failed[0].error} if failed else {}),
         }
     if op == "index":
         rows = index_rows()

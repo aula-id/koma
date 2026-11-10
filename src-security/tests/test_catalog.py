@@ -34,7 +34,8 @@ def test_index_op_is_compact_and_has_no_debian():
     assert got["total"] == len(tools)
     assert got["total"] > 100
     assert tools
-    assert set(tools[0]) == {"id", "blurb", "image", "exec", "domain"}
+    # `ready` joins once the active guest has been probed.
+    assert set(tools[0]) - {"ready"} == {"id", "blurb", "image", "exec", "domain"}
     assert all("how_to" not in row for row in tools)
     assert all(str(row.get("image") or "").lower() != "debian" for row in tools)
     cloud = next(row for row in tools if row["id"] == "cloud_enum")

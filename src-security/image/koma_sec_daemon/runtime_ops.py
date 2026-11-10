@@ -21,6 +21,10 @@ _RUN_DIR: Path | None = None
 
 
 def _default_image() -> str:
+    """The primary guest image: the first of the active set. It also runs the proxy."""
+    images = [i.strip() for i in (os.environ.get("KOMA_SEC_IMAGES") or "").split(",") if i.strip()]
+    if images:
+        return images[0]
     return os.environ.get("KOMA_SEC_IMAGE") or "ghcr.io/aula-id/koma-safety:latest"
 
 
@@ -67,6 +71,7 @@ def status() -> dict:
             "image": b.image,
             "scope_key": b.scope_key,
             "guest": b.guest or None,
+            "guests": dict(b.guests),
             "proxy": b.proxy or None,
             "network": b.network or None,
             "artifacts": str(b.artifacts),

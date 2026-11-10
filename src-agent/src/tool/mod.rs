@@ -1150,9 +1150,14 @@ fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str
         "categories" => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
                 if let Some(arr) = v.get("categories").and_then(|c| c.as_array()) {
+                    // `{"name","tools"}` rows; plain strings from older daemons.
                     let cats: Vec<String> = arr
                         .iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .filter_map(|x| {
+                            x.as_str()
+                                .or_else(|| x.get("name").and_then(|n| n.as_str()))
+                                .map(|s| s.to_string())
+                        })
                         .collect();
                     ws.remember_categories(&cats);
                 }
@@ -1242,7 +1247,11 @@ fn dispatch_sec_meta(
             }
         }
         "sec_catalog" => {
-            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            let op = args
+                .get("op")
+                .and_then(|v| v.as_str())
+                .filter(|op| !op.trim().is_empty())
+                .unwrap_or("categories");
             let mut payload = args.clone();
             if let Some(obj) = payload.as_object_mut() {
                 obj.remove("op");
@@ -1254,8 +1263,8 @@ fn dispatch_sec_meta(
                         );
                     }
                 }
-                // Default list filter=ready so the agent does not drown in not-ready rows.
-                if op == "list" && !obj.contains_key("filter") {
+                // The model only ever sees tools the active guests can run.
+                if op == "list" {
                     obj.insert("filter".into(), serde_json::Value::String("ready".into()));
                 }
             }

@@ -32,7 +32,13 @@ pub struct ImageEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImagesInventory {
     pub version: String,
+    /// The primary active composition: the first of `active_set`. Kept on its own
+    /// so an older koma reading this file still finds one active image.
     pub active: String,
+    /// Every active composition, primary first. Each one gets a guest; the model
+    /// sees and runs the tools of all of them.
+    #[serde(default)]
+    pub active_set: Vec<String>,
     pub images: BTreeMap<String, ImageEntry>,
 }
 
@@ -41,8 +47,40 @@ impl Default for ImagesInventory {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             active: String::new(),
+            active_set: Vec::new(),
             images: BTreeMap::new(),
         }
+    }
+}
+
+impl ImagesInventory {
+    /// Active compositions that are pulled, primary first. Falls back to the
+    /// single `active` field written by older versions.
+    #[must_use]
+    pub fn active_ids(&self) -> Vec<String> {
+        let wanted: Vec<&String> = if self.active_set.is_empty() {
+            std::iter::once(&self.active).filter(|id| !id.is_empty()).collect()
+        } else {
+            self.active_set.iter().collect()
+        };
+        let mut out: Vec<String> = Vec::new();
+        for id in wanted {
+            let local = self.images.get(id).is_some_and(|e| !e.digest.is_empty());
+            if local && !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+        out
+    }
+
+    #[must_use]
+    pub fn is_active(&self, id: &str) -> bool {
+        self.active_ids().iter().any(|a| a == id)
+    }
+
+    fn set_active(&mut self, ids: Vec<String>) {
+        self.active = ids.first().cloned().unwrap_or_default();
+        self.active_set = ids;
     }
 }
 
@@ -166,7 +204,8 @@ fn write_image_ref(dest: &Path, version: &str, digest: &str, composition: &str) 
 pub fn pinned_from_inventory_or_ref() -> Option<String> {
     let dest = security_dir().ok()?;
     let inv = read_images_inventory_at(&dest);
-    if let Some(entry) = inv.images.get(&inv.active) {
+    let primary = inv.active_ids().into_iter().next().unwrap_or_else(|| inv.active.clone());
+    if let Some(entry) = inv.images.get(&primary) {
         if !entry.digest.is_empty() {
             return Some(entry.digest.clone());
         }
@@ -186,6 +225,9 @@ pub fn pinned_from_inventory_or_ref() -> Option<String> {
 pub fn active_composition_id() -> Option<String> {
     let dest = security_dir().ok()?;
     let inv = read_images_inventory_at(&dest);
+    if let Some(primary) = inv.active_ids().into_iter().next() {
+        return Some(primary);
+    }
     if !inv.active.is_empty() {
         return Some(inv.active);
     }
@@ -334,9 +376,10 @@ pub(super) fn pull_composition_inner(id: &str, force: bool, feed: Feed<'_>) -> R
     inv.version = version.to_string();
     inv.images.insert(id.to_string(), entry);
 
-    let become_active = inv.active.is_empty() || inv.active == id;
-    if inv.active.is_empty() {
-        inv.active = id.to_string();
+    let current = inv.active_ids();
+    let become_active = current.is_empty() || current.first().is_some_and(|p| p == id);
+    if current.is_empty() {
+        inv.set_active(vec![id.to_string()]);
     }
     write_images_inventory_at(&dest, &inv)?;
     if become_active {
@@ -355,7 +398,58 @@ pub(super) fn pull_composition_inner(id: &str, force: bool, feed: Feed<'_>) -> R
     })
 }
 
-/// Make a previously pulled composition the active guest image.
+/// Every active guest image as `(composition, digest ref)`, primary first.
+#[must_use]
+pub fn active_guest_images() -> Vec<(String, String)> {
+    let Ok(dest) = security_dir() else {
+        return Vec::new();
+    };
+    let inv = read_images_inventory_at(&dest);
+    inv.active_ids()
+        .into_iter()
+        .filter_map(|id| {
+            let digest = inv.images.get(&id)?.digest.clone();
+            (!digest.is_empty()).then_some((id, digest))
+        })
+        .collect()
+}
+
+/// Add a pulled composition to the active set, or take it out.
+///
+/// Returns whether it is active afterwards. The last active image stays: with
+/// none, the daemon would fall back to an image the user never chose.
+pub fn toggle_active_composition(id: &str) -> Result<bool> {
+    if !is_known_composition(id) {
+        return Err(anyhow!("unknown composition '{id}'"));
+    }
+    let dest = security_dir()?;
+    let mut inv = read_images_inventory_at(&dest);
+    let mut ids = inv.active_ids();
+    if let Some(pos) = ids.iter().position(|a| a == id) {
+        if ids.len() == 1 {
+            return Err(anyhow!("'{id}' is the only active image — activate another first"));
+        }
+        ids.remove(pos);
+        inv.set_active(ids);
+        write_images_inventory_at(&dest, &inv)?;
+        if let Some(primary) = inv.active_ids().first() {
+            if let Some(entry) = inv.images.get(primary) {
+                write_image_ref(&dest, env!("CARGO_PKG_VERSION"), &entry.digest, primary)?;
+            }
+        }
+        return Ok(false);
+    }
+    let local = inv.images.get(id).is_some_and(|e| !e.digest.is_empty());
+    if !local {
+        return Err(anyhow!("composition '{id}' is not local — pull it first"));
+    }
+    ids.push(id.to_string());
+    inv.set_active(ids);
+    write_images_inventory_at(&dest, &inv)?;
+    Ok(true)
+}
+
+/// Make a previously pulled composition the only active guest image.
 pub fn activate_composition(id: &str) -> Result<()> {
     if !is_known_composition(id) {
         return Err(anyhow!("unknown composition '{id}'"));
@@ -371,7 +465,7 @@ pub fn activate_composition(id: &str) -> Result<()> {
     if entry.digest.is_empty() {
         return Err(anyhow!("composition '{id}' is not local — pull it first"));
     }
-    inv.active = id.to_string();
+    inv.set_active(vec![id.to_string()]);
     write_images_inventory_at(&dest, &inv)?;
     write_image_ref(&dest, version, &entry.digest, id)?;
     Ok(())
@@ -386,9 +480,9 @@ pub fn remove_composition(id: &str) -> Result<()> {
     }
     let dest = security_dir()?;
     let mut inv = read_images_inventory_at(&dest);
-    if inv.active == id {
+    if inv.is_active(id) {
         return Err(anyhow!(
-            "cannot remove active composition '{id}' — activate another first"
+            "cannot remove active composition '{id}' — deactivate it first"
         ));
     }
     let Some(entry) = inv.images.remove(id) else {

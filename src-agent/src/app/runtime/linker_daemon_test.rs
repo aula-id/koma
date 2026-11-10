@@ -413,8 +413,10 @@ fn register_response_contains_status_and_generation() {
     let resp = register(&state, "s1", &["/a"]);
     match resp {
         LinkerResponse::Registered { status, generation } => {
-            // generation starts at 0 (no scan done yet in sync path).
-            assert_eq!(generation, 0);
+            // The scan of a missing root runs on its own thread and can finish
+            // before the response is built, so either state is valid: scanning
+            // at generation 0, or done at generation 1. Never ahead of one scan.
+            assert!(generation <= 1, "one registration, at most one scan: {generation}");
             assert!(matches!(status, ScanStatus::Scanning | ScanStatus::Ready));
         }
         other => panic!("expected Registered, got {other:?}"),

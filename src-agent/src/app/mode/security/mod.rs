@@ -16,8 +16,11 @@ pub struct CatalogRow {
     pub image: String,
     pub exec: String,
     pub domain: String,
-    /// `"ready"` | `"local"` | `"remote"`.
+    /// `"ready"` | `"missing"` | `"local"` | `"remote"`.
     pub ready_mark: String,
+    /// The daemon's probe of the active guest: can it run this tool? `None`
+    /// until the guest has been probed; the mark then follows the image pin.
+    pub guest_ready: Option<bool>,
 }
 
 /// Catalog list filter. `f` cycles All → ReadyHere → NeedsImage.
@@ -209,6 +212,7 @@ impl SecurityState {
                 exec: r.exec,
                 domain: r.domain,
                 ready_mark: "remote".into(),
+                guest_ready: r.ready,
             })
             .collect();
         self.overlay_ready_marks();
@@ -230,7 +234,7 @@ impl SecurityState {
                 None
             };
             let local = entry.map(|e| !e.digest.is_empty()).unwrap_or(false);
-            let active = version_ok && inv.active == *id && local;
+            let active = version_ok && local && inv.is_active(id);
             let size_label = entry
                 .map(|e| format_image_size(e.size_bytes))
                 .unwrap_or_else(|| "—".into());
@@ -479,8 +483,16 @@ pub fn ready_mark_for(image: &str, images: &[SafetyImageRow]) -> String {
 }
 
 pub fn overlay_ready_marks(rows: &mut [CatalogRow], images: &[SafetyImageRow]) {
+    let active = images.iter().any(|r| r.active);
     for row in rows {
-        row.ready_mark = ready_mark_for(&row.image, images);
+        let mark = ready_mark_for(&row.image, images);
+        // The probe of the active guest wins over the pin: an image can ship a
+        // tool another composition lists, and a build can miss one it lists.
+        row.ready_mark = match (active, row.guest_ready) {
+            (true, Some(true)) => "ready".into(),
+            (true, Some(false)) if mark == "ready" => "missing".into(),
+            _ => mark,
+        };
     }
 }
 
@@ -538,6 +550,7 @@ mod tests {
             exec: "net".into(),
             domain: "recon".into(),
             ready_mark: "remote".into(),
+            guest_ready: None,
         }
     }
 
@@ -562,5 +575,28 @@ mod tests {
         assert_eq!(ready_mark_for("external", &[image("web", true, false)]), "remote");
         assert_eq!(ready_mark_for("debian", &[]), "remote");
         assert_eq!(ready_mark_for("empty", &[]), "remote");
+    }
+
+    #[test]
+    fn guest_probe_overrides_the_pin_while_an_image_is_active() {
+        let images = vec![image("recon", true, true), image("web", true, false)];
+        let probed = |id: &str, img: &str, ready: bool| CatalogRow {
+            guest_ready: Some(ready),
+            ..row(id, img)
+        };
+        let mut rows = vec![
+            probed("built", "recon", true),
+            probed("failed-build", "recon", false),
+            probed("shared-bin", "web", true),
+            probed("elsewhere", "web", false),
+        ];
+        overlay_ready_marks(&mut rows, &images);
+        let marks: Vec<_> = rows.iter().map(|r| r.ready_mark.as_str()).collect();
+        assert_eq!(marks, ["ready", "missing", "ready", "local"]);
+
+        // No active guest: a stale probe says nothing about what can run.
+        let mut rows = vec![probed("built", "recon", true)];
+        overlay_ready_marks(&mut rows, &[image("recon", true, false)]);
+        assert_eq!(rows[0].ready_mark, "local");
     }
 }
