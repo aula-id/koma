@@ -1130,6 +1130,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A `.skill` file from Claude's skill tooling: a deflated ZIP with one
+    /// folder named after the skill, explicit directory entries, and frontmatter
+    /// carrying `name`, `description` and `license`.
+    #[test]
+    fn install_accepts_a_claude_skill_package() {
+        let tmp = std::env::temp_dir().join(format!("koma-dot-skill-{}", uuid::Uuid::new_v4()));
+        let entry: &[u8] = b"---\nname: pdf-helper\ndescription: Fill and merge PDF forms. Use when the user mentions a PDF.\nlicense: Complete terms in LICENSE.txt\n---\n\n# PDF helper\n\nRun scripts/fill.py.\n";
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer.add_directory("pdf-helper/", options).unwrap();
+            writer.start_file("pdf-helper/SKILL.md", options).unwrap();
+            writer.write_all(entry).unwrap();
+            writer
+                .start_file("pdf-helper/LICENSE.txt", options)
+                .unwrap();
+            writer.write_all(b"terms").unwrap();
+            writer
+                .add_directory("pdf-helper/scripts/", options)
+                .unwrap();
+            writer
+                .start_file("pdf-helper/scripts/fill.py", options)
+                .unwrap();
+            writer.write_all(b"print('fill')\n").unwrap();
+            writer
+                .start_file("pdf-helper/references/forms.md", options)
+                .unwrap();
+            writer.write_all(b"# Forms\n").unwrap();
+            writer.finish().unwrap();
+        }
+        let package = cursor.into_inner();
+
+        let installed = install_owned_skill_zip(
+            Some(&tmp),
+            OwnedSkillTarget::Project,
+            "pdf-helper",
+            &package,
+        )
+        .unwrap();
+
+        let dir = installed.parent().unwrap();
+        assert_eq!(dir.file_name().unwrap(), "pdf-helper");
+        assert_eq!(std::fs::read(&installed).unwrap(), entry);
+        assert_eq!(
+            std::fs::read(dir.join("scripts/fill.py")).unwrap(),
+            b"print('fill')\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("references/forms.md")).unwrap(),
+            b"# Forms\n"
+        );
+        // The installed skill is discoverable with the package's description.
+        let text = std::fs::read_to_string(&installed).unwrap();
+        let skill = parse_skill(
+            "pdf-helper",
+            &text,
+            crate::model::skill::SkillSource::ProjectAgents,
+            installed.clone(),
+            Some(dir.to_path_buf()),
+        )
+        .unwrap();
+        assert!(skill.description.starts_with("Fill and merge PDF forms."));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn export_zip_preserves_owned_entry_and_companions() {
         let tmp = std::env::temp_dir().join(format!("koma-skill-export-{}", uuid::Uuid::new_v4()));

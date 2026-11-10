@@ -25,9 +25,13 @@ function readFileAsBase64(file: File): Promise<string> {
   })
 }
 
-function skillNameFromFilename(filename: string): string {
+// A .skill file is the same ZIP package under the extension Claude's skill
+// tooling writes, so both go down one install path.
+const PACKAGE_EXTENSION = /\.(zip|skill)$/i
+
+export function skillNameFromFilename(filename: string): string {
   return filename
-    .replace(/\.zip$/i, '')
+    .replace(PACKAGE_EXTENSION, '')
     .toLocaleLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -71,17 +75,17 @@ export default function UploadSkillTab() {
     setLocalError(null)
     setRequestId(null)
     setSelectedFile(file.name)
-    if (!file.name.toLocaleLowerCase().endsWith('.zip')) {
-      setLocalError('Choose a .zip skill package.')
+    if (!PACKAGE_EXTENSION.test(file.name)) {
+      setLocalError('Choose a .zip or .skill package.')
       return
     }
     if (file.size > MAX_ZIP_BYTES) {
-      setLocalError('ZIP package exceeds the 64 MiB upload limit.')
+      setLocalError('Skill package exceeds the 64 MiB upload limit.')
       return
     }
     const name = skillNameFromFilename(file.name)
     if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
-      setLocalError('The ZIP filename does not produce a valid skill name.')
+      setLocalError('The package filename does not produce a valid skill name.')
       return
     }
     try {
@@ -106,7 +110,7 @@ export default function UploadSkillTab() {
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-1 px-8 py-6">
           <div className="mb-4 border-b border-koma-border pb-2">
-            <h2 className="text-[15px] font-semibold text-koma-fg">Upload skill (.zip)</h2>
+            <h2 className="text-[15px] font-semibold text-koma-fg">Upload skill (.zip or .skill)</h2>
             <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">Install a packaged skill into Global or Project scope.</p>
           </div>
 
@@ -132,10 +136,10 @@ export default function UploadSkillTab() {
             <div className="px-3 py-1.5">
               <button type="button" onClick={chooseFile} disabled={busy || !insideProject} title={insideProject ? undefined : 'Open a project to add a skill'} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] text-koma-fg transition-colors hover:border-koma-accent hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40">
                 {busy ? <BrailleSpinner size={16} /> : <Upload size={18} className="text-koma-accent" />}
-                {busy ? 'Installing…' : selectedFile ? `Choose another ZIP (${selectedFile})` : 'Choose .zip package'}
+                {busy ? 'Installing…' : selectedFile ? `Choose another package (${selectedFile})` : 'Choose .zip or .skill package'}
               </button>
-              <input ref={inputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
-              <p className="mt-2 text-[11px] text-koma-fg opacity-45">ZIP up to 64 MiB. Must contain a valid SKILL.md.</p>
+              <input ref={inputRef} type="file" accept=".zip,.skill,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
+              <p className="mt-2 text-[11px] text-koma-fg opacity-45">A .zip or .skill package up to 64 MiB. Must contain a valid SKILL.md.</p>
             </div>
             {/* Keep these limits aligned with src-agent/src/model/skill/persistence.rs and its safety tests. */}
             <details className="mx-3 rounded border border-koma-border px-3 py-2 text-koma-fg">

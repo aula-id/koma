@@ -22,8 +22,11 @@ use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::model::secret_box::{
+    key_path, load_key_at, load_or_create_key_at, secrets_dir, set_mode, KEY_LEN,
+};
+
 const STORE_VERSION: u32 = 1;
-const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -39,28 +42,13 @@ struct StoreEntry {
     ct: String,
 }
 
-fn secrets_dir() -> Result<PathBuf> {
-    Ok(crate::model::store::base_dir()?.join("secrets"))
-}
-
+#[cfg(test)]
 fn machine_key_path() -> Result<PathBuf> {
-    Ok(secrets_dir()?.join("machine.key"))
+    key_path()
 }
 
 fn passwords_path() -> Result<PathBuf> {
     Ok(secrets_dir()?.join("remote-passwords.json"))
-}
-
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-        .with_context(|| format!("chmod {:o} {}", mode, path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
-    Ok(())
 }
 
 fn ensure_secrets_dir() -> Result<PathBuf> {
@@ -71,33 +59,11 @@ fn ensure_secrets_dir() -> Result<PathBuf> {
 }
 
 fn read_or_create_machine_key() -> Result<[u8; KEY_LEN]> {
-    ensure_secrets_dir()?;
-    let path = machine_key_path()?;
-    if path.exists() {
-        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        if bytes.len() == KEY_LEN {
-            let mut key = [0u8; KEY_LEN];
-            key.copy_from_slice(&bytes);
-            return Ok(key);
-        }
-        // Corrupt/truncated key → treat as reset (caller may recreate on set).
-        anyhow::bail!("machine key has invalid length {}", bytes.len());
-    }
-    let mut key = [0u8; KEY_LEN];
-    rand::thread_rng().fill_bytes(&mut key);
-    atomic_write(&path, &key, 0o600)?;
-    Ok(key)
+    load_or_create_key_at(&key_path()?)
 }
 
 fn load_machine_key_for_get() -> Option<[u8; KEY_LEN]> {
-    let path = machine_key_path().ok()?;
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.len() != KEY_LEN {
-        return None;
-    }
-    let mut key = [0u8; KEY_LEN];
-    key.copy_from_slice(&bytes);
-    Some(key)
+    load_key_at(&key_path().ok()?)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {

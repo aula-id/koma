@@ -236,7 +236,22 @@ fn check_koma(config_ok: bool) -> CheckResult {
         "config CORRUPT".to_string()
     } else {
         match store::base_dir().map(|d| d.join("config.json")) {
-            Ok(path) if path.exists() => "config ok".to_string(),
+            Ok(path) if path.exists() => {
+                // Credentials live in this file. koma writes it owner-only, so a
+                // wider mode means something else changed it.
+                if crate::model::secret_box::is_exposed(&path) == Some(true) {
+                    if status == Status::Ok {
+                        status = Status::Warn;
+                    }
+                    details.push(
+                        "config.json is readable by other users; run: chmod 600 ~/.koma/config.json"
+                            .to_string(),
+                    );
+                    "config readable by others".to_string()
+                } else {
+                    "config ok".to_string()
+                }
+            }
             _ => {
                 details.push("no config.json yet (running on defaults)".to_string());
                 "no config (defaults)".to_string()
@@ -879,15 +894,14 @@ fn check_security_daemon() -> CheckResult {
     #[cfg(not(windows))]
     {
         if crate::security::is_installed() {
-            let active = crate::security::active_composition_id()
-                .unwrap_or_else(|| "minimal".to_string());
+            let active =
+                crate::security::active_composition_id().unwrap_or_else(|| "minimal".to_string());
             CheckResult {
                 status: Status::Ok,
                 headline: "Security daemon (optional, installed)".to_string(),
                 details: vec![
                     format!("active guest composition: {active}"),
-                    "install pulls minimal only — domain images via /security → Images"
-                        .to_string(),
+                    "install pulls minimal only — domain images via /security → Images".to_string(),
                 ],
             }
         } else {
