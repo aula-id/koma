@@ -48,6 +48,47 @@ try {
     Write-Host "Downloading koma..."
     Invoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing
 
+    # The release publishes SHA256SUMS next to the installer. Check the MSI
+    # against it before msiexec runs it.
+    if ($env:KOMA_SKIP_CHECKSUM -eq '1') {
+        Write-Host "Checksum check skipped (KOMA_SKIP_CHECKSUM=1)."
+    } else {
+        $sums = $null
+        try {
+            $response = Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing
+            $sums = if ($response.Content -is [byte[]]) {
+                [System.Text.Encoding]::UTF8.GetString($response.Content)
+            } else {
+                [string]$response.Content
+            }
+        } catch {
+            $sums = $null
+        }
+        if (-not $sums) {
+            # Releases before SHA256SUMS existed have nothing to check against.
+            Write-Warning "This release publishes no SHA256SUMS; installing unverified."
+        } else {
+            $want = $null
+            foreach ($line in ($sums -split "`n")) {
+                $parts = $line.Trim() -split '\s+', 2
+                if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $asset) {
+                    $want = $parts[0].ToLowerInvariant()
+                    break
+                }
+            }
+            if (-not $want) {
+                Write-Error "SHA256SUMS does not list $asset; refusing to install it."
+                exit 1
+            }
+            $got = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($got -ne $want) {
+                Write-Error "Checksum mismatch for $asset; nothing was installed. Expected $want, got $got."
+                exit 1
+            }
+            Write-Host "Verified sha256 $got"
+        }
+    }
+
     $installed = $null
     try {
         $installed = Get-ItemProperty `

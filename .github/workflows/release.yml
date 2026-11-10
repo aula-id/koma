@@ -355,6 +355,14 @@ jobs:
           for file in koma-linux-x64 koma-linux-arm64 koma-darwin-arm64 koma-darwin-x64 koma-x64.msi; do
             test -s "release-assets/$file" || { echo "::error::missing $file"; find release-assets -type f; exit 1; }
           done
+      # install.sh and install.ps1 check their download against this file.
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum koma-linux-x64 koma-linux-arm64 koma-darwin-arm64 koma-darwin-x64 koma-x64.msi > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
       - name: Hammer the release identity
         run: |
           set -euo pipefail
@@ -370,6 +378,7 @@ jobs:
             release-assets/koma-darwin-arm64
             release-assets/koma-darwin-x64
             release-assets/koma-x64.msi
+            release-assets/SHA256SUMS
             release.json
           fail_on_unmatched_files: true
       - name: Check the published release
@@ -387,6 +396,17 @@ jobs:
           done
           test "$ok" = 1
           python3 scripts/check-release.py release-check.json "$version" "$GITHUB_SHA"
+      # What users download must be what was built: fetch the published sums
+      # and one published binary back, and check them against the build.
+      - name: Check the published checksums
+        run: |
+          set -euo pipefail
+          base="https://github.com/aula-id/koma/releases/download/${GITHUB_REF_NAME}"
+          curl -fsSL --retry 5 --retry-delay 10 "$base/SHA256SUMS" -o published-sums
+          cmp published-sums release-assets/SHA256SUMS
+          mkdir published
+          curl -fsSL --retry 5 --retry-delay 10 "$base/koma-linux-x64" -o published/koma-linux-x64
+          (cd published && grep ' koma-linux-x64$' ../published-sums | sha256sum --check --strict -)
 
   # Guest images (only on v*-security tags). They start after the binaries are
   # published and run one tier at a time, so a release never has 30 builds at

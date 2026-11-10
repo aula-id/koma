@@ -9,6 +9,7 @@
 # Environment overrides:
 #   KOMA_RELEASE_BASE   override the base download URL
 #   KOMA_INSTALL_DIR    override the install directory (default ~/.local/bin)
+#   KOMA_SKIP_CHECKSUM  set to 1 to install without checking the download's SHA-256
 
 set -e
 
@@ -133,6 +134,72 @@ _koma_download() {
 }
 
 # ---------------------------------------------------------------------------
+# Checksum — the release publishes SHA256SUMS next to the binaries.
+# ---------------------------------------------------------------------------
+# Quiet fetch for a small file. Returns non-zero instead of exiting, so the
+# caller decides what a missing file means.
+_koma_fetch_quiet() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$2" "$1" 2>/dev/null
+    else
+        wget -qO "$2" "$1" 2>/dev/null
+    fi
+}
+_koma_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+# _koma_verify <file> <asset name>. Stops the install unless the file's SHA-256
+# is the one the release lists for that asset.
+_koma_verify() {
+    _file=$1
+    _name=$2
+    if [ "${KOMA_SKIP_CHECKSUM:-0}" = 1 ]; then
+        _info "checksum check skipped (KOMA_SKIP_CHECKSUM=1)"
+        return 0
+    fi
+    _step "Verifying ${_name}"
+    _sums=$(mktemp)
+    if ! _koma_fetch_quiet "${KOMA_RELEASE_BASE}/SHA256SUMS" "$_sums" || [ ! -s "$_sums" ]; then
+        rm -f "$_sums"
+        # Releases before SHA256SUMS existed have nothing to check against. Once
+        # every supported release publishes it, this should stop the install too.
+        echo "  WARNING: this release publishes no SHA256SUMS; installing unverified." >&2
+        return 0
+    fi
+    # Lines are "<hex>  <name>" (sha256sum) or "<hex> *<name>" (binary mode).
+    _want=$(awk -v n="$_name" '{ f = $2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$_sums")
+    rm -f "$_sums"
+    if [ -z "$_want" ]; then
+        echo "ERROR: SHA256SUMS does not list ${_name}; refusing to install it." >&2
+        exit 1
+    fi
+    if ! _got=$(_koma_sha256 "$_file") || [ -z "$_got" ]; then
+        echo "ERROR: no sha256sum, shasum or openssl found, so the download cannot be checked." >&2
+        echo "Install one of them, or set KOMA_SKIP_CHECKSUM=1 to install without the check." >&2
+        exit 1
+    fi
+    _want=$(printf '%s' "$_want" | tr 'A-F' 'a-f')
+    _got=$(printf '%s' "$_got" | tr 'A-F' 'a-f')
+    if [ "$_got" != "$_want" ]; then
+        echo "ERROR: checksum mismatch for ${_name}; nothing was installed." >&2
+        echo "  expected $_want" >&2
+        echo "  got      $_got" >&2
+        echo "The download is corrupt or is not the file the release published. Try again;" >&2
+        echo "if it keeps failing, report it at https://github.com/aula-id/koma/issues" >&2
+        exit 1
+    fi
+    _ok "sha256 $_got"
+}
+
+# ---------------------------------------------------------------------------
 # OS detection
 # ---------------------------------------------------------------------------
 _os=$(uname -s)
@@ -211,6 +278,8 @@ trap cleanup EXIT
 # Download
 # ---------------------------------------------------------------------------
 _koma_download "$url" "$tmp" "$asset"
+# Check before the file becomes executable or leaves the temp path.
+_koma_verify "$tmp" "$asset"
 
 chmod +x "$tmp"
 
