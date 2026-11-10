@@ -29,7 +29,8 @@ export function catalogRows(body: Rec): Rec[] {
 }
 
 const READINESS: Record<string, { glyph: string; text: string; reason: string; role: Role }> = {
-  ready: { glyph: "●", text: "ready", reason: "image active", role: "success" },
+  ready: { glyph: "●", text: "ready", reason: "in the active guest", role: "success" },
+  missing: { glyph: "×", text: "missing", reason: "image active, binary not in it", role: "warn" },
   local: { glyph: "▒", text: "local", reason: "pulled, not active", role: "info" },
   remote: { glyph: "·", text: "remote", reason: "not pulled", role: "dim" },
 }
@@ -214,6 +215,15 @@ function Dashboard({ body, theme, onMove, send, width, height }: { body: Rec; th
   )
 }
 
+/** Where the ready count came from: the probed guest, or an estimate from the pin. */
+export function catalogDetail(status: Rec): string {
+  const source = str(status.catalog_source)
+  if (source === "guest") return "in guest"
+  if (source === "checking") return "checking…"
+  if (source === "index") return "estimate"
+  return ""
+}
+
 type Gauge = { title: string; up: boolean | null; value: string; detail: string; bar?: number; pull?: Pull }
 
 function gauges(body: Rec): Gauge[] {
@@ -232,7 +242,7 @@ function gauges(body: Rec): Gauge[] {
     { title: "Guest", up: !!active, value: active ? str(active.id) : "none", detail: `${images.filter((row) => flag(row.local)).length}/${images.length} images pulled`, pull: pullOf(body) ?? undefined },
     { title: "Boundary", up: flag(status.boundary_up), value: flag(status.boundary_up) ? "up" : "down", detail: flag(status.boundary_up) ? "guest isolated" : "no boundary guest" },
     { title: "Egress", up: net === "off" || net === "scope" ? true : net === "down" ? false : null, value: net, detail: `${rules} allow rule${rules === 1 ? "" : "s"}` },
-    { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: "", bar: total ? ready / total : 0 },
+    { title: "Catalog", up: ready > 0, value: `${ready}/${total}`, detail: catalogDetail(status), bar: total ? ready / total : 0 },
   ]
 }
 
@@ -244,7 +254,7 @@ function StatusBoard({ body, theme }: { body: Rec; theme: Theme }) {
     <box flexDirection="row" flexShrink={0} height={4} columnGap={1} minWidth={0}>
       {gauges(body).map((gauge) => (
         <box key={gauge.title} border borderStyle="rounded" borderColor={theme.dim} title={` ${gauge.title} `} titleColor={theme.dim} flexGrow={1} flexBasis={0} minWidth={0} overflow="hidden" flexDirection="column" paddingLeft={1} paddingRight={1}>
-          <text wrapMode="none"><span fg={gaugeColor(theme, gauge.up)}>{`${gaugeGlyph(gauge.up)} `}</span><span fg={theme.fg}>{gauge.value}</span></text>
+          <text wrapMode="none"><span fg={gaugeColor(theme, gauge.up)}>{`${gaugeGlyph(gauge.up)} `}</span><span fg={theme.fg}>{gauge.value}</span>{gauge.bar != null && gauge.detail ? <span fg={theme.dim}>{` · ${gauge.detail}`}</span> : null}</text>
           {gauge.pull ? <TilePull pull={gauge.pull} theme={theme} /> : gauge.bar != null ? <Bar ratio={gauge.bar} theme={theme} /> : <text wrapMode="none" fg={theme.dim}>{gauge.detail}</text>}
         </box>
       ))}

@@ -275,6 +275,10 @@ RUN set -eux; \
     chown -R koma:koma /work /artifacts /opt/koma || true; \
     cp /tmp/install_report_final.txt /opt/koma/install_report.txt || true
 
+# Kali's amass wrapper downloads libpostal data as root on first run. The
+# guest has neither root nor egress, so call the real binary directly.
+RUN if [ -x /usr/lib/amass/amass ]; then ln -sf /usr/lib/amass/amass /usr/bin/amass; fi
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY koma_proxy.py /opt/koma/koma_proxy.py
 COPY koma_sec_daemon /opt/koma/koma_sec_daemon

@@ -49,6 +49,14 @@ pub(super) struct Connected {
 pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String> {
     let python = crate::security::venv_python()
         .map_err(|e| format!("cannot locate security venv python: {e}"))?;
+    // An upgraded binary must run its own daemon, not the files the last
+    // version extracted.
+    if let Err(e) = crate::security::ensure_daemon_sources_current() {
+        crate::model::store::append_global_error_log(
+            "security",
+            &format!("could not refresh security daemon files: {e}"),
+        );
+    }
     let dir =
         crate::security::security_dir().map_err(|e| format!("cannot locate security dir: {e}"))?;
 

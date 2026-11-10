@@ -467,6 +467,8 @@ pub(super) fn handle_security_image_activate(id: String, state: &mut AppState) -
         Ok(()) => {
             // Reuse the stop+start path so the child picks up the new pin.
             handle_security_restart(state)?;
+            // The restarted daemon probes the new guest; take its readiness.
+            crate::app::runtime::commands::security::reload_security_catalog(state);
             state.rest.fg_mut().status = format!("security: activated '{id}'; daemon restarted");
         }
         Err(e) => {

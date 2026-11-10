@@ -133,8 +133,10 @@ def main() -> None:
     # Redirect print() / library output to stderr so the frame channel stays clean
     sys.stdout = sys.stderr
 
+    import json as _json
+
     from koma_sec_daemon.protocol import read_frame, write_frame
-    from koma_sec_daemon import registry
+    from koma_sec_daemon import effects, registry, runtime_ops
     from koma_sec_daemon import verdict
     from koma_sec_daemon.registry import descriptors, refused_descriptors, call
     from koma_sec_daemon.sessions import SessionStore
@@ -316,6 +318,15 @@ def main() -> None:
             emit({"id": frame_id, "ok": True, "result": installer.install(key)})
         except Exception as exc:
             emit({"id": frame_id, "ok": False, "error": str(exc)})
+
+    # Ask the active guest image what it ships, in the background, so the first
+    # catalog op does not pay for the `docker run`.
+    try:
+        from koma_sec_daemon import catalog as _catalog_warm
+
+        _catalog_warm.guest(0.0)
+    except Exception as exc:  # noqa: BLE001 - readiness falls back to the index
+        print(f"[koma_sec_daemon] guest probe not started: {exc}", file=sys.stderr)
 
     try:
         while True:

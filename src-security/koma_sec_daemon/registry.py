@@ -148,6 +148,8 @@ def _build() -> tuple[dict[str, dict], list[dict], list[dict]]:
         if reasons:
             refused.append({"name": name, "reasons": reasons})
             continue
+        # The import this tool needs where it runs (guest, or host for browser).
+        normalised["requires_module"] = _REQUIRES.get(module)
         registry[name] = normalised
         if desc.get("available") is False:
             unavailable.append(

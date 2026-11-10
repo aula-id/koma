@@ -644,6 +644,9 @@ export interface SecStatus {
   net?: string
   rules?: Array<string>
   catalog_ready?: number
+  /** guest | checking | index — where catalog_ready came from. */
+  catalog_source?: string
+  catalog_error?: string
   catalog_total?: number
 }
 

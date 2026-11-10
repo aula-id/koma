@@ -20,7 +20,7 @@
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -242,7 +242,62 @@ pub fn refresh_daemon_sources() -> Result<()> {
     let dest = security_dir()?;
     std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
     extract_assets(&SECURITY_ASSETS, &dest)?;
+    write_payload_stamp(&dest);
     Ok(())
+}
+
+/// Stamp beside the extracted daemon naming the payload it holds.
+const PAYLOAD_STAMP: &str = ".payload";
+
+/// Fingerprint of the daemon files this binary ships. Two builds with the same
+/// files agree, so an upgrade rewrites `~/.koma/security` only when it changed.
+pub(crate) fn embedded_payload_fingerprint() -> &'static str {
+    static FP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FP.get_or_init(|| {
+        use std::hash::Hasher;
+        fn walk(dir: &Dir, h: &mut std::collections::hash_map::DefaultHasher) {
+            for entry in dir.entries() {
+                match entry {
+                    include_dir::DirEntry::Dir(sub) if ships_to_the_user(sub.path()) => walk(sub, h),
+                    include_dir::DirEntry::File(f) if ships_to_the_user(f.path()) => {
+                        h.write(f.path().to_string_lossy().as_bytes());
+                        h.write_u8(0);
+                        h.write(f.contents());
+                        h.write_u8(0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        walk(&SECURITY_ASSETS, &mut h);
+        format!("{}-{:016x}", env!("CARGO_PKG_VERSION"), h.finish())
+    })
+}
+
+fn write_payload_stamp(dest: &Path) {
+    let _ = std::fs::write(dest.join(PAYLOAD_STAMP), embedded_payload_fingerprint());
+}
+
+/// Re-extract the daemon files when they are not the ones this binary ships.
+///
+/// Run before every daemon start: an upgraded koma must not keep driving the
+/// previous version's daemon (old readiness rules, old wire vocabulary) until
+/// someone remembers to press `u`. Returns whether files were rewritten.
+pub fn ensure_daemon_sources_current() -> Result<bool> {
+    let dest = security_dir()?;
+    ensure_daemon_sources_at(&dest)
+}
+
+pub(crate) fn ensure_daemon_sources_at(dest: &Path) -> Result<bool> {
+    let current = std::fs::read_to_string(dest.join(PAYLOAD_STAMP)).unwrap_or_default();
+    if current.trim() == embedded_payload_fingerprint() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(dest).with_context(|| format!("create {}", dest.display()))?;
+    extract_assets(&SECURITY_ASSETS, &dest.to_path_buf())?;
+    write_payload_stamp(dest);
+    Ok(true)
 }
 
 /// Tools whose destination is fixed in the handler, so they carry no destination
@@ -410,6 +465,7 @@ pub fn install(force: bool) -> Result<()> {
     ui.step("Security files");
     std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
     let written = extract_assets(&SECURITY_ASSETS, &dest)?;
+    write_payload_stamp(&dest);
     ui.ok(&format!("{written} files in {}", dest.display()));
 
     let venv_ready = is_installed() && !force;
@@ -964,8 +1020,10 @@ pub(super) fn quiet_failure(program: &str, args: &[&str], code: Option<i32>, std
 
 /// One compact catalog row from `index.json` or the daemon `catalog index` op.
 ///
-/// File rows use `summary`; the daemon uses `blurb`. Both map here. Readiness is
-/// not in the payload — the panel overlays it from the image inventory.
+/// File rows use `summary`; the daemon uses `blurb`. Both map here. `ready` is
+/// the daemon's answer from probing the active guest image (`None` in the
+/// embedded file, or before the probe finished); the panel falls back to the
+/// image inventory without it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogIndexRow {
     pub id: String,
@@ -973,6 +1031,7 @@ pub struct CatalogIndexRow {
     pub image: String,
     pub exec: String,
     pub domain: String,
+    pub ready: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -995,6 +1054,8 @@ struct CatalogIndexJson {
     exec: String,
     #[serde(default)]
     domain: String,
+    #[serde(default)]
+    ready: Option<bool>,
 }
 
 /// Embedded `src-security/catalog/index.json` (path relative to this file).
@@ -1028,6 +1089,7 @@ pub fn parse_catalog_index(raw: &str) -> Option<Vec<CatalogIndexRow>> {
                     image: row.image.trim().to_string(),
                     exec: row.exec.trim().to_string(),
                     domain: row.domain.trim().to_string(),
+                    ready: row.ready,
                 })
             })
             .collect(),
