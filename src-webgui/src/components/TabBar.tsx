@@ -142,7 +142,7 @@ function tabVisual(
     case 'skill':
       return { Icon: Library, label: tab.title, title: tab.title }
     case 'uploadSkill':
-      return { Icon: Package, label: 'Upload skill', title: 'Upload skill (.zip)' }
+      return { Icon: Package, label: 'Upload skill', title: 'Upload skill (.zip or .skill)' }
     case 'subagent':
       return { Icon: Bot, label: tab.title, title: tab.title }
     case 'bash':

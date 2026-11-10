@@ -221,12 +221,12 @@ describe.sequential('Skills UX copy and disclosures', () => {
   it('keeps ZIP guidance concise while exposing every enforced package requirement', async () => {
     useKoma.setState((state) => ({ session: { ...state.session, id: null } }))
     const screen = await render(<UploadSkillTab />)
-    expect(screen.getByRole('heading', { name: 'Upload skill (.zip)' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Upload skill (.zip or .skill)' })).toBeTruthy()
     const project = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Project')
     const choose = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Choose .zip'))
     expect(project?.disabled).toBe(true)
     expect(choose?.disabled).toBe(true)
-    expect(screen.getByText('ZIP up to 64 MiB. Must contain a valid SKILL.md.')).toBeTruthy()
+    expect(screen.getByText('A .zip or .skill package up to 64 MiB. Must contain a valid SKILL.md.')).toBeTruthy()
 
     const summary = document.querySelector<HTMLElement>('summary')!
     const details = summary.closest('details')!
@@ -263,8 +263,39 @@ describe.sequential('Skills UX copy and disclosures', () => {
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
     input.dispatchEvent(new Event('change', { bubbles: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(useKoma.getState().ui.toast?.text).toBe('ZIP package exceeds the 64 MiB upload limit.')
+    expect(useKoma.getState().ui.toast?.text).toBe('Skill package exceeds the 64 MiB upload limit.')
     expect(useKoma.getState().ui.toast?.kind).toBe('error')
+  })
+
+  it('installs a .skill package the same way as a .zip', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' } }))
+    const sent: Array<Record<string, unknown>> = []
+    const originalReq = useKoma.getState().req
+    useKoma.setState({ req: ((message: Record<string, unknown>) => { sent.push(message) }) as typeof originalReq })
+    try {
+      await render(<UploadSkillTab />)
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+      expect(input.accept.split(',')).toContain('.skill')
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['PK'], 'PDF-Helper.skill'))
+      Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await expect.poll(() => sent.length).toBe(1)
+      expect(sent[0]).toMatchObject({ r: 'InstallSkillZip', name: 'pdf-helper', target: 'global' })
+    } finally {
+      useKoma.setState({ req: originalReq })
+    }
+  })
+
+  it('rejects a file that is neither a .zip nor a .skill', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' } }))
+    await render(<UploadSkillTab />)
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['x'], 'notes.skill.txt'))
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await expect.poll(() => useKoma.getState().ui.toast?.text).toBe('Choose a .zip or .skill package.')
   })
 
   it('keeps two visible skill tabs when Edit with Koma focuses an active chat', async () => {
@@ -364,7 +395,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
     const visibleTabTitles = [...document.querySelectorAll<HTMLElement>('[role="tab"][title]')].map((element) => element.title)
     expect(visibleTabTitles).toContain('alpha')
     expect(visibleTabTitles).toContain('beta')
-    expect(visibleTabTitles).toContain('Upload skill (.zip)')
+    expect(visibleTabTitles).toContain('Upload skill (.zip or .skill)')
   })
 
   it('makes automatic locations scannable without changing External-root controls', async () => {
