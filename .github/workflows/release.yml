@@ -285,38 +285,16 @@ jobs:
           chmod +x release-check/${{ matrix.asset }}
           python3 scripts/verify-terminal-release.py release-check/${{ matrix.asset }}
 
-  terminal-tests:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-latest, macos-26-intel, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: python scripts/prepare-terminal.py
-      - run: python -m unittest discover -s scripts -p 'test_terminal_payload.py'
-      - run: cargo test --locked -p agent --no-default-features --bin koma term_bundle
-      - working-directory: src-term
-        run: bun install --frozen-lockfile
-      - working-directory: src-term
-        run: bun test
-      - working-directory: src-term
-        run: bun node_modules/typescript/bin/tsc --noEmit
-
   publish:
-    # Binaries never wait for guest images; those build after this, tier by tier.
+    # build -> check -> publish. Source tests belong to ci.yml and ran on the
+    # PR; this pipeline only checks the binaries it built (verify, and the MSI
+    # checks inside windows-package). Guest images build after this, tier by tier.
     if: >-
       ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
       && needs.build.result == 'success'
       && needs.windows-package.result == 'success'
-      && needs.verify.result == 'success'
-      && needs.terminal-tests.result == 'success' }}
-    needs: [build, windows-package, verify, terminal-tests]
+      && needs.verify.result == 'success' }}
+    needs: [build, windows-package, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
