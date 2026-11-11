@@ -621,6 +621,24 @@ pub(super) fn handle_approve_tool(
                 return Ok(());
             }
         }
+        // A parked target request: the y is what writes the scope record. Then
+        // the call runs and finds its targets covered.
+        if let Some(request) =
+            crate::app::runtime::stream::unconfirmed_scope(state, fgi, &call)
+        {
+            let ctx = crate::app::runtime::stream::build_tool_ctx(state, fgi);
+            if let Err(e) = crate::tool::scope_grant::grant(&ctx, &request) {
+                state.rest.fg_mut().tool_results.push((
+                    call.id.clone(),
+                    format!("error: could not record the scope: {e}"),
+                ));
+                state.rest.fg_mut().tool_idx += 1;
+                process_tools(state, fgi, client, handle);
+                return Ok(());
+            }
+            dispatch_deferred(state, fgi, &call);
+            return Ok(());
+        }
         // The approved call is a risky tool (write/edit/delete/bash) — all of which
         // are heavy/blocking and live in `DEFERRED_TOOLS`. Run it OFF the UI thread
         // and PARK rather than running it inline here: an approved large write would

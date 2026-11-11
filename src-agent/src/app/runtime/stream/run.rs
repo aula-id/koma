@@ -303,7 +303,10 @@ Do NOT call legacy concrete tool names as top-level functions. Use ONLY:\n\
 - `sec_catalog` — op=categories | list | get (discover tools and schemas; lane-filtered)\n\
 - `sec_run` — {name, args} execute one concrete tool (gates apply to the inner name)\n\
 - `sec_fs` — op=copy_in | copy_out | ls (explicit files into/out of the guest)\n\
-- `sec_runtime` — op=status | up | down | health (koma-safety isolation boundary)\n\
+- `sec_runtime` — op=status | up | down | health | net (koma-safety isolation boundary)\n\
+Before any networked sec_run, declare the scope: `sec_runtime` op=net mode=scope \
+targets=[\"host\" or \"host:port\"]. The user confirms the list once; a run against \
+a host outside it is refused.\n\
 Prefer sec_run over raw shell (`curl`/`nc`) for security work. Bring the jail up with \
 sec_runtime when needed; sec_run may lazy-start it.\n\
 \n\

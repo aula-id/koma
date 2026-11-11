@@ -36,6 +36,7 @@ mod plan_policy;
 pub mod pong;
 pub mod recovery;
 pub mod scope;
+pub mod scope_grant;
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
@@ -1300,6 +1301,53 @@ fn dispatch_sec_meta(
                     }
                 }
                 payload = serde_json::Value::Object(map);
+            }
+            // Targets reach the daemon only from the confirmed scope record. The
+            // record is written by the approval prompt, never by this call, so a
+            // request nobody confirmed stops here and the allowlist stays shut.
+            if scope::lane_of(ctx) != Some(crate::app::sec::lane::Lane::Research) {
+                match scope_grant::requested(name, args) {
+                    Err(reason) => {
+                        return output::finish_tool_output(
+                            ctx,
+                            name,
+                            args,
+                            verdict::TypedResult {
+                                verdict: verdict::Verdict::Error,
+                                excerpt: reason,
+                                handle: None,
+                            }
+                            .to_json(),
+                        );
+                    }
+                    Ok(Some(request)) => {
+                        let current = scope_grant::current(ctx);
+                        if !scope_grant::covered(current.as_ref(), &request) {
+                            return output::finish_tool_output(
+                                ctx,
+                                name,
+                                args,
+                                verdict::TypedResult {
+                                    verdict: verdict::Verdict::Blocked,
+                                    excerpt: scope_grant::UNCONFIRMED.into(),
+                                    handle: None,
+                                }
+                                .to_json(),
+                            );
+                        }
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.insert(
+                                "targets".into(),
+                                serde_json::json!(scope_grant::wire(&request.targets)),
+                            );
+                            obj.insert(
+                                "exclusions".into(),
+                                serde_json::json!(scope_grant::wire(&request.exclusions)),
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                }
             }
             // Lane net policy: Research never carries egress allowlist; Red may use
             // scope targets only when provided (empty up = deny-all offline guest).
