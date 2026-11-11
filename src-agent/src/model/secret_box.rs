@@ -13,8 +13,8 @@
 //! Losing `machine.key` loses the sealed values: they load as empty and the UI
 //! asks for the credential again. Nothing else in the config depends on the key.
 //!
-//! Plain values are still accepted on load, so an older config (or one edited by
-//! hand) keeps working and is sealed on the next save.
+//! Plain values are still accepted on load. That load rewrites them sealed under
+//! the machine key. A sealed value that will not open stays on disk.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

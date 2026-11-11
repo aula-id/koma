@@ -2,9 +2,9 @@
 //!
 //! Unlike per-session `settings.json`, this file stores user-wide preferences
 //! that apply across all sessions: visual theme, accent colour, and any future
-//! global knobs. It is loaded once at startup (after `ensure_dirs`) and never
-//! written automatically — the user (or a future `/settings` command) calls
-//! `save()` explicitly.
+//! global knobs. It is loaded once at startup (after `ensure_dirs`). A load that
+//! still finds a plain-text credential, or a file other users can read, rewrites
+//! it sealed and owner-only. `save()` does the same when settings are stored.
 //!
 //! On-disk format (pretty-printed JSON):
 //! ```json
@@ -759,6 +759,24 @@ pub struct AppConfig {
     /// remain in config so Settings can explain the problem.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_skill_roots: Vec<std::path::PathBuf>,
+    /// Ciphertext this process could not open. A later save writes it back
+    /// instead of the empty string left in memory. Not persisted.
+    #[serde(skip)]
+    pub(crate) kept_unreadable: Vec<(SecretId, String)>,
+}
+
+/// Which credential a failed open came from, so a later save can put the
+/// ciphertext back on that same field.
+#[derive(Clone, Debug)]
+pub(crate) enum SecretId {
+    Provider(String),
+    Access(String),
+    Refresh(String),
+    Id(String),
+    Firecrawl,
+    Tavily,
+    Exa,
+    Mcp { server: String, name: String },
 }
 
 impl Default for AppConfig {
@@ -779,6 +797,7 @@ impl Default for AppConfig {
             installed_extensions: Vec::new(),
             ext_preferred_models: std::collections::BTreeMap::new(),
             extra_skill_roots: Vec::new(),
+            kept_unreadable: Vec::new(),
         }
     }
 }
@@ -786,60 +805,92 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Load from `~/.koma/config.json`.
     ///
-    /// Strips any `clinepass` OAuth conns + orphaned models (whose `provider_uuid`
-    /// referenced one of those stripped conns) on load — ClinePass was only usable
-    /// with an existing CLI login (no browser authorize/callback) and is now removed.
-    /// The migration runs at the JSON level so the enum variant can still deserialize
-    /// (it hasn't been deleted yet). If anything was stripped the cleaned config is
-    /// persisted; otherwise the file is left untouched.
+    /// Strips removed `clinepass` connections, and seals any credential that is
+    /// still plain text. A sealed credential that cannot be opened is left on
+    /// disk (and copied to `config.json.undecrypted.bak`) and comes back empty
+    /// in memory.
     ///
-    /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,
-    /// etc.) so startup is never blocked by a missing or corrupt config file.
+    /// Returns `AppConfig::default()` on any error so startup is never blocked
+    /// by a missing or corrupt config file.
     pub fn load() -> Self {
         Self::try_load().unwrap_or_default()
     }
 
-    /// Reload without treating a corrupt/unreadable catalogue as deletion.
+    /// Reload without treating a corrupt catalogue as deletion.
+    ///
+    /// Under `cfg(test)` this does not rewrite the file. Unit tests reach it
+    /// through code that loads the developer's real config, and the key in a
+    /// test build is the fixed test key.
     pub(crate) fn try_load() -> Result<Self> {
         let path = base_dir()?.join("config.json");
-        let bytes = std::fs::read(&path)?;
+        let read = secret_box::key_for_read();
+        Self::load_at(
+            &path,
+            read.as_ref(),
+            !cfg!(test),
+            !cfg!(test),
+            secret_box::key_for_write,
+        )
+    }
+
+    /// Open `path` and, when `allow_write` is set, seal plain-text credentials
+    /// under the key from `write_key`. `write_key` is called only when the file
+    /// needs a rewrite, so a key is not created for a file that is already sealed.
+    ///
+    /// A value that cannot be opened is not stored back as empty. The original
+    /// file is copied beside it first, and a rewrite puts that ciphertext back.
+    pub(crate) fn load_at(
+        path: &std::path::Path,
+        read_key: Option<&secret_box::Key>,
+        allow_write: bool,
+        report: bool,
+        write_key: impl FnOnce() -> Result<secret_box::Key>,
+    ) -> Result<Self> {
+        let bytes = std::fs::read(path)?;
         let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
         let stripped = Self::strip_clinepass(&mut value);
         let mut config: Self = serde_json::from_value(value)?;
-        let opened = config.open_secrets(secret_box::key_for_read().as_ref());
-        if opened.lost > 0 {
-            // The values now read as empty and the next save would write them
-            // out that way. Keep the file as it was, so they can be recovered
-            // if the key turns up.
-            let kept = secret_box::keep_unreadable_copy(&path);
-            crate::model::store::append_global_error_log(
-                "config secrets",
-                &format!(
-                    "{} saved credential(s) could not be decrypted (machine key missing or \
-                     replaced); enter them again. {}",
-                    opened.lost,
-                    match kept {
-                        Ok(copy) => format!("The previous file is kept at {}", copy.display()),
-                        Err(error) =>
-                            format!("Could not keep a copy of the previous file: {error}"),
-                    }
-                ),
-            );
-        }
-        // Rewrite once when the file still carries plain-text credentials or a
-        // mode other users can read; `save` seals and writes it owner-only.
-        //
-        // Never under `cfg(test)`: unit tests reach this through code that loads
-        // the developer's real config, and there the key is the fixed test key.
-        // Rewriting would seal real credentials under a key the installed
-        // binary does not have.
-        let exposed = secret_box::is_exposed(&path) == Some(true);
-        if !cfg!(test) && (stripped || opened.plain > 0 || exposed) {
-            if let Err(error) = config.save() {
+        let opened = config.open_secrets(read_key);
+        let exposed = secret_box::is_exposed(path) == Some(true);
+        if opened.lost > 0 && allow_write {
+            let kept = secret_box::keep_unreadable_copy(path);
+            if report {
                 crate::model::store::append_global_error_log(
-                    "config migration",
-                    &format!("save failed: {error}"),
+                    "config secrets",
+                    &format!(
+                        "{} saved credential(s) could not be decrypted (machine key missing or \
+                         replaced); enter them again. {}",
+                        opened.lost,
+                        match kept {
+                            Ok(copy) => format!("The previous file is kept at {}", copy.display()),
+                            Err(error) => {
+                                format!("Could not keep a copy of the previous file: {error}")
+                            }
+                        }
+                    ),
                 );
+            }
+        }
+        if allow_write && (stripped || opened.plain > 0 || exposed) {
+            match write_key() {
+                Ok(key) => {
+                    if let Err(error) = config.write_sealed(path, &key) {
+                        if report {
+                            crate::model::store::append_global_error_log(
+                                "config migration",
+                                &format!("save failed: {error}"),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    if report {
+                        crate::model::store::append_global_error_log(
+                            "config migration",
+                            &format!("save failed: {error}"),
+                        );
+                    }
+                }
             }
         }
         Ok(config)
@@ -855,44 +906,133 @@ impl AppConfig {
     }
 
     /// The document to store: this config with every credential sealed.
+    /// Ciphertext this process could not open is written back unchanged.
     pub(crate) fn to_disk_bytes(&self, key: &secret_box::Key) -> Result<Vec<u8>> {
         let mut sealed = self.clone();
+        sealed.put_back_unreadable();
         sealed.seal_secrets(key)?;
         Ok(serde_json::to_vec_pretty(&sealed)?)
     }
 
-    /// Every field that holds a credential. One list, so sealing and opening
-    /// cannot drift apart. MCP `env` values are included because that is where
-    /// server tokens are configured.
-    fn secret_fields(&mut self) -> impl Iterator<Item = &mut String> {
-        let providers = self.providers.iter_mut().map(|p| &mut p.api_key);
-        let oauth = self
-            .oauth_conns
-            .iter_mut()
-            .flat_map(|c| [&mut c.access_token, &mut c.refresh_token, &mut c.id_token]);
-        let search = [
-            &mut self.web_search.firecrawl_key.0,
-            &mut self.web_search.tavily_key.0,
-            &mut self.web_search.exa_key.0,
-        ];
-        let mcp = self
-            .mcp_servers
-            .iter_mut()
-            .flat_map(|server| server.env.iter_mut().map(|(_, value)| value));
-        providers.chain(oauth).chain(search).chain(mcp)
+    fn write_sealed(&self, path: &std::path::Path, key: &secret_box::Key) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = self.to_disk_bytes(key)?;
+        secret_box::write_private(path, &json)?;
+        Ok(())
+    }
+
+    /// Every credential field, with a stable id. MCP `env` values are included
+    /// because that is where server tokens are configured.
+    fn for_each_secret(&mut self, mut visit: impl FnMut(SecretId, &mut String)) {
+        for provider in &mut self.providers {
+            visit(
+                SecretId::Provider(provider.uuid.clone()),
+                &mut provider.api_key,
+            );
+        }
+        for conn in &mut self.oauth_conns {
+            let uuid = conn.uuid.clone();
+            visit(SecretId::Access(uuid.clone()), &mut conn.access_token);
+            visit(SecretId::Refresh(uuid.clone()), &mut conn.refresh_token);
+            visit(SecretId::Id(uuid), &mut conn.id_token);
+        }
+        visit(SecretId::Firecrawl, &mut self.web_search.firecrawl_key.0);
+        visit(SecretId::Tavily, &mut self.web_search.tavily_key.0);
+        visit(SecretId::Exa, &mut self.web_search.exa_key.0);
+        for server in &mut self.mcp_servers {
+            let uuid = server.uuid.clone();
+            for (name, value) in &mut server.env {
+                visit(
+                    SecretId::Mcp {
+                        server: uuid.clone(),
+                        name: name.clone(),
+                    },
+                    value,
+                );
+            }
+        }
     }
 
     fn seal_secrets(&mut self, key: &secret_box::Key) -> Result<()> {
-        self.secret_fields()
-            .try_for_each(|field| secret_box::seal_field(key, field))
+        let mut error = None;
+        self.for_each_secret(|_, field| {
+            if error.is_none() {
+                if let Err(err) = secret_box::seal_field(key, field) {
+                    error = Some(err);
+                }
+            }
+        });
+        match error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     fn open_secrets(&mut self, key: Option<&secret_box::Key>) -> secret_box::Opened {
         let mut opened = secret_box::Opened::default();
-        for field in self.secret_fields() {
+        let mut kept = Vec::new();
+        self.for_each_secret(|id, field| {
+            let previous = field.clone();
+            let before = opened.lost;
             secret_box::open_field(key, field, &mut opened);
-        }
+            if opened.lost > before {
+                kept.push((id, previous));
+            }
+        });
+        self.kept_unreadable = kept;
         opened
+    }
+
+    fn put_back_unreadable(&mut self) {
+        for (id, ciphertext) in self.kept_unreadable.clone() {
+            let Some(field) = self.secret_field_mut(&id) else {
+                continue;
+            };
+            if field.is_empty() {
+                *field = ciphertext;
+            }
+        }
+    }
+
+    fn secret_field_mut(&mut self, id: &SecretId) -> Option<&mut String> {
+        match id {
+            SecretId::Provider(uuid) => self
+                .providers
+                .iter_mut()
+                .find(|provider| provider.uuid == *uuid)
+                .map(|provider| &mut provider.api_key),
+            SecretId::Access(uuid) => self
+                .oauth_conns
+                .iter_mut()
+                .find(|conn| conn.uuid == *uuid)
+                .map(|conn| &mut conn.access_token),
+            SecretId::Refresh(uuid) => self
+                .oauth_conns
+                .iter_mut()
+                .find(|conn| conn.uuid == *uuid)
+                .map(|conn| &mut conn.refresh_token),
+            SecretId::Id(uuid) => self
+                .oauth_conns
+                .iter_mut()
+                .find(|conn| conn.uuid == *uuid)
+                .map(|conn| &mut conn.id_token),
+            SecretId::Firecrawl => Some(&mut self.web_search.firecrawl_key.0),
+            SecretId::Tavily => Some(&mut self.web_search.tavily_key.0),
+            SecretId::Exa => Some(&mut self.web_search.exa_key.0),
+            SecretId::Mcp { server, name } => self
+                .mcp_servers
+                .iter_mut()
+                .find(|entry| entry.uuid == *server)
+                .and_then(|entry| {
+                    entry
+                        .env
+                        .iter_mut()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value)
+                }),
+        }
     }
 
     /// Remove every OAuth conn whose `provider` field is `"clinepass"` and every
@@ -1306,10 +1446,10 @@ impl AppConfig {
     pub fn save(&self) -> Result<()> {
         let directory = base_dir()?;
         std::fs::create_dir_all(&directory)?;
-        let path = directory.join("config.json");
-        let json = self.to_disk_bytes(&secret_box::key_for_write()?)?;
-        secret_box::write_private(&path, &json)?;
-        Ok(())
+        self.write_sealed(
+            &directory.join("config.json"),
+            &secret_box::key_for_write()?,
+        )
     }
 }
 
