@@ -509,8 +509,8 @@
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=dnsenum2"
     },
     {
-      "id": "domain_hunter_2",
-      "name": "domain_hunter_2",
+      "id": "domain_hunter",
+      "name": "domain_hunter",
       "summary": "Try to find all subdomains, similar-domains and related-domains of an organization.",
       "categories": [
         "informations-gathering"
@@ -771,6 +771,116 @@
       "scope_needed": true,
       "image_or_pack": "recon-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=yet-another-sniffer"
+    },
+    {
+      "id": "aranea",
+      "name": "aranea",
+      "summary": "OSINT tool used for web crawling or examining JavaScript files for likely useful data.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "aranea"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/leddcode/Aranea; detect=aranea"
+    },
+    {
+      "id": "asnlookup",
+      "name": "asnlookup",
+      "summary": "Leverage ASN to look up IP addresses (IPv4 & IPv6) owned by a specific organization for reconnaissance purposes, then run port scanning on it",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "asnlookup"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/yassineaboukir/Asnlookup; detect=asnlookup"
+    },
+    {
+      "id": "badkarma",
+      "name": "badkarma",
+      "summary": "Advanced network reconnaissance tool",
+      "categories": [
+        "osint-and-reconnaissance"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "badkarma"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/r3vn/badKarma; detect=badkarma"
+    },
+    {
+      "id": "carnivore",
+      "name": "carnivore",
+      "summary": "Assessment of on-premises Microsoft servers such as ADFS, Skype, Exchange, and RDWeb",
+      "categories": [
+        "networking"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "carnivore"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/nccgroup/Carnivore; detect=carnivore"
+    },
+    {
+      "id": "commit_stream",
+      "name": "commit_stream",
+      "summary": "OSINT tool for finding Github repositories by extracting commit logs in real time.",
+      "categories": [
+        "informations-gathering"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red",
+        "research"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "commit-stream"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "recon-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/x1sec/commit-stream; detect=commit-stream"
     }
   ]
 }

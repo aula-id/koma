@@ -4,3 +4,5 @@ https://github.com/cryps1s/DARKSURGEON
 https://github.com/DFIR-ORC/dfir-orc
 https://github.com/lijiejie/ds_store_exp
 https://github.com/Temzasse/ntu-crysis
+https://github.com/ninoseki/eml_analyzer
+https://github.com/mtth-bfft/libiris

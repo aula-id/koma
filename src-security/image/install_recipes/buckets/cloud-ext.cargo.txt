@@ -1,3 +1,0 @@
-barq
-nsdetect
-sandcastle

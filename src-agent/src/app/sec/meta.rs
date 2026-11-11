@@ -156,7 +156,9 @@ op=copy_out (guest src → host dest), op=ls (guest path). Boundary must be up."
             "sec_runtime",
             "Control the koma-safety isolation boundary. \
 op=status|health inspect; op=up start guest+proxy on an internal network (fail-closed); \
-op=down tear down. Prefer sec_runtime up before heavy runs; sec_run may lazy-start.",
+op=down tear down. Prefer sec_runtime up before heavy runs; sec_run may lazy-start. \
+Network scope: op=net mode=scope targets=[host or host:port] asks the user to confirm \
+those targets; once confirmed they are the scope every networked sec_run is checked against.",
             object_schema(
                 serde_json::json!({
                     "op": {
@@ -167,7 +169,7 @@ op=down tear down. Prefer sec_runtime up before heavy runs; sec_run may lazy-sta
                     "targets": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Optional egress allowlist cells for up (host:ports)"
+                        "description": "Scope targets for up/net, as host or host:port (no scheme, no path). New targets need the user's confirmation"
                     },
                     "exclusions": {
                         "type": "array",

@@ -104,19 +104,14 @@ const KNOWN_COMPOSITIONS: &[(&str, &str)] = &[
     ("identity-ext", "identity (npm + cargo)"),
     ("identity-src", "identity from source"),
     ("cloud", "cloud (apt + go)"),
-    ("cloud-ext", "cloud (npm + cargo)"),
     ("cloud-src", "cloud from source"),
     ("rev", "reverse engineering (apt + go)"),
-    ("rev-ext", "reverse engineering (npm + cargo)"),
     ("rev-src", "reverse engineering from source"),
     ("crypto", "crypto (apt + go)"),
-    ("crypto-ext", "crypto (npm + cargo)"),
     ("crypto-src", "crypto from source"),
     ("pxn", "pwn / exploit (apt + go)"),
-    ("pxn-ext", "pwn / exploit (npm + cargo)"),
     ("pxn-src", "pwn / exploit from source"),
     ("dfir", "DFIR (apt + go)"),
-    ("dfir-ext", "DFIR (npm + cargo)"),
     ("dfir-src", "DFIR from source"),
     ("lab", "lab utilities (apt + go)"),
     ("lab-ext", "lab utilities (npm + cargo)"),
@@ -125,6 +120,15 @@ const KNOWN_COMPOSITIONS: &[(&str, &str)] = &[
 
 fn is_known_composition(id: &str) -> bool {
     KNOWN_COMPOSITIONS.iter().any(|(known, _)| *known == id)
+}
+
+/// Compositions that are no longer published. A copy pulled earlier can still be
+/// deactivated and removed, never pulled or made the active image again.
+pub const RETIRED_COMPOSITIONS: &[&str] =
+    &["cloud-ext", "rev-ext", "crypto-ext", "pxn-ext", "dfir-ext"];
+
+fn is_retired_composition(id: &str) -> bool {
+    RETIRED_COMPOSITIONS.contains(&id)
 }
 
 fn images_json_path(dest: &Path) -> PathBuf {
@@ -419,7 +423,7 @@ pub fn active_guest_images() -> Vec<(String, String)> {
 /// Returns whether it is active afterwards. The last active image stays: with
 /// none, the daemon would fall back to an image the user never chose.
 pub fn toggle_active_composition(id: &str) -> Result<bool> {
-    if !is_known_composition(id) {
+    if !is_known_composition(id) && !is_retired_composition(id) {
         return Err(anyhow!("unknown composition '{id}'"));
     }
     let dest = security_dir()?;
@@ -475,7 +479,7 @@ pub fn activate_composition(id: &str) -> Result<()> {
 ///
 /// Refuses to remove the active composition.
 pub fn remove_composition(id: &str) -> Result<()> {
-    if !is_known_composition(id) {
+    if !is_known_composition(id) && !is_retired_composition(id) {
         return Err(anyhow!("unknown composition '{id}'"));
     }
     let dest = security_dir()?;

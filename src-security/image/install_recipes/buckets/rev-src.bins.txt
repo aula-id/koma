@@ -13,3 +13,8 @@ droidefense
 flutter-spy
 pastis
 xxxpwn_smart
+adb-toolkit
+barf
+cerberus
+codecat
+panda

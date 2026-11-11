@@ -3,3 +3,5 @@ crypto-identifier
 cryptoguard
 cryptorex
 cryscanner
+avet
+depix

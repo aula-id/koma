@@ -2,6 +2,150 @@
   "tools_in": 723,
   "skipped_snap": 14,
   "skipped_other": 0,
+  "registry_unverified_built_from_source": 61,
+  "registry_unverified_left_out": [
+    "andor",
+    "arecibo",
+    "atlas",
+    "barq",
+    "bbot",
+    "blackwidow",
+    "boomerang",
+    "bore",
+    "brutex",
+    "bug-hunter",
+    "c-jwt-cracker",
+    "ccs",
+    "cero",
+    "certify",
+    "chimera",
+    "cloudgpt",
+    "cloudscraper",
+    "cloudshark",
+    "cloudsploit",
+    "codeql",
+    "cook",
+    "cracken",
+    "cstc",
+    "ctfr",
+    "detect-secrets",
+    "dexcalibur",
+    "distributed-jwt-cracker",
+    "domain-hunter",
+    "dome",
+    "dot",
+    "eagle",
+    "edd",
+    "eos",
+    "espionage",
+    "falco",
+    "fastsub",
+    "flan",
+    "flare",
+    "floss",
+    "frida",
+    "fuxi",
+    "fuzzilli",
+    "garfield",
+    "git-dumper",
+    "goop",
+    "gorgo",
+    "graphicator",
+    "grr",
+    "gtfo",
+    "haiti",
+    "harpoon",
+    "hash-buster",
+    "hassh",
+    "hawk",
+    "honggfuzz",
+    "hping",
+    "http-traceroute",
+    "injectus",
+    "interlace",
+    "ironwasp",
+    "ja3",
+    "jaqen",
+    "jaws",
+    "js-scan",
+    "js-tap",
+    "jsparser",
+    "jwt-tool",
+    "kekeo",
+    "lateralus",
+    "lightbulb",
+    "linenum",
+    "link",
+    "mantis",
+    "masky",
+    "mentalist",
+    "minidump",
+    "monsoon",
+    "moriarty",
+    "mvt",
+    "myjwt",
+    "nemesis",
+    "netcap",
+    "netprobe",
+    "nighthawk",
+    "nipe",
+    "nozaki",
+    "nsdetect",
+    "objection",
+    "omnibus",
+    "osintui",
+    "osquery",
+    "overlord",
+    "pandora",
+    "pipedream",
+    "polymorph",
+    "ppfuzz",
+    "prowler",
+    "ps2",
+    "ptf",
+    "pwntools",
+    "pyscan",
+    "rabid",
+    "redirect-tracker",
+    "rekall",
+    "rengine",
+    "restler",
+    "retirejs",
+    "rsg",
+    "ruler",
+    "rustbuster",
+    "sandcastle",
+    "scarecrow",
+    "scout",
+    "seatbelt",
+    "semgrep",
+    "shelling",
+    "shells",
+    "sigma",
+    "sj",
+    "skill-scanner",
+    "smuggler",
+    "spamscanner",
+    "stews",
+    "triton",
+    "tsunami",
+    "turner",
+    "uboat",
+    "uglifyjs2",
+    "vaf",
+    "vega",
+    "velociraptor",
+    "venom",
+    "volatility",
+    "vuls",
+    "wappalyzer",
+    "wascan",
+    "webcopilot",
+    "whonow",
+    "wpscan",
+    "xxexploiter",
+    "zdns"
+  ],
   "domain_tool_counts": {
     "cloud": 37,
     "crypto": 22,
@@ -88,15 +232,14 @@
     "recon-ext": {
       "apt": 0,
       "go": 0,
-      "npm": 31,
-      "cargo": 19,
+      "npm": 1,
+      "cargo": 0,
       "src": 0,
-      "bins": 50,
-      "tools_in_pack": 50,
+      "bins": 1,
+      "tools_in_pack": 1,
       "base_hint": "debian",
       "channels": [
-        "npm",
-        "cargo"
+        "npm"
       ]
     },
     "recon-src": {
@@ -104,9 +247,9 @@
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 35,
-      "bins": 35,
-      "tools_in_pack": 35,
+      "src": 40,
+      "bins": 40,
+      "tools_in_pack": 40,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -129,15 +272,14 @@
     "web-ext": {
       "apt": 0,
       "go": 0,
-      "npm": 33,
-      "cargo": 7,
+      "npm": 4,
+      "cargo": 0,
       "src": 0,
-      "bins": 40,
-      "tools_in_pack": 40,
+      "bins": 4,
+      "tools_in_pack": 4,
       "base_hint": "debian",
       "channels": [
-        "npm",
-        "cargo"
+        "npm"
       ]
     },
     "web-src": {
@@ -145,9 +287,9 @@
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 33,
-      "bins": 33,
-      "tools_in_pack": 33,
+      "src": 40,
+      "bins": 40,
+      "tools_in_pack": 40,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -170,15 +312,14 @@
     "identity-ext": {
       "apt": 0,
       "go": 0,
-      "npm": 14,
-      "cargo": 9,
+      "npm": 1,
+      "cargo": 0,
       "src": 0,
-      "bins": 23,
-      "tools_in_pack": 23,
+      "bins": 1,
+      "tools_in_pack": 1,
       "base_hint": "debian",
       "channels": [
-        "npm",
-        "cargo"
+        "npm"
       ]
     },
     "identity-src": {
@@ -186,9 +327,9 @@
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 23,
-      "bins": 23,
-      "tools_in_pack": 23,
+      "src": 28,
+      "bins": 28,
+      "tools_in_pack": 28,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -208,28 +349,14 @@
         "go"
       ]
     },
-    "cloud-ext": {
-      "apt": 0,
-      "go": 0,
-      "npm": 7,
-      "cargo": 3,
-      "src": 0,
-      "bins": 10,
-      "tools_in_pack": 10,
-      "base_hint": "debian",
-      "channels": [
-        "npm",
-        "cargo"
-      ]
-    },
     "cloud-src": {
       "apt": 0,
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 13,
-      "bins": 13,
-      "tools_in_pack": 13,
+      "src": 16,
+      "bins": 16,
+      "tools_in_pack": 16,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -249,28 +376,14 @@
         "go"
       ]
     },
-    "rev-ext": {
-      "apt": 0,
-      "go": 0,
-      "npm": 12,
-      "cargo": 1,
-      "src": 0,
-      "bins": 13,
-      "tools_in_pack": 13,
-      "base_hint": "debian",
-      "channels": [
-        "npm",
-        "cargo"
-      ]
-    },
     "rev-src": {
       "apt": 0,
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 15,
-      "bins": 15,
-      "tools_in_pack": 15,
+      "src": 20,
+      "bins": 20,
+      "tools_in_pack": 20,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -290,28 +403,14 @@
         "go"
       ]
     },
-    "crypto-ext": {
-      "apt": 0,
-      "go": 0,
-      "npm": 5,
-      "cargo": 3,
-      "src": 0,
-      "bins": 8,
-      "tools_in_pack": 8,
-      "base_hint": "debian",
-      "channels": [
-        "npm",
-        "cargo"
-      ]
-    },
     "crypto-src": {
       "apt": 0,
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 5,
-      "bins": 5,
-      "tools_in_pack": 5,
+      "src": 7,
+      "bins": 7,
+      "tools_in_pack": 7,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -331,28 +430,14 @@
         "go"
       ]
     },
-    "pxn-ext": {
-      "apt": 0,
-      "go": 0,
-      "npm": 7,
-      "cargo": 7,
-      "src": 0,
-      "bins": 14,
-      "tools_in_pack": 14,
-      "base_hint": "debian",
-      "channels": [
-        "npm",
-        "cargo"
-      ]
-    },
     "pxn-src": {
       "apt": 0,
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 20,
-      "bins": 20,
-      "tools_in_pack": 20,
+      "src": 24,
+      "bins": 24,
+      "tools_in_pack": 24,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -372,28 +457,14 @@
         "go"
       ]
     },
-    "dfir-ext": {
-      "apt": 0,
-      "go": 0,
-      "npm": 6,
-      "cargo": 4,
-      "src": 0,
-      "bins": 10,
-      "tools_in_pack": 10,
-      "base_hint": "debian",
-      "channels": [
-        "npm",
-        "cargo"
-      ]
-    },
     "dfir-src": {
       "apt": 0,
       "go": 0,
       "npm": 0,
       "cargo": 0,
-      "src": 6,
-      "bins": 6,
-      "tools_in_pack": 6,
+      "src": 8,
+      "bins": 8,
+      "tools_in_pack": 8,
       "base_hint": "debian",
       "channels": [
         "from-source"
@@ -416,11 +487,11 @@
     "lab-ext": {
       "apt": 0,
       "go": 0,
-      "npm": 36,
-      "cargo": 9,
+      "npm": 2,
+      "cargo": 3,
       "src": 0,
-      "bins": 45,
-      "tools_in_pack": 45,
+      "bins": 5,
+      "tools_in_pack": 5,
       "base_hint": "debian",
       "channels": [
         "npm",
@@ -441,15 +512,21 @@
       ]
     },
     "minimal": {
-      "apt": 0,
+      "apt": 11,
       "go": 0,
-      "npm": 0,
+      "npm": 1,
       "cargo": 0,
-      "src": 0,
-      "bins": 0,
+      "src": 1,
+      "bins": 12,
       "tools_in_pack": 0,
       "base_hint": "debian",
-      "channels": []
+      "channels": [
+        "apt",
+        "npm",
+        "from-source",
+        "pip",
+        "gem"
+      ]
     }
   },
   "composition_ids": [
@@ -464,19 +541,14 @@
     "identity-ext",
     "identity-src",
     "cloud",
-    "cloud-ext",
     "cloud-src",
     "rev",
-    "rev-ext",
     "rev-src",
     "crypto",
-    "crypto-ext",
     "crypto-src",
     "pxn",
-    "pxn-ext",
     "pxn-src",
     "dfir",
-    "dfir-ext",
     "dfir-src",
     "lab",
     "lab-ext",
@@ -485,13 +557,10 @@
   ],
   "packs_written": [
     "cloud",
-    "cloud-ext",
     "cloud-src",
     "crypto",
-    "crypto-ext",
     "crypto-src",
     "dfir",
-    "dfir-ext",
     "dfir-src",
     "identity",
     "identity-ext",
@@ -500,14 +569,12 @@
     "lab-ext",
     "lab-src",
     "pxn",
-    "pxn-ext",
     "pxn-src",
     "recon",
     "recon-2",
     "recon-ext",
     "recon-src",
     "rev",
-    "rev-ext",
     "rev-src",
     "web",
     "web-ext",
@@ -517,6 +584,7 @@
     "apt_max_per_domain_image": 75,
     "src_allowlist_max": 40,
     "snap": "skipped",
-    "channel": "preferred_order[0]; source\u2192from-source"
+    "channel": "preferred_order[0]; source\u2192from-source",
+    "registry": "npm/cargo only when registry_audit.json marks the package verified; otherwise from-source if the tool has a repository, else left out"
   }
 }

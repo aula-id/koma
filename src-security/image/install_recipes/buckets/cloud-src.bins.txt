@@ -11,3 +11,6 @@ festin
 firebase-extractor
 offensive-azure
 teh-s3-bucketeers
+bucket-stream
+curate
+linkedindumper

@@ -18,3 +18,7 @@ flutterguard
 pypykatz
 quadrainspect
 sweetpotato
+cssg
+dllinjector
+ffm
+watson

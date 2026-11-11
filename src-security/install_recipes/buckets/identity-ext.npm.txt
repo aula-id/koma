@@ -1,14 +1,1 @@
-arsenal
-azureadlateralmovement
-ctf-tools
-cve
-dot
-dshell
-eagle
-jwt-cracker
-jwt-tool
-kekeo
-linenum
-mentalist
-moriarty
 padding-oracle-attacker

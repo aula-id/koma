@@ -274,6 +274,69 @@
       "scope_needed": true,
       "image_or_pack": "cloud-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=teh-s3-bucketeers"
+    },
+    {
+      "id": "bucket_stream",
+      "name": "bucket_stream",
+      "summary": "Find interesting Amazon S3 Buckets by watching certificate transparency logs.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "bucket-stream"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/eth0izzle/bucket-stream; detect=bucket-stream"
+    },
+    {
+      "id": "curate",
+      "name": "curate",
+      "summary": "A tool for fetching archived URLs.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "curate"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/EdOverflow/curate; detect=curate"
+    },
+    {
+      "id": "linkedindumper",
+      "name": "linkedindumper",
+      "summary": "Script that dumps employee data from the LinkedIn social networking platform.",
+      "categories": [
+        "cloud-services"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "linkedindumper"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "cloud-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/l4rm4nd/LinkedInDumper; detect=linkedindumper"
     }
   ]
 }

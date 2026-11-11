@@ -421,6 +421,90 @@
       "scope_needed": true,
       "image_or_pack": "pxn-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=sweetpotato"
+    },
+    {
+      "id": "cssg",
+      "name": "cssg",
+      "summary": "Cobalt Strike Shellcode Generator; script used to more easily generate and format beacon shellcode in Cobalt Strike",
+      "categories": [
+        "red-teaming"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cssg"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/RCStep/CSSG; detect=cssg"
+    },
+    {
+      "id": "dllinjector",
+      "name": "dllinjector",
+      "summary": "Dll injection tool",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dllinjector"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/OpenSecurityResearch/dllinjector; detect=dllinjector"
+    },
+    {
+      "id": "ffm",
+      "name": "ffm",
+      "summary": "Freedom Fighting Mode (FFM), hacking harness, post-exploitation tool",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ffm"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/JusticeRage/FFM; detect=ffm"
+    },
+    {
+      "id": "watson",
+      "name": "watson",
+      "summary": "Enumerate missing KBs and suggest exploits for useful privilege escalation vulnerabilities.",
+      "categories": [
+        "system-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "watson"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "pxn-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/rasta-mouse/Watson; detect=watson"
     }
   ]
 }

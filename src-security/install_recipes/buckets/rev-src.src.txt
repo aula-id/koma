@@ -13,3 +13,8 @@ https://github.com/droidefense/engine
 https://github.com/anasfik/flutter-spy
 https://github.com/quarkslab/pastis
 https://github.com/aayla-secura/xxxpwn_smart
+https://github.com/ASHWIN990/ADB-Toolkit
+https://github.com/programa-stic/barf-project
+https://github.com/h311d1n3r/Cerberus
+https://github.com/CoolerVoid/codecat
+https://github.com/panda-re/panda
