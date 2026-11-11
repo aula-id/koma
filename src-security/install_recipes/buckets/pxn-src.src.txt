@@ -18,3 +18,7 @@ https://github.com/flutterguard/flutterguard-cli
 https://github.com/skelsec/pypykatz
 https://github.com/morpheuslord/QuadraInspect
 https://github.com/CCob/SweetPotato
+https://github.com/RCStep/CSSG
+https://github.com/OpenSecurityResearch/dllinjector
+https://github.com/JusticeRage/FFM
+https://github.com/rasta-mouse/Watson

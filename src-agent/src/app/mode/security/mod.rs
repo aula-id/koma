@@ -226,7 +226,15 @@ impl SecurityState {
         // Images float on `latest`; a pull from another koma version still counts.
         let version_ok = true;
         let mut rows = Vec::with_capacity(crate::security::list_known_compositions().len());
-        for (id, blurb) in crate::security::list_known_compositions() {
+        // A retired image shows only while a pulled copy is still on disk, so it
+        // can be removed; it is never offered for a fresh pull.
+        let retired = crate::security::RETIRED_COMPOSITIONS
+            .iter()
+            .filter(|id| inv.images.contains_key(**id))
+            .map(|id| (*id, "retired — no longer published, safe to remove"));
+        let known = crate::security::list_known_compositions().iter().copied();
+        for (id, blurb) in known.chain(retired) {
+            let (id, blurb) = (&id, &blurb);
             let tag = crate::security::composition_tag(id);
             let entry = if version_ok {
                 inv.images.get(*id)

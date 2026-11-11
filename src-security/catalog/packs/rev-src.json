@@ -342,6 +342,119 @@
       "scope_needed": true,
       "image_or_pack": "rev-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=xxxpwn_smart"
+    },
+    {
+      "id": "adb_toolkit",
+      "name": "adb_toolkit",
+      "summary": "Wrapper around adb to ease certain tasks",
+      "categories": [
+        "mobile"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "adb-toolkit"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "rev-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/ASHWIN990/ADB-Toolkit; detect=adb-toolkit"
+    },
+    {
+      "id": "barf",
+      "name": "barf",
+      "summary": "Binary Analysis and Reverse engineering Framework",
+      "categories": [
+        "reverse-engineering"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "barf"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/programa-stic/barf-project; detect=barf"
+    },
+    {
+      "id": "cerberus",
+      "name": "cerberus",
+      "summary": "Unstrip Rust and Go binaries (ELF and PE) for static analysis; based on hashing and scoring systems, it can retrieve lots of symbol names",
+      "categories": [
+        "reverse-engineering"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cerberus"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/h311d1n3r/Cerberus; detect=cerberus"
+    },
+    {
+      "id": "codecat",
+      "name": "codecat",
+      "summary": "Automatic code static analysis tool to detect bugs and vulnerabilities",
+      "categories": [
+        "code-analysis"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "codecat"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/CoolerVoid/codecat; detect=codecat"
+    },
+    {
+      "id": "panda",
+      "name": "panda",
+      "summary": "Platform for architecture-neutral dynamic analysis",
+      "categories": [
+        "reverse-engineering"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "panda"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "rev-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/panda-re/panda; detect=panda"
     }
   ]
 }

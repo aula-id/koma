@@ -11,3 +11,6 @@ https://github.com/cr0hn/festin
 https://github.com/viperbluff/Firebase-Extractor
 https://github.com/blacklanternsecurity/offensive-azure
 https://github.com/tomdev/teh_s3_bucketeers
+https://github.com/eth0izzle/bucket-stream
+https://github.com/EdOverflow/curate
+https://github.com/l4rm4nd/LinkedInDumper

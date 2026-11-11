@@ -275,6 +275,27 @@ pub(super) fn park_classifier_unavailable(
     true
 }
 
+/// The target request in a `sec_runtime` call that the confirmed scope does not
+/// cover yet. `None` when the call opens nothing, is malformed (the tool reports
+/// that itself), or runs on the research lane, which never carries targets.
+pub(crate) fn unconfirmed_scope(
+    state: &AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+) -> Option<crate::tool::scope_grant::Request> {
+    let args: serde_json::Value = serde_json::from_str(
+        &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
+    )
+    .ok()?;
+    let request = crate::tool::scope_grant::requested(&call.function.name, &args).ok()??;
+    let ctx = super::super::spawn::build_tool_ctx(state, sess_idx);
+    if crate::tool::scope::lane_of(&ctx) == Some(crate::app::sec::lane::Lane::Research) {
+        return None;
+    }
+    let current = crate::tool::scope_grant::current(&ctx);
+    (!crate::tool::scope_grant::covered(current.as_ref(), &request)).then_some(request)
+}
+
 /// Drive the tool-approval state machine for the current round.
 ///
 /// Walks `pending_tool_calls` from `tool_idx`, running each call and collecting
@@ -687,6 +708,22 @@ pub(crate) fn process_tools(
                 }
             }
         }
+        // New network targets are the user's to confirm, in every mode: the
+        // scope record is what admits a networked run, and only a y writes it.
+        if call.function.name == "sec_runtime" {
+            if let Some(request) = unconfirmed_scope(state, sess_idx, &call) {
+                if park_or_reject(
+                    state,
+                    sess_idx,
+                    &call,
+                    Some(crate::tool::scope_grant::prompt(&request)),
+                    "approve scope? [y/n]".to_string(),
+                ) {
+                    return;
+                }
+                continue;
+            }
+        }
         if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str())
             || call.function.name.starts_with("mcp__")
             || call.function.name.starts_with("sec_")
@@ -829,6 +866,29 @@ mod outage_tests {
                 assert!(state.rest.fg().tool_results.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn new_scope_targets_park_for_the_user_even_in_yolo() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut state = AppState::new(crate::app::mode::Mode::Chat);
+        state.rest.fg_mut().agent_mode = AgentMode::Yolo;
+        state.rest.fg_mut().pending_tool_calls.push(ToolCall {
+            id: "scope-call".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "sec_runtime".into(),
+                arguments: r#"{"op":"net","mode":"scope","targets":["a.test:8080"]}"#.into(),
+            },
+        });
+        process_tools(&mut state, 0, &None, runtime.handle());
+        assert!(state.rest.fg().awaiting_approval);
+        assert_eq!(state.rest.fg().tool_idx, 0);
+        assert!(state.rest.fg().tool_results.is_empty());
+        assert_eq!(
+            state.rest.fg().approval_reason.as_deref(),
+            Some("allow network access to: a.test:8080")
+        );
     }
 
     #[test]

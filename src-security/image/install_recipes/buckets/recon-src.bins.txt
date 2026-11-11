@@ -33,3 +33,8 @@ favfreak
 scanless
 sniff-paste
 yet-another-sniffer
+aranea
+asnlookup
+badkarma
+carnivore
+commit-stream

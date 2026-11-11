@@ -1,9 +1,0 @@
-certify
-cook
-cracken
-eos
-grr
-honggfuzz
-interlace
-netprobe
-ppfuzz

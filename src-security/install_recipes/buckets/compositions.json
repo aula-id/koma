@@ -22,8 +22,7 @@
     "id": "recon-ext",
     "domain": "recon",
     "channels": [
-      "npm",
-      "cargo"
+      "npm"
     ],
     "blurb": "OSINT, network recon, scanning, enumeration (npm/cargo)",
     "base_hint": "debian"
@@ -51,8 +50,7 @@
     "id": "web-ext",
     "domain": "web",
     "channels": [
-      "npm",
-      "cargo"
+      "npm"
     ],
     "blurb": "Web app exploitation, CMS, bug bounty, vuln assessment (npm/cargo)",
     "base_hint": "debian"
@@ -80,8 +78,7 @@
     "id": "identity-ext",
     "domain": "identity",
     "channels": [
-      "npm",
-      "cargo"
+      "npm"
     ],
     "blurb": "Auth, permissions, password cracking (npm/cargo)",
     "base_hint": "debian"
@@ -106,16 +103,6 @@
     "base_hint": "debian"
   },
   {
-    "id": "cloud-ext",
-    "domain": "cloud",
-    "channels": [
-      "npm",
-      "cargo"
-    ],
-    "blurb": "Cloud services and cloud-native security (npm/cargo)",
-    "base_hint": "debian"
-  },
-  {
     "id": "cloud-src",
     "domain": "cloud",
     "channels": [
@@ -132,16 +119,6 @@
       "go"
     ],
     "blurb": "Reverse engineering, binary/code analysis, mobile",
-    "base_hint": "debian"
-  },
-  {
-    "id": "rev-ext",
-    "domain": "rev",
-    "channels": [
-      "npm",
-      "cargo"
-    ],
-    "blurb": "Reverse engineering, binary/code analysis, mobile (npm/cargo)",
     "base_hint": "debian"
   },
   {
@@ -164,16 +141,6 @@
     "base_hint": "debian"
   },
   {
-    "id": "crypto-ext",
-    "domain": "crypto",
-    "channels": [
-      "npm",
-      "cargo"
-    ],
-    "blurb": "Cryptanalysis, cryptography, steganography (npm/cargo)",
-    "base_hint": "debian"
-  },
-  {
     "id": "crypto-src",
     "domain": "crypto",
     "channels": [
@@ -193,16 +160,6 @@
     "base_hint": "debian"
   },
   {
-    "id": "pxn-ext",
-    "domain": "pxn",
-    "channels": [
-      "npm",
-      "cargo"
-    ],
-    "blurb": "System exploitation, red team, wireless, adversary sim (npm/cargo)",
-    "base_hint": "debian"
-  },
-  {
     "id": "pxn-src",
     "domain": "pxn",
     "channels": [
@@ -219,16 +176,6 @@
       "go"
     ],
     "blurb": "Digital forensics, IR, defensive, threat intel",
-    "base_hint": "debian"
-  },
-  {
-    "id": "dfir-ext",
-    "domain": "dfir",
-    "channels": [
-      "npm",
-      "cargo"
-    ],
-    "blurb": "Digital forensics, IR, defensive, threat intel (npm/cargo)",
     "base_hint": "debian"
   },
   {

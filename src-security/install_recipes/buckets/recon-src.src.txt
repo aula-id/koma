@@ -33,3 +33,8 @@ https://github.com/devanshbatham/FavFreak
 https://github.com/vesche/scanless
 https://github.com/needmorecowbell/sniff-paste
 https://github.com/redcode-labs/YAS
+https://github.com/leddcode/Aranea
+https://github.com/yassineaboukir/Asnlookup
+https://github.com/r3vn/badKarma
+https://github.com/nccgroup/Carnivore
+https://github.com/x1sec/commit-stream

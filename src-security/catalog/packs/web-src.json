@@ -694,6 +694,153 @@
       "scope_needed": true,
       "image_or_pack": "web-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=xsswagger"
+    },
+    {
+      "id": "astra",
+      "name": "astra",
+      "summary": "REST API penetration testing tool",
+      "categories": [
+        "vulnerabilities"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "astra"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/flipkart-incubator/astra; detect=astra"
+    },
+    {
+      "id": "blazy",
+      "name": "blazy",
+      "summary": "Login page bruteforcer: CSRF, SQLi, Clickjacking, WAF detection",
+      "categories": [
+        "web-application-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "blazy"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/s0md3v/Blazy; detect=blazy"
+    },
+    {
+      "id": "dead_link_checker",
+      "name": "dead_link_checker",
+      "summary": "A dead-simple way to recursively look for broken links on a web page.",
+      "categories": [
+        "vulnerabilities"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dead-link-checker"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/Kaltsoon/dead-link-checker; detect=dead-link-checker"
+    },
+    {
+      "id": "fingerprinter",
+      "name": "fingerprinter",
+      "summary": "CMS version detection tool",
+      "categories": [
+        "cms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "fingerprinter"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/erwanlr/Fingerprinter; detect=fingerprinter"
+    },
+    {
+      "id": "hackeroneclient",
+      "name": "hackeroneclient",
+      "summary": "A limited client library for interacting with HackerOne",
+      "categories": [
+        "bug-bounty"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "hackeroneclient"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/oreoshake/hackerone-client; detect=hackeroneclient"
+    },
+    {
+      "id": "open_sesame",
+      "name": "open_sesame",
+      "summary": "Contains HackerOne disclosed reports and other bug bounty writeups.",
+      "categories": [
+        "bug-bounty"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "open-sesame"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/humblelad/open-sesame; detect=open-sesame"
+    },
+    {
+      "id": "takeover",
+      "name": "takeover",
+      "summary": "A tool for testing subdomain takeover possibilities at a mass scale.",
+      "categories": [
+        "web-application-exploitation"
+      ],
+      "effect": "exploit",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "takeover"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "web-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/mzfr/takeover; detect=takeover"
     }
   ]
 }

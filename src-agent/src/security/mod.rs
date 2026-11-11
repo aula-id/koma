@@ -42,7 +42,7 @@ mod pull;
 use images::pull_safety_image;
 pub use images::{
     active_composition_id, active_guest_images, composition_tag,
-    list_known_compositions, read_images_inventory, remove_composition, safety_image_tag_for,
+    list_known_compositions, read_images_inventory, RETIRED_COMPOSITIONS, remove_composition, safety_image_tag_for,
     toggle_active_composition,
 };
 #[allow(unused_imports)] // public inventory types for callers/tests

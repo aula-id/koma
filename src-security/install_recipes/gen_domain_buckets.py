@@ -19,6 +19,8 @@ INDEX_OUT = ROOT.parent / "catalog" / "index.json"
 SUMMARY_OUT = ROOT / "buckets_summary.json"
 COMPOSITIONS_OUT = BUCKETS / "compositions.json"
 COMPOSITIONS_MD = ROOT / "COMPOSITIONS.md"
+# Written by verify_registry.py. A package missing from it counts as unverified.
+REGISTRY_AUDIT = ROOT / "registry_audit.json"
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 APT_MAX = 75
@@ -295,6 +297,27 @@ def src_spec(channel: dict, tool: dict) -> str | None:
     return None
 
 
+def load_registry_audit() -> dict[str, dict[str, dict]]:
+    try:
+        data = json.loads(REGISTRY_AUDIT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def registry_verified(audit: dict, channel: str, package: str | None) -> bool:
+    row = (audit.get(channel) or {}).get(package or "")
+    return isinstance(row, dict) and row.get("verified") is True
+
+
+def tool_repository(tool: dict, channels: dict) -> str:
+    for key in ("from-source", "source"):
+        body = channels.get(key)
+        if isinstance(body, dict) and str(body.get("repository") or "").strip():
+            return str(body["repository"]).strip()
+    return str(tool.get("repository") or "").strip()
+
+
 def write_catalog_index() -> int:
     """Compact dashboard index. Skips `debian.json`. Later pack files win on id."""
     by_id: dict[str, dict] = {}
@@ -395,6 +418,12 @@ def main() -> int:
     }
     skipped_snap = 0
     skipped_other = 0
+    # A registry name that is not the tool: built from its repository when it has
+    # one, otherwise left out. Never installed by name.
+    audit = load_registry_audit()
+    rerouted_to_source = 0
+    skipped_unverified: list[str] = []
+    rerouted: dict[str, list[dict]] = defaultdict(list)
     category_counts: dict[str, int] = defaultdict(int)
     domain_counts: dict[str, int] = defaultdict(int)
 
@@ -428,6 +457,20 @@ def main() -> int:
             "bin": bin_name,
             "domain": domain,
         }
+        if ch in ("npm", "cargo"):
+            pick = npm_package if ch == "npm" else cargo_package
+            package = pick(entry["channel_body"], primary) or bin_name
+            if not registry_verified(audit, ch, package):
+                repo = tool_repository(t, channels)
+                if not repo:
+                    skipped_unverified.append(str(t.get("id") or bin_name))
+                    continue
+                entry["channel"] = "from-source"
+                entry["channel_body"] = {"repository": repo}
+                entry["primary"] = f"git clone {repo}"
+                rerouted[domain].append(entry)
+                rerouted_to_source += 1
+                continue
         by_domain[domain][ch].append(entry)
 
     compositions: list[dict] = []
@@ -473,7 +516,9 @@ def main() -> int:
         go_entries = list(chans.get("go") or [])
         npm_entries = list(chans.get("npm") or [])
         cargo_entries = list(chans.get("cargo") or [])
-        src_entries = list(chans.get("from-source") or [])
+        # Rerouted tools queue behind the native from-source ones, so the cap
+        # below never trades a tool that was already baked for one that was not.
+        src_entries = list(chans.get("from-source") or []) + rerouted[domain]
 
         # --- {domain}: first 75 apt + all go ---
         apt_main = apt_entries[:APT_MAX]
@@ -628,6 +673,15 @@ def main() -> int:
 
     # write bucket files
     BUCKETS.mkdir(parents=True, exist_ok=True)
+    # A composition that no longer has tools must not leave its lists behind:
+    # the image build would still install from them.
+    for stale in BUCKETS.glob("*.txt"):
+        if stale.name.split(".")[0] not in buckets:
+            stale.unlink()
+    if PACKS.is_dir():
+        for stale in PACKS.glob("*.json"):
+            if stale.stem not in buckets and stale.stem not in ("smoke", "debian"):
+                stale.unlink()
     for comp_id, b in buckets.items():
         write_lines(BUCKETS / f"{comp_id}.apt.txt", b["apt"])
         write_lines(BUCKETS / f"{comp_id}.go.txt", b["go"])
@@ -676,6 +730,8 @@ def main() -> int:
         "tools_in": len(tools_in),
         "skipped_snap": skipped_snap,
         "skipped_other": skipped_other,
+        "registry_unverified_built_from_source": rerouted_to_source,
+        "registry_unverified_left_out": sorted(skipped_unverified),
         "domain_tool_counts": dict(sorted(domain_counts.items())),
         "category_counts": dict(sorted(category_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
         "compositions": {
@@ -689,6 +745,8 @@ def main() -> int:
             "src_allowlist_max": SRC_MAX,
             "snap": "skipped",
             "channel": "preferred_order[0]; source→from-source",
+            "registry": "npm/cargo only when registry_audit.json marks the package verified; "
+            "otherwise from-source if the tool has a repository, else left out",
         },
     }
     SUMMARY_OUT.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -716,6 +774,10 @@ def main() -> int:
             "Shard rules: `{domain}` = apt(≤75)+go; `{domain}-2` = apt overflow; "
             "`{domain}-ext` = npm+cargo; `{domain}-src` = from-source allowlist ≤40; "
             "`minimal` = handler binaries missing from every domain image. Snap skipped.",
+            "",
+            "npm and cargo packages are installed only when `registry_audit.json` "
+            "(from `verify_registry.py`) confirms the registry entry is the tool. "
+            "The rest build from their repository, or are left out when they have none.",
             "",
         ]
     )

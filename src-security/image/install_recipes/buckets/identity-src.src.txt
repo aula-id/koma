@@ -21,3 +21,8 @@ https://github.com/kgretzky/evilginx2
 https://github.com/p0dalirius/FindUncommonShares
 https://github.com/DragoQCC/HardHatC2
 https://github.com/praetorian-inc/ruby_hashcat
+https://github.com/Orange-Cyberdefense/arsenal
+https://github.com/BloodHoundAD/Bloodhound
+https://github.com/zardus/ctf-tools
+https://github.com/trickest/cve
+https://github.com/USArmyResearchLab/Dshell

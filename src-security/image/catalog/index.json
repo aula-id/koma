@@ -17,7 +17,7 @@
     },
     {
       "id": "adb_toolkit",
-      "image": "rev-ext",
+      "image": "rev-src",
       "domain": "rev",
       "exec": "net",
       "summary": "Wrapper around adb to ease certain tasks"
@@ -142,13 +142,6 @@
       "summary": "DNS enumeration and network mapping tool suite: scraping, recursive brute forcing, crawling web archives, reverse DNS sweeping"
     },
     {
-      "id": "andor",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Blind SQL Injection Tool with Golang."
-    },
-    {
       "id": "androbugs_framework",
       "image": "rev-src",
       "domain": "rev",
@@ -213,7 +206,7 @@
     },
     {
       "id": "aranea",
-      "image": "recon-ext",
+      "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "OSINT tool used for web crawling or examining JavaScript files for likely useful data."
@@ -231,13 +224,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Script for Arch Linux which use iptables settings to create a transparent proxy through Tor Network"
-    },
-    {
-      "id": "arecibo",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Endpoint for Out-of-Band Exfiltration (DNS & HTTP)"
     },
     {
       "id": "arjun",
@@ -262,7 +248,7 @@
     },
     {
       "id": "arsenal",
-      "image": "identity-ext",
+      "image": "identity-src",
       "domain": "identity",
       "exec": "net",
       "summary": "Just a quick inventory, reminder and launcher for pentest commands."
@@ -276,7 +262,7 @@
     },
     {
       "id": "asnlookup",
-      "image": "recon-ext",
+      "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "Leverage ASN to look up IP addresses (IPv4 & IPv6) owned by a specific organization for reconnaissance purposes, then run port scanning on it"
@@ -297,17 +283,10 @@
     },
     {
       "id": "astra",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "REST API penetration testing tool"
-    },
-    {
-      "id": "atlas",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Tool that suggests sqlmap tampers to bypass WAF/IDS/IPS based on status codes"
     },
     {
       "id": "autopwn",
@@ -339,7 +318,7 @@
     },
     {
       "id": "avet",
-      "image": "crypto-ext",
+      "image": "crypto-src",
       "domain": "crypto",
       "exec": "cpu",
       "summary": "AntiVirus Evasion Tool; targeting windows machines with executable files"
@@ -367,7 +346,7 @@
     },
     {
       "id": "azureadlateralmovement",
-      "image": "identity-ext",
+      "image": "identity-src",
       "domain": "identity",
       "exec": "net",
       "summary": "Lateral movement graph for Azure Active Directory."
@@ -395,7 +374,7 @@
     },
     {
       "id": "badkarma",
-      "image": "recon-ext",
+      "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "Advanced network reconnaissance tool"
@@ -416,7 +395,7 @@
     },
     {
       "id": "barf",
-      "image": "rev-ext",
+      "image": "rev-src",
       "domain": "rev",
       "exec": "binary",
       "summary": "Binary Analysis and Reverse engineering Framework"
@@ -427,20 +406,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Enumerating and attacking Java Remote Method Invocation services."
-    },
-    {
-      "id": "barq",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "The AWS Cloud Post Exploitation framework!"
-    },
-    {
-      "id": "bbot",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "OSINT automation for hackers."
     },
     {
       "id": "bbrecon",
@@ -548,15 +513,8 @@
       "summary": "Identify usage of pre-shared Machine Keys in a application for encryption and decryption."
     },
     {
-      "id": "blackwidow",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Web application scanner to gather OSINT and fuzz for OWASP vulnerabilities on a target website."
-    },
-    {
       "id": "blazy",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "Login page bruteforcer: CSRF, SQLi, Clickjacking, WAF detection"
@@ -576,25 +534,11 @@
       "summary": "A .NET Runtime for Cobalt Strike's Beacon Object Files"
     },
     {
-      "id": "boomerang",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Client/Server HTTP pivoting tool"
-    },
-    {
       "id": "bopscrk",
       "image": "identity",
       "domain": "identity",
       "exec": "cpu",
       "summary": "Before Outset PaSsword CRacKing, password wordlist generator with exclusive features like lyrics based mode"
-    },
-    {
-      "id": "bore",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A simple CLI tool for making tunnels to localhost."
     },
     {
       "id": "bqm",
@@ -632,13 +576,6 @@
       "summary": "Takes nmap GNMAP/XML output or newline seperated JSONS and automatically brute-forces services with default credentials using Medusa"
     },
     {
-      "id": "brutex",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Automatically brute force all services running on a target."
-    },
-    {
       "id": "brutexss",
       "image": "web-src",
       "domain": "web",
@@ -654,17 +591,10 @@
     },
     {
       "id": "bucket_stream",
-      "image": "cloud-ext",
+      "image": "cloud-src",
       "domain": "cloud",
       "exec": "net",
       "summary": "Find interesting Amazon S3 Buckets by watching certificate transparency logs."
-    },
-    {
-      "id": "bug_hunter",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Adversarial AI bug hunter with auto-fix skill for Claude Code, Cursor, Codex CLI, GitHub Copilot CLI, Kiro CLI, Opencode, Pi Coding Agent, and more. Multi-agent"
     },
     {
       "id": "bundler_audit",
@@ -695,15 +625,8 @@
       "summary": "Cisco password type-7 encryptor and decryptor"
     },
     {
-      "id": "c_jwt_cracker",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "JWT brute force cracker written in C."
-    },
-    {
       "id": "carnivore",
-      "image": "recon-ext",
+      "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "Assessment of on-premises Microsoft servers such as ADFS, Skype, Exchange, and RDWeb"
@@ -723,13 +646,6 @@
       "summary": "Extracting URLs of a specific target based on the results of commoncrawl.org."
     },
     {
-      "id": "ccs",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Code Credential Scanner; scan a large, diverse codebase for hard-coded credentials, or credentials present in configuration files"
-    },
-    {
       "id": "cdk",
       "image": "lab",
       "domain": "lab",
@@ -738,24 +654,10 @@
     },
     {
       "id": "cerberus",
-      "image": "rev-ext",
+      "image": "rev-src",
       "domain": "rev",
       "exec": "binary",
       "summary": "Unstrip Rust and Go binaries (ELF and PE) for static analysis; based on hashing and scoring systems, it can retrieve lots of symbol names"
-    },
-    {
-      "id": "cero",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Scrape domain names from SSL certificates of arbitrary hosts."
-    },
-    {
-      "id": "certify",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Active Directory certificate abuse."
     },
     {
       "id": "certmon",
@@ -814,13 +716,6 @@
       "summary": "Collect and maintain internet-wide assets data for public Bug Bounty programs."
     },
     {
-      "id": "chimera",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Obfuscation script designed to bypass AMSI and commercial antivirus solution."
-    },
-    {
       "id": "chipwhisperer",
       "image": "pxn-src",
       "domain": "pxn",
@@ -847,13 +742,6 @@
       "domain": "rev",
       "exec": "binary",
       "summary": "Regexp static code analysis"
-    },
-    {
-      "id": "clairvoyance",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Obtain GraphQL API schema even if the introspection is disabled by abusing the \"did you mean\" feature"
     },
     {
       "id": "cloud_enum",
@@ -884,39 +772,11 @@
       "summary": "A tool for identifying misconfigured CloudFront domains."
     },
     {
-      "id": "cloudgpt",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "Vulnerability scanner for AWS customer managed policies using ChatGPT"
-    },
-    {
       "id": "cloudlist",
       "image": "cloud",
       "domain": "cloud",
       "exec": "net",
       "summary": "Cloudlist is a tool for listing Assets from multiple Cloud Providers."
-    },
-    {
-      "id": "cloudscraper",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "Tool to enumerate targets in search of cloud resources."
-    },
-    {
-      "id": "cloudshark",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "PCAP analyzer"
-    },
-    {
-      "id": "cloudsploit",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "Cloud Security Posture Management (CSPM)."
     },
     {
       "id": "cloudtracker",
@@ -948,7 +808,7 @@
     },
     {
       "id": "codecat",
-      "image": "rev-ext",
+      "image": "rev-src",
       "domain": "rev",
       "exec": "binary",
       "summary": "Automatic code static analysis tool to detect bugs and vulnerabilities"
@@ -959,13 +819,6 @@
       "domain": "dfir",
       "exec": "net",
       "summary": "An application curated to crisis zones to facilitate the dissemination of accurate mission-critical information from sources on the ground to key partners with "
-    },
-    {
-      "id": "codeql",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "Semantic code analysis engine; discover vulnerabilities across a codebase, lets you query code as though it were data, write a query to find all variants of a v"
     },
     {
       "id": "coerced_potato",
@@ -983,7 +836,7 @@
     },
     {
       "id": "commit_stream",
-      "image": "recon-ext",
+      "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "OSINT tool for finding Github repositories by extracting commit logs in real time."
@@ -1010,13 +863,6 @@
       "summary": "An open-source, free protector for .NET applications."
     },
     {
-      "id": "cook",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "cpu",
-      "summary": "Overpower wordlist generator, words permutation and combinations, encoding/decoding..."
-    },
-    {
       "id": "cookie_crimes",
       "image": "lab-src",
       "domain": "lab",
@@ -1036,13 +882,6 @@
       "domain": "pxn",
       "exec": "net",
       "summary": "Parse the Database Lock Files of the Cortex XDR Agent by Palo Alto Networks and extract Agent Settings, the Hash and Salt of the Uninstall Password, as well as "
-    },
-    {
-      "id": "cracken",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "cpu",
-      "summary": "Password wordlist generator, Smartlist creation and password hybrid-mask"
     },
     {
       "id": "crackmapexec",
@@ -1179,17 +1018,10 @@
     },
     {
       "id": "cssg",
-      "image": "pxn-ext",
+      "image": "pxn-src",
       "domain": "pxn",
       "exec": "net",
       "summary": "Cobalt Strike Shellcode Generator; script used to more easily generate and format beacon shellcode in Cobalt Strike"
-    },
-    {
-      "id": "cstc",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Cyber Security Transformation Chef; chaining simple operations and formatting on each incoming or outgoing HTTP message"
     },
     {
       "id": "ctf_party",
@@ -1200,17 +1032,10 @@
     },
     {
       "id": "ctf_tools",
-      "image": "identity-ext",
+      "image": "identity-src",
       "domain": "identity",
       "exec": "net",
       "summary": "Some setup scripts for security research tools."
-    },
-    {
-      "id": "ctfr",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Abusing Certificate Transparency logs for getting HTTPS websites subdomains."
     },
     {
       "id": "ctftool",
@@ -1228,7 +1053,7 @@
     },
     {
       "id": "curate",
-      "image": "cloud-ext",
+      "image": "cloud-src",
       "domain": "cloud",
       "exec": "net",
       "summary": "A tool for fetching archived URLs."
@@ -1242,7 +1067,7 @@
     },
     {
       "id": "cve",
-      "image": "identity-ext",
+      "image": "identity-src",
       "domain": "identity",
       "exec": "net",
       "summary": "Gather and update all available and newest CVEs with their PoC."
@@ -1274,13 +1099,6 @@
       "domain": "web",
       "exec": "net",
       "summary": "CVSS calculator library"
-    },
-    {
-      "id": "cyberstrike",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Open-source AI-augmented offensive security harness. 13+ autonomous agents, 150+ LLM providers, 5,300+ models, 7,600+ Ed25519-signed attack skills, 56+ built-in"
     },
     {
       "id": "dalfox",
@@ -1333,7 +1151,7 @@
     },
     {
       "id": "dead_link_checker",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "A dead-simple way to recursively look for broken links on a web page."
@@ -1361,17 +1179,10 @@
     },
     {
       "id": "depix",
-      "image": "crypto-ext",
+      "image": "crypto-src",
       "domain": "crypto",
       "exec": "cpu",
       "summary": "Recovers passwords from pixelized screenshots."
-    },
-    {
-      "id": "detect_secrets",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "An enterprise friendly way of detecting and preventing secrets in code."
     },
     {
       "id": "detectify_cves",
@@ -1386,13 +1197,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Tools to work with android .dex and java .class files."
-    },
-    {
-      "id": "dexcalibur",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "Android reverse engineering platform focus on instrumentation automation (decompile/disass intercepted bytecode at runtime, write hook code, search interesting "
     },
     {
       "id": "dfir_orc",
@@ -1458,15 +1262,8 @@
       "summary": "Asset discovery and identification tool."
     },
     {
-      "id": "distributed_jwt_cracker",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "HS256 JWT token distributed brute force cracker"
-    },
-    {
       "id": "dllinjector",
-      "image": "pxn-ext",
+      "image": "pxn-src",
       "domain": "pxn",
       "exec": "net",
       "summary": "Dll injection tool"
@@ -1578,24 +1375,10 @@
     },
     {
       "id": "domain_hunter",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Checks expired domains to determine good candidates for phishing and C2 domain names."
-    },
-    {
-      "id": "domain_hunter_2",
       "image": "recon-src",
       "domain": "recon",
       "exec": "net",
       "summary": "Try to find all subdomains, similar-domains and related-domains of an organization."
-    },
-    {
-      "id": "domainfinder",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Find a domain from an IP address"
     },
     {
       "id": "domainim",
@@ -1603,13 +1386,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Domain reconnaissance for organizational network scanning"
-    },
-    {
-      "id": "dome",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Script that makes active and/or passive scan to obtain subdomains and search for open ports."
     },
     {
       "id": "domlink",
@@ -1652,13 +1428,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Quickly do keyword searches over GitLab and GitHub for OSINT & bug bounty recon."
-    },
-    {
-      "id": "dot",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "The Deepfake Offensive Toolkit."
     },
     {
       "id": "dotdotpwn",
@@ -1704,7 +1473,7 @@
     },
     {
       "id": "dshell",
-      "image": "identity-ext",
+      "image": "identity-src",
       "domain": "identity",
       "exec": "net",
       "summary": "A network forensic analysis framework."
@@ -1787,13 +1556,6 @@
       "summary": "The Damn Vulnerable Router Firmware project."
     },
     {
-      "id": "eagle",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Vulnerability scanner for mass detection of web-based applications vulnerabilities."
-    },
-    {
       "id": "eagleeye",
       "image": "cloud-src",
       "domain": "cloud",
@@ -1815,13 +1577,6 @@
       "summary": "Sensitive data detection tool capable of scanning source code repositories."
     },
     {
-      "id": "edd",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Ultimate domain enumeration tool."
-    },
-    {
       "id": "edrsilencer",
       "image": "pxn-src",
       "domain": "pxn",
@@ -1830,7 +1585,7 @@
     },
     {
       "id": "eml_analyzer",
-      "image": "dfir-ext",
+      "image": "dfir-src",
       "domain": "dfir",
       "exec": "binary",
       "summary": "Analyze EML files: headers, bodies, attachments; extract IOCs; identify suspicious attachments"
@@ -1855,20 +1610,6 @@
       "domain": "rev",
       "exec": "net",
       "summary": "Windows Samba enumeration tool"
-    },
-    {
-      "id": "eos",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Enemies Of Symfony - debug mode Symfony looter."
-    },
-    {
-      "id": "espionage",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Domain information gathering: whois, history, dns records, web technologies, records"
     },
     {
       "id": "ettercap",
@@ -1983,25 +1724,11 @@
       "summary": "OSINT tool, facebook profile dumper, windows and chrome only"
     },
     {
-      "id": "falco",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Cloud native runtime security."
-    },
-    {
       "id": "falconhound",
       "image": "dfir",
       "domain": "dfir",
       "exec": "net",
       "summary": "Plug BloodHound with a SIEM or other log aggregation"
-    },
-    {
-      "id": "fastsub",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A DNS bruteforcer with multi-threading, and handling of bad resolvers."
     },
     {
       "id": "favfreak",
@@ -2047,7 +1774,7 @@
     },
     {
       "id": "ffm",
-      "image": "pxn-ext",
+      "image": "pxn-src",
       "domain": "pxn",
       "exec": "net",
       "summary": "Freedom Fighting Mode (FFM), hacking harness, post-exploitation tool"
@@ -2074,13 +1801,6 @@
       "summary": "A DNS reconnaissance tool for locating non-contiguous IP space."
     },
     {
-      "id": "fiercephish",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Full-fledged phishing framework to manage all phishing engagements."
-    },
-    {
       "id": "finalrecon",
       "image": "recon",
       "domain": "recon",
@@ -2103,7 +1823,7 @@
     },
     {
       "id": "fingerprinter",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "CMS version detection tool"
@@ -2123,32 +1843,11 @@
       "summary": "Fileless linux malware framework"
     },
     {
-      "id": "flan",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A pretty sweet vulnerability scanner."
-    },
-    {
-      "id": "flare",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "Processes SWF and extract scripts from it"
-    },
-    {
       "id": "flask_session_cookie_decoderencoder",
       "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "A script that let you encode and decode a Flask session cookie"
-    },
-    {
-      "id": "floss",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Automatically extract obfuscated strings from malware."
     },
     {
       "id": "flutter_spy",
@@ -2200,34 +1899,6 @@
       "summary": "Payload creation tool used for circumventing EDR security controls to execute shellcode in a stealthy manner"
     },
     {
-      "id": "frida",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Dynamic code instrumentation toolkit"
-    },
-    {
-      "id": "fuxi",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Penetration testing platform, automate some scan & attack"
-    },
-    {
-      "id": "fuzzilli",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A JavaScript Engine Fuzzer."
-    },
-    {
-      "id": "garfield",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Attack framework for distributed systems"
-    },
-    {
       "id": "gau",
       "image": "pxn",
       "domain": "pxn",
@@ -2261,13 +1932,6 @@
       "domain": "web",
       "exec": "net",
       "summary": "Dump the contents of a remote git repository without directory listing enabled"
-    },
-    {
-      "id": "git_dumper",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A tool to dump a git repository from a website."
     },
     {
       "id": "gitleaks",
@@ -2305,25 +1969,11 @@
       "summary": "A fast and minimal JS endpoint extractor."
     },
     {
-      "id": "goop",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Dump the contents of a remote git repository without directory listing enabled; focus on as-complete-as-possible dumps and handling as many edge-cases as possib"
-    },
-    {
       "id": "gophish",
       "image": "recon",
       "domain": "recon",
       "exec": "net",
       "summary": "Phishing toolkit providing the ability to setup and execute phishing engagements and security awareness training"
-    },
-    {
-      "id": "gorgo",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "The vertasile multi-threaded password sprayer built on the shoulders of giants."
     },
     {
       "id": "gorsair",
@@ -2345,27 +1995,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Take screenshots of websites"
-    },
-    {
-      "id": "graphicator",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Enumerate and extract GraphQL APIs."
-    },
-    {
-      "id": "grr",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "An incident response framework focused on remote live forensics."
-    },
-    {
-      "id": "gtfo",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "CLI for searching gtfobins and lolbas from the terminal"
     },
     {
       "id": "gvm",
@@ -2397,17 +2026,10 @@
     },
     {
       "id": "hackeroneclient",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "A limited client library for interacting with HackerOne"
-    },
-    {
-      "id": "haiti",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Hash type identifier (CLI & lib)"
     },
     {
       "id": "hakoriginfinder",
@@ -2452,34 +2074,6 @@
       "summary": "A cross-platform, collaborative, Command & Control framework."
     },
     {
-      "id": "harpoon",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "CLI tool; collect data and document actively or passively"
-    },
-    {
-      "id": "hash_buster",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Crack hashes in seconds."
-    },
-    {
-      "id": "hassh",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Network fingerprinting standard which can be used to identify specific client and server SSH implementations"
-    },
-    {
-      "id": "hawk",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Network, recon and offensive-security tool for Linux."
-    },
-    {
       "id": "hekatomb",
       "image": "identity",
       "domain": "identity",
@@ -2501,13 +2095,6 @@
       "summary": "Windows reverse shell payload generator and handler that abuses the http(s) protocol to establish a beacon-like reverse shell"
     },
     {
-      "id": "honggfuzz",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Security oriented software fuzzer; supports evolutionary, feedback-driven fuzzing based on code coverage (SW and HW based)"
-    },
-    {
       "id": "houndsploit",
       "image": "lab-src",
       "domain": "lab",
@@ -2515,25 +2102,11 @@
       "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
     },
     {
-      "id": "hping",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "hping"
-    },
-    {
       "id": "hrekt",
       "image": "lab-ext",
       "domain": "lab",
       "exec": "net",
       "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
-      "id": "http_traceroute",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "HTTP-traceroute in Go."
     },
     {
       "id": "httprobe",
@@ -2550,39 +2123,11 @@
       "summary": "Network login cracker"
     },
     {
-      "id": "infer",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A static analyzer for Java, C, C++, and Objective-C."
-    },
-    {
-      "id": "injectus",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "CRLF and open redirect fuzzer."
-    },
-    {
       "id": "interactsh",
       "image": "web",
       "domain": "web",
       "exec": "net",
       "summary": "HTTP request collector and inspector; OOB interaction gathering server and client library; DNS / HTTP / SMTP interaction support"
-    },
-    {
-      "id": "interlace",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Turn single threaded command line applications into a multi-threaded application with CIDR and glob support"
-    },
-    {
-      "id": "ironwasp",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web security/vulnerability scanner (native for Windows only)"
     },
     {
       "id": "is_website_vulnerable",
@@ -2599,13 +2144,6 @@
       "summary": "IVRE (Instrument de veille sur les r\u00e9seaux ext\u00e9rieurs) or DRUNK (Dynamic Recon of UNKnown networks); network recon framework including tools ofr passive and act"
     },
     {
-      "id": "ja3",
-      "image": "crypto-ext",
-      "domain": "crypto",
-      "exec": "cpu",
-      "summary": "Create SSL client fingerprints in an easy to produce and shareable way."
-    },
-    {
       "id": "jadx",
       "image": "rev",
       "domain": "rev",
@@ -2618,20 +2156,6 @@
       "domain": "identity",
       "exec": "net",
       "summary": "Framework for building your own Web Application Scanner"
-    },
-    {
-      "id": "jaqen",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Abstracts away the complex steps required to perform a DNS rebind and exposes a HTML5 Fetch interface which transparently triggers a DNS rebind"
-    },
-    {
-      "id": "jaws",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Just Another Windows (Enum) Script; quickly identify potential privilege escalation vectors on Windows systems"
     },
     {
       "id": "jok3r",
@@ -2662,53 +2186,11 @@
       "summary": "Beautifier for JavaScript."
     },
     {
-      "id": "js_scan",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A .js scanner, built in PHP, designed to scrape urls and other info."
-    },
-    {
-      "id": "js_tap",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "JavaScript payload and supporting software to be used as XSS payload or post exploitation implant."
-    },
-    {
-      "id": "jsgen",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Generate javascript code to be injected in case you find a Server Side Javascript Injection."
-    },
-    {
-      "id": "jsparser",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Python script to parse relative URLs from JavaScript files."
-    },
-    {
-      "id": "jwt_tool",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "A toolkit for testing, tweaking and cracking JSON Web Tokens."
-    },
-    {
       "id": "katana",
       "image": "web",
       "domain": "web",
       "exec": "net",
       "summary": "Crawling and spidering framework, supporting headless mode, JavaScript, customizable automatic form filling and scope control"
-    },
-    {
-      "id": "kekeo",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "A little toolbox to play with Microsoft Kerberos in C."
     },
     {
       "id": "kerberoast",
@@ -2746,13 +2228,6 @@
       "summary": "This is a python wrapper around the amazing KNOXSS."
     },
     {
-      "id": "krakatau",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Java decompiler, assembler, and disassembler."
-    },
-    {
       "id": "kraken",
       "image": "identity",
       "domain": "identity",
@@ -2772,13 +2247,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Exploit Kubernetes clusters misconfigurations and be the swiss army knife of your pentests."
-    },
-    {
-      "id": "lateralus",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Terminal based phishing campaign tool"
     },
     {
       "id": "lazyegg",
@@ -2803,17 +2271,10 @@
     },
     {
       "id": "libiris",
-      "image": "dfir-ext",
+      "image": "dfir-src",
       "domain": "dfir",
       "exec": "net",
       "summary": "Cross-platform sandboxing library"
-    },
-    {
-      "id": "lightbulb",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Framework for auditing web application firewalls and filters"
     },
     {
       "id": "ligolo_ng",
@@ -2823,22 +2284,8 @@
       "summary": "An advanced, yet simple, tunneling/pivoting tool that uses a TUN interface."
     },
     {
-      "id": "linenum",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Linux enumeration and privilege escalation script"
-    },
-    {
-      "id": "link",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Command and control framework; HTTPS communication, process injection, in-memory .NET assembly execution, SharpCollection tools, sRDI implementation for shellco"
-    },
-    {
       "id": "linkedindumper",
-      "image": "cloud-ext",
+      "image": "cloud-src",
       "domain": "cloud",
       "exec": "net",
       "summary": "Script that dumps employee data from the LinkedIn social networking platform."
@@ -2849,13 +2296,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Reveals invisible links within JavaScript files."
-    },
-    {
-      "id": "load",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
     },
     {
       "id": "loki",
@@ -2872,13 +2312,6 @@
       "summary": "Generates a bunch of malicious pdf files with phone-home functionality."
     },
     {
-      "id": "mantis",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Command-line framework designed to automate the workflow of asset discovery, reconnaissance, and scanning"
-    },
-    {
       "id": "mapcidr",
       "image": "lab",
       "domain": "lab",
@@ -2891,13 +2324,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Open-source Intelligence Framework."
-    },
-    {
-      "id": "masky",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Library and CLI allowing to remotely dump domain user credentials via an ADCS without dumping the LSASS process memory"
     },
     {
       "id": "masscan",
@@ -2928,13 +2354,6 @@
       "summary": "PoC tool to exploit common IEEE 802.11 protocol weaknesses"
     },
     {
-      "id": "mec",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
       "id": "medusa",
       "image": "recon",
       "domain": "recon",
@@ -2947,13 +2366,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Fetch many paths for many hosts, without killing the hosts."
-    },
-    {
-      "id": "mentalist",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "cpu",
-      "summary": "Graphical tool for custom wordlist generation, can output rules compatible with Hashcat and John the Ripper"
     },
     {
       "id": "merlin",
@@ -2970,13 +2382,6 @@
       "summary": "A little tool to play with Windows security."
     },
     {
-      "id": "minidump",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Library and CLI to parse and read Microsoft minidump file format"
-    },
-    {
       "id": "mksub",
       "image": "lab",
       "domain": "lab",
@@ -2991,20 +2396,6 @@
       "summary": "By looking through CT logs an attacker can gather a lot of information about organization's infrastructure i."
     },
     {
-      "id": "monsoon",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web directory and file scanner (wordlist bruteforce)"
-    },
-    {
-      "id": "moriarty",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Designed to enumerate missing KBs, detect various vulnerabilities, and suggest potential."
-    },
-    {
       "id": "murphysec",
       "image": "lab",
       "domain": "lab",
@@ -3012,25 +2403,11 @@
       "summary": "An open source tool focused on software supply chain security."
     },
     {
-      "id": "mvt",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "binary",
-      "summary": "Mobile Verification Toolkit; collection of utilities to simplify and automate the process of gathering forensic traces helpful to identify a potential compromis"
-    },
-    {
       "id": "mx_takeover",
       "image": "web",
       "domain": "web",
       "exec": "net",
       "summary": "Focuses DNS MX records and detects misconfigured MX records."
-    },
-    {
-      "id": "myjwt",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "A toolkit for signing, forging and cracking JWT tokens"
     },
     {
       "id": "naabu",
@@ -3068,25 +2445,11 @@
       "summary": "Reliable and adaptative network login cracker supporting a large number of protocols"
     },
     {
-      "id": "nemesis",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Packet manipulation CLI tool; craft and inject packets of several protocols"
-    },
-    {
       "id": "nessus_database_export",
       "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "Export Nessus results to a relational database for use in reports, analysis, or whatever else."
-    },
-    {
-      "id": "netcap",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A framework for secure and scalable network traffic analysis."
     },
     {
       "id": "netexec",
@@ -3096,20 +2459,6 @@
       "summary": "Windows / Active Directory environments pentest; fork of CrackMapExec"
     },
     {
-      "id": "netprobe",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "A tool you can use to scan for devices on your network."
-    },
-    {
-      "id": "nighthawk",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Command & Control framework; multi-operator, API driven, malleable native implant"
-    },
-    {
       "id": "nikto",
       "image": "recon",
       "domain": "recon",
@@ -3117,32 +2466,11 @@
       "summary": "Nikto web server scanner."
     },
     {
-      "id": "nipe",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Script to make TOR as default gateway"
-    },
-    {
       "id": "nmap",
       "image": "recon",
       "domain": "recon",
       "exec": "net",
       "summary": "Tool for network discovery and security auditing"
-    },
-    {
-      "id": "nozaki",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "HTTP fuzzer engine security oriented."
-    },
-    {
-      "id": "nsdetect",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "Utility to detect AWS NS Takeover."
     },
     {
       "id": "ntu_crysis",
@@ -3173,25 +2501,11 @@
       "summary": "Framework allowing to write, build and patch instrumentation modules for Bluetooth Low Energy (BLE) controllers"
     },
     {
-      "id": "objection",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "net",
-      "summary": "Runtime mobile exploration."
-    },
-    {
       "id": "offensive_azure",
       "image": "cloud-src",
       "domain": "cloud",
       "exec": "net",
       "summary": "Collection of offensive tools targeting Microsoft Azure written in Python to be platform agnostic."
-    },
-    {
-      "id": "omnibus",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "OSINT framework; collection of tools"
     },
     {
       "id": "onesixtyone",
@@ -3202,7 +2516,7 @@
     },
     {
       "id": "open_sesame",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "Contains HackerOne disclosed reports and other bug bounty writeups."
@@ -3220,34 +2534,6 @@
       "domain": "identity",
       "exec": "net",
       "summary": "Windows password cracker based on rainbow tables."
-    },
-    {
-      "id": "osintui",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "OSINT from your favorite services in a friendly terminal user interface."
-    },
-    {
-      "id": "osquery",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "net",
-      "summary": "Uses SQL queries to monitor and analyze operating systems, providing endpoint visibility for security"
-    },
-    {
-      "id": "overlord",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "CLI used to build Red Teaming infrastructure in an automated way, supports AWS and Digital Ocean"
-    },
-    {
-      "id": "owasp_mastg",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Comprehensive manual for mobile application security testing and reverse engineering."
     },
     {
       "id": "pack",
@@ -3272,17 +2558,10 @@
     },
     {
       "id": "panda",
-      "image": "rev-ext",
+      "image": "rev-src",
       "domain": "rev",
       "exec": "binary",
       "summary": "Platform for architecture-neutral dynamic analysis"
-    },
-    {
-      "id": "pandora",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "net",
-      "summary": "Analysis framework that discovers if a file is suspicious and conveniently show the results"
     },
     {
       "id": "param_miner",
@@ -3369,13 +2648,6 @@
       "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
     },
     {
-      "id": "pipedream",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Collect HTTP or webhook requests and inspect them in a human-friendly way."
-    },
-    {
       "id": "plution",
       "image": "lab-src",
       "domain": "lab",
@@ -3388,13 +2660,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Poastal is an email OSINT tool that provides valuable information on any email address."
-    },
-    {
-      "id": "polymorph",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Real-time network packet manipulation framework"
     },
     {
       "id": "pop",
@@ -3425,25 +2690,11 @@
       "summary": "A PowerShell Post-Exploitation Framework."
     },
     {
-      "id": "ppfuzz",
-      "image": "identity-ext",
-      "domain": "identity",
-      "exec": "net",
-      "summary": "Scan for client-side prototype pollution"
-    },
-    {
       "id": "privacynet",
       "image": "lab-src",
       "domain": "lab",
       "exec": "net",
       "summary": "Allow users to route Internet traffic through Tor and hide their real IP address."
-    },
-    {
-      "id": "prowler",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "Open Source Security tool to perform Cloud Security best practices"
     },
     {
       "id": "proxify",
@@ -3467,13 +2718,6 @@
       "summary": "Continuation of the unmaintained proxychains project."
     },
     {
-      "id": "ps2",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "A port scanner written purely in PowerShell."
-    },
-    {
       "id": "psbypassclm",
       "image": "lab-src",
       "domain": "lab",
@@ -3495,13 +2739,6 @@
       "summary": "CLI tool designed to snoop on processes without need for root permissions; it allows to see commands run by other users, cron jobs, etc. as they execute"
     },
     {
-      "id": "ptf",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The Penetration Testers Framework (PTF) is a way for modular support for up-to-date tools."
-    },
-    {
       "id": "pwncat",
       "image": "recon",
       "domain": "recon",
@@ -3514,13 +2751,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Enhance GDB, for exploit development and reverse engineering"
-    },
-    {
-      "id": "pwntools",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "net",
-      "summary": "Framework and exploit development library"
     },
     {
       "id": "pybuster",
@@ -3544,13 +2774,6 @@
       "summary": "Platform idependent Mimikatz implementation"
     },
     {
-      "id": "pyscan",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A dependency vulnerability scanner for your python projects, straight from the terminal."
-    },
-    {
       "id": "qsinject",
       "image": "lab",
       "domain": "lab",
@@ -3570,13 +2793,6 @@
       "domain": "pxn",
       "exec": "net",
       "summary": "A comprehensive approach to the vulnerability analysis of Android application."
-    },
-    {
-      "id": "rabid",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "CLI tool and library allowing to simply decode all kind of BigIP cookies"
     },
     {
       "id": "race_the_web",
@@ -3642,27 +2858,6 @@
       "summary": "Rapid content discovery tool for recursively querying webservers."
     },
     {
-      "id": "redirect_tracker",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "net",
-      "summary": "Track the HTTP redirect chains; 301 and 302, JavaScript and Meta fresh redirects"
-    },
-    {
-      "id": "regulator",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Automated learning of regexes for DNS discovery."
-    },
-    {
-      "id": "rekall",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "binary",
-      "summary": "Volatile memory extraction utility"
-    },
-    {
       "id": "related_domains",
       "image": "lab-src",
       "domain": "lab",
@@ -3670,39 +2865,11 @@
       "summary": "Find related domains of a given domain."
     },
     {
-      "id": "rengine",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Automated recon framework for web applications; customizable scan engines & pipeline of reconnaissance"
-    },
-    {
-      "id": "repo_supervisor",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Scan your code for security misconfiguration, search for passwords and secrets."
-    },
-    {
       "id": "responder",
       "image": "recon",
       "domain": "recon",
       "exec": "net",
       "summary": "LLMNR, NBT-NS and MDNS poisoner to intercept authentication requests/answers"
-    },
-    {
-      "id": "restler",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A stateful fuzzing tool for automatically testing cloud services through their REST APIs."
-    },
-    {
-      "id": "retirejs",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Scanner detecting the use of JavaScript libraries with known vulnerabilities"
     },
     {
       "id": "ripgen",
@@ -3726,13 +2893,6 @@
       "summary": "Exploitation framework for embedded devices: exploits, default credentials, scanners, payloads"
     },
     {
-      "id": "rsg",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "A tool to generate various ways to do a reverse shell."
-    },
-    {
       "id": "rubeus",
       "image": "recon-2",
       "domain": "recon",
@@ -3747,25 +2907,11 @@
       "summary": "Command line wrapper, library, and REST API for oclHashcat"
     },
     {
-      "id": "ruler",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Interact with Exchange servers remotely, through either the MAPI/HTTP or RPC/HTTP to abuse the client-side Outlook features and gain a shell"
-    },
-    {
       "id": "rush",
       "image": "lab",
       "domain": "lab",
       "exec": "net",
       "summary": "A cross-platform command-line tool for executing jobs in parallel."
-    },
-    {
-      "id": "rustbuster",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web directory, file and DNS scanner (wordlist bruteforce); but also a web fuzzer"
     },
     {
       "id": "s3cxsser",
@@ -3782,13 +2928,6 @@
       "summary": "Scan for open S3 buckets and dump the contents."
     },
     {
-      "id": "sandcastle",
-      "image": "cloud-ext",
-      "domain": "cloud",
-      "exec": "net",
-      "summary": "A Python script for AWS S3 bucket enumeration."
-    },
-    {
       "id": "scanless",
       "image": "recon-src",
       "domain": "recon",
@@ -3803,13 +2942,6 @@
       "summary": "Powerful and interactive packet manipulation program and library."
     },
     {
-      "id": "scarecrow",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Payload creation framework designed around EDR bypass"
-    },
-    {
       "id": "scilla",
       "image": "lab",
       "domain": "lab",
@@ -3817,32 +2949,11 @@
       "summary": "Information Gathering tool - DNS / Subdomains / Ports / Directories enumeration."
     },
     {
-      "id": "scout",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web directory and file scanner (wordlist bruteforce)"
-    },
-    {
-      "id": "screenshooter",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Convert your masscan/subdomain-scan results into screenshots for better analysis."
-    },
-    {
       "id": "screenshoteer",
       "image": "lab-ext",
       "domain": "lab",
       "exec": "net",
       "summary": "Makes web screenshots and mobile emulations from the command line."
-    },
-    {
-      "id": "seatbelt",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "Seatbelt"
     },
     {
       "id": "sec_browser",
@@ -4041,20 +3152,6 @@
       "summary": "Second-order subdomain takeover scanner."
     },
     {
-      "id": "secret_bridge",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Monitors Github for leaked secrets."
-    },
-    {
-      "id": "semgrep",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "Lightweight static analysis for many languages. Find bug variants with patterns that look like source code."
-    },
-    {
       "id": "sharpshooter",
       "image": "pxn",
       "domain": "pxn",
@@ -4062,32 +3159,11 @@
       "summary": "Payload Generation Framework for C# source code"
     },
     {
-      "id": "shelling",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "A comprehensive OS command injection payload generator."
-    },
-    {
-      "id": "shells",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "A script for generating common revshells fast and easily."
-    },
-    {
       "id": "sherlock",
       "image": "recon-2",
       "domain": "recon",
       "exec": "net",
       "summary": "Hunt down social media accounts by username across social networks"
-    },
-    {
-      "id": "sigma",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "net",
-      "summary": "Generic signature format for SIEM systems"
     },
     {
       "id": "silenttrinity",
@@ -4102,27 +3178,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "DNS rebinding attack framework"
-    },
-    {
-      "id": "sj",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Swagger Jacker; audit API endpoints defined in exposed (Swagger/OpenAPI) definition files"
-    },
-    {
-      "id": "skanuvaty",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Dangerously fast DNS/network/port scanner."
-    },
-    {
-      "id": "skill_scanner",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A security scanner for AI Agent Skills that detects prompt injection, data exfiltration, and malicious code patterns. Combines pattern-based detection (YAML + Y"
     },
     {
       "id": "slurp",
@@ -4144,13 +3199,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "smbmap"
-    },
-    {
-      "id": "smuggler",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "An HTTP Request Smuggling / Desync testing tool."
     },
     {
       "id": "sniff_paste",
@@ -4179,13 +3227,6 @@
       "domain": "lab",
       "exec": "net",
       "summary": "Extract JavaScript source trees from source map files."
-    },
-    {
-      "id": "spamscanner",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Spam Scanner is a tool and service created after hitting countless roadblocks with existing spam-detection solutions."
     },
     {
       "id": "spiderfoot",
@@ -4258,27 +3299,6 @@
       "summary": "Tool to hide messages in images"
     },
     {
-      "id": "stews",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Security Testing and Enumeration of WebSockets; tool suite for security testing WebSockets: discover endpoints, fingerprint server, detect vulnerabilities"
-    },
-    {
-      "id": "storm_breaker",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Social engineering tool, access eebcam & microphone & location finder."
-    },
-    {
-      "id": "subdomainfinder",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Find subdomains by searching public certificate records."
-    },
-    {
       "id": "subfinder",
       "image": "recon-2",
       "domain": "recon",
@@ -4298,13 +3318,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Subdomains enumeration tool"
-    },
-    {
-      "id": "subnerium",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A fast passive subdomain enumeration tool that uses various sources to gather data."
     },
     {
       "id": "subzy",
@@ -4350,7 +3363,7 @@
     },
     {
       "id": "takeover",
-      "image": "web-ext",
+      "image": "web-src",
       "domain": "web",
       "exec": "net",
       "summary": "A tool for testing subdomain takeover possibilities at a mass scale."
@@ -4384,13 +3397,6 @@
       "summary": "TLS/SSL scanner to find weak ciphers, protocols or flaws"
     },
     {
-      "id": "tex",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Telegram Explorer created to help researchers, investigators and law enforcement agent."
-    },
-    {
       "id": "theharvester",
       "image": "recon-2",
       "domain": "recon",
@@ -4419,13 +3425,6 @@
       "summary": "Automatic Linux privilege escalation via exploitation of low-hanging fruit."
     },
     {
-      "id": "triton",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "Dynamic binary analysis framework, automate reverse engineering"
-    },
-    {
       "id": "trivy",
       "image": "rev",
       "domain": "rev",
@@ -4447,39 +3446,11 @@
       "summary": "Command line tool for URL parsing and manipulation."
     },
     {
-      "id": "tsunami",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Network security scanner with an extensible plugin system"
-    },
-    {
-      "id": "turner",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Tunnels HTTP over a permissive/open TURN server; supports HTTP and SOCKS5 proxy"
-    },
-    {
-      "id": "uboat",
-      "image": "pxn-ext",
-      "domain": "pxn",
-      "exec": "net",
-      "summary": "HTTP botnet PoC"
-    },
-    {
       "id": "uglifyjs",
       "image": "crypto",
       "domain": "crypto",
       "exec": "cpu",
       "summary": "A JavaScript parser, minifier, compressor and beautifier toolkit."
-    },
-    {
-      "id": "uglifyjs2",
-      "image": "rev-ext",
-      "domain": "rev",
-      "exec": "binary",
-      "summary": "JavaScript obfuscator or beautifier toolkit"
     },
     {
       "id": "uncover",
@@ -4531,53 +3502,11 @@
       "summary": "uro"
     },
     {
-      "id": "vaf",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web directory and file scanner (wordlist bruteforce); but also a web fuzzer"
-    },
-    {
-      "id": "vega",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Multi-platform web scanner and intercepting proxy"
-    },
-    {
-      "id": "velociraptor",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "binary",
-      "summary": "Endpoint visibility and collection tool"
-    },
-    {
-      "id": "venom",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Popular Pentesting scanner for SQLi/XSS/LFI/RFI and other Vulns."
-    },
-    {
       "id": "villain",
       "image": "pxn",
       "domain": "pxn",
       "exec": "net",
       "summary": "Distributed command and control framework"
-    },
-    {
-      "id": "volatility",
-      "image": "dfir-ext",
-      "domain": "dfir",
-      "exec": "binary",
-      "summary": "Volatile memory extraction utility"
-    },
-    {
-      "id": "vuls",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Agentless system vulnerability scanner for Linux/FreeBSD with a dashboard (VulsRepo) for analyzing the scan results"
     },
     {
       "id": "wafw00f",
@@ -4594,22 +3523,8 @@
       "summary": "Web-oriented vulnerability scanner, can generates reports"
     },
     {
-      "id": "wappalyzer",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "Wappalyzer"
-    },
-    {
-      "id": "wascan",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Web application security scanner"
-    },
-    {
       "id": "watson",
-      "image": "pxn-ext",
+      "image": "pxn-src",
       "domain": "pxn",
       "exec": "net",
       "summary": "Enumerate missing KBs and suggest exploits for useful privilege escalation vulnerabilities."
@@ -4629,13 +3544,6 @@
       "summary": "Find links from Wayback Machine, Common Crawl, Alien Vault OTX and URLScan; download the archived responses for URLs on Wayback Machine"
     },
     {
-      "id": "webcopilot",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Automation tool designed to enumerate subdomains and detect bugs using different open-source tools."
-    },
-    {
       "id": "webpalm",
       "image": "lab",
       "domain": "lab",
@@ -4648,20 +3556,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "Framework for analysing applications that communicate using the HTTP and HTTPS protocols."
-    },
-    {
-      "id": "webscrape",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "A web scraper to scrape email's and phone numbers from websites."
-    },
-    {
-      "id": "websy",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Keep an eye on your targets to get quickly notified for any change they push on their server."
     },
     {
       "id": "weevely",
@@ -4683,13 +3577,6 @@
       "domain": "web",
       "exec": "net",
       "summary": "Web scanner, recognises web technologies including content management systems (CMS), blogging platforms, statistic/analytics packages, JavaScript libraries, web"
-    },
-    {
-      "id": "whonow",
-      "image": "recon-ext",
-      "domain": "recon",
-      "exec": "net",
-      "summary": "DNS Server for executing DNS Rebinding attacks"
     },
     {
       "id": "wifiphisher",
@@ -4720,49 +3607,7 @@
       "summary": "Take screenshots of websites, provide some server header info, and identify default credentials if possible"
     },
     {
-      "id": "wpscan",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "WPScan WordPress Security Scanner"
-    },
-    {
-      "id": "wrapwrap",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
-      "id": "wtfis",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Passive hostname, domain and IP lookup tool for non-robots."
-    },
-    {
       "id": "x8",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
-      "id": "xcat",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
-      "id": "xray",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "Web security scanner (XSS, SQLi, SSRF, XXE, etc."
-    },
-    {
-      "id": "xsinator",
       "image": "lab-ext",
       "domain": "lab",
       "exec": "net",
@@ -4811,13 +3656,6 @@
       "summary": "A cli utility to find domain's known URLs from curated passive online sources."
     },
     {
-      "id": "xxexploiter",
-      "image": "web-ext",
-      "domain": "web",
-      "exec": "net",
-      "summary": "Tool to help exploit XXE vulnerabilities."
-    },
-    {
       "id": "xxxpwn_smart",
       "image": "rev-src",
       "domain": "rev",
@@ -4839,13 +3677,6 @@
       "summary": "TYet Another Stupid Audit Tool; check general Linux system and common softwares configuration"
     },
     {
-      "id": "yasuo",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
       "id": "yersinia",
       "image": "recon-2",
       "domain": "recon",
@@ -4865,20 +3696,6 @@
       "domain": "recon",
       "exec": "net",
       "summary": "A network analyzer that make easy to extract informations about network traffic."
-    },
-    {
-      "id": "yoga",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "The premier open-source database of cybersecurity intelligence, penetration test reports, and advanced security tooling."
-    },
-    {
-      "id": "zdns",
-      "image": "lab-ext",
-      "domain": "lab",
-      "exec": "net",
-      "summary": "zdns"
     },
     {
       "id": "zmap",

@@ -129,6 +129,50 @@
       "scope_needed": true,
       "image_or_pack": "dfir-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=ntu-crysis"
+    },
+    {
+      "id": "eml_analyzer",
+      "name": "eml_analyzer",
+      "summary": "Analyze EML files: headers, bodies, attachments; extract IOCs; identify suspicious attachments",
+      "categories": [
+        "digital-forensics"
+      ],
+      "effect": "static",
+      "exec": "binary",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "eml-analyzer"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/ninoseki/eml_analyzer; detect=eml-analyzer"
+    },
+    {
+      "id": "libiris",
+      "name": "libiris",
+      "summary": "Cross-platform sandboxing library",
+      "categories": [
+        "defensive"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "libiris"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "dfir-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/mtth-bfft/libiris; detect=libiris"
     }
   ]
 }

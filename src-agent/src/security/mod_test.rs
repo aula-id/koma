@@ -48,7 +48,10 @@ fn known_compositions_include_minimal_and_domain_shards() {
     ] {
         assert!(ids.contains(&need), "missing {need}");
     }
-    assert_eq!(ids.len(), 29);
+    assert_eq!(ids.len(), 24);
+    for gone in RETIRED_COMPOSITIONS {
+        assert!(!ids.contains(gone), "{gone} is retired and must not be offered");
+    }
 }
 
 #[test]

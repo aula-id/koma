@@ -21,3 +21,8 @@ evilginx3
 finduncommonshares
 hardhat-c2
 rubyhashcat
+arsenal
+azureadlateralmovement
+ctf-tools
+cve
+dshell

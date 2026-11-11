@@ -248,7 +248,7 @@ impl Refusal {
     #[must_use]
     pub fn reason(self) -> &'static str {
         match self {
-            Self::NoScope => "no scope record — declare one before touching the network",
+            Self::NoScope => "no scope record — call sec_runtime op=net mode=scope with targets and the user confirms them",
             Self::NotActive => "scope is not active",
             Self::NotConfirmed => "scope is not confirmed",
             Self::OutOfScope => "target not in scope",
