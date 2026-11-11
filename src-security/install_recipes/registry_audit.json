@@ -1,0 +1,1275 @@
+{
+  "cargo": {
+    "arecibo": {
+      "repository": "lurk-lab/arecibo",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "barq": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "boomerang": {
+      "repository": "jondo2010/boomerang",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "bore": {
+      "repository": "bitbucket.org/delan/nonymous",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ccs": {
+      "repository": "jzbor/ccs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "certify": {
+      "repository": "tyrchen/certify",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "chimera": {
+      "repository": "ooojustin/chimera",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "cook": {
+      "repository": "sjc5/cook",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "cracken": {
+      "repository": "shmuelamar/cracken",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ctfr": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "edd": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "eos": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "flan": {
+      "repository": "lnicola/flan",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "flare": {
+      "repository": "boom-astro/flare",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "floss": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "fuxi": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "fuzzilli": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "garfield": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "goop": {
+      "repository": "google/crubit",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "gorgo": {
+      "repository": "codeberg.org/brettchalupa/gorgo",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "grr": {
+      "repository": "msiglreith/grr",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "gtfo": {
+      "repository": "irishmaestro/gtfo",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hassh": {
+      "repository": "flier/hassh-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hawk": {
+      "repository": "taskcluster/rust-hawk",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "honggfuzz": {
+      "repository": "rust-fuzz/honggfuzz-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hrekt": {
+      "repository": "ethicalhackingplayground/hrekt",
+      "verified": true,
+      "why": "repo"
+    },
+    "interlace": {
+      "repository": "nonamexishere/interlace",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ja3": {
+      "repository": "jabedude/ja3-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "jaws": {
+      "repository": "alexrudy/jaws",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "libiris": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "lightbulb": {
+      "repository": "ciresnave/lightbulb",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "link": {
+      "repository": "crlf0710/link-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "mantis": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "minidump": {
+      "repository": "rust-minidump/rust-minidump",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "monsoon": {
+      "repository": "jiripospisil/monsoon",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "mvt": {
+      "repository": "douglau/mvt",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "nemesis": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "netprobe": {
+      "repository": "shellrow/netprobe",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "nighthawk": {
+      "repository": "sushaanthsrinivasan/nighthawk",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "nsdetect": {
+      "repository": "alexanderkjall/nsdetect",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "omnibus": {
+      "repository": "0xphilg/omnibus",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "osintui": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "overlord": {
+      "repository": "cryptape/overlord",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "pipedream": {
+      "repository": "trashbyte/pipedream",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "polymorph": {
+      "repository": "a248/polymorph-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ppfuzz": {
+      "repository": "dwisiswant0/ppfuzz",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ps2": {
+      "repository": "lucis-fluxum/ps2-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "pyscan": {
+      "repository": "ohaswin/pyscan",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "rekall": {
+      "repository": "pr0d1r2/rekall",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "rengine": {
+      "repository": "muhammadmnorouzi/rengine",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ripgen": {
+      "repository": "resyncgg/ripgen",
+      "verified": true,
+      "why": "repo"
+    },
+    "ruler": {
+      "repository": "2-complex/ruler",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "rustbuster": {
+      "repository": "evengarli/rustbuster",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "sandcastle": {
+      "repository": "bfrog/sandcastle-rs",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "scarecrow": {
+      "repository": "spacecowboy/scarecrow",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "seatbelt": {
+      "repository": "microsoft/oxidizer/tree/main/crates/seatbelt",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "shells": {
+      "repository": "proksima/shells",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "sigma": {
+      "repository": "shekohex/sigma",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "sj": {
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "skanuvaty": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "subnerium": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "x8": {
+      "repository": "sh1yo/x8",
+      "verified": true,
+      "why": "repo"
+    }
+  },
+  "npm": {
+    "adb-toolkit": {
+      "commands": [],
+      "repository": "fernandojsg/adb-toolkit",
+      "verified": false,
+      "why": "another repository"
+    },
+    "andor": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "apk-mitm": {
+      "commands": [
+        "apk-mitm"
+      ],
+      "repository": "shroudedcode/apk-mitm",
+      "verified": true,
+      "why": "description"
+    },
+    "aranea": {
+      "commands": [],
+      "repository": "jaredhanson/aranea",
+      "verified": false,
+      "why": "another repository"
+    },
+    "arsenal": {
+      "commands": [],
+      "repository": "leiming/arsenal",
+      "verified": false,
+      "why": "another repository"
+    },
+    "asnlookup": {
+      "commands": [],
+      "repository": "cloudron-io/asnlookup",
+      "verified": false,
+      "why": "another repository"
+    },
+    "astra": {
+      "commands": [],
+      "repository": "galkinrost/astra",
+      "verified": false,
+      "why": "another repository"
+    },
+    "atlas": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "avet": {
+      "commands": [],
+      "repository": "avetjs/avet",
+      "verified": false,
+      "why": "another repository"
+    },
+    "azureadlateralmovement": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "badkarma": {
+      "commands": [],
+      "repository": "ertetajir/badkarma",
+      "verified": false,
+      "why": "another repository"
+    },
+    "barf": {
+      "commands": [],
+      "repository": "svnlto/barf",
+      "verified": false,
+      "why": "another repository"
+    },
+    "bbot": {
+      "commands": [],
+      "repository": "amazebot/bbot",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "blackwidow": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "blazy": {
+      "commands": [],
+      "repository": "dinbror/blazy",
+      "verified": false,
+      "why": "another repository"
+    },
+    "broken-link-checker": {
+      "commands": [
+        "blc",
+        "broken-link-checker"
+      ],
+      "repository": "stevenvachon/broken-link-checker",
+      "verified": true,
+      "why": "repo"
+    },
+    "brutex": {
+      "commands": [],
+      "repository": "r3dcr0ss/brutex",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "bucket-stream": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "bug-hunter": {
+      "commands": [],
+      "repository": "node-bug-hunter/bug-hunter",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "carnivore": {
+      "commands": [],
+      "repository": "re1/carnivore",
+      "verified": false,
+      "why": "another repository"
+    },
+    "cerberus": {
+      "commands": [],
+      "repository": "jomik/cerberus",
+      "verified": false,
+      "why": "another repository"
+    },
+    "cero": {
+      "commands": [],
+      "repository": "d4rkr00t/cero",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "clairvoyance": {
+      "commands": [
+        "clairvoyance"
+      ],
+      "repository": "sinsoku/clairvoyance",
+      "verified": false,
+      "why": "another repository"
+    },
+    "cloudgpt": {
+      "commands": [],
+      "repository": "/cloudgpt",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "cloudscraper": {
+      "commands": [],
+      "repository": "codemanki/cloudscraper",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "cloudshark": {
+      "commands": [],
+      "repository": "sieteunoseis/cloudshark",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "cloudsploit": {
+      "commands": [
+        "cloudsploitscan"
+      ],
+      "repository": "cloudsploit/scans",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "codecat": {
+      "commands": [],
+      "repository": "romancow/codecat",
+      "verified": false,
+      "why": "another repository"
+    },
+    "codeql": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "commit-stream": {
+      "commands": [],
+      "repository": "nodejs/commit-stream",
+      "verified": false,
+      "why": "another repository"
+    },
+    "crlfi": {
+      "commands": [
+        "crlf-i",
+        "crlfi"
+      ],
+      "repository": "karthi-the-hacker/crlfi",
+      "verified": true,
+      "why": "description"
+    },
+    "cssg": {
+      "commands": [
+        "cssg",
+        "cssg-helper"
+      ],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "cstc": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "ctf-tools": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "curate": {
+      "commands": [],
+      "repository": "rschmukler/curate",
+      "verified": false,
+      "why": "another repository"
+    },
+    "cve": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "cyberstrike": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "dead-link-checker": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "depix": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "detect-secrets": {
+      "commands": [
+        "detect-secrets-launcher"
+      ],
+      "repository": "lirantal/detect-secrets",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "dexcalibur": {
+      "commands": [
+        "dexcalibur"
+      ],
+      "repository": "frenchyeti/dexcalibur",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "distributed-jwt-cracker": {
+      "commands": [
+        "jwt-cracker-client",
+        "jwt-cracker-server"
+      ],
+      "repository": "lmammino/distributed-jwt-cracker",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "dllinjector": {
+      "commands": [],
+      "repository": "2jj1/dllinjector-npm-package",
+      "verified": false,
+      "why": "another repository"
+    },
+    "domain-hunter": {
+      "commands": [
+        "domain-hunter"
+      ],
+      "repository": "whitebite/domain-hunter",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "domainfinder": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "dome": {
+      "commands": [],
+      "repository": "culljs/dome",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "dot": {
+      "commands": [
+        "dottojs"
+      ],
+      "repository": "olado/dot",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "drek": {
+      "commands": [
+        "drek"
+      ],
+      "repository": "chrisallenlane/drek",
+      "verified": true,
+      "why": "repo"
+    },
+    "dshell": {
+      "commands": [],
+      "repository": "distpub/dshell",
+      "verified": false,
+      "why": "another repository"
+    },
+    "eagle": {
+      "commands": [],
+      "repository": "btspoony/node-eagle",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "eml-analyzer": {
+      "commands": [],
+      "repository": "email-markup-consortium/eml-analyzer",
+      "verified": false,
+      "why": "another repository"
+    },
+    "espionage": {
+      "commands": [],
+      "repository": "sterlingw/simplespy.js",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "falco": {
+      "commands": [],
+      "repository": "grawk/falco",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "fastsub": {
+      "commands": [],
+      "repository": "snowt69/fastsub",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ffm": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "fiercephish": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "fingerprinter": {
+      "commands": [],
+      "repository": "sapegin/fingerprinter",
+      "verified": false,
+      "why": "another repository"
+    },
+    "frida": {
+      "commands": [],
+      "repository": "frida/frida-node",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "git-dump": {
+      "commands": [
+        "git-dump"
+      ],
+      "repository": "bahamas10/git-dump",
+      "verified": true,
+      "why": "description"
+    },
+    "git-dumper": {
+      "commands": [
+        "git-dumper"
+      ],
+      "repository": "oom-/simple-git-dumper",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "graphicator": {
+      "commands": [],
+      "repository": "codenautas/graphicator",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hackerone-client": {
+      "commands": [],
+      "repository": "securitybites/hackerone-client",
+      "verified": false,
+      "why": "another repository"
+    },
+    "haiti": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "harpoon": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hashbuster": {
+      "commands": [],
+      "repository": "jakemulley/hashbuster",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "hping": {
+      "commands": [
+        "hping"
+      ],
+      "repository": "kurdin/hping",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "http-traceroute": {
+      "commands": [
+        "http-traceroute"
+      ],
+      "repository": "watson/http-traceroute",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "infer": {
+      "commands": [
+        "infer"
+      ],
+      "repository": "bevacqua/infer",
+      "verified": false,
+      "why": "another repository"
+    },
+    "injectus": {
+      "commands": [],
+      "repository": "hossam7amdy/injectus",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ironwasp": {
+      "commands": [],
+      "repository": "npm/security-holder",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "is-website-vulnerable": {
+      "commands": [
+        "is-website-vulnerable"
+      ],
+      "repository": "lirantal/is-website-vulnerable",
+      "verified": true,
+      "why": "repo"
+    },
+    "jaqen": {
+      "commands": [
+        "jaqen"
+      ],
+      "repository": "matiasgagliano/jaqen",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "js-tap": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "jsgen": {
+      "commands": [
+        "nodeTest"
+      ],
+      "repository": "legend0702",
+      "verified": false,
+      "why": "another repository"
+    },
+    "jsparser": {
+      "commands": [],
+      "repository": "cjihrig/jsparser",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "jsscan": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "jwt-cracker": {
+      "commands": [
+        "jwt-cracker"
+      ],
+      "repository": "lmammino/jwt-cracker",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "jwt-tool": {
+      "commands": [
+        "jwt-tool"
+      ],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "kekeo": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "krakatau": {
+      "commands": [],
+      "repository": "frizadiga/krakatau",
+      "verified": false,
+      "why": "another repository"
+    },
+    "lateralus": {
+      "commands": [],
+      "repository": "jellyvision/lateralus",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "linenum": {
+      "commands": [
+        "linenum"
+      ],
+      "repository": "zswang/linenum",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "linkedindumper": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "load": {
+      "commands": [],
+      "repository": "3rd-eden/load",
+      "verified": false,
+      "why": "another repository"
+    },
+    "masky": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "mec": {
+      "commands": [],
+      "repository": "mec-org/nodejs-mec",
+      "verified": false,
+      "why": "another repository"
+    },
+    "mentalist": {
+      "commands": [],
+      "repository": "janpot@github.com/janpot/mentalist",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "moriarty": {
+      "commands": [],
+      "repository": "github.dev.xero.com:dev-sethd/moriarty",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "myjwt": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "netcap": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "nipe": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "nozaki": {
+      "commands": [
+        "nozaki"
+      ],
+      "repository": "riaevangelist/nozaki",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "objection": {
+      "commands": [],
+      "repository": "ditojs/objection",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "open-sesame": {
+      "commands": [
+        "open-sesame"
+      ],
+      "repository": "cliffano/open-sesame",
+      "verified": false,
+      "why": "another repository"
+    },
+    "osquery": {
+      "commands": [],
+      "repository": "sidorares/osquery-node",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "owasp-mastg": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "padding-oracle-attacker": {
+      "commands": [
+        "padding-oracle-attack",
+        "padding-oracle-attacker",
+        "poattack"
+      ],
+      "repository": "kishanbagaria/padding-oracle-attacker",
+      "verified": true,
+      "why": "repo"
+    },
+    "panda": {
+      "commands": [],
+      "repository": "adampuzio/panda",
+      "verified": false,
+      "why": "another repository"
+    },
+    "pandora": {
+      "commands": [
+        "pandora"
+      ],
+      "repository": "midwayjs/pandora",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "prowler": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "ptf": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "pwntools": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "rabid": {
+      "commands": [],
+      "repository": "bluerival/node-rabid",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "redirect-tracker": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "regulator": {
+      "commands": [],
+      "repository": "jaredhanson/node-regulator",
+      "verified": false,
+      "why": "another repository"
+    },
+    "repo-supervisor": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "restler": {
+      "commands": [],
+      "repository": "danwrong/restler",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "retirejs": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "rsg": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "scout": {
+      "commands": [],
+      "repository": "thekemkid/scout",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "screenshooter": {
+      "commands": [
+        "screenshooter"
+      ],
+      "repository": "camme/screenshooter",
+      "verified": false,
+      "why": "another repository"
+    },
+    "screenshoteer": {
+      "commands": [
+        "screenshoteer"
+      ],
+      "repository": "vladocar/screenshoteer",
+      "verified": true,
+      "why": "repo"
+    },
+    "secret-bridge": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "semgrep": {
+      "commands": [],
+      "repository": "returntocorp/sgrep",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "shelling": {
+      "commands": [
+        "shelling"
+      ],
+      "repository": "alykoshin/shelling",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "skill-scanner": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "smuggler": {
+      "commands": [],
+      "repository": "ramonfritsch/smuggler",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "spamscanner": {
+      "commands": [
+        "spamscanner"
+      ],
+      "repository": "spamscanner/spamscanner",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "stews": {
+      "commands": [],
+      "repository": "paishee/stews",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "stormbreaker": {
+      "commands": [],
+      "repository": "anooprav7/stormbreaker-cl",
+      "verified": false,
+      "why": "another repository"
+    },
+    "subdomainfinder": {
+      "commands": [
+        "subdomainfinder"
+      ],
+      "repository": "hariharan005/subdomain",
+      "verified": false,
+      "why": "another repository"
+    },
+    "takeover": {
+      "commands": [
+        "takeover"
+      ],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "tex": {
+      "commands": [],
+      "repository": "chbrown/tex",
+      "verified": false,
+      "why": "another repository"
+    },
+    "triton": {
+      "commands": [
+        "triton"
+      ],
+      "repository": "tritondatacenter/node-triton",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "tsunami": {
+      "commands": [
+        "tsunami"
+      ],
+      "repository": "gitlab.com/acceleratxr/tsunami",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "turner": {
+      "commands": [],
+      "repository": "merciba/turner",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "uboat": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "uglifyjs2": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "vaf": {
+      "commands": [],
+      "repository": "aflover/vaf",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "vega": {
+      "commands": [],
+      "repository": "vega/vega",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "velociraptor": {
+      "commands": [
+        "velociraptor"
+      ],
+      "repository": "ben-ng/velociraptor",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "venom": {
+      "commands": [],
+      "repository": "dgaubert/venom",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "volatility": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "vuls": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "wappalyzer": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "wascan": {
+      "commands": [],
+      "repository": "intelligent-medical-cloud/pkg-wascan",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "watson": {
+      "commands": [
+        "watson"
+      ],
+      "repository": "hornairs/watson",
+      "verified": false,
+      "why": "another repository"
+    },
+    "webcopilot": {
+      "commands": [
+        "webcopilot"
+      ],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "webscrape": {
+      "commands": [],
+      "repository": "masotime/webscrape",
+      "verified": false,
+      "why": "another repository"
+    },
+    "websy": {
+      "commands": [
+        "websy-server"
+      ],
+      "repository": "elyctech/websy",
+      "verified": false,
+      "why": "another repository"
+    },
+    "whonow": {
+      "commands": [
+        "whonow"
+      ],
+      "repository": "brannondorsey/whonow",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "wpscan": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "wrapwrap": {
+      "commands": [],
+      "repository": "odeum/wrapwrap",
+      "verified": false,
+      "why": "another repository"
+    },
+    "wtfis": {
+      "commands": [],
+      "repository": "geclos/is",
+      "verified": false,
+      "why": "another repository"
+    },
+    "xcat": {
+      "commands": [],
+      "repository": "xcatliu/xcat",
+      "verified": false,
+      "why": "another repository"
+    },
+    "xray": {
+      "commands": [],
+      "repository": "janeklb/xray.js",
+      "verified": false,
+      "why": "another repository"
+    },
+    "xsinator": {
+      "verified": false,
+      "why": "not on the registry"
+    },
+    "xxexploiter": {
+      "commands": [
+        "xxexploiter"
+      ],
+      "repository": "",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    },
+    "yasuo": {
+      "commands": [],
+      "repository": "",
+      "verified": false,
+      "why": "no repository on the registry entry"
+    },
+    "yoga": {
+      "commands": [
+        "yoga"
+      ],
+      "repository": "prisma/yoga2",
+      "verified": false,
+      "why": "another repository"
+    },
+    "zdns": {
+      "commands": [],
+      "repository": "liudonghua123/zdns-sdk",
+      "verified": false,
+      "why": "tool has no repository on record and the description differs"
+    }
+  }
+}

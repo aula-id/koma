@@ -31,3 +31,10 @@ s3cxsser
 smbcrawler
 xssor-2
 xsswagger
+astra
+blazy
+dead-link-checker
+fingerprinter
+hackeroneclient
+open-sesame
+takeover

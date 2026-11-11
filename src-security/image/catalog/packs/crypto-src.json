@@ -106,6 +106,52 @@
       "scope_needed": true,
       "image_or_pack": "crypto-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=cryscanner"
+    },
+    {
+      "id": "avet",
+      "name": "avet",
+      "summary": "AntiVirus Evasion Tool; targeting windows machines with executable files",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "avet"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/govolution/avet; detect=avet"
+    },
+    {
+      "id": "depix",
+      "name": "depix",
+      "summary": "Recovers passwords from pixelized screenshots.",
+      "categories": [
+        "cryptanalysis"
+      ],
+      "effect": "local",
+      "exec": "cpu",
+      "lanes": [
+        "research",
+        "red",
+        "blue"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "depix"
+      ],
+      "scope_needed": false,
+      "image_or_pack": "crypto-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/spipm/Depixelization_poc; detect=depix"
     }
   ]
 }

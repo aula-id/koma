@@ -492,6 +492,111 @@
       "scope_needed": false,
       "image_or_pack": "identity-src",
       "how_to": "channel=from-source; primary=sudo apt-get update && sudo apt-get install -y git build-essential; detect=rubyhashcat"
+    },
+    {
+      "id": "arsenal",
+      "name": "arsenal",
+      "summary": "Just a quick inventory, reminder and launcher for pentest commands.",
+      "categories": [
+        "auth-perms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "arsenal"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "identity-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/Orange-Cyberdefense/arsenal; detect=arsenal"
+    },
+    {
+      "id": "azureadlateralmovement",
+      "name": "azureadlateralmovement",
+      "summary": "Lateral movement graph for Azure Active Directory.",
+      "categories": [
+        "auth-perms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "azureadlateralmovement"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "identity-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/BloodHoundAD/Bloodhound; detect=azureadlateralmovement"
+    },
+    {
+      "id": "ctf_tools",
+      "name": "ctf_tools",
+      "summary": "Some setup scripts for security research tools.",
+      "categories": [
+        "auth-perms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "ctf-tools"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "identity-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/zardus/ctf-tools; detect=ctf-tools"
+    },
+    {
+      "id": "cve",
+      "name": "cve",
+      "summary": "Gather and update all available and newest CVEs with their PoC.",
+      "categories": [
+        "auth-perms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "cve"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "identity-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/trickest/cve; detect=cve"
+    },
+    {
+      "id": "dshell",
+      "name": "dshell",
+      "summary": "A network forensic analysis framework.",
+      "categories": [
+        "auth-perms"
+      ],
+      "effect": "remote",
+      "exec": "net",
+      "lanes": [
+        "red"
+      ],
+      "plan_ok": false,
+      "ready": false,
+      "requires": [
+        "dshell"
+      ],
+      "scope_needed": true,
+      "image_or_pack": "identity-src",
+      "how_to": "channel=from-source; primary=git clone https://github.com/USArmyResearchLab/Dshell; detect=dshell"
     }
   ]
 }

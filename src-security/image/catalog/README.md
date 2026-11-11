@@ -43,11 +43,11 @@ Research should keep rules empty. Agent does not unilaterally open the internet.
 | recon, recon-2, recon-ext, recon-src | `-recon…` | OSINT / enum / network |
 | web, web-ext, web-src | `-web…` | App / API / CMS / vulns |
 | identity, identity-ext, identity-src | `-identity…` | Auth / passwords / cracking |
-| cloud, cloud-ext, cloud-src | `-cloud…` | Cloud services |
-| rev, rev-ext, rev-src | `-rev…` | Reverse / binary / mobile |
-| crypto, crypto-ext, crypto-src | `-crypto…` | Crypto / stego |
-| pxn, pxn-ext, pxn-src | `-pxn…` | Host offensive / red / wireless (**not** `pwn`) |
-| dfir, dfir-ext, dfir-src | `-dfir…` | Forensics / IR / defensive |
+| cloud, cloud-src | `-cloud…` | Cloud services |
+| rev, rev-src | `-rev…` | Reverse / binary / mobile |
+| crypto, crypto-src | `-crypto…` | Crypto / stego |
+| pxn, pxn-src | `-pxn…` | Host offensive / red / wireless (**not** `pwn`) |
+| dfir, dfir-src | `-dfir…` | Forensics / IR / defensive |
 | lab, lab-ext, lab-src | `-lab…` | Dev / virt / misc lab |
 
 Image name: `ghcr.io/aula-id/koma-safety`.
