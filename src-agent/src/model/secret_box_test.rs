@@ -224,3 +224,203 @@ fn a_session_key_is_sealed_on_disk_and_restored_on_load() {
     assert_eq!(Settings::load(&path).unwrap().api_key, "sk-or-OLD");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn an_unreadable_config_is_kept_once_and_never_replaced_by_a_later_one() {
+    let dir = temp_dir("keep");
+    let path = dir.join("config.json");
+    std::fs::write(&path, b"sealed under a lost key").unwrap();
+
+    let copy = keep_unreadable_copy(&path).unwrap();
+    assert_eq!(copy, dir.join("config.json.undecrypted.bak"));
+    assert_eq!(std::fs::read(&copy).unwrap(), b"sealed under a lost key");
+    assert!(!is_exposed(&copy).unwrap_or(false));
+
+    // The config is later saved with the lost values empty. The copy must
+    // still be the original.
+    std::fs::write(&path, b"saved again, credentials empty").unwrap();
+    keep_unreadable_copy(&path).unwrap();
+    assert_eq!(std::fs::read(&copy).unwrap(), b"sealed under a lost key");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn load_at(path: &Path, read: Option<&Key>, write: Key) -> AppConfig {
+    AppConfig::load_at(path, read, true, false, || Ok(write)).unwrap()
+}
+
+/// An older `config.json` stores credentials as plain text, often in a file
+/// other users can read. One load seals them and leaves everything else.
+#[test]
+fn an_old_plain_config_is_sealed_in_place_and_still_opens() {
+    let dir = temp_dir("migrate");
+    let path = dir.join("config.json");
+    let mut old = config_with_secrets();
+    old.oauth_conns[0].email = "agung@retas.co.id".into();
+    old.oauth_conns[0].name = "koma (agung@retas.co.id)".into();
+    old.palette = "light".into();
+    std::fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let loaded = load_at(&path, None, KEY);
+    assert_eq!(loaded.providers[0].api_key, "sk-or-PROVIDER");
+    assert_eq!(loaded.oauth_conns[0].access_token, "ACCESS-tok");
+    assert_eq!(loaded.oauth_conns[0].refresh_token, "REFRESH-tok");
+    assert_eq!(loaded.oauth_conns[0].id_token, "ID-tok");
+    assert_eq!(loaded.oauth_conns[0].email, "agung@retas.co.id");
+    assert_eq!(loaded.oauth_conns[0].account_id, "acct-visible");
+    assert_eq!(loaded.web_search.exa_key.0, "EXA-key");
+    assert_eq!(loaded.mcp_servers[0].env[0].1, "ghp_MCP");
+    assert_eq!(loaded.palette, "light");
+
+    let stored = std::fs::read_to_string(&path).unwrap();
+    for secret in SECRETS {
+        assert!(
+            !stored.contains(secret),
+            "{secret} is still plain after migration"
+        );
+    }
+    assert!(stored.contains("enc:v1:"));
+    assert!(stored.contains("agung@retas.co.id"));
+    assert!(stored.contains("acct-visible"));
+    assert!(stored.contains("openrouter"));
+    assert!(!dir.join("config.json.undecrypted.bak").exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let sealed_bytes = std::fs::read(&path).unwrap();
+    let again = load_at(&path, Some(&KEY), KEY);
+    assert_eq!(again.providers[0].api_key, "sk-or-PROVIDER");
+    assert_eq!(again.oauth_conns[0].refresh_token, "REFRESH-tok");
+    assert_eq!(again.mcp_servers[0].env[0].1, "ghp_MCP");
+    assert_eq!(std::fs::read(&path).unwrap(), sealed_bytes);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The failure that blanked a real config: the file was sealed under a key this
+/// process does not have, and it was also world-readable, so the load rewrote it.
+/// The rewrite must keep the ciphertext. A later save must not blank it either.
+#[test]
+fn a_sealed_config_that_will_not_open_is_not_replaced_with_empty_secrets() {
+    let dir = temp_dir("keepmig");
+    let path = dir.join("config.json");
+    let original = config_with_secrets().to_disk_bytes(&OTHER).unwrap();
+    std::fs::write(&path, &original).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let loaded = load_at(&path, Some(&KEY), KEY);
+    assert_eq!(loaded.providers[0].api_key, "");
+    assert_eq!(loaded.oauth_conns[0].access_token, "");
+    assert_eq!(loaded.oauth_conns[0].account_id, "acct-visible");
+
+    let bak = dir.join("config.json.undecrypted.bak");
+    assert_eq!(std::fs::read(&bak).unwrap(), original);
+    let rewritten: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let provider_key = rewritten["providers"][0]["api_key"].as_str().unwrap();
+    let access = rewritten["oauth_conns"][0]["access_token"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        open_with(&OTHER, provider_key).as_deref(),
+        Some("sk-or-PROVIDER")
+    );
+    assert_eq!(open_with(&OTHER, access).as_deref(), Some("ACCESS-tok"));
+    assert!(!provider_key.is_empty());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    // Saving the in-memory config, whose secrets are now empty, must put the
+    // ciphertext back rather than store "".
+    let saved: serde_json::Value =
+        serde_json::from_slice(&loaded.to_disk_bytes(&KEY).unwrap()).unwrap();
+    assert_eq!(
+        open_with(&OTHER, saved["providers"][0]["api_key"].as_str().unwrap()).as_deref(),
+        Some("sk-or-PROVIDER")
+    );
+    assert_eq!(
+        open_with(
+            &OTHER,
+            saved["mcp_servers"][0]["env"][0][1].as_str().unwrap()
+        )
+        .as_deref(),
+        Some("ghp_MCP")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// One field still plain, another sealed under a key we do not have. The plain
+/// field is sealed; the other field stays the ciphertext it already was.
+#[test]
+fn a_mixed_config_seals_the_plain_fields_and_keeps_the_unreadable_ones() {
+    let dir = temp_dir("mixed");
+    let path = dir.join("config.json");
+    let mut old = config_with_secrets();
+    old.providers[0].api_key = seal_with(&OTHER, "sk-or-PROVIDER").unwrap();
+    let original_key = old.providers[0].api_key.clone();
+    std::fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+
+    let loaded = load_at(&path, Some(&KEY), KEY);
+    assert_eq!(loaded.providers[0].api_key, "");
+    assert_eq!(loaded.oauth_conns[0].access_token, "ACCESS-tok");
+
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        stored["providers"][0]["api_key"].as_str(),
+        Some(original_key.as_str())
+    );
+    assert_eq!(
+        open_with(
+            &KEY,
+            stored["oauth_conns"][0]["access_token"].as_str().unwrap()
+        )
+        .as_deref(),
+        Some("ACCESS-tok")
+    );
+    assert!(!stored.to_string().contains("ACCESS-tok"));
+    assert!(dir.join("config.json.undecrypted.bak").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Tests reach `AppConfig::try_load` through code that reads the developer's
+/// real config. With the fixed test key in play, a load must never write.
+#[test]
+fn loading_the_config_in_a_test_build_never_rewrites_it() {
+    let Ok(path) = crate::model::store::base_dir().map(|dir| dir.join("config.json")) else {
+        return;
+    };
+    let before = std::fs::read(&path).ok();
+    let _ = AppConfig::try_load();
+    assert_eq!(std::fs::read(&path).ok(), before);
+}
+
+#[test]
+fn a_value_sealed_by_a_test_run_is_recovered_and_flagged_for_resealing() {
+    let mut opened = Opened::default();
+    let mut field = seal_with(&TEST_KEY, "sk-real-credential").unwrap();
+
+    // The machine key is a different key, or does not exist yet.
+    open_field(Some(&KEY), &mut field, &mut opened);
+    assert_eq!(field, "sk-real-credential");
+    assert_eq!(opened, Opened { plain: 1, lost: 0 });
+
+    let mut keyless = seal_with(&TEST_KEY, "sk-real-credential").unwrap();
+    open_field(None, &mut keyless, &mut opened);
+    assert_eq!(keyless, "sk-real-credential");
+    assert_eq!(opened, Opened { plain: 2, lost: 0 });
+}
