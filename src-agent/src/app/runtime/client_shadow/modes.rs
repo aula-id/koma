@@ -129,6 +129,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
             name: e.name,
             last_active: std::time::UNIX_EPOCH + Duration::from_secs(e.last_active_secs),
             dir_label: String::new(), // not projected over the wire; labels shown on daemon side
+            workdir: None,
             is_current_dir: false,
             remote_host: None,
         })
@@ -153,6 +154,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 // `pending_kill`). None for the synthetic `[+ new session]` row.
                 session_id: c.session_id,
                 dir_label: String::new(), // not projected over the wire
+                workdir: None,
                 is_current_dir: false,
                 remote_host: c.remote_host,
             })

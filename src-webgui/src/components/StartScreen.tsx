@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowRight, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, FolderPlus, Info, Search, Server, Sparkles, X, Zap } from 'lucide-react'
+import { ArrowRight, ChevronDown, ChevronRight, Clock, Folder, FolderOpen, FolderPlus, Info, Plus, Search, Server, Sparkles, X, Zap } from 'lucide-react'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
 import { SessionBulkBar } from './SessionBulkBar'
@@ -118,7 +118,7 @@ export function StartScreen() {
   }, [query, multiClear])
 
   // Live (cooking) sessions first, then past history — grouped client-side by
-  // folder basename (`dirLabel`). No daemon/IPC change; empty dirLabel is Other.
+  // local working directory when known. Older rows fall back to their label.
   const liveSessions = useMemo(
     () => cooking.filter((c) => c.kind === 'session' && c.id),
     [cooking],
@@ -334,26 +334,43 @@ export function StartScreen() {
         ) : (
           <div className="max-h-[40vh] overflow-y-auto px-3 pb-3">
             {visibleGroups.map((group) => {
-              const open = !nestFolders || searchingActive || expanded.has(group.key)
+              const collapsible = nestFolders
+              const open = !collapsible || searchingActive || expanded.has(group.key)
               const count = group.live.length + group.history.length
               return (
-                <div key={group.key || 'other'}>
-                  {nestFolders && (
-                    <button
-                      type="button"
-                      onClick={() => toggleFolder(group.key)}
-                      aria-expanded={open}
-                      className="flex h-7 w-full items-center gap-1 rounded px-1 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
-                    >
-                      {open ? <ChevronDown size={13} className="flex-none text-koma-dim" /> : <ChevronRight size={13} className="flex-none text-koma-dim" />}
-                      {open ? (
-                        <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
-                      ) : (
-                        <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+                <div key={group.key}>
+                  {(nestFolders || (group.workdir && !remoteLive)) && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleFolder(group.key)}
+                        disabled={!collapsible}
+                        title={group.workdir}
+                        aria-expanded={open}
+                        className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded px-1 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+                      >
+                        {open ? <ChevronDown size={13} className="flex-none text-koma-dim" /> : <ChevronRight size={13} className="flex-none text-koma-dim" />}
+                        {open ? (
+                          <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
+                        ) : (
+                          <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                        <span className="flex-none text-[10px] text-koma-dim">{count}</span>
+                      </button>
+                      {group.workdir && !remoteLive && (
+                        <button
+                          type="button"
+                          aria-label={`New session in ${group.workdir}`}
+                          title={`New session in ${group.workdir}`}
+                          className="flex h-7 w-7 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                          disabled={Boolean(switchingTo)}
+                          onClick={() => req({ r: 'NewSession', workdir: group.workdir })}
+                        >
+                          <Plus size={14} aria-hidden />
+                        </button>
                       )}
-                      <span className="min-w-0 flex-1 truncate">{group.label}</span>
-                      <span className="flex-none text-[10px] text-koma-dim">{count}</span>
-                    </button>
+                    </div>
                   )}
                   {open && (
                     <div className={nestFolders ? 'pl-3' : undefined}>

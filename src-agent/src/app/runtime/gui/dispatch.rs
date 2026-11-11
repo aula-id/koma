@@ -156,14 +156,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // thread; IFileDialog without the owner HWND opens behind the window
         // or not at all), so those hop to the tao loop and use this window
         // as parent.
-        GuiReq::NewSession { kill, folder } => {
-            if folder {
+        GuiReq::NewSession {
+            kill,
+            folder,
+            workdir,
+        } => {
+            if folder
+                || workdir
+                    .as_ref()
+                    .is_some_and(|path| !path.is_absolute() || !path.is_dir())
+            {
                 open_local_folder_picker(ctx, kill);
             } else {
-                let _ = ctx.ctl.send(HostCtl::New {
-                    workdir: None,
-                    kill,
-                });
+                let _ = ctx.ctl.send(HostCtl::New { workdir, kill });
             }
         }
         // A hub row's KILL button (a live session, or the attached one): the

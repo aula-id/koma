@@ -70,6 +70,8 @@ pub struct CookingEntry {
     pub session_id: Option<String>,
     /// Basename of the session's working directory, used as a label in the cooking pane.
     pub dir_label: String,
+    /// Local session folder, when available to the GUI host.
+    pub workdir: Option<String>,
     /// Whether the session's working directory matches the current process's working directory.
     /// Populated for future use; cooking pane currently uses `is_foreground` for emphasis.
     #[allow(dead_code)]
@@ -96,6 +98,8 @@ pub struct HistoryEntry {
     pub last_active: SystemTime,
     /// Basename of the session's working directory, shown as a label in the history pane.
     pub dir_label: String,
+    /// Local session folder, when available to the GUI host.
+    pub workdir: Option<String>,
     /// Whether the session's working directory matches the current process's working directory.
     pub is_current_dir: bool,
     /// If this history row lives on a remote host, its display name (`user@host`).
