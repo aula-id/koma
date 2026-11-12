@@ -29,7 +29,7 @@ impl LaneRunState {
 }
 
 /// What the reconciler saw for one pending assignment.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Observation {
     /// `None` when the run no longer exists.
     pub run: Option<LaneRunState>,

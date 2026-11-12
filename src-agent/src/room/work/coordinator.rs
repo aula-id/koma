@@ -240,6 +240,23 @@ impl Coordinator {
         }
     }
 
+    /// The active engagement with its assignments, for the clerk's audit and the
+    /// reconciler's observation set. `None` when nothing is active.
+    pub fn active_work(&self) -> Option<super::model::Work> {
+        self.store.with_tx(|conn| store::active_work(conn)).ok().flatten()
+    }
+
+    /// The active engagement's key, goal text and open trajectory goals, for the
+    /// wake and check-in prompts. `None` when nothing is active.
+    pub fn active_brief(&self) -> Option<(String, String, Vec<String>)> {
+        let open = self.open_goals().unwrap_or_default();
+        self.store
+            .with_tx(|conn| Ok(store::active_work(conn)?.map(|w| (w.key, w.prompt))))
+            .ok()
+            .flatten()
+            .map(|(key, prompt)| (key, prompt, open))
+    }
+
     fn open_goals(&self) -> R<Vec<String>> {
         let rows = self.shelf.scan("trajectory/").map_err(|e| e.0)?;
         let contents: Vec<String> = rows.into_iter().filter_map(|r| r.content).collect();

@@ -28,6 +28,8 @@ pub use control::{Action as ControlAction, Command as ControlCommand, ControlSta
 #[allow(unused_imports)]
 pub use digest::{Digest, LaneStatus, Phase};
 #[allow(unused_imports)]
+pub use crate::room::registry::LaneKind;
+#[allow(unused_imports)]
 pub use event::LaneEvent;
 #[allow(unused_imports)]
 pub use inbox::{Inbox, Item as InboxItem, Priority};
@@ -35,6 +37,6 @@ pub use inbox::{Inbox, Item as InboxItem, Priority};
 pub use timeline::{Milestone, Timeline};
 #[allow(unused_imports)]
 pub use runner::{
-    run_lane, LaneConfig, LaneInput, LaneKind, ModelClient, ModelReply, ModelRequest, ToolRouter,
+    run_lane, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,
     ToolRun, ToolSpec, Usage,
 };

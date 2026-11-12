@@ -17,17 +17,9 @@ use futures_util::future::BoxFuture;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::dto::chat::{ChatMessage, Role, ToolCall};
-use crate::room::registry::LaneModel;
+use crate::room::registry::{LaneKind, LaneModel};
 
 use super::event::LaneEvent;
-
-/// Which kind of lane this is. A chat lane answers the user in short turns; a
-/// work lane runs one assignment to completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneKind {
-    Chat,
-    Work,
-}
 
 /// A tool offered to the model.
 #[derive(Debug, Clone, PartialEq)]
