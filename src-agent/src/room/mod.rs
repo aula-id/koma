@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 pub mod actor;
+pub mod browse;
 pub mod clerk;
 pub mod cli;
 pub mod daemon;

@@ -24,6 +24,10 @@ pub enum RoomClient {
     PasteImage,
     /// Esc: stop what the Chief and the specialists are saying. Their work keeps running.
     Interrupt,
+    /// Open a browse screen: the shelf, the goals and the reports.
+    Browse,
+    /// Open one shelf item in full.
+    Open { key: String },
     Control { command: RoomControl },
     /// Ask for the registered models and what each lane runs.
     Models,
@@ -64,6 +68,10 @@ pub enum RoomServer {
     },
     /// What a paste turned into: text for the draft at the caret.
     Pasted { insert: String },
+    /// The shelf, goals and reports, answering [`RoomClient::Browse`].
+    Browse { shelf: Vec<crate::room::browse::ShelfRow>, goals: Vec<crate::room::browse::Goal>, reports: Vec<crate::room::browse::Report> },
+    /// One shelf item, answering [`RoomClient::Open`].
+    Item { key: String, revision: i64, updated: i64, content: String },
     Chief { text: String },
     LaneChat { avatar: String, text: String },
     Visible { author: String, text: String },
@@ -136,6 +144,9 @@ impl RoomServer {
             RoomEvent::Visible { author, text } => RoomServer::Visible { author, text },
             RoomEvent::Part { author, lane, part } => RoomServer::Part { author, lane, part },
             RoomEvent::Status(status) => Self::from_status(status),
+            RoomEvent::Browse(b) => RoomServer::Browse { shelf: b.shelf, goals: b.goals, reports: b.reports },
+            RoomEvent::Item(i) => RoomServer::Item { key: i.key, revision: i.revision, updated: i.updated, content: i.content },
+            RoomEvent::Notice(text) => RoomServer::Notice { text },
             RoomEvent::Closed => RoomServer::Closed,
         }
     }

@@ -277,7 +277,7 @@ mod attach {
     fn show(frame: &RoomServer, last_digest: &mut String) -> bool {
         let mut out = std::io::stdout().lock();
         match frame {
-            RoomServer::Hello { .. } | RoomServer::Pasted { .. } => {}
+            RoomServer::Hello { .. } | RoomServer::Pasted { .. } | RoomServer::Browse { .. } | RoomServer::Item { .. } => {}
             RoomServer::Chief { text } => { let _ = writeln!(out, "chief: {text}"); }
             RoomServer::LaneChat { avatar, text } => { let _ = writeln!(out, "{avatar}: {text}"); }
             RoomServer::Part { author, part, .. } => {

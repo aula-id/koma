@@ -258,6 +258,11 @@ impl RoomActor {
                     });
                 }
                 ActorMsg::Resync => self.emit_status(),
+                ActorMsg::Browse => self.emit(RoomEvent::Browse(crate::room::browse::build(&self.shelf))),
+                ActorMsg::Open { key } => match crate::room::browse::item(&self.shelf, &key) {
+                    Some(item) => self.emit(RoomEvent::Item(item)),
+                    None => self.emit(RoomEvent::Notice(format!("{key} is not on the shelf"))),
+                },
                 ActorMsg::Shutdown => break,
             }
         }
