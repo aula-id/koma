@@ -317,6 +317,9 @@ pub struct Opts {
     /// coding panel. Short-circuited in `main` before the TUI (same pattern as
     /// `doctor` / `ext`).
     pub lsp: Option<crate::lsp::LspCli>,
+    /// `koma room …`: read-only views of a secure-room session. Short-circuited
+    /// in `main` before the TUI (same pattern as `lsp`).
+    pub room: Option<crate::room::cli::RoomCli>,
     /// `koma run …` headless one-shot against the default session-daemon path.
     /// Short-circuited in `main` before the TUI (never uses `--local` / standalone).
     pub run: Option<RunCli>,
@@ -627,6 +630,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                 .cloned()
                 .collect();
             opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
+        }
+        Some("room") => {
+            // Everything after the `room` verb; re-collected from `all` so flag
+            // values such as `--goal x` survive the non-`--` positional filter.
+            let room_args: Vec<String> = all
+                .iter()
+                .skip(1) // argv[0]
+                .skip_while(|a| a.as_str() != "room")
+                .skip(1) // the `room` token itself
+                .cloned()
+                .collect();
+            opts.room = Some(crate::room::cli::RoomCli::parse(&room_args));
         }
         Some("run") => {
             opts.run = Some(run_args::parse(&all[1..]));

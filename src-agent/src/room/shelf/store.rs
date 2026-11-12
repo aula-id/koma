@@ -169,6 +169,27 @@ impl Shelf {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Open an existing shelf for reading only. No tables are created and no
+    /// data, schema or journal mode changes; writes fail. SQLite may still
+    /// create its `-wal` and `-shm` index files beside a WAL database, which it
+    /// needs to read one. For viewers such as `koma room trajectory`, which must
+    /// be safe against a live session.
+    pub fn open_read_only(path: &Path) -> Result<Self, ShelfError> {
+        use rusqlite::OpenFlags;
+        if !path.is_file() {
+            return fail(format!("no room database at {}", path.display()));
+        }
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        let has_shelf: Option<i64> = conn
+            .query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'shelf_items'", [], |r| r.get(0))
+            .optional()?;
+        if has_shelf.is_none() {
+            return fail(format!("{} has no shelf (not a room database)", path.display()));
+        }
+        Ok(Self { conn: Mutex::new(conn), subscribers: Mutex::new(Vec::new()) })
+    }
+
     fn init(conn: Connection) -> Result<Self, ShelfError> {
         let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         conn.execute_batch(

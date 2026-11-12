@@ -24,7 +24,7 @@ pub use effects::Effect;
 #[allow(unused_imports)]
 pub use finish::assert_finishable;
 #[allow(unused_imports)]
-pub use goals::{append_goal, open_trajectory_goals};
+pub use goals::{append_goal, is_exhausted, open_trajectory_goals};
 #[allow(unused_imports)]
 pub use model::{Assignment, ReviewItem, ReviewStatus, Work};
 #[allow(unused_imports)]

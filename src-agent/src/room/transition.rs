@@ -51,7 +51,7 @@ pub fn derive_assignment_status(
     if !current.is_pending() {
         return current;
     }
-    let ended = seen.run.map_or(true, LaneRunState::is_terminal);
+    let ended = seen.run.is_none_or(LaneRunState::is_terminal);
     if ended {
         if seen.unsettled {
             return AssignmentStatus::Uncertain;

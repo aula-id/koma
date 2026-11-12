@@ -336,7 +336,7 @@ impl Coordinator {
                             && b.kind == a.kind
                             && b.prompt == a.prompt
                             && (b.reviews_id.is_none() || b.reviews_id == a.reviews_id)
-                            && b.references.as_deref().map_or(true, |r| same_references(r, &a.references))
+                            && b.references.as_deref().is_none_or(|r| same_references(r, &a.references))
                     })
                 });
             if !same {

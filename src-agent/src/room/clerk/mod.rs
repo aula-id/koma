@@ -118,7 +118,7 @@ impl Clerk {
 
         let print = fingerprint(input)?;
         let changed = self.last_fingerprint.as_deref() != Some(print.as_str());
-        let spaced = self.last_pass_ms.map_or(true, |t| input.now_ms.saturating_sub(t) >= MIN_PASS_GAP_MS);
+        let spaced = self.last_pass_ms.is_none_or(|t| input.now_ms.saturating_sub(t) >= MIN_PASS_GAP_MS);
         if new_findings.is_empty() && !(changed && spaced) {
             return Ok(Tick::Quiet);
         }

@@ -274,6 +274,11 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(lsp::run_cli(cmd));
     }
 
+    // --- short-circuit: `koma room …` read-only secure-room views (no TUI, no daemon) ---
+    if let Some(cmd) = opts.room {
+        std::process::exit(room::cli::run(cmd));
+    }
+
     // --- short-circuit: `koma run` headless one-shot (default session-daemon) ---
     // Mint/attach a session-daemon, SubmitInput, optional --once wait. Never standalone.
     if let Some(run) = opts.run.clone() {

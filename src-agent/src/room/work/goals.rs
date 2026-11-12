@@ -24,7 +24,7 @@ pub fn append_goal(existing: &str, added: &str) -> String {
 
 /// A trajectory goal with one of these statuses is finished. Anything else,
 /// including a blank status, stays open.
-fn is_exhausted(status: &str) -> bool {
+pub fn is_exhausted(status: &str) -> bool {
     let status = status.trim().to_lowercase();
     status.contains("exhausted")
         || matches!(
