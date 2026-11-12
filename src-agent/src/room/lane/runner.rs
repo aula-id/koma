@@ -51,6 +51,8 @@ pub type DeltaSink = Arc<dyn Fn(Delta) + Send + Sync>;
 
 /// One model call.
 pub struct ModelRequest {
+    /// Whose lane this is, so its spend is recorded under its name.
+    pub avatar: String,
     pub history: Vec<ChatMessage>,
     pub tools: Vec<ToolSpec>,
     pub model: LaneModel,
@@ -243,6 +245,7 @@ pub async fn run_lane(
         emit(&events, LaneEvent::Step(step));
         let reply = model
             .stream(ModelRequest {
+                avatar: config.avatar.clone(),
                 history: convo.history.clone(),
                 tools: advertised.clone(),
                 model: config.model.clone(),
