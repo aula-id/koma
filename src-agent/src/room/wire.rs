@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::room::actor::{LanePart, RoomEvent, StatusSnapshot};
+use crate::room::actor::{EventInfo, LaneInfo, LanePart, RoomEvent, StatusSnapshot};
 use crate::room::lane::ControlCommand;
 
 /// What an attach client sends.
@@ -73,6 +73,12 @@ pub enum RoomServer {
         shelf: String,
         #[serde(default)]
         trajectory: String,
+        #[serde(default)]
+        lanes: Vec<LaneInfo>,
+        #[serde(default)]
+        events: Vec<EventInfo>,
+        #[serde(default)]
+        now_ms: u64,
     },
     /// The answer to [`RoomClient::Models`], and to every `SetModel`.
     Models { choices: Vec<ModelChoice>, lanes: Vec<LaneRow> },
@@ -136,6 +142,9 @@ impl RoomServer {
             paused: status.paused,
             shelf: status.shelf,
             trajectory: status.trajectory,
+            lanes: status.lanes,
+            events: status.events,
+            now_ms: status.now_ms,
         }
     }
 }

@@ -20,7 +20,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Phase::Running => "running",
             Phase::Submitted => "submitted",

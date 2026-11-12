@@ -200,6 +200,11 @@ impl Registry {
         self.roles.get(&self.avatars.get(avatar)?.role)
     }
 
+    /// Every avatar, in id order.
+    pub fn all_avatars(&self) -> impl Iterator<Item = &Avatar> {
+        self.avatars.values()
+    }
+
     /// Avatars that play `role`, in id order.
     pub fn avatars_of(&self, role: &str) -> Vec<&Avatar> {
         self.avatars.values().filter(|a| a.role == role).collect()

@@ -63,6 +63,19 @@ impl Timeline {
         }
     }
 
+    /// The most recent milestones across every lane, newest first, as
+    /// `(at_ms, avatar, marker, label)`.
+    pub fn events(&self, limit: usize) -> Vec<(u64, String, char, String)> {
+        let mut all: Vec<(u64, String, char, String)> = self
+            .lanes
+            .iter()
+            .flat_map(|(avatar, marks)| marks.iter().map(move |m| (m.at_ms, avatar.clone(), m.marker, m.label.clone())))
+            .collect();
+        all.sort_by(|a, b| b.0.cmp(&a.0));
+        all.truncate(limit);
+        all
+    }
+
     /// Drop a lane's row (e.g. a superseded assignment).
     pub fn forget(&mut self, avatar: &str) {
         if self.lanes.remove(avatar).is_some() {

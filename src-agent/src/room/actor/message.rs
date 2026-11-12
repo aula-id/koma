@@ -65,6 +65,33 @@ pub enum LanePart {
     ToolResult { id: String, ok: bool, result: String },
 }
 
+/// One lane in the status table: who, what they are doing, and how it is going.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LaneInfo {
+    pub avatar: String,
+    pub display: String,
+    pub role: String,
+    /// `chat` or `work`; empty for an avatar with no lane running.
+    pub lane: String,
+    /// `running`, `idle`, `paused`, `submitted`, `done` or `failed`.
+    pub phase: String,
+    pub task: String,
+    pub started_ms: u64,
+    pub last_event_ms: u64,
+    pub steps: usize,
+    pub last_tool: String,
+    pub error: String,
+}
+
+/// One thing that happened, for the timeline.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EventInfo {
+    pub at_ms: u64,
+    pub avatar: String,
+    pub marker: String,
+    pub label: String,
+}
+
 /// A point-in-time picture of the room for the status panes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusSnapshot {
@@ -80,4 +107,10 @@ pub struct StatusSnapshot {
     pub shelf: String,
     /// Trajectory outline.
     pub trajectory: String,
+    /// Every avatar's lanes as rows, for the status table.
+    pub lanes: Vec<LaneInfo>,
+    /// Recent milestones, newest first.
+    pub events: Vec<EventInfo>,
+    /// The room's clock when this was taken, so a client can show elapsed times.
+    pub now_ms: u64,
 }

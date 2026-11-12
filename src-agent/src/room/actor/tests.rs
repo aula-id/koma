@@ -527,3 +527,28 @@ async fn a_bang_line_runs_the_shell_without_the_model() {
     assert!(line.contains("ran bash"), "it went through the bash tool: {line}");
     assert!(!events.iter().any(|e| matches!(e, RoomEvent::Chief(_))), "no model turn");
 }
+
+#[tokio::test]
+async fn the_status_lists_the_whole_roster_and_repeated_turns_do_not_fill_the_timeline() {
+    let mut h = harness(vec![(("chief", 0), text("one")), (("chief", 1), text("two"))]);
+    h.user("first");
+    h.wait_for("first answer", |e| matches!(e, RoomEvent::Chief(t) if t == "one")).await;
+    h.user("second");
+    h.wait_for("second answer", |e| matches!(e, RoomEvent::Chief(t) if t == "two")).await;
+    h.send(ActorMsg::Resync);
+    let events = h.wait_for("status", |e| matches!(e, RoomEvent::Status(_))).await;
+    let status = events
+        .iter()
+        .find_map(|e| if let RoomEvent::Status(s) = e { Some(s.clone()) } else { None })
+        .expect("a status");
+
+    let avatars: Vec<&str> = status.lanes.iter().map(|l| l.avatar.as_str()).collect();
+    for who in ["chief", "red", "reviewer", "reporter"] {
+        assert!(avatars.contains(&who), "{who} is on the roster: {avatars:?}");
+    }
+    assert!(!avatars.contains(&"clerk"), "the clerk is internal");
+    assert!(status.lanes.iter().all(|l| l.phase == "idle" || l.phase == "running" || l.phase == "done"), "{:?}", status.lanes);
+    assert!(status.now_ms > 0);
+    assert!(!status.timeline.contains("◆ chief"), "chief turns no longer add a milestone each: {:?}", status.timeline);
+    assert!(status.events.iter().all(|e| e.avatar != "chief"), "{:?}", status.events);
+}

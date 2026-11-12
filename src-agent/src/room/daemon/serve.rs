@@ -234,6 +234,9 @@ mod tests {
             paused: Vec::new(),
             shelf: String::new(),
             trajectory: String::new(),
+            lanes: Vec::new(),
+            events: Vec::new(),
+            now_ms: 0,
         }
     }
 

@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::{AbortHandle, JoinHandle};
 
-pub use message::{ActorMsg, LanePart, RoomEvent, StatusSnapshot};
+pub use message::{ActorMsg, EventInfo, LaneInfo, LanePart, RoomEvent, StatusSnapshot};
 #[allow(unused_imports)]
 pub use router::{BuiltinHost, LaneRef, NoBuiltins, RoomToolRouter};
 
@@ -79,6 +79,10 @@ struct LaneHandle {
     /// Stopped but not proven idle, so the reconciler reads it as uncertain.
     unsettled: bool,
     ended: bool,
+    started_ms: u64,
+    last_event_ms: u64,
+    steps: usize,
+    last_tool: Option<String>,
 }
 
 /// Chat and work for one avatar are different lanes. The map key keeps them
@@ -324,7 +328,6 @@ impl RoomActor {
             transcript: self.transcript_for(avatar, LaneKind::Chat),
             objective: String::new(),
         };
-        self.timeline.open(avatar, "chat", now_ms());
         self.start_lane(config, LaneRef {
             avatar: avatar.to_string(),
             kind: LaneKind::Chat,
@@ -374,6 +377,14 @@ impl RoomActor {
         if kind == LaneKind::Work {
             self.digest.observe_at(avatar, &event, now);
             self.timeline.record(avatar, &event, now);
+        }
+        if let Some(lane) = self.lanes.get_mut(&Slot::new(avatar, kind)) {
+            lane.last_event_ms = now;
+            match &event {
+                LaneEvent::Step(n) => lane.steps = lane.steps.max(n + 1),
+                LaneEvent::ToolStarted { name } => lane.last_tool = Some(name.clone()),
+                _ => {}
+            }
         }
         let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
         match event {
@@ -483,7 +494,6 @@ impl RoomActor {
         let model = registry.lane_model("chief", LaneKind::Chat);
         let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat), objective: self.coordinator.active_brief().map(|(_, goal, _)| goal).unwrap_or_default() };
         self.chief_busy = true;
-        self.timeline.open("chief", "chief", now_ms());
         self.start_lane(config, LaneRef { avatar: "chief".into(), kind: LaneKind::Chat, assignment_id: None, is_chief: true, is_clerk: false });
     }
 
@@ -625,7 +635,64 @@ impl RoomActor {
             paused: self.control.paused().cloned().collect(),
             shelf,
             trajectory,
+            lanes: self.lane_rows(),
+            events: self
+                .timeline
+                .events(60)
+                .into_iter()
+                .map(|(at_ms, avatar, marker, label)| EventInfo { at_ms, avatar, marker: marker.to_string(), label })
+                .collect(),
+            now_ms: now_ms(),
         }));
+    }
+
+    /// One row per running lane, and one idle row for an avatar with none, so
+    /// the table is the whole roster.
+    fn lane_rows(&self) -> Vec<LaneInfo> {
+        let registry = self.registry.current();
+        let paused: std::collections::BTreeSet<String> = self.control.paused().cloned().collect();
+        let work = self.coordinator.active_work();
+        let task_of = |avatar: &str| -> String {
+            let id = self.assignment_lane.iter().find(|(_, a)| a.as_str() == avatar).map(|(id, _)| id.clone());
+            work.as_ref()
+                .and_then(|w| w.assignments.iter().find(|a| Some(&a.id) == id.as_ref()))
+                .map(|a| format!("{}: {}", a.kind.as_str(), a.prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>()))
+                .unwrap_or_default()
+        };
+        let mut rows = Vec::new();
+        for avatar in registry.all_avatars().filter(|a| a.role != "clerk") {
+            let display = registry.display_of(&avatar.id).to_string();
+            let mut any = false;
+            for kind in [LaneKind::Chat, LaneKind::Work] {
+                let Some(lane) = self.lanes.get(&Slot::new(&avatar.id, kind)) else { continue };
+                any = true;
+                let digest = (kind == LaneKind::Work).then(|| self.digest.status(&avatar.id)).flatten();
+                let phase = if paused.contains(&avatar.id) && kind == LaneKind::Work {
+                    "paused".to_string()
+                } else if lane.ended {
+                    digest.map_or("done", |s| s.phase.label()).to_string()
+                } else {
+                    digest.map_or("running", |s| s.phase.label()).to_string()
+                };
+                rows.push(LaneInfo {
+                    avatar: avatar.id.clone(),
+                    display: display.clone(),
+                    role: avatar.role.clone(),
+                    lane: if kind == LaneKind::Chat { "chat" } else { "work" }.into(),
+                    phase,
+                    task: if kind == LaneKind::Work { task_of(&avatar.id) } else if lane.is_chief { "answering you".into() } else { "talking with you".into() },
+                    started_ms: lane.started_ms,
+                    last_event_ms: lane.last_event_ms,
+                    steps: lane.steps,
+                    last_tool: lane.last_tool.clone().unwrap_or_default(),
+                    error: digest.and_then(|s| s.error.clone()).unwrap_or_default(),
+                });
+            }
+            if !any {
+                rows.push(LaneInfo { avatar: avatar.id.clone(), display, role: avatar.role.clone(), phase: "idle".into(), ..Default::default() });
+            }
+        }
+        rows
     }
 
     // ---- spawning a lane ----
@@ -687,6 +754,10 @@ impl RoomActor {
                 run: LaneRunState::Running,
                 unsettled: false,
                 ended: false,
+                started_ms: now_ms(),
+                last_event_ms: now_ms(),
+                steps: 0,
+                last_tool: None,
             },
         );
     }
