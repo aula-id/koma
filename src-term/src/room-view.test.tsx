@@ -245,3 +245,36 @@ test("the status screen is a roster table, a gates panel and a readable timeline
   const rows = text.split("\n")
   expect(rows.findIndex((r) => r.includes("claims/auth-1"))).toBeLessThan(rows.findIndex((r) => r.includes("probe") && r.includes("◆")))
 })
+
+test("a paste goes to the daemon, and what it sends back lands at the caret", async () => {
+  const pasted: string[] = []
+  let images = 0
+  let latest = ""
+  let insert!: (text: string) => void
+  function Harness() {
+    const [draft, setDraft] = useState("")
+    const [inserted, setInserted] = useState<{ id: number; text: string } | null>(null)
+    latest = draft
+    insert = (text) => setInserted((cur) => ({ id: (cur?.id ?? 0) + 1, text }))
+    return <RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft={draft} onDraft={setDraft} onSend={() => {}}
+      inserted={inserted} onPaste={(t) => pasted.push(t)} onPasteImage={() => { images += 1 }} />
+  }
+  let view!: Awaited<ReturnType<typeof testRender>>
+  await act(async () => { view = await testRender(<Harness />, { width: 100, height: 24 }) })
+  await act(async () => { await view.mockInput.pasteBracketedText("line one\nline two"); await new Promise((r) => setTimeout(r, 20)) })
+  expect(pasted).toEqual(["line one\nline two"])
+  expect(latest).toBe("")
+  await act(async () => { view.mockInput.pressKey("v", { ctrl: true }); await new Promise((r) => setTimeout(r, 20)) })
+  expect(images).toBe(1)
+  await act(async () => { await view.mockInput.typeText("see "); await new Promise((r) => setTimeout(r, 20)) })
+  await act(async () => { insert("[Image #1]"); await new Promise((r) => setTimeout(r, 40)) })
+  await act(async () => { await view.mockInput.typeText(" please"); await new Promise((r) => setTimeout(r, 20)) })
+  expect(latest).toBe("see [Image #1] please")
+  await act(async () => { await view.dispose() })
+})
+
+test("the markers in a draft show as chips above the composer", async () => {
+  const text = await frame(100, 24, { draft: "what is [Image #1] and [Pasted Text #2]?" })
+  expect(text).toContain("Image #1")
+  expect(text).toContain("Pasted Text #2")
+})

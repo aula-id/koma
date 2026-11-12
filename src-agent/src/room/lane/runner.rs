@@ -20,7 +20,7 @@ use crate::dto::chat::{ChatMessage, Role, ToolCall};
 use crate::room::registry::{LaneKind, LaneModel};
 
 use super::event::LaneEvent;
-use super::transcript::{Transcript, DEFAULT_WINDOW_CHARS};
+use super::transcript::{Transcript, UserImage, DEFAULT_WINDOW_CHARS};
 
 /// A tool offered to the model.
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +111,8 @@ pub trait ToolRouter: Send + Sync {
 pub enum LaneInput {
     /// Steering text folded in as a user turn at the next boundary.
     Steer(String),
+    /// Steering text with images the user shared, folded in the same way.
+    SteerImages(String, Vec<UserImage>),
     /// Stop at the next boundary and wait for `Resume`.
     Pause,
     Resume,
@@ -126,6 +128,8 @@ pub struct LaneConfig {
     pub system: String,
     /// The first user turn: the assignment, the goal, or the user's message.
     pub task: String,
+    /// Images that ride with the first user turn.
+    pub task_images: Vec<UserImage>,
     pub model: LaneModel,
     pub max_steps: usize,
     /// The lane's durable conversation. Each run continues it: the task is
@@ -174,6 +178,10 @@ fn drain_inputs(
     loop {
         match inputs.try_recv() {
             Ok(LaneInput::Steer(text)) => convo.push(ChatMessage::new(Role::User, text)),
+            Ok(LaneInput::SteerImages(text, images)) => {
+                let message = convo.transcript.user_turn(&text, &images);
+                convo.push(message);
+            }
             Ok(LaneInput::Pause) => *paused = true,
             Ok(LaneInput::Resume) => *paused = false,
             Ok(LaneInput::Stop) => return false,
@@ -203,7 +211,8 @@ pub async fn run_lane(
     } else {
         convo.history.extend(convo.transcript.window(DEFAULT_WINDOW_CHARS));
     }
-    convo.push(ChatMessage::new(Role::User, config.task.clone()));
+    let first = convo.transcript.user_turn(&config.task, &config.task_images);
+    convo.push(first);
     let advertised = router.advertised();
     let mut paused = false;
     let mut last_text = String::new();
@@ -223,6 +232,10 @@ pub async fn run_lane(
                     return;
                 }
                 Some(LaneInput::Steer(text)) => convo.push(ChatMessage::new(Role::User, text)),
+                Some(LaneInput::SteerImages(text, images)) => {
+                    let message = convo.transcript.user_turn(&text, &images);
+                    convo.push(message);
+                }
                 Some(LaneInput::Pause) => {}
             }
         }
@@ -405,6 +418,7 @@ mod tests {
             kind,
             system: "you are red".into(),
             task: "scan the login".into(),
+            task_images: Vec::new(),
             model: LaneModel::default(),
             max_steps: 8,
             transcript: Transcript::memory(),

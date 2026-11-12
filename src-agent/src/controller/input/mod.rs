@@ -42,11 +42,11 @@ mod usage;
 
 pub use action::Action;
 pub use chat::{file_ref_partial, handle_chat};
-pub use clipboard::request_clipboard_image;
+pub use clipboard::{read_clipboard_png, request_clipboard_image};
 pub use key_input::handle_key_input;
 pub use onboard::handle_onboard;
 pub use onboard_provider::handle_onboard_provider;
-pub use paste::handle_paste;
+pub use paste::{handle_paste, image_path_paste};
 pub use picker::handle_picker;
 pub use quit_confirm::handle_quit_confirm;
 pub use rewind::handle_rewind;

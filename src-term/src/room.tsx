@@ -40,16 +40,23 @@ export function RoomScreen({
   const [counts, setCounts] = useState<Counts>({ open: 0, verified: 0, returned: 0, reports: 0 })
   const [models, setModels] = useState<ModelList>({ choices: [], lanes: [] })
   const [notice, setNotice] = useState("")
+  const [flash, setFlash] = useState("")
+  const [inserted, setInserted] = useState<Inserted | null>(null)
   const [asking, setAsking] = useState(false)
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
+  useEffect(() => {
+    if (!flash) return
+    const timer = setTimeout(() => setFlash(""), 5000)
+    return () => clearTimeout(timer)
+  }, [flash])
   const link = useRef<RoomLink | null>(null)
   const leaving = useRef(false)
 
   useEffect(() => {
     let dead = false
     const room = new RoomLink(
-      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice, setRoster) },
+      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice, setRoster, setFlash, setInserted) },
       (text) => { if (!dead && !leaving.current) setPhase(text) },
     )
     link.current = room
@@ -110,6 +117,10 @@ export function RoomScreen({
       onSend={send}
       models={models}
       notice={notice}
+      flash={flash}
+      inserted={inserted}
+      onPaste={(text) => link.current?.paste(text)}
+      onPasteImage={() => link.current?.pasteImage()}
       asking={asking}
       onAnswer={(yes) => { if (yes) leave(); else setAsking(false) }}
       onOpenModels={() => link.current?.requestModels()}
@@ -118,11 +129,15 @@ export function RoomScreen({
   )
 }
 
+/** Text to put at the composer caret. The id tells two identical inserts apart. */
+export type Inserted = { id: number; text: string }
+let insertSeq = 0
+
 export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
 export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   syntaxStyle?: SyntaxStyle
   lines: Line[]
@@ -134,6 +149,12 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   onSend: (text?: string) => void
   models?: ModelList
   notice?: string
+  /** A short message for the composer row (a refused paste). */
+  flash?: string
+  /** Text the daemon says to put at the caret (a pasted marker). */
+  inserted?: Inserted | null
+  onPaste?: (text: string) => void
+  onPasteImage?: () => void
   /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
   asking?: boolean
   onAnswer?: (yes: boolean) => void
@@ -235,7 +256,10 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
         onSubmit={submit}
         focused={!asking}
         ready={ready}
-        status={ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
+        inserted={inserted}
+        onPaste={onPaste}
+        onPasteImage={onPasteImage}
+        status={flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
         popupOpen={options.open && !asking}
         popup={options.open && !asking ? (
           <SuggestPopup
@@ -405,6 +429,8 @@ function applyFrame(
   setModels: (models: ModelList) => void,
   setNotice: (text: string) => void,
   setRoster: (roster: Roster) => void,
+  setFlash: (text: string) => void,
+  setInserted: (inserted: Inserted) => void,
 ): void {
   switch (frame.type) {
     case "hello":
@@ -429,6 +455,10 @@ function applyFrame(
       break
     case "notice":
       setNotice(frame.text)
+      setFlash(frame.text)
+      break
+    case "pasted":
+      setInserted({ id: ++insertSeq, text: frame.insert })
       break
     case "closed":
       setPhase("the room closed")

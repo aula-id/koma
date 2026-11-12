@@ -28,3 +28,7 @@ test("live delta parts parse", () => {
   expect(parseRoomFrame({ part: { author: "chief", lane: "chat", part: { kind: "text_delta", text: "Hel" } } })).toEqual({ type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "Hel" } })
   expect(parseRoomFrame({ part: { author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "hm" } } })).toEqual({ type: "part", author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "hm" } })
 })
+
+test("a pasted frame carries the text to put in the draft", () => {
+  expect(parseRoomFrame({ pasted: { insert: "[Image #1]" } })).toEqual({ type: "pasted", insert: "[Image #1]" })
+})

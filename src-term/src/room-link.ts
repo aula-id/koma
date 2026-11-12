@@ -11,6 +11,7 @@ export type RoomFrame =
   | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number; lanes: LaneInfo[]; events: EventInfo[]; now_ms: number }
   | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
   | { type: "notice"; text: string }
+  | { type: "pasted"; insert: string }
   | { type: "closed" }
 
 /** One structured piece of a lane's turn: thinking, a tool call, a tool result. */
@@ -105,6 +106,8 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
       lanes: rows("lanes").map((l) => ({ avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), lane: String(l.lane ?? ""), model: String(l.model ?? "") })),
     }
   }
+  const pasted = body("pasted")
+  if (pasted) return { type: "pasted", insert: String(pasted.insert ?? "") }
   const notice = body("notice")
   if (notice) return { type: "notice", text: String(notice.text ?? "") }
   if ("closed" in record) return { type: "closed" }
@@ -136,6 +139,16 @@ export class RoomLink {
 
   sendUser(text: string): void {
     this.send({ user: { text } })
+  }
+
+  /** Text pasted into the composer. The daemon answers with what to insert. */
+  paste(text: string): void {
+    this.send({ paste: { text } })
+  }
+
+  /** Ctrl+V: the daemon reads an image off the clipboard. */
+  pasteImage(): void {
+    this.send("paste_image")
   }
 
   requestModels(): void {

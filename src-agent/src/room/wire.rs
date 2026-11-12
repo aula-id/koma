@@ -18,6 +18,10 @@ pub enum RoomClient {
     /// replays recent history, then sends a fresh status.
     Hello,
     User { text: String },
+    /// Text the user pasted into the composer. The daemon decides what it becomes.
+    Paste { text: String },
+    /// Ctrl+V: take an image from the clipboard.
+    PasteImage,
     Control { command: RoomControl },
     /// Ask for the registered models and what each lane runs.
     Models,
@@ -56,6 +60,8 @@ pub enum RoomServer {
         #[serde(default)]
         replayed: usize,
     },
+    /// What a paste turned into: text for the draft at the caret.
+    Pasted { insert: String },
     Chief { text: String },
     LaneChat { avatar: String, text: String },
     Visible { author: String, text: String },

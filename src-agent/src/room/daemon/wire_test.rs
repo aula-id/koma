@@ -83,6 +83,7 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
         status,
         Arc::clone(&shutting_down),
         super::models::test_book(&dir),
+        Arc::new(super::stage::Staging::new(&dir)),
     ));
 
     let probe = client::connect(&sock).await.expect("probe connect");
@@ -161,7 +162,7 @@ fn bench() -> Bench {
     let (events, events_rx) = unbounded_channel();
     let (to_actor, from_clients) = unbounded_channel();
     let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
-    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(sock.parent().expect("dir"))));
+    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(sock.parent().expect("dir")), Arc::new(super::stage::Staging::new(sock.parent().expect("dir")))));
     Bench { sock, events, from_clients, serve }
 }
 
@@ -268,6 +269,29 @@ async fn a_client_lists_models_and_sets_one() {
     write(&mut write_half, &RoomClient::SetModel { avatar: "red".into(), lane: "work".into(), model: "nope".into() }).await;
     let note = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Notice { .. })).await;
     assert_eq!(note, RoomServer::Notice { text: "that model is not registered".into() });
+    bench.stop();
+}
+
+#[tokio::test]
+async fn a_paste_is_answered_with_what_goes_in_the_draft_and_the_message_carries_the_image() {
+    let mut bench = bench();
+    let (mut read_half, mut write_half, mut reader, _) = bench.attach().await;
+    write(&mut write_half, &RoomClient::Paste { text: "pwd".into() }).await;
+    let pasted = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Pasted { .. })).await;
+    assert_eq!(pasted, RoomServer::Pasted { insert: "pwd".into() });
+    let long = "row\n".repeat(20);
+    write(&mut write_half, &RoomClient::Paste { text: long.clone() }).await;
+    let pasted = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Pasted { .. })).await;
+    assert_eq!(pasted, RoomServer::Pasted { insert: "[Pasted Text #1]".into() });
+    write(&mut write_half, &RoomClient::User { text: "read [Pasted Text #1]".into() }).await;
+    let text = loop {
+        match bench.from_clients.recv().await.expect("the actor was told") {
+            ActorMsg::User(text) => break text,
+            ActorMsg::Resync => {}
+            other => panic!("expected a plain user message, got {other:?}"),
+        }
+    };
+    assert!(text.contains("<<<pasted_text n=1") && text.contains(&long), "the chip is expanded for the model");
     bench.stop();
 }
 

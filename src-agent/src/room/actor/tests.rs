@@ -573,3 +573,108 @@ async fn a_specialists_chat_lane_gets_the_chat_register_on_top_of_its_role() {
     let registry = crate::room::registry::RegistryHandle::embedded().expect("registry").current();
     assert!(!registry.role("red").expect("red").prompt.contains("talking with the user"), "the work prompt is unchanged");
 }
+
+// ---- images the user shares ----
+
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
+    0x1F, 0x15, 0xC4, 0x89, 0, 0, 0, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0D, 0x0A, 0x2D, 0xB4, 0, 0, 0, 0,
+    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+/// Records the first user turn of each avatar's requests, then answers like [`ScriptedModel`].
+struct SeenModel {
+    inner: ScriptedModel,
+    /// (avatar, number of attachments on the last user turn, that turn's text)
+    turns: Arc<Mutex<Vec<(String, usize, String)>>>,
+}
+
+impl ModelClient for SeenModel {
+    fn stream<'a>(&'a self, request: ModelRequest) -> BoxFuture<'a, ModelReply> {
+        let avatar = avatar_of(&request.history);
+        if let Some(user) = request.history.iter().rev().find(|m| m.role == crate::dto::chat::Role::User) {
+            self.turns.lock().unwrap().push((avatar, user.attachments.len(), user.content.clone()));
+        }
+        self.inner.stream(request)
+    }
+}
+
+fn room_with_images(
+    name: &str,
+    replies: Vec<((&str, usize), ModelReply)>,
+) -> (RoomHandle, Arc<Mutex<Vec<(String, usize, String)>>>, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("koma-room-images-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    std::fs::write(root.join("shared/01-shot.png"), PNG).unwrap();
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let script = Script {
+        replies: replies.into_iter().map(|((a, n), r)| ((a.to_string(), n), r)).collect(),
+        seen: Mutex::new(HashMap::new()),
+    };
+    let turns = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(SeenModel {
+        inner: ScriptedModel { script, systems: Arc::new(Mutex::new(Vec::new())), fallback: "done".into() },
+        turns: Arc::clone(&turns),
+    });
+    let handle = spawn_room_in(coordinator, shelf, registry, model, Arc::new(StubBuiltins), RoomConfig::default(), Some(root.join("lanes")));
+    (handle, turns, root)
+}
+
+fn shot(root: &std::path::Path) -> crate::room::lane::UserImage {
+    crate::room::lane::UserImage { n: 1, path: root.join("shared/01-shot.png") }
+}
+
+#[tokio::test]
+async fn an_image_sent_to_a_tagged_specialist_reaches_that_specialist() {
+    let (mut handle, turns, root) = room_with_images("tagged", vec![(("red", 0), text("I see a login form."))]);
+    handle
+        .to_actor
+        .send(ActorMsg::UserWith { text: "@red what is in [Image #1]?".into(), images: vec![shot(&root)] })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
+            Ok(Some(RoomEvent::LaneChat { avatar, .. })) if avatar == "red" => break,
+            Ok(Some(_)) => {}
+            other => panic!("red never answered: {other:?}"),
+        }
+    }
+    let turns = turns.lock().unwrap();
+    let (_, attachments, content) = turns.iter().find(|(a, _, _)| a == "red").expect("red was asked");
+    assert_eq!(*attachments, 1, "the image is on the user turn itself");
+    assert!(content.contains("[Image #1]"));
+    assert!(root.join("lanes/red.chat/images").is_dir(), "the lane keeps its own copy");
+}
+
+#[tokio::test]
+async fn an_image_the_user_shared_follows_the_chief_into_the_lane_it_delegates_to() {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "check the page", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe the login page in the screenshot" }] }),
+    );
+    let (mut handle, turns, root) = room_with_images("delegated", vec![(("chief", 0), tools("Sending Red.", vec![delegate]))]);
+    handle
+        .to_actor
+        .send(ActorMsg::UserWith { text: "scan the page in [Image #1]".into(), images: vec![shot(&root)] })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if turns.lock().unwrap().iter().any(|(a, _, _)| a == "red") {
+            break;
+        }
+        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
+            Ok(Some(_)) => {}
+            other => panic!("red never started: {other:?}"),
+        }
+    }
+    let turns = turns.lock().unwrap();
+    let chief = turns.iter().find(|(a, _, _)| a == "chief").expect("the chief answered");
+    assert_eq!(chief.1, 1, "the Chief sees the image");
+    let red = turns.iter().find(|(a, _, _)| a == "red").expect("red started");
+    assert_eq!(red.1, 1, "the delegated lane sees it too");
+    assert!(red.2.contains("[Image #"), "and its task names the image: {}", red.2);
+}

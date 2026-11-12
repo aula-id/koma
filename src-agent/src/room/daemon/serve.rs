@@ -22,6 +22,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, SessionStatus};
 use crate::ipc::{split_stream, IpcListener, IpcWriteHalf};
 use crate::room::actor::{ActorMsg, RoomEvent};
 use super::models::ModelBook;
+use super::stage::{Pasted, Staging};
 use crate::room::wire::{RoomClient, RoomServer};
 
 /// Spoken lines kept for a client that attaches late.
@@ -72,10 +73,12 @@ pub async fn run(
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
     book: Arc<ModelBook>,
+    stage: Arc<Staging>,
 ) {
-    serve(listener, to_actor, events, status, shutting_down, book, BACKLOG_CAP).await;
+    serve(listener, to_actor, events, status, shutting_down, book, stage, BACKLOG_CAP).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve(
     listener: IpcListener,
     to_actor: UnboundedSender<ActorMsg>,
@@ -83,6 +86,7 @@ async fn serve(
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
     book: Arc<ModelBook>,
+    stage: Arc<Staging>,
     cap: usize,
 ) {
     let (sub_tx, mut sub_rx) = unbounded_channel::<Subscription>();
@@ -98,8 +102,9 @@ async fn serve(
                         let status = status.clone();
                         let shutting_down = Arc::clone(&shutting_down);
                         let book = Arc::clone(&book);
+                        let stage = Arc::clone(&stage);
                         tokio::spawn(async move {
-                            let _ = handle_conn(stream, to_actor, sub_tx, status, shutting_down, book).await;
+                            let _ = handle_conn(stream, to_actor, sub_tx, status, shutting_down, book, stage).await;
                         });
                     }
                     Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
@@ -134,6 +139,7 @@ async fn handle_conn(
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
     book: Arc<ModelBook>,
+    stage: Arc<Staging>,
 ) -> std::io::Result<()> {
     let (mut read, mut write) = split_stream(stream);
     let mut reader = FrameReader::new();
@@ -172,8 +178,25 @@ async fn handle_conn(
                     RoomClient::Hello => {}
                     RoomClient::User { text } => {
                         if !text.trim().is_empty() {
-                            let _ = to_actor.send(ActorMsg::User(text));
+                            let (text, images) = stage.take(&text);
+                            let _ = to_actor.send(if images.is_empty() {
+                                ActorMsg::User(text)
+                            } else {
+                                ActorMsg::UserWith { text, images }
+                            });
                         }
+                    }
+                    RoomClient::Paste { text } => {
+                        write_json(&mut write, &pasted_frame(stage.paste_text(&text))).await?;
+                    }
+                    RoomClient::PasteImage => {
+                        let clipboard = tokio::task::spawn_blocking(crate::controller::input::read_clipboard_png).await;
+                        let pasted = match clipboard {
+                            Ok(Ok(bytes)) => stage.paste_image(&bytes),
+                            Ok(Err(reason)) => Pasted::Refused(format!("clipboard image: {reason}")),
+                            Err(_) => Pasted::Refused("clipboard image: the read was interrupted".into()),
+                        };
+                        write_json(&mut write, &pasted_frame(pasted)).await?;
                     }
                     RoomClient::Control { command } => {
                         let _ = to_actor.send(ActorMsg::Control(command.into()));
@@ -203,6 +226,13 @@ async fn handle_conn(
         }
     }
     Ok(())
+}
+
+fn pasted_frame(pasted: Pasted) -> RoomServer {
+    match pasted {
+        Pasted::Insert(insert) => RoomServer::Pasted { insert },
+        Pasted::Refused(text) => RoomServer::Notice { text },
+    }
 }
 
 fn models_frame(book: &ModelBook) -> RoomServer {

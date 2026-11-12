@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import type { TextareaAction, TextareaRenderable } from "@opentui/core"
-import { useRenderer, useTerminalDimensions } from "@opentui/react"
-import { COMPOSER_KEYS, PALETTE_KEYS, Tips, promptMark } from "./chat.tsx"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
+import { AttachmentPile, COMPOSER_KEYS, PALETTE_KEYS, Tips, promptMark } from "./chat.tsx"
+import type { Attachment } from "./protocol.ts"
 import type { Theme } from "./theme.ts"
 
 export const ROOM_TIPS = [
@@ -9,6 +10,8 @@ export const ROOM_TIPS = [
   "@red talks to a specialist directly",
   "!pwd runs a shell command right away, without the model",
   "Shift+Enter or Ctrl+J starts a new line",
+  "Ctrl+V pastes an image from the clipboard; a long paste or an image path becomes a chip",
+  "Every specialist you tag, and every lane the Chief starts, sees the images you send",
   "Tab completes a command or a name",
   "/status shows every lane, /shelf the findings, /trajectory the goals",
   "/model picks the model of each minion's lane",
@@ -33,6 +36,9 @@ export function RoomComposer({
   popup,
   popupOpen,
   placeholder,
+  inserted = null,
+  onPaste = () => {},
+  onPasteImage = () => {},
 }: {
   theme: Theme
   draft: string
@@ -44,6 +50,10 @@ export function RoomComposer({
   popup?: ReactNode
   popupOpen: boolean
   placeholder: string
+  /** Text the daemon says to put at the caret: a marker for a pasted image or a long paste. */
+  inserted?: { id: number; text: string } | null
+  onPaste?: (text: string) => void
+  onPasteImage?: () => void
 }) {
   const { height, width } = useTerminalDimensions()
   const renderer = useRenderer()
@@ -61,7 +71,24 @@ export function RoomComposer({
   submitRef.current = onSubmit
   const draftRef = useRef(onDraft)
   draftRef.current = onDraft
+  const pasteRef = useRef(onPaste)
+  pasteRef.current = onPaste
   const emitted = useRef<string[]>([])
+  // The daemon decides what a paste becomes; the marker or text lands where the caret is.
+  const lastInserted = useRef(0)
+  useEffect(() => {
+    if (!inserted || inserted.id === lastInserted.current) return
+    lastInserted.current = inserted.id
+    area.current?.insertText(inserted.text)
+  }, [inserted])
+  useKeyboard((key) => {
+    if (key.eventType === "release" || !focused) return
+    if (key.ctrl && key.name === "v") {
+      key.preventDefault()
+      onPasteImage()
+    }
+  })
+  const chips = attachmentsIn(draft)
   useEffect(() => {
     const current = area.current
     const echo = emitted.current.indexOf(draft)
@@ -101,6 +128,7 @@ export function RoomComposer({
         <text fg={status.color} wrapMode="none">{status.text}</text>
       </box>
       <Tips theme={theme} width={width} tips={ROOM_TIPS} />
+      {chips.length ? <box flexShrink={0} paddingLeft={1} paddingRight={1}><AttachmentPile attachments={chips} theme={theme} /></box> : null}
       <box flexDirection="column" flexShrink={0}>{popup}</box>
       <box height={boxHeight} flexShrink={0}>
         <box
@@ -138,10 +166,26 @@ export function RoomComposer({
               emitted.current = [...emitted.current.slice(-50), text]
               draftRef.current(text)
             }}
+            onPaste={(event) => {
+              event.preventDefault()
+              if (!focused) return
+              pasteRef.current(new TextDecoder().decode(event.bytes))
+            }}
             onSubmit={() => submitRef.current()}
           />
         </box>
       </box>
     </box>
   )
+}
+
+/** The chips for the markers in a draft, the way the chat shows its staged attachments. */
+export function attachmentsIn(draft: string): Attachment[] {
+  const found: Attachment[] = []
+  for (const match of draft.matchAll(/\[(Image|Pasted Text) #(\d+)\]/g)) {
+    const kind = match[1] === "Image" ? "image" : "pasted_text"
+    const marker_n = Number(match[2])
+    if (!found.some((a) => a.kind === kind && a.marker_n === marker_n)) found.push({ kind, marker_n, label: "", rel_path: "" } as Attachment)
+  }
+  return found
 }

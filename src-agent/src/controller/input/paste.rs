@@ -272,7 +272,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
 ///
 /// This means prose mentioning a filename won't hijack the paste (it won't be a
 /// real file), but paths with spaces work as long as they exist.
-fn image_path_paste(text: &str) -> Option<String> {
+pub fn image_path_paste(text: &str) -> Option<String> {
     let mut cleaned = text.trim().to_string();
 
     // Strip surrounding quotes if present (matching pair: "" or '')

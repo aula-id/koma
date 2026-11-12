@@ -37,7 +37,7 @@ pub use inbox::{Inbox, Item as InboxItem, Priority};
 #[allow(unused_imports)]
 pub use timeline::{Milestone, Timeline};
 #[allow(unused_imports)]
-pub use transcript::{lane_dir, Transcript};
+pub use transcript::{lane_dir, Transcript, UserImage};
 #[allow(unused_imports)]
 pub use runner::{
     run_lane, Delta, DeltaSink, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,

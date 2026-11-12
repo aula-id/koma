@@ -9,6 +9,7 @@ pub mod models;
 mod run;
 mod selftest;
 mod serve;
+pub mod stage;
 
 #[cfg(test)]
 #[path = "host_test.rs"]

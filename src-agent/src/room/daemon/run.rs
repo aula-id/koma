@@ -138,6 +138,7 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
             probe,
             Arc::clone(&shutting_down),
             book,
+            Arc::new(super::stage::Staging::new(&session_dir)),
         ));
         (session, serve)
     };

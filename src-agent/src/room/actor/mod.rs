@@ -41,7 +41,7 @@ pub use router::{BuiltinHost, LaneRef, NoBuiltins, RoomToolRouter};
 use crate::room::clerk::{AuditConfig, AuditInput, Clerk, Tick as ClerkTick};
 use crate::room::lane::{
     run_lane, ControlAction, ControlState, Digest, Inbox, InboxItem, LaneConfig, LaneEvent,
-    LaneInput, LaneKind, ModelClient, Timeline,
+    LaneInput, LaneKind, ModelClient, Timeline, UserImage,
 };
 use crate::room::registry::{Registry, RegistryHandle};
 use crate::room::shelf::Shelf;
@@ -181,6 +181,8 @@ pub fn spawn_room_in(
         lanes: BTreeMap::new(),
         assignment_lane: BTreeMap::new(),
         chief_busy: false,
+        turn_images: Vec::new(),
+        chief_images: Vec::new(),
         lanes_dir,
         to_actor: to_actor.clone(),
         out,
@@ -207,9 +209,22 @@ struct RoomActor {
     lanes: BTreeMap<Slot, LaneHandle>,
     assignment_lane: BTreeMap<String, String>,
     chief_busy: bool,
+    /// Images from the user's latest message, handed to the lanes the Chief starts this turn.
+    turn_images: Vec<UserImage>,
+    /// Images waiting for the Chief's next turn.
+    chief_images: Vec<UserImage>,
     to_actor: UnboundedSender<ActorMsg>,
     out: UnboundedSender<RoomEvent>,
     config: RoomConfig,
+}
+
+/// A steer with the images the user shared, when there are any.
+fn steer_with(text: String, images: Vec<UserImage>) -> LaneInput {
+    if images.is_empty() {
+        LaneInput::Steer(text)
+    } else {
+        LaneInput::SteerImages(text, images)
+    }
 }
 
 fn now_ms() -> u64 {
@@ -220,7 +235,8 @@ impl RoomActor {
     async fn run(mut self, mut rx: UnboundedReceiver<ActorMsg>) {
         while let Some(msg) = rx.recv().await {
             match msg {
-                ActorMsg::User(text) => self.on_user(text),
+                ActorMsg::User(text) => self.on_user(text, Vec::new()),
+                ActorMsg::UserWith { text, images } => self.on_user(text, images),
                 ActorMsg::Control(cmd) => self.on_control(cmd),
                 ActorMsg::Tick => self.on_tick(),
                 ActorMsg::LaneEvent { avatar, kind, event } => self.on_lane_event(&avatar, kind, event),
@@ -271,41 +287,43 @@ impl RoomActor {
         });
     }
 
-    fn on_user(&mut self, text: String) {
+    fn on_user(&mut self, text: String, images: Vec<UserImage>) {
         if let Some(command) = text.trim().strip_prefix('!').map(str::trim).filter(|c| !c.is_empty()) {
             self.run_shell_shortcut(command.to_string());
             return;
         }
+        self.turn_images = images.clone();
         let registry = self.registry.current();
         match addressed(&registry, &text) {
             Addressed::Clerk => self.emit(RoomEvent::Visible {
                 author: "room".into(),
                 text: "the clerk only speaks to the chief".into(),
             }),
-            Addressed::Avatar { id, body } => self.speak_to(&id, body),
-            Addressed::Chief(text) => self.tell_chief(text),
+            Addressed::Avatar { id, body } => self.speak_to(&id, body, images),
+            Addressed::Chief(text) => self.tell_chief(text, images),
         }
     }
 
-    fn tell_chief(&mut self, text: String) {
+    fn tell_chief(&mut self, text: String, images: Vec<UserImage>) {
         let slot = Slot::new("chief", LaneKind::Chat);
         if self.chief_busy {
             // Preempt the running Chief turn: it sees the message at its next boundary.
             if let Some(chief) = self.lanes.get(&slot) {
-                let _ = chief.inject.send(LaneInput::Steer(format!("The user says: {text}")));
+                let _ = chief.inject.send(steer_with(format!("The user says: {text}"), images));
             }
             return;
         }
+        self.chief_images.extend(images);
         self.inbox.push(InboxItem::User(text));
         self.maybe_start_chief();
     }
 
     /// Open or steer one specialist's chat lane. Its work lane, if any, keeps running.
-    fn speak_to(&mut self, avatar: &str, text: String) {
+    fn speak_to(&mut self, avatar: &str, text: String, images: Vec<UserImage>) {
         let slot = Slot::new(avatar, LaneKind::Chat);
         if self.lanes.get(&slot).is_some_and(|lane| !lane.ended) {
             if let Some(lane) = self.lanes.get(&slot) {
-                let _ = lane.inject.send(LaneInput::Steer(format!("The user says: {text}")));
+                let _ = lane.inject.send(steer_with(format!("The user says: {text}"), images));
             }
             return;
         }
@@ -328,6 +346,7 @@ impl RoomActor {
             kind: LaneKind::Chat,
             system: prompt,
             task,
+            task_images: images,
             model,
             max_steps: self.config.chat_max_steps,
             transcript: self.transcript_for(avatar, LaneKind::Chat),
@@ -433,6 +452,7 @@ impl RoomActor {
             let _ = report; // the words already streamed as Chat events
             if is_chief {
                 self.chief_busy = false;
+                self.turn_images.clear();
                 self.maybe_start_chief();
             }
         }
@@ -458,6 +478,7 @@ impl RoomActor {
                         kind: LaneKind::Work,
                         system: prompt,
                         task,
+                        task_images: self.turn_images.clone(),
                         model,
                         max_steps: self.config.work_max_steps,
                         transcript: self.transcript_for(&assignment.avatar, LaneKind::Work),
@@ -499,7 +520,7 @@ impl RoomActor {
         let task = self.build_chief_turn(items);
         let prompt = registry.role("chief").map(|r| r.prompt.clone()).unwrap_or_default();
         let model = registry.lane_model("chief", LaneKind::Chat);
-        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat), objective: self.coordinator.active_brief().map(|(_, goal, _)| goal).unwrap_or_default() };
+        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, task_images: std::mem::take(&mut self.chief_images), model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat), objective: self.coordinator.active_brief().map(|(_, goal, _)| goal).unwrap_or_default() };
         self.chief_busy = true;
         self.start_lane(config, LaneRef { avatar: "chief".into(), kind: LaneKind::Chat, assignment_id: None, is_chief: true, is_clerk: false });
     }
@@ -615,6 +636,7 @@ impl RoomActor {
             kind: LaneKind::Work,
             system: registry.role("clerk").map(|r| r.prompt.clone()).unwrap_or_default(),
             task: brief,
+            task_images: Vec::new(),
             model,
             max_steps: self.config.work_max_steps,
             // Each audit pass is independent; the clerk keeps no history.

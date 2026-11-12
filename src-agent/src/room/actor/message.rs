@@ -14,6 +14,8 @@ pub enum ActorMsg {
     /// A message the user typed. `@avatar` addresses that member; anything else
     /// goes to the Chief. The clerk is not addressable.
     User(String),
+    /// A message with images the user shared (pasted or named in the composer).
+    UserWith { text: String, images: Vec<crate::room::lane::UserImage> },
     /// A control command (pause / resume / stop / redirect a lane).
     Control(ControlCommand),
     /// The periodic tick that drives the reconciler and the clerk.

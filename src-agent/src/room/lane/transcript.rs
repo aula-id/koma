@@ -27,6 +27,14 @@ const CHARS_PER_TOKEN: usize = 4;
 /// The default window a run reads from the end of its transcript (about 100k tokens).
 pub const DEFAULT_WINDOW_CHARS: usize = 100_000 * CHARS_PER_TOKEN;
 
+/// An image the user shared, as the room holds it: the number its `[Image #n]`
+/// marker carries in the user's text, and where the file is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserImage {
+    pub n: usize,
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Default)]
 pub struct Transcript {
     path: Option<PathBuf>,
@@ -113,6 +121,46 @@ impl Transcript {
             }
         }
         self.messages.push(message);
+    }
+
+    /// A user turn that carries `images`. Each file is copied into this lane's own
+    /// `images/` directory (so the lane's wire reads it like any attachment, and
+    /// `load_image` can name it), and the `[Image #n]` markers in `text` are
+    /// renumbered to the lane's. An image the text never mentions gets a marker
+    /// on its own line. A lane without a directory is told the path instead.
+    pub fn user_turn(&self, text: &str, images: &[UserImage]) -> ChatMessage {
+        if images.is_empty() {
+            return ChatMessage::new(Role::User, text);
+        }
+        let Some(dir) = &self.dir else {
+            let mut text = text.to_string();
+            for image in images {
+                text.push_str(&format!("\n[Image #{}: {}]", image.n, image.path.display()));
+            }
+            return ChatMessage::new(Role::User, text);
+        };
+        let images_dir = dir.join("images");
+        let mut text = text.to_string();
+        let mut attachments = Vec::new();
+        let mut markers = Vec::new();
+        for image in images {
+            let Ok(bytes) = std::fs::read(&image.path) else { continue };
+            let name = image.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "image.png".into());
+            let Ok((attachment, marker)) = crate::model::attachment::ingest_image_bytes(&images_dir, &name, &bytes) else { continue };
+            let old = format!("[Image #{}]", image.n);
+            if text.contains(&old) {
+                // Park the new marker so a later renumbering cannot rewrite it.
+                text = text.replace(&old, &format!("\u{0}{}\u{0}", markers.len()));
+            } else {
+                text.push_str(&format!("\n\u{0}{}\u{0}", markers.len()));
+            }
+            markers.push(marker);
+            attachments.push(attachment);
+        }
+        for (i, marker) in markers.iter().enumerate() {
+            text = text.replace(&format!("\u{0}{i}\u{0}"), marker);
+        }
+        ChatMessage::new(Role::User, text).with_attachments(attachments)
     }
 
     /// The tail of the conversation that fits `max_chars`, cut so it starts on a
@@ -240,6 +288,32 @@ mod tests {
         assert!(window.len() < t.messages().len());
         let tiny = t.window(1);
         assert!(tiny.iter().any(|m| m.content.starts_with("answer 5")), "the last turn is never lost");
+    }
+
+    #[test]
+    fn a_user_turn_copies_images_into_the_lane_and_renumbers_the_markers() {
+        let root = dir("images");
+        let src = root.join("shared");
+        std::fs::create_dir_all(&src).unwrap();
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
+            0x1F, 0x15, 0xC4, 0x89, 0, 0, 0, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0D, 0x0A, 0x2D, 0xB4, 0, 0, 0, 0,
+            0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(src.join("01-a.png"), png).unwrap();
+        std::fs::write(src.join("02-b.png"), png).unwrap();
+        let lane = Transcript::open_dir(root.join("red.chat"));
+        let first = lane.user_turn("see [Image #2] and [Image #1]", &[UserImage { n: 1, path: src.join("01-a.png") }, UserImage { n: 2, path: src.join("02-b.png") }]);
+        assert_eq!(first.attachments.len(), 2);
+        assert!(first.content.contains("[Image #2] and [Image #1]") || first.content.contains("[Image #1]"));
+        for a in &first.attachments {
+            assert!(root.join("red.chat").join(&a.rel_path).is_file(), "the copy lives in the lane's directory");
+        }
+        let bare = lane.user_turn("look", &[UserImage { n: 7, path: src.join("01-a.png") }]);
+        assert!(bare.content.starts_with("look\n[Image #"), "an unmentioned image gets its own marker: {}", bare.content);
+        assert_eq!(bare.attachments.len(), 1);
+        let none = Transcript::memory().user_turn("hi", &[UserImage { n: 1, path: src.join("01-a.png") }]);
+        assert!(none.content.contains("01-a.png") && none.attachments.is_empty());
     }
 
     #[test]
