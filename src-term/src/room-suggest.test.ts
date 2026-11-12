@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { suggest } from "./room-suggest.ts"
 
 test("a bare @ lists everyone you can talk to, and never the clerk", () => {
-  expect(suggest("@").rows.map((r) => r.label)).toEqual(["@chief", "@red", "@reviewer", "@reporter"])
+  expect(suggest("@").rows.map((r) => r.label)).toEqual(["@chief", "@red", "@reviewer", "@reporter", "@red-web", "@red-api", "@researcher", "@re", "@builder"])
 })
 test("matching is by prefix and fills a trailing space", () => {
   expect(suggest("@rev").rows).toEqual([{ label: "@reviewer", detail: "verifies findings independently", insert: "@reviewer " }])
@@ -32,7 +32,7 @@ test("/stop names who to stop, and defaults to everything", () => {
   expect(classify("/stop")).toEqual({ kind: "stop", who: "all" })
   expect(classify("/stop @Red")).toEqual({ kind: "stop", who: "red" })
   const rows = suggestFor("/stop ").rows
-  expect(rows.map((r) => r.label)).toEqual(["all", "red", "reviewer", "reporter"])
+  expect(rows.map((r) => r.label)).toEqual(["all", "red", "reviewer", "reporter", "red-web", "red-api", "researcher", "re", "builder"])
   expect(chosen(rows[1]!)).toEqual({ run: "/stop red" })
   expect(chosen(suggestFor("/sto").rows[0]!)).toEqual({ insert: "/stop " })
 })

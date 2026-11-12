@@ -6,6 +6,11 @@ const PEOPLE: Suggestion[] = [
   { label: "@red", detail: "probes the target", insert: "@red " },
   { label: "@reviewer", detail: "verifies findings independently", insert: "@reviewer " },
   { label: "@reporter", detail: "writes the report", insert: "@reporter " },
+  { label: "@red-web", detail: "probes the web surface", insert: "@red-web " },
+  { label: "@red-api", detail: "probes the API surface", insert: "@red-api " },
+  { label: "@researcher", detail: "looks into questions", insert: "@researcher " },
+  { label: "@re", detail: "reverse engineers binaries", insert: "@re " },
+  { label: "@builder", detail: "implements coding tasks", insert: "@builder " },
 ]
 
 const COMMANDS: Suggestion[] = [

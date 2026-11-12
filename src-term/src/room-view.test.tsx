@@ -224,9 +224,9 @@ test("enter on a bare name only writes it and waits for the message; esc closes 
 
 test("the status screen is a roster table, a gates panel and a readable timeline", async () => {
   const table = [
-    { avatar: "chief", display: "Chief", role: "chief", lane: "chat", phase: "running", task: "answering you", started_ms: 1000, last_event_ms: 98_000, steps: 3, last_tool: "bash", error: "" },
-    { avatar: "red", display: "Red", role: "red", lane: "work", phase: "running", task: "probe: check the login", started_ms: 1000, last_event_ms: 97_000, steps: 12, last_tool: "grep", error: "" },
-    { avatar: "reviewer", display: "Reviewer", role: "reviewer", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+    { avatar: "chief", display: "Chief", alias: "CF", role: "chief", lane: "chat", phase: "running", task: "answering you", started_ms: 1000, last_event_ms: 98_000, steps: 3, last_tool: "bash", error: "" },
+    { avatar: "red", display: "Red", alias: "LR", role: "red", lane: "work", phase: "running", task: "probe: check the login", started_ms: 1000, last_event_ms: 97_000, steps: 12, last_tool: "grep", error: "" },
+    { avatar: "reviewer", display: "Reviewer", alias: "RV", role: "reviewer", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
   ]
   const events = [
     { at_ms: 99_000, avatar: "red", marker: "○", label: "claims/auth-1" },
@@ -305,12 +305,13 @@ test("Esc interrupts, /stop names who, and a mistyped command stays in the box",
 
 test("under the composer, each minion reads thinking or ready", async () => {
   const table = [
-    { avatar: "chief", display: "Chief", role: "chief", lane: "chat", phase: "running", task: "", started_ms: 0, last_event_ms: 0, steps: 1, last_tool: "", error: "" },
-    { avatar: "red", display: "Red", role: "red", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
-    { avatar: "clerk", display: "Clerk", role: "clerk", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+    { avatar: "chief", display: "Chief", alias: "CF", role: "chief", lane: "chat", phase: "running", task: "", started_ms: 0, last_event_ms: 0, steps: 1, last_tool: "", error: "" },
+    { avatar: "red", display: "Red", alias: "LR", role: "red", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+    { avatar: "clerk", display: "Clerk", alias: "CK", role: "clerk", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
   ]
   const text = await frame(110, 24, { panes: { ...panes, table } })
-  expect(text).toContain("chief thinking")
-  expect(text).toContain("red ready")
-  expect(text).toContain("clerk ready")
+  expect(text).toMatch(/CF [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] thinking/)
+  expect(text).toMatch(/LR ○/)
+  expect(text).toMatch(/CK ○/)
+  expect(text).not.toContain("LR ○ ready")
 })

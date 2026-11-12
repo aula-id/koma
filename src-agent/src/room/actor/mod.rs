@@ -780,6 +780,7 @@ impl RoomActor {
         let mut rows = Vec::new();
         for avatar in registry.all_avatars() {
             let display = registry.display_of(&avatar.id).to_string();
+            let alias = registry.alias_of(&avatar.id);
             let mut any = false;
             for kind in [LaneKind::Chat, LaneKind::Work] {
                 let Some(lane) = self.lanes.get(&Slot::new(&avatar.id, kind)) else { continue };
@@ -795,6 +796,7 @@ impl RoomActor {
                 rows.push(LaneInfo {
                     avatar: avatar.id.clone(),
                     display: display.clone(),
+                    alias: alias.clone(),
                     role: avatar.role.clone(),
                     lane: if kind == LaneKind::Chat { "chat" } else { "work" }.into(),
                     phase,
@@ -807,7 +809,7 @@ impl RoomActor {
                 });
             }
             if !any {
-                rows.push(LaneInfo { avatar: avatar.id.clone(), display, role: avatar.role.clone(), phase: "idle".into(), ..Default::default() });
+                rows.push(LaneInfo { avatar: avatar.id.clone(), display, alias, role: avatar.role.clone(), phase: "idle".into(), ..Default::default() });
             }
         }
         rows

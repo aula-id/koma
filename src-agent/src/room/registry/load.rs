@@ -62,6 +62,7 @@ struct AvatarToml {
     id: String,
     role: String,
     display: Option<String>,
+    alias: Option<String>,
     #[serde(default)]
     chat: LaneModel,
     #[serde(default)]
@@ -189,6 +190,7 @@ fn parse_avatars(text: &str) -> Result<Vec<Avatar>, String> {
                 .display
                 .map(|d| d.trim().to_string())
                 .filter(|d| !d.is_empty()),
+            alias: a.alias.map(|s| s.trim().to_uppercase()).filter(|s| !s.is_empty() && s.chars().count() <= 3 && s.chars().all(|c| c.is_ascii_alphanumeric())),
             chat: a.chat,
             work: a.work,
         });
@@ -361,6 +363,7 @@ pub fn build_base(tree: &Tree) -> Result<Registry, String> {
                 id: id.clone(),
                 role: id.clone(),
                 display: None,
+                alias: None,
                 chat: LaneModel::default(),
                 work: LaneModel::default(),
             })

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { ago, busySummary, clip, eventCells, laneCells, laneHeader, laneWidths, phaseMark } from "./room-status.ts"
 import type { LaneInfo } from "./room-link.ts"
 
-const lane = (over: Partial<LaneInfo>): LaneInfo => ({ avatar: "red", display: "Red", role: "red", lane: "work", phase: "running", task: "probe: check auth", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "", ...over })
+const lane = (over: Partial<LaneInfo>): LaneInfo => ({ avatar: "red", display: "Red", alias: "LR", role: "red", lane: "work", phase: "running", task: "probe: check auth", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "", ...over })
 
 test("phases carry a glyph that reads without colour", () => {
   expect(phaseMark("running").glyph).toBe("●")
@@ -43,7 +43,7 @@ test("the summary and the events read plainly", () => {
 import { standing } from "./room-status.ts"
 
 test("each avatar reads thinking or ready, whichever of its lanes is busy", () => {
-  const row = (avatar: string, lane: string, phase: string) => ({ avatar, display: avatar, role: "", lane, phase, task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" })
+  const row = (avatar: string, lane: string, phase: string) => ({ avatar, display: avatar, alias: "", role: "", lane, phase, task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" })
   const result = standing([
     row("chief", "chat", "running"),
     row("red", "chat", "idle"), row("red", "work", "running"),
@@ -52,4 +52,10 @@ test("each avatar reads thinking or ready, whichever of its lanes is busy", () =
     row("clerk", "work", "stopped"),
   ])
   expect(result.map((s) => `${s.name}:${s.state}`)).toEqual(["chief:thinking", "red:thinking", "reviewer:ready", "reporter:ready", "clerk:stopped"])
+})
+
+test("a minion is its short tag, and only the busy one spins", () => {
+  const row = (avatar: string, alias: string, phase: string) => ({ avatar, display: avatar, alias, role: "", lane: "chat", phase, task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" })
+  const result = standing([row("chief", "CF", "running"), row("red", "LR", "idle"), row("researcher", "RS", "idle"), row("reporter", "RR", "idle"), row("x", "", "idle")])
+  expect(result.map((s) => `${s.alias}:${s.spinning}`)).toEqual(["CF:true", "LR:false", "RS:false", "RR:false", "X:false"])
 })

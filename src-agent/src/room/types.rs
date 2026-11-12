@@ -1,8 +1,7 @@
 //! Vocabulary shared by the room: assignment kinds and statuses, outcomes, and
 //! the `{key, revision}` references that results cite.
 //!
-//! Ported from Orpheus `group-work.ts`, restricted to the Lab team (no
-//! builder / `execution` kind).
+//! Ported from Orpheus `group-work.ts`.
 
 use std::collections::BTreeSet;
 
@@ -20,6 +19,8 @@ pub enum AssignmentKind {
     Verification,
     /// Reporter writes the report pack from verified findings.
     Report,
+    /// Builder implements and tests a bounded coding task, publishing under `results/`.
+    Execution,
 }
 
 impl AssignmentKind {
@@ -29,16 +30,24 @@ impl AssignmentKind {
             AssignmentKind::Investigation => "investigation",
             AssignmentKind::Verification => "verification",
             AssignmentKind::Report => "report",
+            AssignmentKind::Execution => "execution",
         }
     }
 
-    /// The only role allowed to take this kind of assignment.
-    pub fn required_role(self) -> &'static str {
+    /// The roles allowed to take this kind of assignment. A probe is Lab Red's, or Lab RE's on a
+    /// binary; the researcher looks into things like the reviewer does, without a verdict.
+    pub fn roles(self) -> &'static [&'static str] {
         match self {
-            AssignmentKind::Probe => "red",
-            AssignmentKind::Investigation | AssignmentKind::Verification => "reviewer",
-            AssignmentKind::Report => "reporter",
+            AssignmentKind::Probe => &["red", "re"],
+            AssignmentKind::Investigation => &["reviewer", "researcher"],
+            AssignmentKind::Verification => &["reviewer"],
+            AssignmentKind::Report => &["reporter"],
+            AssignmentKind::Execution => &["builder"],
         }
+    }
+
+    pub fn allows(self, role: &str) -> bool {
+        self.roles().contains(&role)
     }
 
     /// Production work is what verification has to cover before finishing.
@@ -164,10 +173,12 @@ mod tests {
 
     #[test]
     fn kinds_map_to_the_only_role_that_may_take_them() {
-        assert_eq!(AssignmentKind::Probe.required_role(), "red");
-        assert_eq!(AssignmentKind::Investigation.required_role(), "reviewer");
-        assert_eq!(AssignmentKind::Verification.required_role(), "reviewer");
-        assert_eq!(AssignmentKind::Report.required_role(), "reporter");
+        assert!(AssignmentKind::Probe.allows("red") && AssignmentKind::Probe.allows("re") && !AssignmentKind::Probe.allows("reviewer"));
+        assert!(AssignmentKind::Investigation.allows("reviewer") && AssignmentKind::Investigation.allows("researcher"));
+        assert_eq!(AssignmentKind::Verification.roles(), ["reviewer"]);
+        assert_eq!(AssignmentKind::Report.roles(), ["reporter"]);
+        assert_eq!(AssignmentKind::Execution.roles(), ["builder"]);
+        assert!(!AssignmentKind::Execution.is_production());
         assert!(AssignmentKind::Probe.is_production());
         assert!(!AssignmentKind::Verification.is_production());
         assert!(AssignmentKind::Verification.may_reference() && AssignmentKind::Report.may_reference());

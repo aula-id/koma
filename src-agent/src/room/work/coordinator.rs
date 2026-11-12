@@ -31,7 +31,7 @@ use crate::room::types::{
 
 /// A specialist that fails `group_task_complete` this many times is told to stop calling it.
 const COMPLETE_FAIL_LIMIT: u32 = 2;
-const SPECIALISTS: [&str; 3] = ["red", "reviewer", "reporter"];
+const SPECIALISTS: [&str; 6] = ["red", "re", "reviewer", "researcher", "reporter", "builder"];
 
 /// Who is calling a tool.
 #[derive(Debug, Clone, PartialEq)]
@@ -447,8 +447,8 @@ impl Coordinator {
             if input.assignments.iter().any(|a| a.kind == AssignmentKind::Report) {
                 return Err("Manager report follows verification; start a probe first".to_string());
             }
-            if !input.assignments.iter().any(|a| a.kind == AssignmentKind::Probe) {
-                return Err("Start a probe; Reviewer verifies the published results afterward".to_string());
+            if !input.assignments.iter().any(|a| matches!(a.kind, AssignmentKind::Probe | AssignmentKind::Execution)) {
+                return Err("Start a probe or an execution; Reviewer verifies the published results afterward".to_string());
             }
         }
 
@@ -478,12 +478,13 @@ impl Coordinator {
             if !role.is_some_and(|r| SPECIALISTS.contains(&r)) || role.and_then(|r| registry.role(r)).is_none() {
                 return Err("Specialist membership required".to_string());
             }
-            if role != Some(item.kind.required_role()) {
+            if !role.is_some_and(|r| item.kind.allows(r)) {
                 return Err(match item.kind {
-                    AssignmentKind::Probe => "Only Lab Red may take probe",
-                    AssignmentKind::Investigation => "Only Reviewer may take investigation",
+                    AssignmentKind::Probe => "Only Lab Red or Lab RE may take probe",
+                    AssignmentKind::Investigation => "Only Reviewer or Lab Researcher may take investigation",
                     AssignmentKind::Verification => "Only Reviewer may take verification",
                     AssignmentKind::Report => "Only Lab Reporter may take report",
+                    AssignmentKind::Execution => "Only Lab Builder may take execution",
                 }
                 .to_string());
             }

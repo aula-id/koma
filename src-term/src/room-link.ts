@@ -35,6 +35,8 @@ export type LanePart =
 export type LaneInfo = {
   avatar: string
   display: string
+  /** A short tag, such as LR for Lab Red. */
+  alias: string
   role: string
   /** `chat`, `work`, or empty for an avatar with no lane running. */
   lane: string
@@ -98,7 +100,7 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
       returned: Number(status.returned ?? 0),
       reports: Number(status.reports ?? 0),
       lanes: rows(status.lanes).map((l) => ({
-        avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), role: String(l.role ?? ""), lane: String(l.lane ?? ""),
+        avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), alias: String(l.alias ?? ""), role: String(l.role ?? ""), lane: String(l.lane ?? ""),
         phase: String(l.phase ?? "idle"), task: String(l.task ?? ""), started_ms: Number(l.started_ms ?? 0), last_event_ms: Number(l.last_event_ms ?? 0),
         steps: Number(l.steps ?? 0), last_tool: String(l.last_tool ?? ""), error: String(l.error ?? ""),
       })),

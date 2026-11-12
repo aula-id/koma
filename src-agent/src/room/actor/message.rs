@@ -88,6 +88,9 @@ pub enum LanePart {
 pub struct LaneInfo {
     pub avatar: String,
     pub display: String,
+    /// A short tag, such as `LR` for Lab Red.
+    #[serde(default)]
+    pub alias: String,
     pub role: String,
     /// `chat` or `work`; empty for an avatar with no lane running.
     pub lane: String,

@@ -438,9 +438,17 @@ model = "strong-model"
 "#;
 
 #[test]
-fn the_default_room_has_one_avatar_per_role() {
+fn the_default_room_gives_every_role_an_avatar_and_red_has_three() {
     let reg = RegistryHandle::embedded().expect("load").current();
-    assert_eq!(reg.avatars.len(), reg.roles.len());
+    for role in reg.roles.keys() {
+        assert!(!reg.avatars_of(role).is_empty(), "the {role} role has no avatar");
+    }
+    let reds: Vec<&str> = reg.avatars_of("red").iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(reds, ["red", "red-api", "red-web"]);
+    for id in ["researcher", "re", "builder"] {
+        assert!(reg.avatar(id).is_some(), "avatar {id}");
+    }
+    assert_eq!((reg.alias_of("chief"), reg.alias_of("red"), reg.alias_of("reporter"), reg.alias_of("researcher")), ("CF".to_string(), "LR".to_string(), "RR".to_string(), "RS".to_string()));
     for id in ["chief", "red", "reviewer", "reporter", "clerk"] {
         let a = reg.avatar(id).unwrap_or_else(|| panic!("avatar {id}"));
         assert_eq!(a.role, id);
@@ -466,7 +474,7 @@ fn an_overlay_can_add_a_second_avatar_for_a_specialist_role() {
         .iter()
         .map(|a| a.id.as_str())
         .collect();
-    assert_eq!(ids, ["red", "red-api"]);
+    assert_eq!(ids, ["red", "red-api", "red-web"]);
     assert_eq!(reg.display_of("red-api"), "Lab Red (API)");
     // a new avatar gets the role's prompt, tools and shelf permissions, nothing more
     assert_eq!(reg.role_of("red-api"), reg.role("red"));
