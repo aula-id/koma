@@ -45,6 +45,17 @@ additionalProperties = false
 report = { type = "string", minLength = 1, maxLength = 20000 }
 
 [[tool]]
+name = "room_stop"
+handler = "room_stop"
+description = "Stop a specialist now. Its chat and work lanes are cut off at once, and its assignment is left unproven. Use it when the user asks to stop someone, or when a lane is off track and a nudge will not fix it. Not for ending a goal that is going well."
+[tool.schema]
+type = "object"
+required = ["avatar"]
+additionalProperties = false
+[tool.schema.properties]
+avatar = { type = "string", description = "The specialist to stop, such as red" }
+
+[[tool]]
 name = "message_user"
 handler = "message_user"
 description = "Send the user a short message now, without ending the turn."

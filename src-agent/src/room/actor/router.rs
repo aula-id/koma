@@ -250,6 +250,18 @@ impl RoomToolRouter {
         }
     }
 
+    /// The Chief stops a specialist: the lanes are cut off now, not asked to stop.
+    fn run_room_stop(&self, args: &Value) -> ToolRun {
+        let Some(avatar) = args.get("avatar").and_then(Value::as_str).filter(|a| !a.trim().is_empty() && *a != "chief") else {
+            return ToolRun { result: "error: room_stop needs the avatar to stop, such as \"red\"".to_string(), ..Default::default() };
+        };
+        if self.registry.avatar(avatar).is_none() {
+            return ToolRun { result: format!("error: no specialist called {avatar}"), ..Default::default() };
+        }
+        self.tell_actor(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: avatar.to_string() }));
+        ToolRun { result: json!({ "ok": true, "stopped": avatar, "note": "Its lanes are cut off now. Tell the user what you stopped and why." }).to_string(), ..Default::default() }
+    }
+
     fn run_message_user(&self, args: &Value) -> ToolRun {
         match args.get("text").and_then(Value::as_str) {
             Some(text) if !text.trim().is_empty() => {
@@ -292,6 +304,8 @@ impl ToolRouter for RoomToolRouter {
             self.run_coordinator(name, &args)
         } else if name == "message_user" {
             self.run_message_user(&args)
+        } else if name == "room_stop" {
+            self.run_room_stop(&args)
         } else if name == "clerk_flag" {
             self.run_clerk_flag(&args)
         } else if is_shelf_tool(name) {
@@ -317,6 +331,10 @@ fn str_param(description: &str) -> Value {
 /// A minimal schema for a shelf tool, so the model can call it. The daemon's
 /// catalogue can replace these with richer schemas later.
 fn shelf_spec(name: &str) -> ToolSpec {
+    // A typed put has its own fields; the model fills the tool from this schema.
+    if let Some((description, parameters)) = name.strip_prefix("put_").and_then(crate::room::shelf::typed_tool) {
+        return ToolSpec { name: name.to_string(), description, parameters };
+    }
     let (description, required): (&str, &[&str]) = match name {
         "get" => ("Read a shelf item by key.", &["key"]),
         "list" => ("List shelf keys under an optional prefix.", &[]),

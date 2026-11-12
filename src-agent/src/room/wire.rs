@@ -22,6 +22,8 @@ pub enum RoomClient {
     Paste { text: String },
     /// Ctrl+V: take an image from the clipboard.
     PasteImage,
+    /// Esc: stop what the Chief and the specialists are saying. Their work keeps running.
+    Interrupt,
     Control { command: RoomControl },
     /// Ask for the registered models and what each lane runs.
     Models,

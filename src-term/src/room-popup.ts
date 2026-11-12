@@ -28,12 +28,15 @@ export function dismissed(draft: string, view: PopupView): PopupState {
 
 /** Tab completes the highlighted row and adds a space, which closes the popup. */
 export function completion(row: Suggestion): string {
-  return `${row.label} `
+  return row.insert.startsWith("/stop ") ? row.insert : `${row.label} `
 }
 
 export type Chosen = { run: string } | { insert: string }
 
 /** Enter on a command runs it; Enter on a person writes the name and waits for the message. */
 export function chosen(row: Suggestion): Chosen {
+  // /stop needs to be told whom. Choosing a name under it runs it; the bare command waits for one.
+  if (row.label === "/stop") return { insert: "/stop " }
+  if (row.insert.startsWith("/stop ")) return { run: row.insert }
   return row.label.startsWith("/") ? { run: row.label } : { insert: completion(row) }
 }

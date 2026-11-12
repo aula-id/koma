@@ -551,10 +551,9 @@ async fn the_status_lists_the_whole_roster_and_repeated_turns_do_not_fill_the_ti
         .expect("a status");
 
     let avatars: Vec<&str> = status.lanes.iter().map(|l| l.avatar.as_str()).collect();
-    for who in ["chief", "red", "reviewer", "reporter"] {
+    for who in ["chief", "red", "reviewer", "reporter", "clerk"] {
         assert!(avatars.contains(&who), "{who} is on the roster: {avatars:?}");
     }
-    assert!(!avatars.contains(&"clerk"), "the clerk is internal");
     assert!(status.lanes.iter().all(|l| l.phase == "idle" || l.phase == "running" || l.phase == "done"), "{:?}", status.lanes);
     assert!(status.now_ms > 0);
     assert!(!status.timeline.contains("◆ chief"), "chief turns no longer add a milestone each: {:?}", status.timeline);
@@ -677,4 +676,107 @@ async fn an_image_the_user_shared_follows_the_chief_into_the_lane_it_delegates_t
     let red = turns.iter().find(|(a, _, _)| a == "red").expect("red started");
     assert_eq!(red.1, 1, "the delegated lane sees it too");
     assert!(red.2.contains("[Image #"), "and its task names the image: {}", red.2);
+}
+
+// ---- stopping lanes ----
+
+/// Answers like the script, except that the named avatars never finish a request.
+struct Hangs {
+    inner: ScriptedModel,
+    hang: &'static [&'static str],
+}
+
+impl ModelClient for Hangs {
+    fn stream<'a>(&'a self, request: ModelRequest) -> BoxFuture<'a, ModelReply> {
+        if self.hang.contains(&avatar_of(&request.history).as_str()) {
+            return Box::pin(std::future::pending());
+        }
+        self.inner.stream(request)
+    }
+}
+
+fn hanging_room(hang: &'static [&'static str], replies: Vec<((&str, usize), ModelReply)>) -> RoomHandle {
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let script = Script {
+        replies: replies.into_iter().map(|((a, n), r)| ((a.to_string(), n), r)).collect(),
+        seen: Mutex::new(HashMap::new()),
+    };
+    let model = Arc::new(Hangs { inner: ScriptedModel { script, systems: Arc::new(Mutex::new(Vec::new())), fallback: "done".into() }, hang });
+    spawn_room(coordinator, shelf, registry, model, Arc::new(StubBuiltins), RoomConfig::default())
+}
+
+async fn status_where(handle: &mut RoomHandle, want: impl Fn(&StatusSnapshot) -> bool) -> StatusSnapshot {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        handle.to_actor.send(ActorMsg::Resync).unwrap();
+        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
+            Ok(Some(RoomEvent::Status(status))) if want(&status) => return status,
+            Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(10)).await,
+            other => panic!("the status never matched: {other:?}"),
+        }
+    }
+}
+
+fn phase_of(status: &StatusSnapshot, avatar: &str, lane: &str) -> String {
+    status.lanes.iter().find(|l| l.avatar == avatar && l.lane == lane).map(|l| l.phase.clone()).unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_stopped_specialist_stops_showing_as_running() {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe" }] }),
+    );
+    let mut handle = hanging_room(&["red"], vec![(("chief", 0), tools("Sending Red.", vec![delegate]))]);
+    handle.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "running").await;
+    handle
+        .to_actor
+        .send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "red".into() }))
+        .unwrap();
+    let status = status_where(&mut handle, |s| phase_of(s, "red", "work") == "stopped").await;
+    assert_eq!(status.lanes.iter().find(|l| l.avatar == "red" && l.lane == "work").unwrap().error, "stopped by the user");
+    assert!(status.events.iter().any(|e| e.avatar == "red" && e.label == "stopped"), "the timeline records it");
+}
+
+#[tokio::test]
+async fn stop_all_and_a_second_stop_say_what_they_did() {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe" }] }),
+    );
+    let mut handle = hanging_room(&["red"], vec![(("chief", 0), tools("Sending Red.", vec![delegate]))]);
+    handle.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "running").await;
+    for _ in 0..2 {
+        handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "all".into() })).unwrap();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (mut stopped, mut nothing) = (false, false);
+    while !(stopped && nothing) {
+        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
+            Ok(Some(RoomEvent::Visible { author, text })) => {
+                stopped |= author == "red" && text.contains("stopped by you");
+                nothing |= text.contains("nothing running");
+            }
+            Ok(Some(_)) => {}
+            other => panic!("expected both notes, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn esc_stops_the_chiefs_turn_and_the_next_message_is_answered() {
+    let mut handle = hanging_room(&["chief"], vec![]);
+    handle.to_actor.send(ActorMsg::User("think hard".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "chief", "chat") == "running").await;
+    handle.to_actor.send(ActorMsg::Interrupt).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "chief", "chat").is_empty() || phase_of(s, "chief", "chat") == "idle").await;
+    // The Chief is free again: a new message starts a new turn instead of queueing behind the stopped one.
+    handle.to_actor.send(ActorMsg::User("hello".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "chief", "chat") == "running").await;
 }

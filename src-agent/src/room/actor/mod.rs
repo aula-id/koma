@@ -238,6 +238,7 @@ impl RoomActor {
                 ActorMsg::User(text) => self.on_user(text, Vec::new()),
                 ActorMsg::UserWith { text, images } => self.on_user(text, images),
                 ActorMsg::Control(cmd) => self.on_control(cmd),
+                ActorMsg::Interrupt => self.interrupt(),
                 ActorMsg::Tick => self.on_tick(),
                 ActorMsg::LaneEvent { avatar, kind, event } => self.on_lane_event(&avatar, kind, event),
                 ActorMsg::Effects(effects) => self.apply_effects(effects),
@@ -362,6 +363,13 @@ impl RoomActor {
     }
 
     fn on_control(&mut self, cmd: crate::room::lane::ControlCommand) {
+        if let crate::room::lane::ControlCommand::Stop { avatar } = &cmd {
+            let avatar = avatar.clone();
+            // A stopped lane is not paused any more.
+            let _ = self.control.apply(cmd, &std::collections::BTreeSet::new());
+            self.stop_avatar(&avatar);
+            return;
+        }
         let running: std::collections::BTreeSet<String> = self
             .lanes
             .iter()
@@ -371,7 +379,7 @@ impl RoomActor {
         match self.control.apply(cmd, &running) {
             ControlAction::Pause(avatar) => self.inject_work(&avatar, LaneInput::Pause),
             ControlAction::Resume(avatar) => self.inject_work(&avatar, LaneInput::Resume),
-            ControlAction::Stop(avatar) => self.stop_work(&avatar),
+            ControlAction::Stop(avatar) => self.stop_slot(&Slot::new(&avatar, LaneKind::Work)),
             ControlAction::Inject { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
             ControlAction::Noop(reason) => self.emit(RoomEvent::Visible { author: "room".into(), text: reason }),
         }
@@ -383,13 +391,61 @@ impl RoomActor {
         }
     }
 
-    fn stop_work(&mut self, avatar: &str) {
-        if let Some(lane) = self.lanes.get_mut(&Slot::new(avatar, LaneKind::Work)) {
-            lane.abort.abort();
-            lane.unsettled = true;
-            lane.ended = true;
-            let _ = lane.inject.send(LaneInput::Stop);
+    /// `/stop red` stops that avatar's lanes, chat and work; `/stop all` stops every lane.
+    fn stop_avatar(&mut self, who: &str) {
+        let slots: Vec<Slot> = self
+            .lanes
+            .iter()
+            .filter(|(slot, lane)| !lane.ended && slot.avatar != "clerk" && (who == "all" || slot.avatar == who))
+            .map(|(slot, _)| slot.clone())
+            .collect();
+        if slots.is_empty() {
+            self.emit(RoomEvent::Visible { author: "room".into(), text: format!("{who} has nothing running to stop") });
+            return;
         }
+        for slot in slots {
+            self.stop_slot(&slot);
+        }
+        self.emit_status();
+    }
+
+    /// Esc: the Chief's and the specialists' conversations stop; the work keeps running.
+    fn interrupt(&mut self) {
+        let slots: Vec<Slot> = self
+            .lanes
+            .iter()
+            .filter(|(slot, lane)| slot.kind == LaneKind::Chat && !lane.ended)
+            .map(|(slot, _)| slot.clone())
+            .collect();
+        for slot in slots {
+            self.stop_slot(&slot);
+        }
+        self.emit_status();
+    }
+
+    fn stop_slot(&mut self, slot: &Slot) {
+        let now = now_ms();
+        let Some(lane) = self.lanes.get_mut(slot) else { return };
+        lane.abort.abort();
+        let _ = lane.inject.send(LaneInput::Stop);
+        let is_chief = lane.is_chief;
+        match slot.kind {
+            LaneKind::Work => {
+                lane.unsettled = true;
+                lane.ended = true;
+                self.digest.stopped(&slot.avatar, now);
+                self.timeline.stopped(&slot.avatar, now);
+            }
+            LaneKind::Chat => {
+                self.lanes.remove(slot);
+                if is_chief {
+                    self.chief_busy = false;
+                    self.turn_images.clear();
+                }
+            }
+        }
+        let which = if slot.kind == LaneKind::Chat { "chat" } else { "work" };
+        self.emit(RoomEvent::Visible { author: slot.avatar.clone(), text: format!("stopped by you ({which})") });
     }
 
     // ---- lane events ----
@@ -689,7 +745,7 @@ impl RoomActor {
                 .unwrap_or_default()
         };
         let mut rows = Vec::new();
-        for avatar in registry.all_avatars().filter(|a| a.role != "clerk") {
+        for avatar in registry.all_avatars() {
             let display = registry.display_of(&avatar.id).to_string();
             let mut any = false;
             for kind in [LaneKind::Chat, LaneKind::Work] {

@@ -67,6 +67,7 @@ pub const KNOWN_HANDLERS: &[&str] = &[
     "group_finish",
     "group_task_complete",
     "message_user",
+    "room_stop",
     "clerk_flag",
     "read",
     "write",

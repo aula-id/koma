@@ -151,6 +151,16 @@ export class RoomLink {
     this.send("paste_image")
   }
 
+  /** Esc: stop what the Chief and the specialists are saying. Their work keeps running. */
+  interrupt(): void {
+    this.send("interrupt")
+  }
+
+  /** `/stop red` cuts off that specialist's lanes; `all` cuts off every lane. */
+  stop(avatar: string): void {
+    this.send({ control: { command: { stop: { avatar } } } })
+  }
+
   requestModels(): void {
     this.send("models")
   }

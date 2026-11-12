@@ -10,8 +10,32 @@ export function phaseMark(phase: string): { glyph: string; tone: Tone } {
     case "submitted": return { glyph: "✔", tone: "success" }
     case "done": return { glyph: "✔", tone: "success" }
     case "failed": return { glyph: "✕", tone: "error" }
+    case "stopped": return { glyph: "■", tone: "warn" }
     default: return { glyph: "○", tone: "dim" }
   }
+}
+
+export type Standing = { name: string; state: string; glyph: string; tone: Tone }
+
+/** One word per avatar for the strip under the composer: is it thinking or ready. */
+export function standing(rows: LaneInfo[]): Standing[] {
+  const order: string[] = []
+  const phases = new Map<string, { display: string; phases: string[] }>()
+  for (const row of rows) {
+    if (!phases.has(row.avatar)) {
+      order.push(row.avatar)
+      phases.set(row.avatar, { display: row.display || row.avatar, phases: [] })
+    }
+    phases.get(row.avatar)!.phases.push(row.phase)
+  }
+  return order.map((avatar) => {
+    const { display, phases: seen } = phases.get(avatar)!
+    const pick = (...wanted: string[]) => wanted.find((w) => seen.includes(w))
+    const phase = pick("running") ?? pick("paused") ?? pick("failed") ?? pick("stopped") ?? "ready"
+    const state = phase === "running" ? "thinking" : phase
+    const mark = phase === "ready" ? { glyph: "○", tone: "dim" as Tone } : phaseMark(phase)
+    return { name: display, state, ...mark }
+  })
 }
 
 /** How long ago, in the largest whole unit. Empty when the time is unknown. */

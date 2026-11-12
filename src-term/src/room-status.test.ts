@@ -39,3 +39,17 @@ test("the summary and the events read plainly", () => {
   expect(eventCells({ at_ms: 95_000, avatar: "red", marker: "○", label: "claims/a" }, 100_000)).toEqual({ age: "   5s", avatar: "red       ", marker: "○", label: "claims/a" })
   expect(clip("abcdef", 4)).toBe("abc…")
 })
+
+import { standing } from "./room-status.ts"
+
+test("each avatar reads thinking or ready, whichever of its lanes is busy", () => {
+  const row = (avatar: string, lane: string, phase: string) => ({ avatar, display: avatar, role: "", lane, phase, task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" })
+  const result = standing([
+    row("chief", "chat", "running"),
+    row("red", "chat", "idle"), row("red", "work", "running"),
+    row("reviewer", "", "idle"),
+    row("reporter", "work", "done"),
+    row("clerk", "work", "stopped"),
+  ])
+  expect(result.map((s) => `${s.name}:${s.state}`)).toEqual(["chief:thinking", "red:thinking", "reviewer:ready", "reporter:ready", "clerk:stopped"])
+})

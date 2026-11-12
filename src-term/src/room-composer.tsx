@@ -15,6 +15,7 @@ export const ROOM_TIPS = [
   "Tab completes a command or a name",
   "/status shows every lane, /shelf the findings, /trajectory the goals",
   "/model picks the model of each minion's lane",
+  "Esc stops what the Chief is saying; /stop red or /stop all cuts off the work",
   "Ctrl+C asks before leaving the room",
 ]
 
@@ -39,6 +40,7 @@ export function RoomComposer({
   inserted = null,
   onPaste = () => {},
   onPasteImage = () => {},
+  footer = null,
 }: {
   theme: Theme
   draft: string
@@ -54,6 +56,8 @@ export function RoomComposer({
   inserted?: { id: number; text: string } | null
   onPaste?: (text: string) => void
   onPasteImage?: () => void
+  /** One row under the box, such as who is thinking. */
+  footer?: ReactNode
 }) {
   const { height, width } = useTerminalDimensions()
   const renderer = useRenderer()
@@ -175,7 +179,7 @@ export function RoomComposer({
           />
         </box>
       </box>
-      <box height={1} flexShrink={0} />
+      <box height={1} flexShrink={0} paddingLeft={2}>{footer}</box>
     </box>
   )
 }

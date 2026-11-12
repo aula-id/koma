@@ -9,7 +9,8 @@ import { CLOSED, chosen, completion, dismissed, moved, popupView, type PopupStat
 import { syntaxStyles } from "./syntax.ts"
 import { reduceLines, say, type Item, type Line } from "./room-turns.ts"
 import { RoomLink, type EventInfo, type LaneInfo, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
-import { busySummary, eventCells, laneCells, laneHeader, phaseMark } from "./room-status.ts"
+import { busySummary, eventCells, laneCells, laneHeader, phaseMark, standing } from "./room-status.ts"
+import { classify } from "./room-suggest.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { switchDaemon } from "./paths.ts"
 
@@ -121,6 +122,8 @@ export function RoomScreen({
       inserted={inserted}
       onPaste={(text) => link.current?.paste(text)}
       onPasteImage={() => link.current?.pasteImage()}
+      onInterrupt={() => link.current?.interrupt()}
+      onStop={(who) => link.current?.stop(who)}
       asking={asking}
       onAnswer={(yes) => { if (yes) leave(); else setAsking(false) }}
       onOpenModels={() => link.current?.requestModels()}
@@ -137,7 +140,7 @@ export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
 export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   syntaxStyle?: SyntaxStyle
   lines: Line[]
@@ -155,6 +158,10 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   inserted?: Inserted | null
   onPaste?: (text: string) => void
   onPasteImage?: () => void
+  /** Esc: stop what the Chief and the specialists are saying. */
+  onInterrupt?: () => void
+  /** `/stop red`, `/stop all`. */
+  onStop?: (who: string) => void
   /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
   asking?: boolean
   onAnswer?: (yes: boolean) => void
@@ -180,6 +187,10 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
       if (full !== "model" && (key.name === "escape" || key.name === "q")) setFull(null)
       return
     }
+    if (key.name === "escape" && !options.open) {
+      onInterrupt()
+      return
+    }
     if (!options.open) return
     const name = key.name
     if (name !== "up" && name !== "down" && name !== "tab" && name !== "escape") return
@@ -195,7 +206,24 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
     } else setPopup(moved(popup, draft, options, name === "up" ? -1 : 1))
   })
 
+  const [hint, setHint] = useState("")
+  useEffect(() => {
+    if (!hint) return
+    const timer = setTimeout(() => setHint(""), 4000)
+    return () => clearTimeout(timer)
+  }, [hint])
   const run = (text: string) => {
+    const typed = classify(text)
+    if (typed.kind === "stop") {
+      onStop(typed.who)
+      onDraft("")
+      return
+    }
+    if (typed.kind === "unknown") {
+      // A typo is kept in the box to fix, and is not sent as a message.
+      setHint(typed.near ? `no command ${typed.word} - did you mean ${typed.near}?` : `no command ${typed.word}`)
+      return
+    }
     const command = FULL_COMMANDS[text.trim()]
     if (command) {
       if (command === "model") onOpenModels()
@@ -259,7 +287,8 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
         inserted={inserted}
         onPaste={onPaste}
         onPasteImage={onPasteImage}
-        status={flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
+        footer={<Standings rows={panes.table ?? []} theme={theme} />}
+        status={hint ? { text: hint, color: theme.warn } : flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
         popupOpen={options.open && !asking}
         popup={options.open && !asking ? (
           <SuggestPopup
@@ -273,6 +302,25 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
         placeholder="Message the Chief, @red for a specialist, /status for the lanes"
       />
     </box>
+  )
+}
+
+/** Who is thinking and who is ready, under the composer. */
+function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
+  const items = standing(rows)
+  if (!items.length) return null
+  const ink = { success: theme.success, info: theme.info, warn: theme.warn, error: theme.error, dim: theme.dim }
+  return (
+    <text wrapMode="none" fg={theme.dim}>
+      {items.map((item, i) => (
+        <span key={item.name}>
+          {i ? "   " : ""}
+          <span fg={ink[item.tone]}>{item.glyph}</span>
+          <span fg={theme.fg}>{` ${item.name.toLowerCase()} `}</span>
+          <span fg={ink[item.tone]}>{item.state}</span>
+        </span>
+      ))}
+    </text>
   )
 }
 

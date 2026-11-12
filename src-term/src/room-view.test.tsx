@@ -278,3 +278,39 @@ test("the markers in a draft show as chips above the composer", async () => {
   expect(text).toContain("Image #1")
   expect(text).toContain("Pasted Text #2")
 })
+
+test("Esc interrupts, /stop names who, and a mistyped command stays in the box", async () => {
+  const log: string[] = []
+  const sent: string[] = []
+  function Box() {
+    const [draft, setDraft] = useState("")
+    return <RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft={draft} onDraft={setDraft}
+      onSend={(t) => { sent.push(t ?? draft); setDraft("") }} onInterrupt={() => log.push("interrupt")} onStop={(w) => log.push(`stop ${w}`)} />
+  }
+  let view!: View
+  await act(async () => { view = await testRender(<Box />, { width: 100, height: 24 }) })
+  const step = (run: (v: View) => Promise<void> | void) => act(async () => { await run(view); await new Promise((r) => setTimeout(r, 40)) })
+  await step((v) => v.mockInput.typeText("/stop red "))
+  await step((v) => v.mockInput.pressEnter())
+  expect(log).toEqual(["stop red"])
+  await step((v) => v.mockInput.typeText("/shlef "))
+  await step((v) => v.mockInput.pressEnter())
+  expect(sent).toEqual([])
+  await act(async () => { await view.renderOnce() })
+  expect(view.captureCharFrame()).toContain("did you mean /shelf")
+  await step((v) => v.mockInput.pressEscape())
+  expect(log).toEqual(["stop red", "interrupt"])
+  await act(async () => { await view.dispose() })
+})
+
+test("under the composer, each minion reads thinking or ready", async () => {
+  const table = [
+    { avatar: "chief", display: "Chief", role: "chief", lane: "chat", phase: "running", task: "", started_ms: 0, last_event_ms: 0, steps: 1, last_tool: "", error: "" },
+    { avatar: "red", display: "Red", role: "red", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+    { avatar: "clerk", display: "Clerk", role: "clerk", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+  ]
+  const text = await frame(110, 24, { panes: { ...panes, table } })
+  expect(text).toContain("chief thinking")
+  expect(text).toContain("red ready")
+  expect(text).toContain("clerk ready")
+})

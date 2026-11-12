@@ -17,6 +17,8 @@ pub enum Phase {
     /// The lane ended cleanly.
     Done,
     Failed,
+    /// The user stopped the lane.
+    Stopped,
 }
 
 impl Phase {
@@ -26,6 +28,7 @@ impl Phase {
             Phase::Submitted => "submitted",
             Phase::Done => "done",
             Phase::Failed => "failed",
+            Phase::Stopped => "stopped",
         }
     }
 }
@@ -93,6 +96,14 @@ impl Digest {
         if let Some(lane) = self.lanes.get_mut(avatar) {
             lane.last_event_ms = Some(now_ms);
         }
+    }
+
+    /// The user stopped this lane: it is no longer running, whatever its last event said.
+    pub fn stopped(&mut self, avatar: &str, now_ms: u64) {
+        let lane = self.lanes.entry(avatar.to_string()).or_default();
+        lane.phase = Phase::Stopped;
+        lane.error = Some("stopped by the user".into());
+        lane.last_event_ms = Some(now_ms);
     }
 
     /// Fold one event from `avatar`'s lane into the picture.

@@ -8,6 +8,7 @@ mod args;
 mod links;
 mod record;
 mod reporter;
+mod schema;
 mod store;
 mod trajectory;
 
@@ -15,6 +16,8 @@ mod trajectory;
 mod tests;
 
 // Public surface for the coordinator tools and the trajectory view (later steps).
+#[allow(unused_imports)]
+pub use schema::typed_tool;
 #[allow(unused_imports)]
 pub use store::{Shelf, ShelfEntry, ShelfEvent};
 

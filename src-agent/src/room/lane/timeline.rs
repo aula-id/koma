@@ -53,6 +53,11 @@ impl Timeline {
 
     /// Fold a lane event into a milestone. Routine events (steps, tool starts,
     /// chat chunks, a plain finish) add nothing to the activity trail.
+    /// A lane the user stopped.
+    pub fn stopped(&mut self, avatar: &str, at_ms: u64) {
+        self.push(avatar, at_ms, '■', "stopped".to_string());
+    }
+
     pub fn record(&mut self, avatar: &str, event: &LaneEvent, at_ms: u64) {
         match event {
             LaneEvent::Published { key, .. } => self.push(avatar, at_ms, '○', last_segment(key)),
