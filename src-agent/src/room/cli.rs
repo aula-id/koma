@@ -1,4 +1,4 @@
-//! `koma room …`: read-only views of a secure-room session.
+//! `koma room …`: views of a secure-room session.
 //!
 //! `koma room trajectory` draws the room's map from the shelf. It opens the
 //! session's database read-only, so it is safe to run against a live session:
@@ -6,6 +6,9 @@
 //! database file stays byte for byte the same. SQLite may create its `-wal` and
 //! `-shm` index files beside a WAL database, which it needs in order to read it
 //! (a live session already has them).
+//!
+//! `koma room attach` talks to a running secure daemon. It does not open the
+//! database.
 
 use std::path::{Path, PathBuf};
 
@@ -14,16 +17,19 @@ use super::trajectory::{self, Format};
 
 const USAGE: &str = "usage: koma room trajectory [--goal KEY] [--format ascii|json|dot|mermaid]
                               [--view outline|layered] [--width COLS] [--session ID]
+       koma room attach --session ID
 
-  Draws the secure room's map from the session's shelf. The default is an
-  outline tree that reads at any width; --view layered draws columns by link
-  depth and falls back to the outline when it does not fit. Without --session
-  the newest room session for the current directory is used.";
+  trajectory draws the map from the shelf. The default is an outline tree;
+  --view layered draws columns by link depth. Without --session the newest
+  room session for the current directory is used.
+  attach prints a running secure daemon and sends each typed line as the user.";
 
 /// What `koma room …` was asked to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoomCli {
     Trajectory(TrajectoryArgs),
+    /// Live client for one secure daemon.
+    Attach { session: String },
     /// Not understood; the text says why.
     Usage(String),
 }
@@ -43,6 +49,10 @@ impl RoomCli {
         match args.first().map(String::as_str) {
             Some("trajectory") => match parse_trajectory(&args[1..]) {
                 Ok(parsed) => RoomCli::Trajectory(parsed),
+                Err(why) => RoomCli::Usage(why),
+            },
+            Some("attach") => match parse_attach(&args[1..]) {
+                Ok(session) => RoomCli::Attach { session },
                 Err(why) => RoomCli::Usage(why),
             },
             Some(other) => RoomCli::Usage(format!("unknown room command '{other}'")),
@@ -76,6 +86,26 @@ fn parse_trajectory(args: &[String]) -> Result<TrajectoryArgs, String> {
         }
     }
     Ok(out)
+}
+
+fn parse_attach(args: &[String]) -> Result<String, String> {
+    let mut session = None;
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--session" => {
+                session = Some(it.next().cloned().ok_or_else(|| "--session needs a value".to_string())?);
+            }
+            other => return Err(format!("unknown option '{other}'")),
+        }
+    }
+    let Some(session) = session else {
+        return Err("attach needs --session <id>".to_string());
+    };
+    if session.contains(['/', '\\']) || session == ".." || session == "." {
+        return Err(format!("'{session}' is not a session id"));
+    }
+    Ok(session)
 }
 
 /// A session directory is a room session when it holds a room database.
@@ -152,10 +182,117 @@ pub fn run(cli: RoomCli) -> i32 {
                 1
             }
         },
+        RoomCli::Attach { session } => match attach::run(&session) {
+            Ok(()) => 0,
+            Err(why) => {
+                eprintln!("koma room attach: {why}");
+                1
+            }
+        },
         RoomCli::Usage(why) => {
             eprintln!("koma room: {why}\n{USAGE}");
             2
         }
+    }
+}
+
+mod attach {
+    use std::io::{BufRead, Write};
+
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use crate::ipc::client;
+    use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
+    use crate::ipc::split_stream;
+    use crate::room::wire::{RoomClient, RoomServer};
+
+    pub fn run(session: &str) -> Result<(), String> {
+        let path = crate::model::store::daemon_sock_path(session).map_err(|e| e.to_string())?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(drive(&path))
+    }
+
+    async fn drive(path: &std::path::Path) -> Result<(), String> {
+        let stream = client::connect(path).await.map_err(|_| {
+            format!("no secure daemon is listening on {} (start one with koma --daemon --kind secure)", path.display())
+        })?;
+        let (mut read, mut write) = split_stream(stream);
+        let hello = serde_json::to_vec(&RoomClient::Hello).map_err(|e| e.to_string())?;
+        write_frame_to(&mut write, &hello).await.map_err(|e| e.to_string())?;
+        let mut reader = FrameReader::new();
+        let first = read_frame_from(&mut read, &mut reader).await.map_err(|e| e.to_string())?;
+        let welcome: RoomServer = serde_json::from_slice(&first).map_err(|e| e.to_string())?;
+        match welcome {
+            RoomServer::Hello { kind } if kind == "secure" => println!("room: secure"),
+            RoomServer::Hello { kind } => return Err(format!("daemon kind is '{kind}', not secure")),
+            _ => return Err("the daemon did not say hello".to_string()),
+        }
+
+        let (line_tx, mut line_rx) = unbounded_channel();
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(text) => {
+                        if line_tx.send(text).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut last_digest = String::new();
+        loop {
+            tokio::select! {
+                line = line_rx.recv() => {
+                    let Some(text) = line else {
+                        let quit = serde_json::to_vec(&RoomClient::Quit).map_err(|e| e.to_string())?;
+                        let _ = write_frame_to(&mut write, &quit).await;
+                        break;
+                    };
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let frame = serde_json::to_vec(&RoomClient::User { text }).map_err(|e| e.to_string())?;
+                    write_frame_to(&mut write, &frame).await.map_err(|e| e.to_string())?;
+                }
+                incoming = read_frame_from(&mut read, &mut reader) => {
+                    let bytes = incoming.map_err(|e| e.to_string())?;
+                    let frame: RoomServer = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    if show(&frame, &mut last_digest) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `true` when the daemon closed.
+    fn show(frame: &RoomServer, last_digest: &mut String) -> bool {
+        let mut out = std::io::stdout().lock();
+        match frame {
+            RoomServer::Hello { .. } => {}
+            RoomServer::Chief { text } => { let _ = writeln!(out, "chief: {text}"); }
+            RoomServer::LaneChat { avatar, text } => { let _ = writeln!(out, "{avatar}: {text}"); }
+            RoomServer::Visible { author, text } => { let _ = writeln!(out, "{author}: {text}"); }
+            RoomServer::Status { digest, .. } => {
+                if digest != last_digest && !digest.is_empty() {
+                    let _ = writeln!(out, "status: {digest}");
+                    *last_digest = digest.clone();
+                }
+            }
+            RoomServer::Closed => {
+                let _ = writeln!(out, "room: closed");
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -231,6 +368,9 @@ mod tests {
         };
         assert!(why(&[]).contains("missing room command"));
         assert!(why(&["frobnicate"]).contains("unknown room command 'frobnicate'"));
+        assert_eq!(RoomCli::parse(&args(&["attach", "--session", "abc"])), RoomCli::Attach { session: "abc".into() });
+        assert!(why(&["attach"]).contains("--session"));
+        assert!(why(&["attach", "--session", "../x"]).contains("not a session id"));
         assert!(why(&["trajectory", "--format", "svg"]).contains("unknown format 'svg'"));
         assert!(why(&["trajectory", "--view", "cube"]).contains("unknown view 'cube'"));
         assert!(why(&["trajectory", "--goal"]).contains("--goal needs a value"));

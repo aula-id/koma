@@ -18,6 +18,7 @@ pub mod shelf;
 pub mod trajectory;
 pub mod transition;
 pub mod types;
+pub mod wire;
 pub mod work;
 
 /// Where a session keeps the room's database: `<session dir>/room.sqlite`.

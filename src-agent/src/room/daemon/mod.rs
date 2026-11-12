@@ -6,10 +6,14 @@ pub mod builtins;
 pub mod model_client;
 mod run;
 mod selftest;
+mod serve;
 
 #[cfg(test)]
 #[path = "host_test.rs"]
 mod host_test;
+#[cfg(test)]
+#[path = "wire_test.rs"]
+mod wire_test;
 
 #[allow(unused_imports)]
 pub use assemble::{RoomSession, TICK_MS};

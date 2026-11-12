@@ -1,15 +1,15 @@
 //! `koma --daemon --kind secure`: the room process.
 //!
 //! It takes the same session id, lock, cwd, and Main-route credentials as the
-//! coding daemon, then runs the room until a signal. It does not enter the
-//! coding loop and it does not bind `run/<id>.sock` (the room protocol is a
-//! later phase).
+//! coding daemon, binds `run/<id>.sock`, and runs the room until a signal. It
+//! does not enter the coding loop.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use tokio::sync::mpsc::unbounded_channel;
 
 use super::assemble::RoomSession;
 use super::selftest::run_secure_selftest;
@@ -18,6 +18,7 @@ use crate::app::runtime::{
     build_client, build_startup, build_tool_ctx, install_daemon_session, install_daemon_signals,
     shutdown_runtime,
 };
+use crate::ipc::proto::SessionStatus;
 use crate::model::app_config::ModelRole;
 use crate::room::actor::{ActorMsg, BuiltinHost, RoomConfig};
 use crate::room::daemon::builtins::CtxBuiltins;
@@ -90,30 +91,64 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         let _ = crate::model::store::write_daemon_pid(&session_id);
     }
 
-    let session = {
+    let probe = session_status(&state, &session_id);
+    let sock_path = crate::model::store::daemon_sock_path(&session_id)?;
+    let (session, serve) = {
         let _enter = handle.enter();
-        RoomSession::open(&session_dir, model, builtins, RoomConfig::default())
-            .map_err(|e| anyhow::anyhow!(e))
-    };
-    let session = match session {
-        Ok(session) => session,
-        Err(e) => {
-            shutdown_runtime(&mut state, rt);
-            if let Some(path) = pid_path {
-                let _ = std::fs::remove_file(path);
+        let session = match RoomSession::open(&session_dir, model, builtins, RoomConfig::default()) {
+            Ok(session) => session,
+            Err(e) => {
+                drop(_enter);
+                shutdown_runtime(&mut state, rt);
+                if let Some(path) = &pid_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(anyhow::anyhow!(e));
             }
-            return Err(e);
-        }
+        };
+        let listener = match crate::ipc::server::bind(&sock_path) {
+            Ok(listener) => listener,
+            Err(e) => {
+                drop(_enter);
+                shutdown_runtime(&mut state, rt);
+                if let Some(path) = &pid_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(e.into());
+            }
+        };
+        let mut session = session;
+        let (dummy_tx, dummy_rx) = unbounded_channel();
+        drop(dummy_tx);
+        let events = std::mem::replace(&mut session.room.events, dummy_rx);
+        let to_actor = session.room.to_actor.clone();
+        let serve = tokio::spawn(super::serve::run(listener, to_actor, events, probe));
+        (session, serve)
     };
     while !shutting_down.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(200));
     }
+    serve.abort();
     let _ = session.room.to_actor.send(ActorMsg::Shutdown);
     drop(session);
 
     shutdown_runtime(&mut state, rt);
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(&sock_path);
     if let Some(path) = pid_path {
         let _ = std::fs::remove_file(path);
     }
     Ok(())
+}
+
+fn session_status(state: &crate::app::state::AppState, session_id: &str) -> SessionStatus {
+    let rt = state.rest.fg();
+    let name = rt.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+    let pwd = rt.session.as_ref().map(|_| rt.effective_cwd().display().to_string()).unwrap_or_default();
+    SessionStatus {
+        session_id: session_id.to_string(),
+        name: if name.is_empty() { "secure".to_string() } else { name },
+        pwd,
+        working: false,
+    }
 }
