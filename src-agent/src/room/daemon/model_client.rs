@@ -30,6 +30,25 @@ pub struct ProviderModelClient {
     settings: Settings,
     settings_cap: u32,
     context_window: Option<u64>,
+    /// The coding session this room belongs to, whose usage the lanes' calls are recorded under.
+    usage_session: Option<(String, String)>,
+}
+
+/// How a lane's spend is filed in the usage ledger: the Chief is the main role, a minion is a `sub:` role.
+pub(super) fn usage_role(avatar: &str) -> String {
+    if avatar == "chief" {
+        "main".to_string()
+    } else {
+        format!("sub:{avatar}")
+    }
+}
+
+/// The cost of a call: the provider's own figure, or the catalogue's price for the tokens when it reports none.
+pub(super) fn effective_cost(endpoint: &str, model_id: &str, prompt: u64, cached: u64, completion: u64, reported: f64) -> f64 {
+    if reported != 0.0 {
+        return reported;
+    }
+    crate::service::catalogue_overlay::overlay_cost(endpoint, model_id, prompt, cached, completion).unwrap_or(reported)
 }
 
 impl ProviderModelClient {
@@ -41,7 +60,13 @@ impl ProviderModelClient {
         settings_cap: u32,
         context_window: Option<u64>,
     ) -> Self {
-        Self { client, base, config, settings, settings_cap, context_window }
+        Self { client, base, config, settings, settings_cap, context_window, usage_session: None }
+    }
+
+    /// Record every call into the usage ledger under this coding session.
+    pub fn with_usage(mut self, session_uuid: String, pwd_hash: String) -> Self {
+        self.usage_session = Some((session_uuid, pwd_hash));
+        self
     }
 
     /// The lane's own provider connection when it names one, otherwise the
@@ -105,6 +130,8 @@ impl ModelClient for ProviderModelClient {
         // A model the catalogue does not rule out is assumed to take images, as in a cold chat session.
         let image_ctx = archive_dir.clone().map(|dir| crate::dto::openrouter::ImageWireCtx { session_dir: dir, model_takes_images: true });
         let objective = request.objective;
+        let avatar = request.avatar;
+        let usage_session = self.usage_session.clone();
         let settings = self.settings.clone();
         let settings_cap = self.settings_cap;
         let context_window = self.context_window;
@@ -154,6 +181,7 @@ impl ModelClient for ProviderModelClient {
                     .await;
             });
             let mut reply = ModelReply::default();
+            let mut call_usage: Option<(u64, u64, u64, f64)> = None;
             let mut live = Live::new(sink);
             while let Some(event) = rx.recv().await {
                 match event {
@@ -167,14 +195,20 @@ impl ModelClient for ProviderModelClient {
                     }
                     StreamEvent::ToolCalls(calls) => reply.tool_calls = calls,
                     StreamEvent::Error(e) => reply.error = Some(e),
-                    StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
+                    StreamEvent::Usage { prompt_tokens, completion_tokens, cached_tokens, cost } => {
                         reply.usage = Some(Usage { prompt_tokens, completion_tokens, cost });
+                        call_usage = Some((prompt_tokens, cached_tokens, completion_tokens, cost));
                     }
                     _ => {}
                 }
             }
             live.flush();
             let _ = send.await;
+            // Every lane's call is spend like the coding chat's, so it goes in the ledger.
+            if let (Some((uuid, pwd_hash)), Some((prompt, cached, completion, reported))) = (&usage_session, call_usage) {
+                let cost = effective_cost(&route.endpoint, &route.model_id, prompt, cached, completion, reported);
+                crate::model::usage::record_usage(&route.model_id, &usage_role(&avatar), uuid, pwd_hash, prompt, cached, completion, cost);
+            }
             reply.drss_active = drss_active;
             reply
         })
@@ -250,6 +284,16 @@ mod tests {
         );
         live.flush();
         assert_eq!(seen.lock().unwrap().len(), 2, "an empty flush sends nothing");
+    }
+
+    #[test]
+    fn every_lane_files_its_spend_under_its_name() {
+        assert_eq!(usage_role("chief"), "main");
+        assert_eq!(usage_role("red"), "sub:red");
+        assert_eq!(usage_role("red-web"), "sub:red-web");
+        // The provider's own figure wins; with none, an unknown model costs nothing rather than guessing.
+        assert_eq!(effective_cost("https://example.invalid", "no-such-model", 100, 0, 50, 0.0123), 0.0123);
+        assert_eq!(effective_cost("https://example.invalid", "no-such-model", 100, 0, 50, 0.0), 0.0);
     }
 
     #[test]

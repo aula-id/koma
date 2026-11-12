@@ -76,14 +76,18 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
 
     let context_window =
         (settings.context_window_limit > 0).then_some(settings.context_window_limit);
-    let model = Arc::new(ProviderModelClient::new(
-        client,
-        route,
-        state.rest.config.clone(),
-        settings.clone(),
-        settings.max_output_tokens,
-        context_window,
-    ));
+    let usage_pwd_hash = state.rest.fg().session.as_ref().map(|s| s.pwd_hash.clone()).unwrap_or_default();
+    let model = Arc::new(
+        ProviderModelClient::new(
+            client,
+            route,
+            state.rest.config.clone(),
+            settings.clone(),
+            settings.max_output_tokens,
+            context_window,
+        )
+        .with_usage(session_id.clone(), usage_pwd_hash),
+    );
     let idx = state.rest.foreground;
     let builtins: Arc<dyn BuiltinHost> =
         Arc::new(CtxBuiltins::from_ctx(build_tool_ctx(&state, idx)));
