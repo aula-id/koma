@@ -10,6 +10,7 @@ mod finish;
 mod goals;
 mod model;
 mod queue;
+mod reconcile;
 mod store;
 
 #[cfg(test)]
@@ -27,6 +28,8 @@ pub use goals::{append_goal, open_trajectory_goals};
 pub use model::{Assignment, ReviewItem, ReviewStatus, Work};
 #[allow(unused_imports)]
 pub use queue::{complete_review_queue, enqueue_claim};
+#[allow(unused_imports)]
+pub use reconcile::{ReconcileOutcome, Reconciler, CHECKIN_WINDOW_MS};
 #[allow(unused_imports)]
 pub use store::WorkStore;
 

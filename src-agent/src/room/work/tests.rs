@@ -673,3 +673,127 @@ fn verification_covers_the_results_of_every_red() {
     assert_eq!(keys, ["results/api", "results/web"], "the snapshot spans both Reds, sorted by key");
     assert_ne!(review.avatar, f.assignment(0).avatar);
 }
+
+// ---- reconciler ----
+
+mod reconcile_tests {
+    use std::collections::HashMap;
+
+    use super::super::reconcile::Reconciler;
+    use super::super::store;
+    use super::*;
+    use crate::room::transition::{LaneRunState, Observation};
+
+    fn obs(run: Option<LaneRunState>, unsettled: bool) -> Observation {
+        Observation { run, unsettled }
+    }
+
+    fn observer(map: &HashMap<String, Observation>) -> impl Fn(&str) -> Observation + '_ {
+        move |id: &str| map.get(id).copied().unwrap_or(obs(None, false))
+    }
+
+    fn probe_id(f: &Fx) -> String {
+        f.assignment(0).id
+    }
+
+    fn work_is_active(f: &Fx) -> bool {
+        f.co.store().with_tx(|c| Ok(store::active_work(c)?.is_some())).expect("active?")
+    }
+
+    #[test]
+    fn a_running_batch_earns_one_check_in_per_window() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let id = probe_id(&f);
+        let wid = f.work().id;
+        let mut rec = Reconciler::with_window(1_000);
+        let mut seen = HashMap::new();
+        seen.insert(id.clone(), obs(Some(LaneRunState::Running), false));
+
+        let first = rec.tick(f.co.store(), observer(&seen), 0).expect("tick");
+        assert_eq!(first.status_changes, [(id.clone(), AssignmentStatus::Running)]);
+        assert_eq!(first.checkins, [wid.clone()]);
+        assert!(first.wakes.is_empty());
+
+        // same window, unchanged state: no new check-in, no status change
+        let second = rec.tick(f.co.store(), observer(&seen), 500).expect("tick");
+        assert!(second.checkins.is_empty() && second.status_changes.is_empty());
+
+        // next window: a fresh check-in
+        let third = rec.tick(f.co.store(), observer(&seen), 1_500).expect("tick");
+        assert_eq!(third.checkins, [wid]);
+    }
+
+    #[test]
+    fn a_settled_batch_wakes_the_chief_once() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let id = probe_id(&f);
+        f.co.store()
+            .with_tx(|c| store::submit_assignment(c, &id, "done", Outcome::Passed, &[r("results/x", 1)]))
+            .expect("submit");
+        let wid = f.work().id;
+        let mut rec = Reconciler::new();
+        let mut seen = HashMap::new();
+        seen.insert(id.clone(), obs(Some(LaneRunState::Completed), false));
+
+        let first = rec.tick(f.co.store(), observer(&seen), 0).expect("tick");
+        assert_eq!(first.status_changes, [(id.clone(), AssignmentStatus::Completed)]);
+        assert_eq!(first.wakes, [wid]);
+        assert!(first.checkins.is_empty());
+
+        // unchanged settled state: no second wake
+        let second = rec.tick(f.co.store(), observer(&seen), 10_000).expect("tick");
+        assert!(second.wakes.is_empty());
+    }
+
+    #[test]
+    fn a_lane_that_cannot_be_proven_stopped_becomes_uncertain_and_wakes() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let id = probe_id(&f);
+        f.co.store()
+            .with_tx(|c| store::submit_assignment(c, &id, "maybe", Outcome::Passed, &[r("results/x", 1)]))
+            .expect("submit");
+        let wid = f.work().id;
+        let mut rec = Reconciler::new();
+        let mut seen = HashMap::new();
+        seen.insert(id.clone(), obs(None, true)); // lane vanished, work unproven
+
+        let out = rec.tick(f.co.store(), observer(&seen), 0).expect("tick");
+        assert_eq!(out.status_changes, [(id, AssignmentStatus::Uncertain)]);
+        assert_eq!(out.wakes, [wid]);
+    }
+
+    #[test]
+    fn a_cancelled_lane_cancels_the_work() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let id = probe_id(&f);
+        let mut rec = Reconciler::new();
+        let mut seen = HashMap::new();
+        seen.insert(id, obs(Some(LaneRunState::Cancelled), false));
+
+        let out = rec.tick(f.co.store(), observer(&seen), 0).expect("tick");
+        assert!(out.wakes.is_empty() && out.checkins.is_empty());
+        assert!(!work_is_active(&f), "the work is cancelled, no longer active");
+    }
+
+    #[test]
+    fn a_wake_fires_again_when_the_batch_state_changes() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let id = probe_id(&f);
+        let wid = f.work().id;
+        let mut rec = Reconciler::new();
+        let mut seen = HashMap::new();
+
+        seen.insert(id.clone(), obs(Some(LaneRunState::Running), false));
+        rec.tick(f.co.store(), observer(&seen), 0).expect("tick"); // running -> check-in
+        // the lane now fails: a new state, so a wake fires
+        seen.insert(id.clone(), obs(Some(LaneRunState::Failed), false));
+        let out = rec.tick(f.co.store(), observer(&seen), 100).expect("tick");
+        assert_eq!(out.status_changes, [(id, AssignmentStatus::Failed)]);
+        assert_eq!(out.wakes, [wid]);
+    }
+}

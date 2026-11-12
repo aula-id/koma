@@ -179,6 +179,11 @@ pub fn work_by_key(conn: &Connection, key: &str) -> R<Option<Work>> {
     work_with_assignments(conn, row)
 }
 
+pub fn work_by_id(conn: &Connection, id: &str) -> R<Option<Work>> {
+    let row = db(conn.query_row(&format!("{WORK_SELECT} WHERE id = ?1"), params![id], work_row).optional())?;
+    work_with_assignments(conn, row)
+}
+
 pub fn active_work(conn: &Connection) -> R<Option<Work>> {
     let row = db(conn
         .query_row(&format!("{WORK_SELECT} WHERE status = 'active' ORDER BY seq LIMIT 1"), [], work_row)
