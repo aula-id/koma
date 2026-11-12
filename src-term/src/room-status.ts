@@ -15,26 +15,31 @@ export function phaseMark(phase: string): { glyph: string; tone: Tone } {
   }
 }
 
-export type Standing = { name: string; state: string; glyph: string; tone: Tone }
+export type Standing = { alias: string; name: string; state: string; glyph: string; tone: Tone; spinning: boolean }
 
-/** One word per avatar for the strip under the composer: is it thinking or ready. */
+/** The short tag of an avatar: its alias, or the first two letters of its name. */
+function tagOf(row: LaneInfo): string {
+  return (row.alias || (row.display || row.avatar).replace(/[^A-Za-z0-9]/g, "").slice(0, 2)).toUpperCase()
+}
+
+/** One entry per avatar for the strip under the composer: is it thinking or ready. */
 export function standing(rows: LaneInfo[]): Standing[] {
   const order: string[] = []
-  const phases = new Map<string, { display: string; phases: string[] }>()
+  const seen = new Map<string, { row: LaneInfo; phases: string[] }>()
   for (const row of rows) {
-    if (!phases.has(row.avatar)) {
+    if (!seen.has(row.avatar)) {
       order.push(row.avatar)
-      phases.set(row.avatar, { display: row.display || row.avatar, phases: [] })
+      seen.set(row.avatar, { row, phases: [] })
     }
-    phases.get(row.avatar)!.phases.push(row.phase)
+    seen.get(row.avatar)!.phases.push(row.phase)
   }
   return order.map((avatar) => {
-    const { display, phases: seen } = phases.get(avatar)!
-    const pick = (...wanted: string[]) => wanted.find((w) => seen.includes(w))
+    const { row, phases } = seen.get(avatar)!
+    const pick = (...wanted: string[]) => wanted.find((w) => phases.includes(w))
     const phase = pick("running") ?? pick("paused") ?? pick("failed") ?? pick("stopped") ?? "ready"
     const state = phase === "running" ? "thinking" : phase
     const mark = phase === "ready" ? { glyph: "○", tone: "dim" as Tone } : phaseMark(phase)
-    return { name: display, state, ...mark }
+    return { alias: tagOf(row), name: row.display || row.avatar, state, ...mark, spinning: phase === "running" }
   })
 }
 

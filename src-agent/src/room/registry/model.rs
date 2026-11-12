@@ -147,6 +147,8 @@ pub struct Avatar {
     pub role: String,
     /// Shown instead of the role's display name when set.
     pub display: Option<String>,
+    /// A short tag for tight places, such as the strip under the composer (`LR`).
+    pub alias: Option<String>,
     pub chat: LaneModel,
     pub work: LaneModel,
 }
@@ -241,6 +243,14 @@ impl Registry {
                 .unwrap_or(avatar),
             None => avatar,
         }
+    }
+
+    /// The short tag of an avatar: its own alias, or the first two letters of its id.
+    pub fn alias_of(&self, avatar: &str) -> String {
+        self.avatars
+            .get(avatar)
+            .and_then(|a| a.alias.clone())
+            .unwrap_or_else(|| avatar.chars().filter(|c| c.is_alphanumeric()).take(2).collect::<String>().to_uppercase())
     }
 
     /// The model for one of an avatar's lanes: the avatar's own settings win,

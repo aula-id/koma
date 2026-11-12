@@ -5,7 +5,7 @@ test("the popup opens for a lone / or @ word and closes once the word has a spac
   expect(popupView("/st", CLOSED).open).toBe(true)
   expect(popupView("/status ", CLOSED).open).toBe(false)
   expect(popupView("hello", CLOSED).open).toBe(false)
-  expect(popupView("@r", CLOSED).rows.map((r) => r.label)).toEqual(["@red", "@reviewer", "@reporter"])
+  expect(popupView("@r", CLOSED).rows.map((r) => r.label)).toEqual(["@red", "@reviewer", "@reporter", "@red-web", "@red-api", "@researcher", "@re"])
 })
 
 test("up and down stop at the ends instead of wrapping", () => {
@@ -14,8 +14,8 @@ test("up and down stop at the ends instead of wrapping", () => {
   let view = popupView(draft, state)
   state = moved(state, draft, view, -1)
   expect(popupView(draft, state).selected).toBe(0)
-  for (let i = 0; i < 6; i++) state = moved(state, draft, popupView(draft, state), 1)
-  expect(popupView(draft, state).selected).toBe(2)
+  for (let i = 0; i < 12; i++) state = moved(state, draft, popupView(draft, state), 1)
+  expect(popupView(draft, state).selected).toBe(6)
 })
 
 test("editing the draft starts the highlight over and reopens a dismissed popup", () => {

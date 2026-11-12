@@ -10,7 +10,7 @@ additionalProperties = false
 goal_key = { type = "string", minLength = 1, maxLength = 128 }
 goal = { type = "string", minLength = 1, maxLength = 20000 }
 dispatch_key = { type = "string", minLength = 1, maxLength = 128 }
-assignments = { type = "array", minItems = 1, maxItems = 32, items = { type = "object", required = ["avatar", "kind", "prompt"], properties = { avatar = { type = "string" }, kind = { type = "string", enum = ["probe", "investigation", "verification", "report"] }, prompt = { type = "string", minLength = 1, maxLength = 20000 }, reviews_id = { type = "string" }, retry_of = { type = "string" } } } }
+assignments = { type = "array", minItems = 1, maxItems = 32, items = { type = "object", required = ["avatar", "kind", "prompt"], properties = { avatar = { type = "string" }, kind = { type = "string", enum = ["probe", "investigation", "verification", "report", "execution"] }, prompt = { type = "string", minLength = 1, maxLength = 20000 }, reviews_id = { type = "string" }, retry_of = { type = "string" } } } }
 
 [[tool]]
 name = "group_status"

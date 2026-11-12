@@ -320,9 +320,21 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   )
 }
 
-/** Who is thinking and who is ready, under the composer. */
+const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+/**
+ * Who is thinking and who is ready, under the composer. Each minion is its short tag; one that is
+ * thinking shows the chat's braille spinner in sky blue and says so, the rest stay a quiet circle.
+ */
 function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
   const items = standing(rows)
+  const busy = items.some((item) => item.spinning)
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!busy) return
+    const timer = setInterval(() => setTick((n) => n + 1), 80)
+    return () => clearInterval(timer)
+  }, [busy])
   if (!items.length) return <text fg={theme.dim} wrapMode="none">starting the room…</text>
   const ink = { success: theme.success, info: theme.info, warn: theme.warn, error: theme.error, dim: theme.dim }
   return (
@@ -330,9 +342,9 @@ function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
       {items.map((item, i) => (
         <span key={item.name}>
           {i ? "   " : ""}
-          <span fg={ink[item.tone]}>{item.glyph}</span>
-          <span fg={theme.fg}>{` ${item.name.toLowerCase()} `}</span>
-          <span fg={ink[item.tone]}>{item.state}</span>
+          <span fg={item.state === "ready" ? theme.dim : theme.fg}>{`${item.alias} `}</span>
+          <span fg={ink[item.tone]}>{item.spinning ? SPIN[tick % SPIN.length] : item.glyph}</span>
+          {item.state === "ready" ? null : <span fg={ink[item.tone]}>{` ${item.state}`}</span>}
         </span>
       ))}
     </text>
