@@ -50,7 +50,7 @@ function useTerminalSize() {
   return size
 }
 
-const COMPOSER_KEYS = [
+export const COMPOSER_KEYS = [
   { name: "return", action: "submit" as const },
   { name: "enter", action: "submit" as const },
   { name: "kpenter", action: "submit" as const },
@@ -66,7 +66,7 @@ const COMPOSER_KEYS = [
   // Kitty can report Ctrl+J as the linefeed codepoint rather than the letter j.
   { name: "\n", ctrl: true, action: "newline" as const },
 ]
-const PALETTE_KEYS = [
+export const PALETTE_KEYS = [
   { name: "up", action: "palette-nav" as const },
   { name: "down", action: "palette-nav" as const },
   { name: "tab", action: "palette-nav" as const },
@@ -1069,6 +1069,40 @@ function Palette({
     ? commands.map((row) => ({ label: row.name, detail: row.desc }))
     : files.map((row) => ({ label: row, detail: "" }))
   const selected = rows.length === 0 ? 0 : command ? suggestions.selected : Math.min(snap.global.palette_sel, rows.length - 1)
+  return (
+    <SuggestPopup
+      rows={rows}
+      selected={selected}
+      title={command ? " commands " : " files "}
+      theme={theme}
+      onPress={async (absolute) => {
+        if (!await flushRef.current()) return
+        const steps = command ? commands[absolute]!.sourceIndex - snap.global.palette_sel : absolute - selected
+        if (steps === 0) return
+        const code = steps > 0 ? "Down" : "Up"
+        for (let i = 0; i < Math.abs(steps); i++) send({ SendKey: { code, mods: 0 } })
+      }}
+    />
+  )
+}
+
+/**
+ * The `/` and `@` popup: a fixed window of rows over a list, the highlight kept in view.
+ * The chat and the secure room both draw their suggestions through it.
+ */
+export function SuggestPopup({
+  rows,
+  selected,
+  title,
+  theme,
+  onPress,
+}: {
+  rows: { label: string; detail: string }[]
+  selected: number
+  title: string
+  theme: Theme
+  onPress: (absolute: number) => void | Promise<void>
+}) {
   const signature = rows.map((row) => row.label).join("\n")
   const signatureRef = useRef(signature)
   const [start, setStart] = useState(0)
@@ -1087,7 +1121,7 @@ function Palette({
       borderStyle="rounded"
       borderColor={theme.dim}
       flexDirection="column"
-      title={command ? " commands " : " files "}
+      title={title}
       titleColor={theme.dim}
     >
       {slots.map((row, index) => {
@@ -1100,13 +1134,7 @@ function Palette({
             detail={row.detail}
             theme={theme}
             selected={absolute === selected}
-            onPress={async () => {
-              if (!await flushRef.current()) return
-              const steps = command ? commands[absolute]!.sourceIndex - snap.global.palette_sel : absolute - selected
-              if (steps === 0) return
-              const code = steps > 0 ? "Down" : "Up"
-              for (let i = 0; i < Math.abs(steps); i++) send({ SendKey: { code, mods: 0 } })
-            }}
+            onPress={() => onPress(absolute)}
           />
         )
       })}
@@ -1492,10 +1520,10 @@ export function tipReveal(tip: string, count: number, width: number): string {
   return [...text].slice(0, Math.max(0, count)).join("")
 }
 
-function Tips({ theme, width }: { theme: Theme; width: number }) {
+export function Tips({ theme, width, tips = COMPOSER_TIPS }: { theme: Theme; width: number; tips?: string[] }) {
   const [index, setIndex] = useState(0)
   const [count, setCount] = useState(0)
-  const tip = COMPOSER_TIPS[index] ?? ""
+  const tip = tips[index] ?? ""
   const room = Math.max(0, width - 12)
   const full = [...tip].slice(0, room).join("")
   const visible = tipReveal(tip, count, room)
@@ -1509,7 +1537,7 @@ function Tips({ theme, width }: { theme: Theme; width: number }) {
       return () => clearTimeout(timer)
     }
     const timer = setTimeout(() => {
-      setIndex((value) => (value + 1) % COMPOSER_TIPS.length)
+      setIndex((value) => (value + 1) % tips.length)
       setCount(0)
     }, 3000)
     return () => clearTimeout(timer)

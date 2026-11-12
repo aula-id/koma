@@ -157,3 +157,66 @@ test("a turn shows collapsed thinking, a tool card and markdown, and long lines 
   expect(text).not.toContain("**")
   expect(text).toContain("so I ran pwd myself.")
 })
+
+import { useState } from "react"
+
+function Live({ sent, start = "" }: { sent: string[]; start?: string }) {
+  const [draft, setDraft] = useState(start)
+  return <RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft={draft} onDraft={setDraft} onSend={(text) => { sent.push(text ?? draft); setDraft("") }} />
+}
+
+type View = Awaited<ReturnType<typeof testRender>>
+/** One step of a script. Each runs in its own act so the screen's state settles between keys, as it does live. */
+type Step = (view: View) => Promise<void> | void
+
+async function live(width: number, height: number, steps: Step[], start = "") {
+  const sent: string[] = []
+  let view!: View
+  await act(async () => { view = await testRender(<Live sent={sent} start={start} />, { width, height }) })
+  for (const step of steps) await act(async () => { await step(view); await new Promise((r) => setTimeout(r, 40)) })
+  await act(async () => { await view.waitForVisualIdle(); await view.renderOnce() })
+  const text = view.captureCharFrame()
+  await act(async () => { await view.dispose() })
+  return { text, sent }
+}
+
+test("the composer grows with a multi-line draft instead of staying one tight row", async () => {
+  const { text } = await live(80, 30, [], "alpha\nbeta\ngamma\ndelta")
+  for (const word of ["alpha", "beta", "gamma", "delta"]) expect(text).toContain(word)
+  expect(text).toContain("Tips:")
+  expect(text).toContain("Koma")
+})
+
+test("typing /st and pressing enter runs /status at once, like the coding chat", async () => {
+  const { text, sent } = await live(100, 24, [
+    (view) => view.mockInput.typeText("/st"),
+    (view) => view.mockInput.pressEnter(),
+  ])
+  expect(text).toContain("secure room · status")
+  expect(sent).toEqual([])
+})
+
+test("tab completes a name with a space, and a message after it is sent to the lane", async () => {
+  const { text, sent } = await live(100, 24, [
+    (view) => view.mockInput.typeText("@re"),
+    (view) => view.mockInput.pressTab(),
+    (view) => view.mockInput.typeText("check auth"),
+    (view) => view.mockInput.pressEnter(),
+  ])
+  expect(sent).toEqual(["@red check auth"])
+  expect(text).not.toContain("commands")
+})
+
+test("enter on a bare name only writes it and waits for the message; esc closes the popup", async () => {
+  const first = await live(100, 24, [
+    (view) => view.mockInput.typeText("@rev"),
+    (view) => view.mockInput.pressEnter(),
+  ])
+  expect(first.sent).toEqual([])
+  expect(first.text).toContain("@reviewer")
+  const second = await live(100, 24, [
+    (view) => view.mockInput.typeText("/"),
+    (view) => view.mockInput.pressEscape(),
+  ])
+  expect(second.text).not.toContain("commands")
+})

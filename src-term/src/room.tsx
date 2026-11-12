@@ -3,10 +3,11 @@ import { SyntaxStyle } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
-import { AssistantCard, Choice, MarkdownBody, Reasoning, ToolCard, promptMark } from "./chat.tsx"
+import { AssistantCard, MarkdownBody, Reasoning, SuggestPopup, ToolCard } from "./chat.tsx"
+import { RoomComposer } from "./room-composer.tsx"
+import { CLOSED, chosen, completion, dismissed, moved, popupView, type PopupState } from "./room-popup.ts"
 import { syntaxStyles } from "./syntax.ts"
 import { reduceLines, say, type Item, type Line } from "./room-turns.ts"
-import { suggest } from "./room-suggest.ts"
 import { RoomLink, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { switchDaemon } from "./paths.ts"
@@ -82,8 +83,8 @@ export function RoomScreen({
     return () => { ctrlC.current = before }
   }, [ctrlC])
 
-  const send = () => {
-    const text = draft.trim()
+  const send = (override?: string) => {
+    const text = (override ?? draft).trim()
     setDraft("")
     if (!text) return
     if (text === "/security" || text === "/leave") {
@@ -127,7 +128,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   phase: string
   draft: string
   onDraft: (text: string) => void
-  onSend: () => void
+  onSend: (text?: string) => void
   models?: ModelList
   notice?: string
   /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
@@ -140,16 +141,9 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   const ownStyle = useMemo(() => syntaxStyle ?? SyntaxStyle.fromStyles(syntaxStyles(theme), renderer.nativeScene), [syntaxStyle, theme, renderer])
   useEffect(() => () => { if (!syntaxStyle) ownStyle.destroy() }, [syntaxStyle, ownStyle])
   const [full, setFull] = useState<FullView | null>(null)
-  const options = suggest(draft)
-  const [pickedAt, setPickedAt] = useState(0)
-  const picked = Math.min(pickedAt, Math.max(0, options.rows.length - 1))
-  const open = options.rows.length > 0
-  const accept = (): boolean => {
-    const row = options.rows[picked]
-    if (!row || row.insert === draft) return false
-    onDraft(row.insert)
-    return true
-  }
+  const [popup, setPopup] = useState<PopupState>(CLOSED)
+  const options = popupView(draft, popup)
+  const lastKey = useRef({ name: "", at: 0 })
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
@@ -162,21 +156,41 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
       if (full !== "model" && (key.name === "escape" || key.name === "q")) setFull(null)
       return
     }
-    if (open && (key.name === "up" || key.name === "down")) {
-      setPickedAt((picked + (key.name === "up" ? -1 : 1) + options.rows.length) % options.rows.length)
-    } else if (open && key.name === "tab") accept()
+    if (!options.open) return
+    const name = key.name
+    if (name !== "up" && name !== "down" && name !== "tab" && name !== "escape") return
+    if (typeof key.preventDefault === "function") key.preventDefault()
+    // One physical key can arrive twice. The highlight moves a single row.
+    const now = Date.now()
+    if (name === lastKey.current.name && now - lastKey.current.at < 40) return
+    lastKey.current = { name, at: now }
+    if (name === "escape") setPopup(dismissed(draft, options))
+    else if (name === "tab") {
+      const row = options.rows[options.selected]
+      if (row) onDraft(completion(row))
+    } else setPopup(moved(popup, draft, options, name === "up" ? -1 : 1))
   })
 
-  const submit = () => {
-    if (accept()) return
-    const view = FULL_COMMANDS[draft.trim()]
-    if (view) {
-      if (view === "model") onOpenModels()
-      setFull(view)
+  const run = (text: string) => {
+    const command = FULL_COMMANDS[text.trim()]
+    if (command) {
+      if (command === "model") onOpenModels()
+      setFull(command)
       onDraft("")
       return
     }
-    onSend()
+    onSend(text)
+  }
+
+  const submit = () => {
+    const row = options.open ? options.rows[options.selected] : undefined
+    if (row) {
+      const pick = chosen(row)
+      if ("insert" in pick) onDraft(pick.insert)
+      else run(pick.run)
+      return
+    }
+    run(draft)
   }
 
   const view = asking ? null : full
@@ -189,15 +203,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
 
   const ready = phase === "connected"
   return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-        <text flexShrink={0}>
-          <span fg={theme.fg}>Koma</span>
-          <span fg={theme.dim}> | </span>
-          <span fg={theme.accent}>secure room</span>
-        </text>
-        <text fg={ready ? theme.success : phase === "the room closed" ? theme.warn : theme.dim} wrapMode="none">{ready ? tally(counts, true) : phase}</text>
-      </box>
+    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2}>
       <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY stickyScroll stickyStart="bottom" focusable={false} scrollbarOptions={scrollbars(theme)}>
         {lines.length === 0 ? (
           <box flexDirection="column" paddingTop={1}>
@@ -219,32 +225,26 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
           </box>
         </box>
       ) : null}
-      {open && !asking ? (
-        <box height={options.rows.length + 2} flexShrink={0} border borderStyle="rounded" borderColor={theme.dim} flexDirection="column" title={options.title} titleColor={theme.dim}>
-          {options.rows.map((row, index) => (
-            <Choice key={row.label} label={row.label} detail={row.detail} theme={theme} selected={index === picked} onPress={() => onDraft(row.insert)} />
-          ))}
-        </box>
-      ) : null}
-      <box height={3} flexShrink={0}>
-        <box border borderStyle="rounded" borderColor={ready ? theme.accent : theme.dim} title=" secure " titleAlignment="right" titleColor={theme.accent} flexGrow={1} flexDirection="row" paddingRight={2}>
-          <text fg={theme.accent} flexShrink={0}>{`${promptMark(draft)} `}</text>
-          <input
-            flexGrow={1}
-            value={draft}
-            focused={!asking}
-            placeholder="Message the Chief, @red for a specialist, /status for the lanes"
-            placeholderColor={theme.dim}
-            textColor={theme.fg}
-            focusedTextColor={theme.fg}
-            backgroundColor={theme.bg}
-            focusedBackgroundColor={theme.bg}
-            cursorColor={theme.accent}
-            onInput={onDraft}
-            onSubmit={submit}
+      <RoomComposer
+        theme={theme}
+        draft={draft}
+        onDraft={onDraft}
+        onSubmit={submit}
+        focused={!asking}
+        ready={ready}
+        status={ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
+        popupOpen={options.open && !asking}
+        popup={options.open && !asking ? (
+          <SuggestPopup
+            rows={options.rows.map((row) => ({ label: row.label, detail: row.detail }))}
+            selected={options.selected}
+            title={options.title}
+            theme={theme}
+            onPress={(index) => setPopup({ draft, at: index, dismissed: false })}
           />
-        </box>
-      </box>
+        ) : undefined}
+        placeholder="Message the Chief, @red for a specialist, /status for the lanes"
+      />
     </box>
   )
 }
