@@ -8,6 +8,7 @@
 //! secure daemon is wired in.
 #![allow(dead_code)]
 
+pub mod lane;
 pub mod registry;
 pub mod shelf;
 pub mod transition;
