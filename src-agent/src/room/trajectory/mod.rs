@@ -23,6 +23,8 @@ pub mod view;
 mod tests;
 
 #[allow(unused_imports)]
+pub use gate::{classify_shelf_items, StatusItem};
+#[allow(unused_imports)]
 pub use view::{build, project, TrajectoryView, ViewNode};
 
 /// An output format for `koma room trajectory`.

@@ -554,3 +554,65 @@ fn each_published_trajectory_is_a_view_and_a_goal_can_be_picked() {
     assert_eq!(project(&s, Some("trajectory/api")).expect("project").len(), 1);
     assert!(project(&s, Some("nope")).expect("project").is_empty());
 }
+
+// ---- status-menu classify list ----
+
+use super::gate::{classify_shelf_items, StatusItem};
+
+fn item(key: &str, title: &str, status: &str) -> StatusItem {
+    StatusItem { key: key.into(), title: title.into(), severity: None, status: status.into(), host: None, audience: None }
+}
+
+#[test]
+fn classify_exposes_claims_findings_and_reports_for_the_status_menu() {
+    let rows = classify_shelf_items(&[
+        row("claims/task/cors", json!({ "kind": "claim", "name": "CORS misconfiguration", "severity": "critical", "host": "app.example" })),
+        row("findings/task/hsts", json!({ "kind": "finding", "name": "Missing HSTS", "severity": "medium" })),
+        row("reports/task/executive", json!({ "kind": "report", "title": "Pre-prod gate brief", "audience": "manager", "go_no_go": "no-go", "markdown": "# Brief" })),
+    ]);
+    assert_eq!(rows, [
+        StatusItem { key: "claims/task/cors".into(), title: "CORS misconfiguration".into(), severity: Some("critical".into()), status: "open".into(), host: Some("app.example".into()), audience: None },
+        StatusItem { key: "findings/task/hsts".into(), title: "Missing HSTS".into(), severity: Some("medium".into()), status: "verified".into(), host: None, audience: None },
+        StatusItem { key: "reports/task/executive".into(), title: "Pre-prod gate brief".into(), severity: Some("no-go".into()), status: "report".into(), host: None, audience: Some("manager".into()) },
+    ]);
+}
+
+#[test]
+fn a_verified_claim_shows_through_its_finding_not_twice() {
+    let rows = classify_shelf_items(&[
+        row("claims/a", json!({ "kind": "claim", "name": "cors", "severity": "high" })),
+        row("verdicts/a", json!({ "kind": "verdict", "claim_key": "claims/a", "verdict": "confirmed" })),
+        row("findings/a", json!({ "kind": "finding", "claim_key": "claims/a", "name": "CORS", "severity": "high" })),
+    ]);
+    let claim_rows: Vec<&StatusItem> = rows.iter().filter(|r| r.key.starts_with("claims/")).collect();
+    assert!(claim_rows.is_empty(), "the verified claim is not listed separately");
+    assert_eq!(rows.iter().filter(|r| r.status == "verified").count(), 1);
+}
+
+#[test]
+fn a_returned_verdict_surfaces_only_when_its_claim_is_not_already_shown() {
+    // claim present → the claim row carries the returned status, the verdict does not add a row
+    let with_claim = classify_shelf_items(&[
+        row("claims/x", json!({ "kind": "claim", "name": "x", "status": "returned" })),
+        row("verdicts/x", json!({ "kind": "verdict", "claim_key": "claims/x", "verdict": "returned" })),
+    ]);
+    assert_eq!(with_claim.len(), 1);
+    assert_eq!((with_claim[0].key.as_str(), with_claim[0].status.as_str()), ("claims/x", "returned"));
+
+    // claim gone → the verdict stands in for it, keyed by the claim it names
+    let orphan = classify_shelf_items(&[row("verdicts/gone", json!({ "kind": "verdict", "claim_key": "claims/gone", "verdict": "dismissed" }))]);
+    assert_eq!(orphan, [item("claims/gone", "gone", "returned")]);
+
+    // a non-returned verdict is never a row
+    assert!(classify_shelf_items(&[row("verdicts/ok", json!({ "verdict": "confirmed", "claim_key": "claims/ok" }))]).is_empty());
+}
+
+#[test]
+fn classify_falls_back_to_the_key_for_a_title_and_ignores_other_rows() {
+    let rows = classify_shelf_items(&[
+        row("claims/task/no-name", json!({ "kind": "claim" })),
+        row("notes/scratch", json!({ "kind": "note" })),
+        row("scope/gate", json!({ "kind": "scope", "host": "h" })),
+    ]);
+    assert_eq!(rows, [item("claims/task/no-name", "no-name", "open")]);
+}

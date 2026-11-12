@@ -196,3 +196,61 @@ fn lanes_render_in_a_stable_order_and_can_be_forgotten() {
     digest.forget("red-api");
     assert!(digest.status("red-api").is_none());
 }
+
+// ---- timeline (swim-lane) ----
+
+use super::timeline::Timeline;
+
+#[test]
+fn a_timeline_records_a_milestone_trail_per_avatar() {
+    let mut tl = Timeline::new();
+    assert!(tl.is_empty());
+    assert_eq!(tl.render(80), "");
+
+    tl.open("red", "probe", 0);
+    tl.record("red", &LaneEvent::Step(0), 1); // ignored
+    tl.record("red", &LaneEvent::ToolStarted { name: "sec_run".into() }, 2); // ignored
+    tl.record("red", &LaneEvent::Published { key: "assets/web".into(), revision: 1 }, 3);
+    tl.record("red", &LaneEvent::Published { key: "claims/sqli".into(), revision: 1 }, 4);
+    tl.record("red", &LaneEvent::Submitted, 5);
+
+    tl.open("reviewer", "verify", 2);
+    tl.record("reviewer", &LaneEvent::Published { key: "findings/sqli".into(), revision: 1 }, 6);
+
+    tl.open("clerk", "clerk", 7);
+    tl.record("clerk", &LaneEvent::Flag { severity: "warn".into(), note: "red is off scope. detail".into() }, 8);
+
+    assert!(!tl.is_empty());
+    let text = tl.render(80);
+    let lines: Vec<&str> = text.lines().collect();
+    // avatars render in first-seen order
+    assert!(lines[0].starts_with("red "), "{text}");
+    assert!(lines[0].contains("◆ probe") && lines[0].contains("○ web") && lines[0].contains("○ sqli") && lines[0].contains("✔ submit"), "{text}");
+    assert!(lines[1].starts_with("reviewer") && lines[1].contains("◆ verify") && lines[1].contains("○ sqli"), "the finding key renders as its last segment: {text}");
+    assert!(lines[2].contains("⚑ red is off scope") && !lines[2].contains("detail"), "the flag note is clipped to its first clause: {text}");
+    // names are padded to a common width
+    assert!(lines[0].starts_with("red     "), "aligned: {text:?}");
+}
+
+#[test]
+fn a_timeline_records_a_failure_and_can_forget_a_lane() {
+    let mut tl = Timeline::new();
+    tl.open("red", "probe", 0);
+    tl.record("red", &LaneEvent::Failed { error: "tool error on sec_run\nbacktrace".into() }, 1);
+    assert!(tl.render(80).contains("✕ tool error on sec_run"));
+    tl.forget("red");
+    assert!(tl.is_empty());
+    tl.forget("red"); // forgetting twice is harmless
+}
+
+#[test]
+fn a_timeline_row_is_clipped_to_the_width() {
+    let mut tl = Timeline::new();
+    tl.open("red", "probe", 0);
+    for i in 0..20 {
+        tl.record("red", &LaneEvent::Published { key: format!("claims/a-very-long-claim-name-{i}"), revision: 1 }, i);
+    }
+    let line = tl.render(60).lines().next().expect("row").to_string();
+    assert!(line.chars().count() <= 60, "len {}: {line}", line.chars().count());
+    assert!(line.ends_with('…'));
+}

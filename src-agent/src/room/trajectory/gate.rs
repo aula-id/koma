@@ -181,6 +181,93 @@ fn resolve_claim_key(node: &Node, idx: &GateIndex, items: &[ShelfEntry]) -> Opti
         })
 }
 
+/// A display name for a shelf row: its name, title, summary, or last key segment.
+fn title_of(key: &str, record: &Option<serde_json::Map<String, Value>>) -> String {
+    for field in ["name", "title", "summary"] {
+        if let Some(value) = str_field(record, field) {
+            if !value.is_empty() {
+                return value;
+            }
+        }
+    }
+    last_segment(key).to_string()
+}
+
+/// One row for a status menu: a gate record classified for display.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct StatusItem {
+    pub key: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    /// open, verified, returned or report.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+}
+
+/// Classify the shelf's gate rows for a status menu. A verified claim is shown
+/// through its finding, not twice; a returned verdict surfaces only when its
+/// claim is missing or not already shown. Other keys are ignored.
+pub fn classify_shelf_items(items: &[ShelfEntry]) -> Vec<StatusItem> {
+    let idx = index(items);
+    let mut out = Vec::new();
+    let mut seen_claims = BTreeSet::new();
+
+    for item in items {
+        let key = item.key.trim();
+        let record = parse_object(item.content.as_deref());
+        if is_claim_key(key) {
+            seen_claims.insert(key.to_string());
+            let status = gate_status_for_claim(key, &idx, str_field(&record, "status").as_deref());
+            if status == Gate::Verified {
+                continue; // shown through its finding
+            }
+            out.push(StatusItem {
+                key: key.to_string(),
+                title: title_of(key, &record),
+                severity: str_field(&record, "severity"),
+                status: status.as_str().to_string(),
+                host: str_field(&record, "host"),
+                audience: None,
+            });
+        } else if is_finding_key(key) {
+            out.push(StatusItem {
+                key: key.to_string(),
+                title: title_of(key, &record),
+                severity: str_field(&record, "severity"),
+                status: "verified".to_string(),
+                host: str_field(&record, "host"),
+                audience: None,
+            });
+        } else if is_report_key(key) {
+            out.push(StatusItem {
+                key: key.to_string(),
+                title: title_of(key, &record),
+                severity: str_field(&record, "severity_summary").or_else(|| str_field(&record, "go_no_go")),
+                status: "report".to_string(),
+                host: None,
+                audience: str_field(&record, "audience"),
+            });
+        } else if is_verdict_key(key) {
+            let verdict = str_field(&record, "verdict").unwrap_or_default().to_lowercase();
+            let claim = str_field(&record, "claim_key").map(|s| s.trim().to_string()).unwrap_or_default();
+            if !RETURNED.contains(&verdict.as_str()) {
+                continue;
+            }
+            if !claim.is_empty() && (seen_claims.contains(&claim) || idx.verified_claims.contains(&claim)) {
+                continue;
+            }
+            let shown_key = if claim.is_empty() { key.to_string() } else { claim.clone() };
+            let title = if claim.is_empty() { title_of(key, &record) } else { last_segment(&claim).to_string() };
+            out.push(StatusItem { key: shown_key, title, severity: None, status: "returned".to_string(), host: None, audience: None });
+        }
+    }
+    out
+}
+
 /// Rewrite trajectory node statuses so the graph matches the gate: only a
 /// finding makes a claim verified.
 pub fn apply_gate_statuses(nodes: Vec<Node>, items: &[ShelfEntry]) -> Vec<Node> {
