@@ -2,8 +2,8 @@ import type { LanePart, RoomFrame } from "./room-link.ts"
 
 /** One piece of a message, in the order the lane produced it. */
 export type Item =
-  | { kind: "text"; text: string }
-  | { kind: "reasoning"; text: string }
+  | { kind: "text"; text: string; streaming?: boolean }
+  | { kind: "reasoning"; text: string; streaming?: boolean }
   | { kind: "tool"; id: string; name: string; args: string; result?: { ok: boolean; text: string } }
 
 /**
@@ -34,11 +34,57 @@ function append(lines: Line[], author: string, lane: string, item: Item): Line[]
     const items = [...last.items]
     const tail = items[items.length - 1]
     // Text that arrives right after text of the same turn joins it.
-    if (item.kind === "text" && tail?.kind === "text") items[items.length - 1] = { kind: "text", text: `${tail.text}\n\n${item.text}` }
+    if (item.kind === "text" && !item.streaming && tail?.kind === "text" && !tail.streaming) items[items.length - 1] = { kind: "text", text: `${tail.text}\n\n${item.text}` }
     else items.push(item)
     return [...lines.slice(0, -1), { ...last, items }]
   }
   return [...lines, { id: crypto.randomUUID(), author, lane, items: [item] }]
+}
+
+/** The line a lane's next piece belongs to: its last message, when that is the same author and lane. */
+function currentLine(lines: Line[], author: string, lane: string): number {
+  const last = lines[lines.length - 1]
+  return last && last.author === author && last.lane === lane && !isYou(last) ? lines.length - 1 : -1
+}
+
+/** Add a live piece to the open item of its kind, or start one. */
+function stream(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", piece: string): Line[] {
+  const at = currentLine(lines, author, lane)
+  if (at >= 0) {
+    const line = lines[at]!
+    const index = line.items.length - 1
+    const tail = line.items[index]
+    if (tail && tail.kind === kind && tail.streaming) {
+      const items = [...line.items]
+      items[index] = { kind, text: tail.text + piece, streaming: true }
+      return [...lines.slice(0, at), { ...line, items }, ...lines.slice(at + 1)]
+    }
+  }
+  return append(lines, author, lane, { kind, text: piece, streaming: true })
+}
+
+/** The whole reply arrived: it replaces the live item of its kind in place, or is added. */
+function settle(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", whole: string): Line[] {
+  const at = currentLine(lines, author, lane)
+  if (at >= 0) {
+    const line = lines[at]!
+    for (let i = line.items.length - 1; i >= 0; i--) {
+      const item = line.items[i]!
+      if (item.kind === kind && item.streaming) {
+        const items = [...line.items]
+        items[i] = { kind, text: whole }
+        return [...lines.slice(0, at), { ...line, items }, ...lines.slice(at + 1)]
+      }
+    }
+  }
+  return append(lines, author, lane, { kind, text: whole })
+}
+
+/** Nothing more is coming for this author: close any open live item. */
+function settleAll(lines: Line[], author: string): Line[] {
+  return lines.map((line) => line.author === author && line.items.some((item) => "streaming" in item && item.streaming)
+    ? { ...line, items: line.items.map((item) => "streaming" in item && item.streaming ? { ...item, streaming: false } : item) }
+    : line)
 }
 
 function setResult(lines: Line[], part: Extract<LanePart, { kind: "tool_result" }>): Line[] {
@@ -59,14 +105,16 @@ function setResult(lines: Line[], part: Extract<LanePart, { kind: "tool_result" 
 export function reduceLines(lines: Line[], frame: RoomFrame): Line[] {
   switch (frame.type) {
     case "chief":
-      return append(lines, "chief", "chat", { kind: "text", text: frame.text })
+      return settle(lines, "chief", "chat", "text", frame.text)
     case "lane":
-      return append(lines, frame.avatar, "chat", { kind: "text", text: frame.text })
+      return settle(lines, frame.avatar, "chat", "text", frame.text)
     case "visible":
-      return [...lines, say(frame.author, frame.text)]
+      return [...settleAll(lines, frame.author), say(frame.author, frame.text)]
     case "part": {
       const part = frame.part
-      if (part.kind === "reasoning") return append(lines, frame.author, frame.lane, { kind: "reasoning", text: part.text })
+      if (part.kind === "text_delta") return stream(lines, frame.author, frame.lane, "text", part.text)
+      if (part.kind === "reasoning_delta") return stream(lines, frame.author, frame.lane, "reasoning", part.text)
+      if (part.kind === "reasoning") return settle(lines, frame.author, frame.lane, "reasoning", part.text)
       if (part.kind === "tool_call") return append(lines, frame.author, frame.lane, { kind: "tool", id: part.id, name: part.name, args: part.args })
       return setResult(lines, part)
     }

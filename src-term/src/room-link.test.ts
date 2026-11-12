@@ -23,3 +23,8 @@ test("a part frame carries thinking, a tool call or a tool result", () => {
   expect(parseRoomFrame({ part: { author: "red", lane: "work", part: { kind: "tool_result", id: "c1", ok: false, result: "boom" } } })).toEqual({ type: "part", author: "red", lane: "work", part: { kind: "tool_result", id: "c1", ok: false, result: "boom" } })
   expect(parseRoomFrame({ part: { author: "red", lane: "work", part: { kind: "other" } } })).toBeNull()
 })
+
+test("live delta parts parse", () => {
+  expect(parseRoomFrame({ part: { author: "chief", lane: "chat", part: { kind: "text_delta", text: "Hel" } } })).toEqual({ type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "Hel" } })
+  expect(parseRoomFrame({ part: { author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "hm" } } })).toEqual({ type: "part", author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "hm" } })
+})

@@ -368,13 +368,13 @@ function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; synta
 }
 
 function Piece({ item, theme, syntaxStyle }: { item: Item; theme: Theme; syntaxStyle: SyntaxStyle }) {
-  if (item.kind === "reasoning") return <Reasoning text={item.text} theme={theme} syntaxStyle={syntaxStyle} defaultOpen={false} />
+  if (item.kind === "reasoning") return <Reasoning text={item.text} theme={theme} syntaxStyle={syntaxStyle} defaultOpen={Boolean(item.streaming)} streaming={item.streaming} />
   if (item.kind === "tool") {
     const call = { id: item.id, type: "function", function: { name: item.name, arguments: item.args } }
     const result = item.result ? { role: "tool", content: item.result.text, tool_call_id: item.id } : undefined
     return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} />
   }
-  return <MarkdownBody content={item.text} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} />
+  return <MarkdownBody content={item.text} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} streaming={item.streaming} />
 }
 
 /** Counts of the shelf by gate state; the narrow form keeps what decides the next step. */

@@ -16,6 +16,8 @@ export type RoomFrame =
 /** One structured piece of a lane's turn: thinking, a tool call, a tool result. */
 export type LanePart =
   | { kind: "reasoning"; text: string }
+  | { kind: "text_delta"; text: string }
+  | { kind: "reasoning_delta"; text: string }
   | { kind: "tool_call"; id: string; name: string; args: string }
   | { kind: "tool_result"; id: string; ok: boolean; result: string }
 
@@ -66,6 +68,7 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
     const kind = String(inner?.kind ?? "")
     const author = String(part.author ?? "")
     const lane = String(part.lane ?? "chat")
+    if (kind === "text_delta" || kind === "reasoning_delta") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") } }
     if (kind === "reasoning") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") } }
     if (kind === "tool_call") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), name: String(inner?.name ?? ""), args: String(inner?.args ?? "") } }
     if (kind === "tool_result") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), ok: Boolean(inner?.ok), result: String(inner?.result ?? "") } }

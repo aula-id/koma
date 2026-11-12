@@ -42,3 +42,42 @@ test("a result for an unknown call and non-message frames change nothing", () =>
   expect(run([{ type: "part", author: "chief", lane: "chat", part: { kind: "tool_result", id: "nope", ok: true, result: "x" } }], start)).toBe(start)
   expect(run([{ type: "notice", text: "n" }, { type: "closed" }], start)).toBe(start)
 })
+
+test("live pieces build one item that the whole reply then replaces in place", () => {
+  const lines = run([
+    { type: "part", author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "let me " } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "reasoning_delta", text: "think" } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "Hel" } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "lo" } },
+  ])
+  expect(lines).toHaveLength(1)
+  expect(lines[0]!.items).toEqual([
+    { kind: "reasoning", text: "let me think", streaming: true },
+    { kind: "text", text: "Hello", streaming: true },
+  ])
+  const done = run([
+    { type: "part", author: "chief", lane: "chat", part: { kind: "reasoning", text: "let me think." } },
+    { type: "chief", text: "Hello there." },
+  ], lines)
+  expect(done).toHaveLength(1)
+  expect(done[0]!.items).toEqual([
+    { kind: "reasoning", text: "let me think." },
+    { kind: "text", text: "Hello there." },
+  ])
+})
+
+test("a second step streams after the first without merging into it", () => {
+  const lines = run([
+    { type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "first" } },
+    { type: "chief", text: "first." },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "tool_call", id: "c", name: "bash", args: "{}" } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "tool_result", id: "c", ok: true, result: "x" } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "sec" } },
+    { type: "part", author: "chief", lane: "chat", part: { kind: "text_delta", text: "ond" } },
+  ])
+  expect(lines).toHaveLength(1)
+  expect(lines[0]!.items.map((i) => i.kind)).toEqual(["text", "tool", "text"])
+  expect(lines[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: true })
+  const closed = run([{ type: "visible", author: "chief", text: "lane failed: x" }], lines)
+  expect(closed[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: false })
+})
