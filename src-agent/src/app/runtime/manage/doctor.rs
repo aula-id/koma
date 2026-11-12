@@ -85,7 +85,6 @@ pub fn run_doctor(verbose: bool) -> i32 {
         check_gui(),
         check_extensions(),
         check_internet_fullmode(),
-        check_security_daemon(),
         check_language_servers(),
         check_mcp_servers(config_ok),
         check_update(),
@@ -879,45 +878,7 @@ fn check_internet_fullmode() -> CheckResult {
     }
 }
 
-// ─── 7. Security daemon ─────────────────────────────────────────────────────
-
-fn check_security_daemon() -> CheckResult {
-    #[cfg(windows)]
-    {
-        CheckResult {
-            status: Status::Warn,
-            headline: "Security daemon (not supported on Windows)".to_string(),
-            details: Vec::new(),
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        if crate::security::is_installed() {
-            let active =
-                crate::security::active_composition_id().unwrap_or_else(|| "minimal".to_string());
-            CheckResult {
-                status: Status::Ok,
-                headline: "Security daemon (optional, installed)".to_string(),
-                details: vec![
-                    format!("active guest composition: {active}"),
-                    "install pulls minimal only — domain images via /security → Images".to_string(),
-                ],
-            }
-        } else {
-            CheckResult::warn(
-                "Security daemon (optional, not installed)",
-                vec![
-                    "optional — install with: koma --security-install (pulls minimal guest)"
-                        .to_string(),
-                    "domain images (recon, web, …): /security → Images after install".to_string(),
-                ],
-            )
-        }
-    }
-}
-
-// ─── 7b. Language servers ───────────────────────────────────────────────────
+// ─── 7. Language servers ────────────────────────────────────────────────────
 
 fn check_language_servers() -> CheckResult {
     let rows = crate::lsp::status_all();

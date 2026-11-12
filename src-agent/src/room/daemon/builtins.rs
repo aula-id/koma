@@ -40,13 +40,8 @@ impl CtxBuiltins {
     }
 
     /// One session context for every avatar. Host specs are the compiled tool
-    /// list. Chat specs stay empty. Security-daemon fields are cleared so a
-    /// `sec_*` name cannot dispatch even if the caller copied a coding context.
-    pub fn from_ctx(mut ctx: ToolCtx) -> Self {
-        ctx.sec_manager = None;
-        ctx.cyber_lane = None;
-        ctx.sec_block = None;
-        ctx.sec_inactive.clear();
+    /// list. Chat specs stay empty.
+    pub fn from_ctx(ctx: ToolCtx) -> Self {
         ctx.plan_read_only.store(false, Ordering::Release);
         Self {
             by_avatar: BTreeMap::new(),

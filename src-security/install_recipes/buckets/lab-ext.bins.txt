@@ -1,5 +1,0 @@
-is-website-vulnerable
-screenshoteer
-hrekt
-ripgen
-x8

@@ -18,11 +18,7 @@ impl Archive {
     fn tool_ctx(&self) -> crate::tool::ToolCtx {
         crate::tool::ToolCtx {
             workspace: self.0.clone(),
-            session_id: "sess-test".into(),
-            cyber_lane: None,
-            sec_block: None,
-            sec_inactive: Vec::new(),
-            workspaces: vec![self.0.clone()],
+                        workspaces: vec![self.0.clone()],
             dir_cache: std::sync::Arc::new(
                 std::sync::RwLock::new(crate::tool::DirCache::default()),
             ),
@@ -36,7 +32,6 @@ impl Archive {
             active_skill_names: None,
             active_skill_dirs: Vec::new(),
             mcp_manager: None,
-            sec_manager: None,
             bash_saving: true,
             bash_log_dir: None,
             session_dir: Some(self.0.clone()),

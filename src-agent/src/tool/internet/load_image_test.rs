@@ -7,16 +7,11 @@ const PNG: &[u8] =
 
 fn ctx(
     workspace: PathBuf,
-    session_id: String,
     workspaces: Vec<PathBuf>,
     scratch: PathBuf,
     session_dir: Option<PathBuf>,
 ) -> ToolCtx {
     ToolCtx {
-        session_id,
-        cyber_lane: None,
-        sec_block: None,
-        sec_inactive: Vec::new(),
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace,
         workspaces,
@@ -30,7 +25,6 @@ fn ctx(
         skill_registry: None,
         active_skill_names: None,
         mcp_manager: None,
-        sec_manager: None,
         bash_saving: true,
         bash_log_dir: None,
         session_dir,
@@ -79,7 +73,6 @@ fn accepts_configured_workspace_worktree_and_exact_scratch() {
     put(&scratch.join("c.png"), PNG);
     let ctx = ctx(
         worktree.clone(),
-        "sess-test".into(),
         vec![worktree.clone(), ws.clone()],
         scratch.clone(),
         None,
@@ -102,7 +95,6 @@ fn accepts_session_images_dir_path_and_image_n() {
     std::fs::create_dir_all(&scratch).unwrap();
     let ctx = ctx(
         ws,
-        "sess-test".into(),
         vec![base.join("ws")],
         scratch,
         Some(session.clone()),
@@ -151,7 +143,6 @@ fn image_marker_label_in_path_resolves_and_a_real_path_still_loads() {
     .unwrap();
     let ctx = ctx(
         ws.clone(),
-        "sess-test".into(),
         vec![ws.clone()],
         scratch,
         Some(session),
@@ -201,7 +192,7 @@ fn rejects_live_cwd_outside_configured_roots() {
     put(&cwd.join("outside.png"), PNG);
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
-    let ctx = ctx(cwd, "sess-test".into(), vec![ws], scratch, None);
+    let ctx = ctx(cwd, vec![ws], scratch, None);
     assert!(read_validated_image(&ctx, "outside.png").is_err());
     let _ = std::fs::remove_dir_all(base);
 }
@@ -233,7 +224,6 @@ fn rejects_disallowed_and_invalid_sources() {
     std::fs::create_dir_all(session_a.join("images")).unwrap();
     let ctx = ctx(
         ws.clone(),
-        "sess-test".into(),
         vec![ws.clone()],
         scratch,
         Some(session_a),

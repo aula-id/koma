@@ -511,20 +511,30 @@ impl DaemonHub {
         self.send_settings_values(idx, state);
     }
 
-    /// Headless / IPC: start or stop the security daemon (panel-free).
-    pub(super) fn set_security_enabled(&mut self, idx: usize, state: &mut AppState, enabled: bool) {
-        let result = if enabled {
-            crate::app::runtime::actions::security::handle_security_start(state)
-        } else {
-            crate::app::runtime::actions::security::handle_security_stop(state)
-        };
-        self.ack_or_error(idx, result);
+    /// The security daemon is gone. Reject the old start/stop request.
+    pub(super) fn set_security_enabled(
+        &mut self,
+        idx: usize,
+        _state: &mut AppState,
+        _enabled: bool,
+    ) {
+        self.ack_or_error(
+            idx,
+            Err(anyhow::anyhow!(
+                "the security daemon has been removed; /security opens the secure room"
+            )),
+        );
     }
 
-    /// Headless / IPC: arm or disarm Layer-1 YOLO (refuses arm if sec daemon down).
+    /// Arm or disarm Layer-1 YOLO. Disarming while the session is in YOLO
+    /// drops the mode back to Auto.
     pub(super) fn set_yolo_armed(&mut self, idx: usize, state: &mut AppState, armed: bool) {
-        let result = crate::app::runtime::actions::security::handle_set_yolo_armed(state, armed);
-        self.ack_or_error(idx, result);
+        use crate::app::state::AgentMode;
+        state.rest.yolo_armed = armed;
+        if !armed && state.rest.agent_mode() == AgentMode::Yolo {
+            state.rest.set_agent_mode(AgentMode::Auto);
+        }
+        self.ack_or_error(idx, Ok(()));
     }
 
     /// Headless `koma run --system` / `--system-file`: persist extra system-prompt

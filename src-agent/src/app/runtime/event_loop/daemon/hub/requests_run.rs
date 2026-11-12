@@ -38,11 +38,7 @@ pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
         working: rt.is_working(),
         awaiting_approval: rt.awaiting_approval,
         security_enabled: state.rest.security_enabled,
-        security_running: state
-            .rest
-            .sec_manager
-            .as_ref()
-            .is_some_and(|m| m.is_running()),
+        security_running: false,
         yolo_armed: state.rest.yolo_armed,
         short_send: settings.short_send_enabled,
         drss_active: settings.short_send_enabled && rt.context_usage.is_some_and(|c| c.drss_active),

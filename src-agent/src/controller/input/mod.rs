@@ -32,7 +32,7 @@ mod picker;
 mod quit_confirm;
 mod remote;
 mod rewind;
-mod security;
+
 mod session_hub;
 mod settings;
 mod skill_cmd;
@@ -117,7 +117,6 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Extensions(e) => extensions::handle_extensions(e, &mut state.rest, key),
         Mode::ExtScreen(s) => ext_screen::handle_ext_screen(s, &mut state.rest, key),
         Mode::ExtStore(s) => store::handle_store(s, &mut state.rest, key),
-        Mode::Security(s) => security::handle_security(s, &mut state.rest, key),
         Mode::Bash(b) => bash::handle_bash(b, &mut state.rest, key),
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),
         Mode::Attachments(a) => attachments::handle_attachments(a, &mut state.rest, key),

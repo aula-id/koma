@@ -102,13 +102,6 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
-        // A background `/security` image pull: apply its outcome, and redraw while it runs.
-        if crate::app::runtime::actions::security::poll_security_jobs(state)
-            || crate::security::image_pull_busy_id().is_some()
-        {
-            dirty = true;
-        }
-
         // Refresh the todo overlay from disk when open (picked up by the draw below).
         // When any item is InProgress, force dirty every tick so the braille spinner
         // animates — spinner_glyph() uses wall-clock time but needs a redraw to cycle.

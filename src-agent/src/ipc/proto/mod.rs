@@ -598,13 +598,11 @@ pub enum ClientRequest {
         effort: String,
     },
 
-    /// Start or stop the security daemon (headless / non-panel equivalent of the
-    /// Security panel Daemon checkbox). `enabled: true` starts the manager;
-    /// `false` stops it and disarms yolo.
+    /// Retired. The security daemon is gone; the daemon replies with an error.
     SetSecurityEnabled {
         enabled: bool,
     },
-    /// Arm or disarm Layer-1 YOLO. Arming requires the security daemon.
+    /// Arm or disarm Layer-1 YOLO. Headless `koma run --mode yolo` arms it.
     SetYoloArmed {
         armed: bool,
     },
@@ -1015,7 +1013,7 @@ pub enum DaemonEvent {
     /// One-shot: the controller asked for the `/select` transcript dump.
     EnterSelect,
     /// One-shot: `/security` in the OpenTUI client. The client quits this daemon
-    /// and attaches the secure room. The legacy screen still uses `Mode::Security`.
+    /// and attaches the secure room. The legacy screen ignores the frame.
     EnterSecure,
     /// One-shot: signal the foreground client to open its LOCAL daemon swapper
     /// (the `/resume` picker). Mirrors [`EnterSelect`] — a daemon-side `/resume`
@@ -1449,7 +1447,6 @@ pub enum ModeSnapshot {
     Extensions(Box<ExtensionsSnapshot>),
     ExtScreen(Box<ExtScreenSnapshot>),
     ExtStore(Box<ExtStoreSnapshot>),
-    Security(Box<SecuritySnapshot>),
     Bash(Box<BashSnapshot>),
     Todo(Box<TodoSnapshot>),
     Attachments(Box<AttachmentsSnapshot>),

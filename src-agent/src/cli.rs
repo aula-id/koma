@@ -145,13 +145,8 @@ pub struct RunCli {
     /// Optional reasoning effort (`--effort`): `off`/`none`/`default`/`low`/`high`/….
     pub effort: Option<String>,
     /// Optional agent mode (`--mode`): `auto`/`normal`/`plan`/`yolo`/`sdlc`.
-    /// `yolo` requires security on + yolo armed (headless arms automatically when
-    /// `--mode yolo` or when `--security on` is paired with yolo).
+    /// `yolo` arms itself for this headless run.
     pub mode: Option<String>,
-    /// Optional security daemon toggle (`--security on|off`).
-    /// `on` starts the security daemon (autocheck strat) and is required for yolo;
-    /// `off` stops it and disarms yolo.
-    pub security: Option<bool>,
     /// Optional reply limit (`--max-tokens N`). `0` = 128k fallback, bounded by context.
     pub max_tokens: Option<u32>,
     /// DRSS master switch and context overrides, matching General settings.
@@ -182,7 +177,6 @@ impl Default for RunCli {
             model: None,
             effort: None,
             mode: None,
-            security: None,
             max_tokens: None,
             short_send: None,
             context_window_limit: None,
@@ -204,9 +198,7 @@ pub struct Opts {
     pub internet_fullmode_install: bool,
     /// When `true`, remove the Python full-mode (browser) environment then exit.
     pub internet_fullmode_uninstall: bool,
-    /// When `true`, provision the Python security daemon environment then exit.
-    pub security_install: bool,
-    /// Modifier for `--internet-fullmode-install` / `--security-install`: overwrite an existing install.
+    /// Modifier for `--internet-fullmode-install`: overwrite an existing install.
     pub force: bool,
     /// When `true`, run the daemon IPC transport self-test then exit
     /// (`--ipc-selftest` flag).
@@ -389,7 +381,6 @@ pub fn print_help() -> i32 {
          flags:\n\
          \x20 --resume                       open the resume hub\n\
          \x20 --session <id>                 bind this invocation to a specific session id\n\
-         \x20 --security-install [--force]   install security daemon + minimal guest image\n\
          \x20 --internet-fullmode-install    install internet full-mode (Playwright) stack\n\
          \x20 --version, -V                  print the version and exit\n\
          \x20 --help, -h                     print this help and exit\n\
@@ -404,7 +395,6 @@ pub fn print_help() -> i32 {
          \x20   --model SLUG         set Main only (name|model_id|uuid; same as agent model:)\n\
          \x20   --effort LEVEL       off|none|default|low|medium|high|…\n\
          \x20   --mode MODE          auto|normal|plan|yolo|sdlc\n\
-         \x20   --security on|off    start/stop security daemon (yolo needs on)\n\
          \x20   --max-tokens N       reply limit (0=128k fallback; bounded by context)\n\
          \x20   --short-send on|off  enable/disable DRSS for this session\n\
          \x20   --context-window-limit N  context override (0=detected, bumped down to 300000; a positive N may exceed 300000 up to the detected model window)\n\
@@ -465,7 +455,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--resume" => opts.resume = true,
             "--internet-fullmode-install" => opts.internet_fullmode_install = true,
             "--internet-fullmode-uninstall" => opts.internet_fullmode_uninstall = true,
-            "--security-install" => opts.security_install = true,
             "--force" => opts.force = true,
             "--ipc-selftest" => opts.ipc_selftest = true,
             "--daemon-selftest" => opts.daemon_selftest = true,
@@ -530,7 +519,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         "--model",
         "--effort",
         "--mode",
-        "--security",
         "--max-tokens",
         "--short-send",
         "--context-window-limit",

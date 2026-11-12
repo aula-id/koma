@@ -10,7 +10,6 @@ use crate::app::mode::ext_screen::ExtScreenState;
 use crate::app::mode::extensions::{ExtRow, ExtensionsState};
 use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
-use crate::app::mode::security::SecurityState;
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft,
 };
@@ -34,7 +33,7 @@ use crate::ipc::proto::{
     OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot, PathPickerSnapshot,
     PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RemoteEditorSnapshot,
     RemoteHostSnapshot, RemoteSessionSnapshot, RemoteSnapshot, RewindEntrySnapshot, RewindSnapshot,
-    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    RolePickerSnapshot, SessionHubSnapshot, SessionMetaSnapshot,
     SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot, TodoItemSnapshot,
     TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
@@ -117,10 +116,6 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // a thin client rebuilds + renders the SAME browse/detail/confirm view instead of
         // a blank Chat screen.
         Mode::ExtStore(s) => ModeSnapshot::ExtStore(Box::new(ext_store_snapshot(s))),
-        // The `/security` control panel projects a live status re-read from the
-        // daemon manager (so the snapshot always reflects current daemon state after
-        // start/stop, not just the state at mode-open time) plus the cursor.
-        Mode::Security(s) => ModeSnapshot::Security(Box::new(security_snapshot(s, state))),
         // The `/bash` panel projects the LIVE background-job registry (read fresh from
         // the foreground session every frame, like `/agents`) + the list cursor, so a
         // thin client renders the same master/detail view of current jobs.
@@ -1132,56 +1127,6 @@ pub fn remote_snapshot(m: &crate::app::mode::RemoteState) -> RemoteSnapshot {
             }
         }),
         editing_field: m.editing_field,
-    }
-}
-
-/// Project the `/security` control panel.
-///
-/// Re-reads daemon memory status every snapshot so start/stop/restart show up
-/// immediately. Runtime fields ride the non-blocking probe cache inside
-/// `status()` (background refresh when stale) — this projection never runs
-/// `docker info` itself. Falls back to `s.status` when there is no manager
-/// (thin client path).
-pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapshot {
-    let status = state
-        .rest
-        .sec_manager
-        .as_ref()
-        .map(|m| m.status())
-        .unwrap_or_else(|| s.status.clone());
-    // The inactive set is authoritative on `state.rest`; project it sorted so the
-    // wire form is deterministic.
-    let mut inactive: Vec<String> = state.rest.sec_inactive.iter().cloned().collect();
-    inactive.sort();
-    let image_pull = crate::security::image_pull_progress();
-    SecuritySnapshot {
-        status,
-        selected: s.selected,
-        inactive,
-        // YOLO arm flag is authoritative on `state.rest`; carry it so the client's panel
-        // renders the same armed/locked status row.
-        yolo_armed: state.rest.yolo_armed,
-        pane: s.pane.as_str().into(),
-        refused_selected: s.refused_selected,
-        images: s.images.clone(),
-        images_selected: s.images_selected,
-        images_busy: s.images_busy || image_pull.is_some(),
-        lane_label: s.lane_label.clone(),
-        catalog: s.catalog.clone(),
-        catalog_filter: s.catalog_filter.as_str().into(),
-        catalog_query: s.catalog_query.clone(),
-        catalog_searching: s.catalog_searching,
-        map_filter: s.map_filter.clone().unwrap_or_default(),
-        agent_mode_label: state.rest.agent_mode().label().to_string(),
-        image_pull,
-        image_pull_result: crate::security::image_pull_last_result(),
-        notice: state
-            .rest
-            .fg()
-            .status
-            .strip_prefix("security: ")
-            .unwrap_or_default()
-            .to_string(),
     }
 }
 

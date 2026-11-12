@@ -459,9 +459,6 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     tick's frames.
         let _ = service_approval_park_timeouts(state, hub.client_count() > 0);
 
-        // 3a-sec. Apply a finished background `/security` image pull before streaming.
-        crate::app::runtime::actions::security::poll_security_jobs(state);
-
         // 3a-todo. Passive todo refresh: for every session whose mode is Todo,
         //     re-read memory/TODO.md periodically (same 500ms cadence as the TUI).
         //     This keeps the daemon's in-memory state current when the agent writes

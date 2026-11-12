@@ -1,7 +1,0 @@
-exif
-sslscan
-sslstrip
-sslyze
-steghide
-testssl.sh
-uglifyjs

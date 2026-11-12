@@ -59,7 +59,6 @@ mod re_util;
 mod remote;
 mod resources;
 mod room;
-mod security;
 mod service;
 mod tool;
 mod view;
@@ -355,16 +354,6 @@ fn main() -> anyhow::Result<()> {
 
     if opts.internet_fullmode_uninstall {
         return match internet::uninstall() {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                eprintln!("error: {e:#}");
-                std::process::exit(1);
-            }
-        };
-    }
-
-    if opts.security_install {
-        return match security::install(opts.force) {
             Ok(()) => Ok(()),
             Err(e) => {
                 eprintln!("error: {e:#}");

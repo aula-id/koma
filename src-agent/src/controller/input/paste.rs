@@ -246,7 +246,6 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::MessageRewind(_)
         | Mode::SessionHub(_)
         | Mode::QuitConfirm(_)
-        | Mode::Security(_)
         | Mode::Extensions(_)
         | Mode::ExtScreen(_)
         | Mode::ExtStore(_)

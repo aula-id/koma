@@ -107,7 +107,7 @@ impl DaemonHub {
     }
 
     /// `/security` set `secure_handoff_pending`. Tell the OpenTUI client to take
-    /// the session. Legacy ignores this frame and keeps drawing `Mode::Security`.
+    /// the session. Legacy ignores this frame.
     pub(in crate::app::runtime::event_loop::daemon) fn drain_secure_handoff(
         &mut self,
         state: &mut AppState,

@@ -464,7 +464,6 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Extensions(e) => Mode::Extensions(Box::new(shadow_extensions(*e))),
         ModeSnapshot::ExtScreen(s) => Mode::ExtScreen(Box::new(shadow_ext_screen(*s))),
         ModeSnapshot::ExtStore(s) => Mode::ExtStore(Box::new(shadow_ext_store(*s))),
-        ModeSnapshot::Security(s) => Mode::Security(Box::new(shadow_security(*s))),
         ModeSnapshot::Bash(b) => Mode::Bash(Box::new(shadow_bash(*b))),
         ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Attachments(a) => Mode::Attachments(Box::new(shadow_attachments(*a))),

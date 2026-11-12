@@ -1,8 +1,7 @@
 //! Extension host CORE.
 //!
 //! koma installs, verifies, spawns, and talks to a signed extension. This module is
-//! the Rust-side host manager, keyed PER-EXTENSION (unlike the single security daemon
-//! it is cloned from — [`crate::app::sec`]). For each running daemon-kind extension it
+//! the Rust-side host manager, keyed PER-EXTENSION. For each running daemon-kind extension it
 //! owns a child process and a DUPLEX unix-socket connection: koma `Invoke`s the
 //! extension (the "contributes" side) and the extension `Call`s back into koma (the
 //! "requires" side) over the same link.

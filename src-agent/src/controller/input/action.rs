@@ -258,55 +258,6 @@ pub enum Action {
     /// `y` in InstallConfirm (koma.run bearer present) — kick off the async install
     /// download; the landed artifact runs the shared on-loop verify+install tail.
     StoreInstallConfirm,
-    // --- Security daemon control panel actions ---
-    /// Esc from the `/security` panel — return to Chat.
-    CloseSecurity,
-    /// Not bound. Restart is not a dashboard button; `r` refreshes Images only.
-    #[allow(dead_code)]
-    SecurityRestart,
-    /// Legacy: Space/Enter used to toggle the daemon/YOLO checkbox. Those are letter
-    /// keys now; this arm is a no-op refresh so a stale client does not miss a match.
-    #[allow(dead_code)]
-    SecurityToggleTool,
-    /// `s` — start the daemon if stopped, stop it if running.
-    SecurityToggleDaemon,
-    /// `o` — arm/disarm YOLO through the existing gate.
-    SecurityToggleYolo,
-    /// `e` — enter or leave `AgentMode::Yolo`. Refused unless the daemon is running
-    /// and YOLO is armed.
-    SecurityEnterYolo,
-    /// `u` — reload catalog index + image inventory. Not a daemon restart.
-    SecurityRefreshDashboard,
-    /// Not bound. Domain enable/disable is not on the dashboard.
-    #[allow(dead_code)]
-    SecurityToggleDomain,
-    /// Not bound. Host dep install stays on the daemon; the panel does not call it.
-    #[allow(dead_code)]
-    SecurityInstall(String),
-    /// `l` in the `/security` panel — set this session's cyber lane. Inner is the
-    /// lane, or `None` to clear it. Refused with a reason when the chosen role has
-    /// no model assigned, so the gate is never left looking configured.
-    SecurityLane(Option<crate::app::sec::lane::Lane>),
-    /// Not bound. `a` on the dashboard activates the selected tool's image.
-    #[allow(dead_code)]
-    SecurityEnableAllTools,
-    /// Not bound. `n` is confirms-only.
-    #[allow(dead_code)]
-    SecurityDisableAllTools,
-    /// Not bound. `u` reloads the dashboard catalog, it does not restart the daemon.
-    #[allow(dead_code)]
-    SecurityRefreshToolkit,
-    /// `c` in the `/security` panel — try to bring the container runtime up
-    /// (Colima start when installed; otherwise a status hint only).
-    SecurityEnsureRuntime,
-    /// `p` on the Images pane — pull the selected composition (blocking; status line updates).
-    SecurityImagePull(String),
-    /// Enter/`a` on the Images pane — activate a previously pulled composition.
-    SecurityImageActivate(String),
-    /// `x`/Delete on the Images pane — remove a non-active local composition.
-    SecurityImageRemove(String),
-    /// `r` on the Images pane — rebuild the composition list from inventory.
-    SecurityImageRefresh,
     // --- Bash job panel actions ---
     /// Esc from the `/bash` panel — return to Chat.
     CloseBash,
