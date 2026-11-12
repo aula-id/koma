@@ -145,6 +145,9 @@ fn every_lane_of_a_role_is_offered_the_hosts_tools_its_role_grants() {
         for tool in ["web_search", "web_fetch"] {
             assert!(names.iter().any(|n| n == tool), "{role} is missing {tool}");
         }
+        for tool in ["git_operator", "web_download"] {
+            assert!(!names.iter().any(|n| n == tool), "{role} must not offer {tool}");
+        }
     }
 
     let chief = names_for("chief", LaneKind::Chat);
@@ -303,7 +306,9 @@ fn a_lane_runs_a_background_job_and_polls_it() {
     assert!(status.contains("[killed]"), "{status}");
 
     let git = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "git status", "run_in_background": true }));
-    assert!(git.contains("git_operator"), "{git}");
+    assert!(git.contains("not available in the secure room"), "{git}");
+    let foreground = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "git status" }));
+    assert!(foreground.contains("not available in the secure room") && !foreground.contains("git_operator"), "{foreground}");
     assert!(text_of(&b, "red", LaneKind::Work, "bash_output", json!({ "job_id": "bash-9" })).contains("no such job"));
 }
 
@@ -326,6 +331,8 @@ fn cd_moves_only_the_lane_that_asked() {
 /// Tools the coding agent has that room lanes deliberately do not, each with the reason.
 /// Every other chat tool must be a host handler, so adding a chat tool forces a decision.
 const NOT_IN_THE_ROOM: &[(&str, &str)] = &[
+    ("git_operator", "git stays out of the secure room"),
+    ("web_download", "a file pulled from the web is a way in; the lab fetches and reads, it does not download"),
     ("computer_windows", "desktop control; the lab works through the shell and the browser tools"),
     ("computer_select_window", "desktop control"),
     ("computer_observe", "desktop control"),

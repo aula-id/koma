@@ -184,13 +184,6 @@ description = "Keep a task checklist for this lane."
 type = "object"
 
 [[tool]]
-name = "git_operator"
-handler = "git_operator"
-description = "Run git commands safely."
-[tool.schema]
-type = "object"
-
-[[tool]]
 name = "web_page"
 handler = "web_page"
 description = "Read a web page in full."
@@ -201,13 +194,6 @@ type = "object"
 name = "web_search_full"
 handler = "web_search_full"
 description = "Search the web with full results."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "web_download"
-handler = "web_download"
-description = "Download a file from the web."
 [tool.schema]
 type = "object"
 

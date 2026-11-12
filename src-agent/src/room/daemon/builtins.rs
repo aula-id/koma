@@ -136,6 +136,9 @@ impl CtxBuiltins {
     }
 }
 
+/// What a lane is told when it asks for git. The room keeps git out on purpose.
+const NO_GIT: &str = "error: git is not available in the secure room";
+
 impl BuiltinHost for CtxBuiltins {
     fn run_with_messages(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> (String, Vec<crate::dto::chat::ChatMessage>) {
         if call.function.name == "load_image" {
@@ -181,14 +184,11 @@ impl BuiltinHost for CtxBuiltins {
                 if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
                     return "error: no writable workspace root; cannot run bash".into();
                 }
-                // `bash` refuses git and points at git_operator. A background job must too.
+                // `bash` refuses git, and the secure room has no git tool: a background job must refuse it too.
                 static GIT_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
                 let git = GIT_RE.get_or_init(|| crate::re_util::static_re(r"(?:^|[\s;&|(])git\b"));
                 if git.is_match(command) {
-                    return "error: use the git_operator tool for git commands, not bash. git_operator runs git directly \
-                            (no shell-injection risk), injects the session SSH key automatically, and gates destructive \
-                            operations. Example: git_operator({\"args\": [\"log\", \"--oneline\", \"-5\"]})"
-                        .into();
+                    return NO_GIT.into();
                 }
                 return self.state.start(&lane, command, ctx.workspace.clone());
             }
@@ -197,7 +197,12 @@ impl BuiltinHost for CtxBuiltins {
             "cd" => return self.state.apply_cd(&lane, execute_tool(&ctx, call)),
             _ => {}
         }
-        execute_tool(&ctx, call)
+        let result = execute_tool(&ctx, call);
+        // The coding agent points a refused git command at its git tool, which the room does not have.
+        if result.contains("git_operator") {
+            return NO_GIT.into();
+        }
+        result
     }
 
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec> {
