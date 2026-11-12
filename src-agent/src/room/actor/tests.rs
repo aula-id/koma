@@ -510,3 +510,20 @@ async fn a_resync_answers_with_a_status_without_waiting_for_a_tick() {
     let events = h.wait_for("status", |e| matches!(e, RoomEvent::Status(_))).await;
     assert_eq!(events.len(), 1, "a resync only reports status: {events:?}");
 }
+
+#[tokio::test]
+async fn a_bang_line_runs_the_shell_without_the_model() {
+    let mut h = harness(vec![]);
+    h.user("!pwd");
+    let events = h
+        .wait_for("the shell line", |e| matches!(e, RoomEvent::Visible { author, .. } if author == "shell"))
+        .await;
+    let line = events.iter().find_map(|e| match e {
+        RoomEvent::Visible { author, text } if author == "shell" => Some(text.clone()),
+        _ => None,
+    });
+    let line = line.expect("a shell line");
+    assert!(line.starts_with("$ pwd"), "{line}");
+    assert!(line.contains("ran bash"), "it went through the bash tool: {line}");
+    assert!(!events.iter().any(|e| matches!(e, RoomEvent::Chief(_))), "no model turn");
+}

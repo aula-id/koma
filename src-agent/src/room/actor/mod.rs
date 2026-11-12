@@ -248,7 +248,30 @@ impl RoomActor {
 
     // ---- user and control ----
 
+    /// `!cmd` runs a shell command right away, without the model, like the
+    /// coding chat's `!` shortcut. It goes through the same `bash` tool.
+    fn run_shell_shortcut(&self, command: String) {
+        let builtins = Arc::clone(&self.builtins);
+        let out = self.out.clone();
+        let call = crate::dto::chat::ToolCall {
+            id: "shell-shortcut".into(),
+            kind: "function".into(),
+            function: crate::dto::chat::FunctionCall {
+                name: "bash".into(),
+                arguments: serde_json::json!({ "command": command }).to_string(),
+            },
+        };
+        tokio::task::spawn_blocking(move || {
+            let result = builtins.run("chief", LaneKind::Chat, &call);
+            let _ = out.send(RoomEvent::Visible { author: "shell".into(), text: format!("$ {command}\n{result}") });
+        });
+    }
+
     fn on_user(&mut self, text: String) {
+        if let Some(command) = text.trim().strip_prefix('!').map(str::trim).filter(|c| !c.is_empty()) {
+            self.run_shell_shortcut(command.to_string());
+            return;
+        }
         let registry = self.registry.current();
         match addressed(&registry, &text) {
             Addressed::Clerk => self.emit(RoomEvent::Visible {
