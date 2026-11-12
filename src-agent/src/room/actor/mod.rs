@@ -60,7 +60,7 @@ pub struct RoomConfig {
 impl Default for RoomConfig {
     fn default() -> Self {
         Self {
-            chat_max_steps: 12,
+            chat_max_steps: 60,
             work_max_steps: 60,
             audit: AuditConfig::default(),
         }
@@ -146,6 +146,20 @@ pub fn spawn_room(
     builtins: Arc<dyn BuiltinHost>,
     config: RoomConfig,
 ) -> RoomHandle {
+    spawn_room_in(coordinator, shelf, registry, model, builtins, config, None)
+}
+
+/// Like [`spawn_room`], keeping each lane's conversation under `lanes_dir`
+/// (`<avatar>.<chat|work>.jsonl`) so it survives turns and restarts.
+pub fn spawn_room_in(
+    coordinator: Arc<Coordinator>,
+    shelf: Arc<Shelf>,
+    registry: Arc<RegistryHandle>,
+    model: Arc<dyn ModelClient>,
+    builtins: Arc<dyn BuiltinHost>,
+    config: RoomConfig,
+    lanes_dir: Option<std::path::PathBuf>,
+) -> RoomHandle {
     let (to_actor, rx) = unbounded_channel();
     let (out, events) = unbounded_channel();
     let actor = RoomActor {
@@ -163,6 +177,7 @@ pub fn spawn_room(
         lanes: BTreeMap::new(),
         assignment_lane: BTreeMap::new(),
         chief_busy: false,
+        lanes_dir,
         to_actor: to_actor.clone(),
         out,
         config,
@@ -172,6 +187,8 @@ pub fn spawn_room(
 }
 
 struct RoomActor {
+    /// Where lane transcripts live; `None` keeps them in memory only.
+    lanes_dir: Option<std::path::PathBuf>,
     coordinator: Arc<Coordinator>,
     shelf: Arc<Shelf>,
     registry: Arc<RegistryHandle>,
@@ -281,6 +298,7 @@ impl RoomActor {
             task,
             model,
             max_steps: self.config.chat_max_steps,
+            transcript: self.transcript_for(avatar, LaneKind::Chat),
         };
         self.timeline.open(avatar, "chat", now_ms());
         self.start_lane(config, LaneRef {
@@ -387,6 +405,7 @@ impl RoomActor {
                         task,
                         model,
                         max_steps: self.config.work_max_steps,
+                        transcript: self.transcript_for(&assignment.avatar, LaneKind::Work),
                     };
                     self.timeline.open(&assignment.avatar, assignment.kind.as_str(), now_ms());
                     self.assignment_lane.insert(assignment.id.clone(), assignment.avatar.clone());
@@ -424,7 +443,7 @@ impl RoomActor {
         let task = self.build_chief_turn(items);
         let prompt = registry.role("chief").map(|r| r.prompt.clone()).unwrap_or_default();
         let model = registry.lane_model("chief", LaneKind::Chat);
-        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps };
+        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat) };
         self.chief_busy = true;
         self.timeline.open("chief", "chief", now_ms());
         self.start_lane(config, LaneRef { avatar: "chief".into(), kind: LaneKind::Chat, assignment_id: None, is_chief: true, is_clerk: false });
@@ -543,6 +562,8 @@ impl RoomActor {
             task: brief,
             model,
             max_steps: self.config.work_max_steps,
+            // Each audit pass is independent; the clerk keeps no history.
+            transcript: crate::room::lane::Transcript::memory(),
         };
         self.timeline.open("clerk", "clerk", now_ms());
         self.start_lane(config, LaneRef { avatar: "clerk".into(), kind: LaneKind::Work, assignment_id: None, is_chief: false, is_clerk: true });
@@ -569,6 +590,16 @@ impl RoomActor {
     }
 
     // ---- spawning a lane ----
+
+    fn transcript_for(&self, avatar: &str, kind: LaneKind) -> crate::room::lane::Transcript {
+        use crate::room::lane::Transcript;
+        let Some(dir) = &self.lanes_dir else { return Transcript::memory() };
+        let kind = match kind {
+            LaneKind::Chat => "chat",
+            LaneKind::Work => "work",
+        };
+        Transcript::open(dir.join(format!("{avatar}.{kind}.jsonl")))
+    }
 
     fn start_lane(&mut self, config: LaneConfig, lane: LaneRef) {
         let avatar = lane.avatar.clone();

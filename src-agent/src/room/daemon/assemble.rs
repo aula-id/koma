@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
-use super::super::actor::{spawn_room, BuiltinHost, RoomConfig, RoomHandle};
+use super::super::actor::{spawn_room_in, BuiltinHost, RoomConfig, RoomHandle};
 use super::super::lane::ModelClient;
 use super::super::registry::{overlay_dir_for, RegistryHandle};
 use super::super::shelf::Shelf;
@@ -44,7 +44,15 @@ impl RoomSession {
         let store = WorkStore::open(&db)?;
         let registry = Arc::new(RegistryHandle::with_overlay(overlay_dir_for(session_dir))?);
         let coordinator = Arc::new(Coordinator::new(store, Arc::clone(&shelf), Arc::clone(&registry)));
-        let room = spawn_room(coordinator, shelf, Arc::clone(&registry), model, builtins, config);
+        let room = spawn_room_in(
+            coordinator,
+            shelf,
+            Arc::clone(&registry),
+            model,
+            builtins,
+            config,
+            Some(session_dir.join("lanes")),
+        );
 
         let to_actor = room.to_actor.clone();
         let ticker = tokio::spawn(async move {

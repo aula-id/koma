@@ -192,7 +192,7 @@ fn overlay_cannot_use_unknown_handlers_or_add_roles() {
 }
 
 #[test]
-fn specialists_run_host_tools_and_the_chief_does_not() {
+fn specialists_and_the_chief_run_host_tools_and_the_clerk_does_not() {
     let reg = RegistryHandle::embedded().expect("load").current();
     let red = reg.role("red").expect("red");
     assert!(red.tools.iter().any(|t| t.handler == "bash"));
@@ -207,15 +207,15 @@ fn specialists_run_host_tools_and_the_chief_does_not() {
     let reporter = reg.role("reporter").expect("reporter");
     assert!(reporter.tools.iter().any(|t| t.handler == "read"));
     assert!(reporter.tools.iter().all(|t| t.handler != "web_fetch"));
-    for id in ["chief", "clerk"] {
-        let role = reg.role(id).expect(id);
-        assert!(
-            role.tools
-                .iter()
-                .all(|t| !HOST_HANDLERS.contains(&t.handler.as_str())),
-            "{id} has a host tool"
-        );
+    let chief = reg.role("chief").expect("chief");
+    for tool in ["bash", "read", "write", "edit", "grep", "web_search", "browser_tabs"] {
+        assert!(chief.tools.iter().any(|t| t.handler == tool), "chief lacks {tool}");
     }
+    let clerk = reg.role("clerk").expect("clerk");
+    assert!(
+        clerk.tools.iter().all(|t| !HOST_HANDLERS.contains(&t.handler.as_str())),
+        "the clerk has a host tool"
+    );
 }
 
 #[test]

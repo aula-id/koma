@@ -22,8 +22,8 @@ pub const SHELF_TOOLS: &[&str] = &[
     "put_result",
 ];
 
-/// Host tools a specialist work lane may be granted. The handler name is the
-/// builtin name. Chat lanes, the Chief, and the clerk are not granted these.
+/// Host tools a role may be granted for its lanes, chat and work alike. The
+/// handler name is the builtin name. The clerk is not granted these.
 /// `sec_*` is never a host handler.
 pub const HOST_HANDLERS: &[&str] = &[
     "read",

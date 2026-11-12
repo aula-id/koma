@@ -83,7 +83,7 @@ fn names_for(avatar: &str, kind: LaneKind) -> Vec<String> {
 }
 
 #[test]
-fn a_work_lane_is_offered_its_host_tools_and_a_chat_lane_is_not() {
+fn every_lane_of_a_role_is_offered_the_hosts_tools_its_role_grants() {
     let builtins = CtxBuiltins::from_ctx(context(std::path::Path::new(".")));
     let red_work = names_for("red", LaneKind::Work);
     assert!(red_work.iter().any(|n| n == "bash"));
@@ -92,7 +92,8 @@ fn a_work_lane_is_offered_its_host_tools_and_a_chat_lane_is_not() {
     assert!(red_work.iter().all(|n| !n.starts_with("sec_")));
 
     let red_chat = names_for("red", LaneKind::Chat);
-    assert!(red_chat.iter().all(|n| n != "bash" && n != "web_search"));
+    assert!(red_chat.iter().any(|n| n == "bash"));
+    assert!(red_chat.iter().any(|n| n == "web_search"));
     assert!(red_chat.iter().any(|n| n == "group_task_complete"));
 
     let reviewer = names_for("reviewer", LaneKind::Work);
@@ -103,10 +104,15 @@ fn a_work_lane_is_offered_its_host_tools_and_a_chat_lane_is_not() {
 
     let chief = names_for("chief", LaneKind::Chat);
     assert!(chief.iter().any(|n| n == "group_delegate"));
-    assert!(chief.iter().all(|n| n != "bash"));
+    for tool in ["bash", "read", "write", "edit", "grep", "web_search"] {
+        assert!(chief.iter().any(|n| n == tool), "the chief lacks {tool}");
+    }
+    assert!(chief.iter().all(|n| !n.starts_with("sec_")));
 
-    let chat_specs = builtins.specs(LaneKind::Chat);
-    assert!(chat_specs.is_empty());
+    let clerk = names_for("clerk", LaneKind::Work);
+    assert!(clerk.iter().all(|n| n != "bash" && n != "read"), "the clerk gets no host tools");
+
+    assert_eq!(builtins.specs(LaneKind::Chat), builtins.specs(LaneKind::Work));
     assert!(builtins
         .specs(LaneKind::Work)
         .iter()

@@ -40,13 +40,13 @@ impl CtxBuiltins {
     }
 
     /// One session context for every avatar. Host specs are the compiled tool
-    /// list. Chat specs stay empty.
+    /// list, the same for chat and work lanes; a role's allowlist narrows it.
     pub fn from_ctx(ctx: ToolCtx) -> Self {
         ctx.plan_read_only.store(false, Ordering::Release);
         Self {
             by_avatar: BTreeMap::new(),
             fallback: Arc::new(ctx),
-            chat_specs: Vec::new(),
+            chat_specs: host_tool_specs(),
             work_specs: host_tool_specs(),
         }
     }
@@ -74,9 +74,9 @@ pub fn host_tool_specs() -> Vec<ToolSpec> {
 }
 
 impl BuiltinHost for CtxBuiltins {
-    fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String {
+    fn run(&self, avatar: &str, _kind: LaneKind, call: &ToolCall) -> String {
         let name = call.function.name.as_str();
-        if kind != LaneKind::Work || name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
+        if name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
             return format!("error: tool '{name}' is not available to this lane");
         }
         execute_tool(self.ctx(avatar), call)

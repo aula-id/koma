@@ -19,6 +19,7 @@ pub mod event;
 pub mod inbox;
 pub mod runner;
 pub mod timeline;
+pub mod transcript;
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +36,8 @@ pub use event::LaneEvent;
 pub use inbox::{Inbox, Item as InboxItem, Priority};
 #[allow(unused_imports)]
 pub use timeline::{Milestone, Timeline};
+#[allow(unused_imports)]
+pub use transcript::Transcript;
 #[allow(unused_imports)]
 pub use runner::{
     run_lane, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,

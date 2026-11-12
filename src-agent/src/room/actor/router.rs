@@ -109,9 +109,9 @@ impl RoomToolRouter {
         let role = registry.role_of(&lane.avatar);
         let shelf_allow = role.map(|r| r.shelf_allow.clone()).unwrap_or_default();
         let role_tools = role.map(|r| r.tools.clone()).unwrap_or_default();
-        // Host tools are work-lane only. Chat, the Chief, and the clerk keep
-        // the room tools. The compiled spec (real schema) wins over the toml
-        // stub, and only names this role's allowlist granted.
+        // Host tools are offered to any lane of a role whose allowlist grants
+        // them, chat and work alike. The compiled spec (real schema) wins over
+        // the toml stub, and only names this role's allowlist granted.
         let host_allowed: BTreeSet<String> = role_tools
             .iter()
             .filter(|t| is_host_handler(&t.handler))
@@ -129,16 +129,14 @@ impl RoomToolRouter {
         for name in &shelf_allow {
             tools.push(shelf_spec(name));
         }
-        if lane.kind == LaneKind::Work {
-            for spec in builtins.specs(lane.kind) {
-                if spec.name.starts_with("sec_") || !host_allowed.contains(&spec.name) {
-                    continue;
-                }
-                if tools.iter().any(|t| t.name == spec.name) {
-                    continue;
-                }
-                tools.push(spec);
+        for spec in builtins.specs(lane.kind) {
+            if spec.name.starts_with("sec_") || !host_allowed.contains(&spec.name) {
+                continue;
             }
+            if tools.iter().any(|t| t.name == spec.name) {
+                continue;
+            }
+            tools.push(spec);
         }
         Self {
             lane,

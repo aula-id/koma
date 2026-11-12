@@ -54,3 +54,133 @@ required = ["text"]
 additionalProperties = false
 [tool.schema.properties]
 text = { type = "string", minLength = 1, maxLength = 4000 }
+
+# Host computer. Every lane of this role runs these on this machine, chat and
+# work alike. Schemas advertised to the model come from the compiled tools.
+# Red also gets the web and browser surface. Reviewer and reporter do not.
+[[tool]]
+name = "read"
+handler = "read"
+description = "Read a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "write"
+handler = "write"
+description = "Create or overwrite a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "edit"
+handler = "edit"
+description = "Edit a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "delete"
+handler = "delete"
+description = "Delete a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "dir_list"
+handler = "dir_list"
+description = "List a directory on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "grep"
+handler = "grep"
+description = "Search file contents on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "glob"
+handler = "glob"
+description = "Find files by name on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash"
+handler = "bash"
+description = "Run a foreground shell command on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "remember"
+handler = "remember"
+description = "Save a memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "recall"
+handler = "recall"
+description = "Read a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "forget"
+handler = "forget"
+description = "Delete a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill"
+handler = "skill"
+description = "List or load a skill."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search"
+handler = "web_search"
+description = "Search the web."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_fetch"
+handler = "web_fetch"
+description = "Fetch one URL."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_tabs"
+handler = "browser_tabs"
+description = "List or open browser tabs."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_inspect"
+handler = "browser_inspect"
+description = "Inspect a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_interact"
+handler = "browser_interact"
+description = "Click, type, or scroll in a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_evaluate"
+handler = "browser_evaluate"
+description = "Run JavaScript in a browser tab."
+[tool.schema]
+type = "object"
+
