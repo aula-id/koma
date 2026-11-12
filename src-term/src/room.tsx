@@ -12,6 +12,7 @@ import { RoomLink, type EventInfo, type LaneInfo, type LaneRow, type ModelChoice
 import { busySummary, eventCells, laneCells, laneHeader, phaseMark, standing } from "./room-status.ts"
 import { classify } from "./room-suggest.ts"
 import { ModelPicker } from "./room-model.tsx"
+import { BrowseScreen, type BrowseData, type OpenItem } from "./room-browse.tsx"
 import { switchDaemon } from "./paths.ts"
 
 export type { Line } from "./room-turns.ts"
@@ -43,6 +44,8 @@ export function RoomScreen({
   const [notice, setNotice] = useState("")
   const [flash, setFlash] = useState("")
   const [inserted, setInserted] = useState<Inserted | null>(null)
+  const [browse, setBrowse] = useState<BrowseData | null>(null)
+  const [item, setItem] = useState<OpenItem | null>(null)
   const [asking, setAsking] = useState(false)
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
@@ -57,7 +60,7 @@ export function RoomScreen({
   useEffect(() => {
     let dead = false
     const room = new RoomLink(
-      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice, setRoster, setFlash, setInserted) },
+      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice, setRoster, setFlash, setInserted, setBrowse, setItem) },
       (text) => { if (!dead && !leaving.current) setPhase(text) },
     )
     link.current = room
@@ -123,6 +126,10 @@ export function RoomScreen({
       onPaste={(text) => link.current?.paste(text)}
       onPasteImage={() => link.current?.pasteImage()}
       onInterrupt={() => link.current?.interrupt()}
+      browse={browse}
+      item={item}
+      onBrowse={() => link.current?.browse()}
+      onOpenItem={(key) => link.current?.open(key)}
       onStop={(who) => link.current?.stop(who)}
       asking={asking}
       onAnswer={(yes) => { if (yes) leave(); else setAsking(false) }}
@@ -140,7 +147,7 @@ export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
 export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, browse = null, item = null, onBrowse = () => {}, onOpenItem = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   syntaxStyle?: SyntaxStyle
   lines: Line[]
@@ -162,6 +169,11 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   onInterrupt?: () => void
   /** `/stop red`, `/stop all`. */
   onStop?: (who: string) => void
+  /** What the shelf, goal and report screens draw, and how they ask for more. */
+  browse?: BrowseData | null
+  item?: OpenItem | null
+  onBrowse?: () => void
+  onOpenItem?: (key: string) => void
   /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
   asking?: boolean
   onAnswer?: (yes: boolean) => void
@@ -184,7 +196,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
       return
     }
     if (full) {
-      if (full !== "model" && (key.name === "escape" || key.name === "q")) setFull(null)
+      if (full === "status" && (key.name === "escape" || key.name === "q")) setFull(null)
       return
     }
     if (key.name === "escape" && !options.open) {
@@ -248,6 +260,9 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   const view = asking ? null : full
   if (view === "model") {
     return <ModelPicker theme={theme} choices={models.choices} lanes={models.lanes} notice={notice} onSet={onSetModel} onBack={() => setFull(null)} />
+  }
+  if (view === "shelf" || view === "trajectory" || view === "report") {
+    return <BrowseScreen view={view} theme={theme} syntaxStyle={ownStyle} data={browse} item={item} onOpenItem={onOpenItem} onRefresh={onBrowse} onBack={() => setFull(null)} />
   }
   if (view) {
     return <FullScreenView view={view} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
@@ -324,10 +339,10 @@ function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
   )
 }
 
-export type FullView = "status" | "shelf" | "trajectory" | "model"
-const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory", "/model": "model" }
+export type FullView = "status" | "shelf" | "trajectory" | "report" | "model"
+const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory", "/report": "report", "/model": "model" }
 
-function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: Exclude<FullView, "model">; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
+function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: "status"; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
   const { width } = useTerminalDimensions()
   const header = (
     <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
@@ -339,7 +354,7 @@ function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: E
       <Action label="Back (esc)" theme={theme} plain onPress={onBack} />
     </box>
   )
-  if (view === "status") {
+  {
     const table = panes.table ?? []
     const events = panes.events ?? []
     const nowMs = panes.nowMs ?? 0
@@ -383,21 +398,6 @@ function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: E
       </box>
     )
   }
-  const section = view === "shelf" ? { title: "Findings", text: panes.shelf, empty: "The shelf is empty." } : { title: "Trajectory goals", text: panes.map, empty: "No trajectory yet." }
-  return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      {header}
-      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
-        <Panel title={section.title} hot={false} theme={theme}>
-          <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
-            {section.text.trim()
-              ? section.text.split("\n").map((row, i) => <text key={i} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
-              : <text fg={theme.dim} paddingLeft={1}>{section.empty}</text>}
-          </scrollbox>
-        </Panel>
-      </box>
-    </box>
-  )
 }
 
 function LaneRowView({ row, nowMs, width, theme }: { row: LaneInfo; nowMs: number; width: number; theme: Theme }) {
@@ -479,6 +479,8 @@ function applyFrame(
   setRoster: (roster: Roster) => void,
   setFlash: (text: string) => void,
   setInserted: (inserted: Inserted) => void,
+  setBrowse: (data: BrowseData) => void,
+  setItem: (item: OpenItem) => void,
 ): void {
   switch (frame.type) {
     case "hello":
@@ -504,6 +506,12 @@ function applyFrame(
     case "notice":
       setNotice(frame.text)
       setFlash(frame.text)
+      break
+    case "browse":
+      setBrowse({ shelf: frame.shelf, goals: frame.goals, reports: frame.reports })
+      break
+    case "item":
+      setItem({ key: frame.key, revision: frame.revision, updated: frame.updated, content: frame.content })
       break
     case "pasted":
       setInserted({ id: ++insertSeq, text: frame.insert })

@@ -295,6 +295,26 @@ async fn a_paste_is_answered_with_what_goes_in_the_draft_and_the_message_carries
     bench.stop();
 }
 
+#[tokio::test]
+async fn browse_and_open_reach_the_actor_and_a_browse_event_becomes_a_frame() {
+    let mut bench = bench();
+    let (_read, mut write_half, _reader, _) = bench.attach().await;
+    write(&mut write_half, &RoomClient::Browse).await;
+    write(&mut write_half, &RoomClient::Open { key: "claims/a".into() }).await;
+    let (mut browse, mut open) = (false, false);
+    while !(browse && open) {
+        match bench.from_clients.recv().await.expect("the actor was told") {
+            ActorMsg::Browse => browse = true,
+            ActorMsg::Open { key } => open = key == "claims/a",
+            _ => {}
+        }
+    }
+    let frame = RoomServer::from_event(RoomEvent::Browse(crate::room::browse::Browse::default()));
+    assert_eq!(frame, RoomServer::Browse { shelf: Vec::new(), goals: Vec::new(), reports: Vec::new() });
+    assert!(!frame.is_history(), "a browse answer is not replayed to a late client");
+    bench.stop();
+}
+
 async fn next_matching(read_half: &mut crate::ipc::IpcReadHalf, reader: &mut FrameReader, want: impl Fn(&RoomServer) -> bool) -> RoomServer {
     loop {
         let frame = next(read_half, reader).await;
