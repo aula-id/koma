@@ -243,7 +243,7 @@ impl Coordinator {
     /// The active engagement with its assignments, for the clerk's audit and the
     /// reconciler's observation set. `None` when nothing is active.
     pub fn active_work(&self) -> Option<super::model::Work> {
-        self.store.with_tx(|conn| store::active_work(conn)).ok().flatten()
+        self.store.with_tx(store::active_work).ok().flatten()
     }
 
     /// The active engagement's key, goal text and open trajectory goals, for the
