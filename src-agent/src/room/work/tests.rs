@@ -780,6 +780,29 @@ mod reconcile_tests {
     }
 
     #[test]
+    fn pruning_keeps_the_newest_nonces_and_they_still_dedup() {
+        let store = WorkStore::open_in_memory().expect("store");
+        for i in 0..20 {
+            assert!(store.remember_nonce(&format!("n{i}")).expect("insert"));
+        }
+        let kept = store.prune_fired_nonces(5).expect("prune");
+        assert_eq!(kept.len(), 5);
+        assert!((15..20).all(|i| kept.contains(&format!("n{i}"))));
+        assert!(!store.remember_nonce("n19").expect("kept nonce"), "a kept nonce must not fire again");
+        assert!(store.remember_nonce("n0").expect("dropped nonce"), "a pruned nonce is forgotten");
+    }
+
+    #[test]
+    fn pruning_below_the_limit_changes_nothing() {
+        let store = WorkStore::open_in_memory().expect("store");
+        for i in 0..3 {
+            store.remember_nonce(&format!("n{i}")).expect("insert");
+        }
+        assert_eq!(store.prune_fired_nonces(10).expect("prune").len(), 3);
+        assert_eq!(store.prune_fired_nonces(0).expect("prune to nothing").len(), 0);
+    }
+
+    #[test]
     fn a_lane_that_cannot_be_proven_stopped_becomes_uncertain_and_wakes() {
         let f = fx();
         ok(&f.delegate_probe("Scan", "r1"));

@@ -70,6 +70,16 @@ impl Reconciler {
         self.fired.extend(fired);
     }
 
+    /// Swap the remembered nonces for `fired`, used after the store is pruned.
+    pub fn replace_fired(&mut self, fired: HashSet<String>) {
+        self.fired = fired;
+    }
+
+    /// How many nonces are held in memory.
+    pub fn fired_len(&self) -> usize {
+        self.fired.len()
+    }
+
     /// Run one pass. `observe` reports the lane state behind each pending
     /// assignment id; `now_ms` is the wall clock for check-in bucketing.
     pub fn tick(

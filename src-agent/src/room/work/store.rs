@@ -146,6 +146,21 @@ impl WorkStore {
         self.with_tx(|conn| insert_fired_nonce(conn, nonce))
     }
 
+    /// Keep only the `keep` most recently stored nonces and return them. Old
+    /// check-in nonces carry a time bucket that never recurs, and dispatch,
+    /// result and finish nonces belong to batches that are already closed, so
+    /// dropping the oldest only risks one repeated line for a very old state.
+    pub fn prune_fired_nonces(&self, keep: usize) -> R<HashSet<String>> {
+        self.with_tx(|conn| {
+            db(conn.execute(
+                "DELETE FROM fired_nonces WHERE rowid NOT IN \
+                 (SELECT rowid FROM fired_nonces ORDER BY rowid DESC LIMIT ?1)",
+                params![keep as i64],
+            ))?;
+            load_fired_nonces(conn)
+        })
+    }
+
     /// Run `f` in one transaction: commit on `Ok`, roll back on `Err`.
     pub fn with_tx<T>(&self, f: impl FnOnce(&Connection) -> R<T>) -> R<T> {
         let mut conn = self.lock();

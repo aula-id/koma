@@ -55,11 +55,22 @@ pub struct RoomConfig {
     pub chat_max_steps: usize,
     pub work_max_steps: usize,
     pub audit: AuditConfig,
+    /// Fired nonces held before the oldest are dropped (memory and `room.sqlite`).
+    pub nonce_cap: usize,
+    /// Fired nonces kept after a prune. Below `nonce_cap` so a prune is not
+    /// triggered again by the next nonce.
+    pub nonce_keep: usize,
 }
 
 impl Default for RoomConfig {
     fn default() -> Self {
-        Self { chat_max_steps: 12, work_max_steps: 60, audit: AuditConfig::default() }
+        Self {
+            chat_max_steps: 12,
+            work_max_steps: 60,
+            audit: AuditConfig::default(),
+            nonce_cap: 10_000,
+            nonce_keep: 5_000,
+        }
     }
 }
 
@@ -195,7 +206,13 @@ fn now_ms() -> u64 {
 
 impl RoomActor {
     async fn run(mut self, mut rx: UnboundedReceiver<ActorMsg>) {
-        if let Ok(fired) = self.coordinator.store().fired_nonces() {
+        // Prune before loading so an old, oversized database never fills memory.
+        let loaded = self
+            .coordinator
+            .store()
+            .prune_fired_nonces(self.config.nonce_keep)
+            .or_else(|_| self.coordinator.store().fired_nonces());
+        if let Ok(fired) = loaded {
             self.reconciler.preload(fired.clone());
             self.seen_nonces = fired;
         }
@@ -460,7 +477,21 @@ impl RoomActor {
 
     // ---- the periodic tick ----
 
+    /// Trim the remembered nonces once either copy outgrows the cap. A failed
+    /// prune leaves everything as it was and is retried on the next tick.
+    fn prune_nonces(&mut self) {
+        let held = self.seen_nonces.len().max(self.reconciler.fired_len());
+        if held <= self.config.nonce_cap {
+            return;
+        }
+        if let Ok(kept) = self.coordinator.store().prune_fired_nonces(self.config.nonce_keep) {
+            self.reconciler.replace_fired(kept.clone());
+            self.seen_nonces = kept;
+        }
+    }
+
     fn on_tick(&mut self) {
+        self.prune_nonces();
         self.reconcile();
         self.run_clerk();
         self.maybe_start_chief();
