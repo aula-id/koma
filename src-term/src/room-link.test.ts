@@ -1,0 +1,18 @@
+import { expect, test } from "bun:test"
+import { parseRoomFrame } from "./room-link.ts"
+
+test("room frames keep the chief, the lanes, the shelf and the map", () => {
+  expect(parseRoomFrame("hello")).toEqual({ type: "hello", kind: "" })
+  expect(parseRoomFrame({ hello: { kind: "secure" } })).toEqual({ type: "hello", kind: "secure" })
+  expect(parseRoomFrame({ chief: { text: "ready" } })).toEqual({ type: "chief", text: "ready" })
+  expect(parseRoomFrame({ lane_chat: { avatar: "red", text: "looking" } })).toEqual({ type: "lane", avatar: "red", text: "looking" })
+  expect(parseRoomFrame({ visible: { author: "chief", text: "dispatched" } })).toEqual({ type: "visible", author: "chief", text: "dispatched" })
+  expect(parseRoomFrame({ status: { digest: "red running", timeline: "red ·", shelf: "claims/a", trajectory: "goal", open: 1, verified: 0, returned: 0, reports: 0 } })).toMatchObject({
+    type: "status",
+    digest: "red running",
+    shelf: "claims/a",
+    trajectory: "goal",
+  })
+  expect(parseRoomFrame({ closed: null })).toEqual({ type: "closed" })
+  expect(parseRoomFrame({ Snapshot: {} })).toBeNull()
+})

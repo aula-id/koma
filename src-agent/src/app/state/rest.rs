@@ -212,6 +212,9 @@ pub struct AppStateRest {
     /// [`crate::ipc::proto::DaemonEvent::RunUpdate`] to the controlling client, which
     /// owns the terminal the installer runs in. Same transient shape as `new_pending`.
     pub update_pending: bool,
+    /// Set by `/security` in the daemon. The next hub tick tells the OpenTUI
+    /// client to hand the session to the secure daemon. Cleared when signalled.
+    pub secure_handoff_pending: bool,
     /// Set by the extension grant broker's `sessions.switch` (W7) when the target session
     /// uuid is NOT a live session in THIS daemon: a transient "tell the client to attach
     /// that session's OTHER daemon" request, drained next tick by the hub into a one-shot
@@ -606,6 +609,7 @@ impl AppStateRest {
             resume_pending: false,
             new_pending: None,
             update_pending: false,
+            secure_handoff_pending: false,
             ext_switch_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),

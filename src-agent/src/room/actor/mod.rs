@@ -431,12 +431,22 @@ impl RoomActor {
     }
 
     fn emit_status(&self) {
+        let items = self.shelf.list_items(&[], true, 40).unwrap_or_default();
         let counts = gate::count(&self.shelf.list_items(&[], true, 400).unwrap_or_default());
+        let shelf = items.iter().map(|item| item.key.as_str()).collect::<Vec<_>>().join("\n");
+        let trajectory = crate::room::trajectory::project(&self.shelf, None)
+            .ok()
+            .map(|views| {
+                views.iter().map(crate::room::trajectory::render::outline).collect::<Vec<_>>().join("\n")
+            })
+            .unwrap_or_default();
         self.emit(RoomEvent::Status(StatusSnapshot {
             digest: self.digest.render(),
             timeline: self.timeline.render(120),
             counts,
             paused: self.control.paused().cloned().collect(),
+            shelf,
+            trajectory,
         }));
     }
 

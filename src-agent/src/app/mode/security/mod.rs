@@ -165,36 +165,6 @@ pub struct SecurityState {
 }
 
 impl SecurityState {
-    /// Build from a live status snapshot, the disabled-tool set, and the YOLO arm flag.
-    /// Seeds images from disk and the catalog from the embedded index (marks overlaid).
-    pub fn new(
-        status: SecStatus,
-        inactive: std::collections::HashSet<String>,
-        yolo_armed: bool,
-    ) -> Self {
-        let mut st = Self {
-            status,
-            selected: 0,
-            inactive,
-            yolo_armed,
-            images: Vec::new(),
-            images_selected: 0,
-            images_busy: false,
-            pane: SecPane::Tools,
-            refused_selected: 0,
-            lane_label: "none".into(),
-            agent_mode_label: "auto".into(),
-            catalog: Vec::new(),
-            catalog_filter: CatalogFilter::All,
-            catalog_query: String::new(),
-            catalog_searching: false,
-            map_filter: None,
-        };
-        st.refresh_images();
-        st.seed_embedded_catalog();
-        st
-    }
-
     /// Replace the catalog with the embedded index, then overlay marks.
     pub fn seed_embedded_catalog(&mut self) {
         self.set_catalog_index(crate::security::embedded_catalog_rows());

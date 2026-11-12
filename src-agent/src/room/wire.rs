@@ -37,6 +37,10 @@ pub enum RoomServer {
         returned: usize,
         reports: usize,
         paused: Vec<String>,
+        #[serde(default)]
+        shelf: String,
+        #[serde(default)]
+        trajectory: String,
     },
     Closed,
 }
@@ -86,6 +90,8 @@ impl RoomServer {
             returned: status.counts.returned,
             reports: status.counts.reports,
             paused: status.paused,
+            shelf: status.shelf,
+            trajectory: status.trajectory,
         }
     }
 }

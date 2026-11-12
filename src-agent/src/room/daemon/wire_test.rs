@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -74,7 +75,14 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
         pwd: dir.display().to_string(),
         working: false,
     };
-    let serve = tokio::spawn(super::serve::run(listener, to_actor, events, status));
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let serve = tokio::spawn(super::serve::run(
+        listener,
+        to_actor,
+        events,
+        status,
+        Arc::clone(&shutting_down),
+    ));
 
     let probe = client::connect(&sock).await.expect("probe connect");
     let (mut probe_read, mut probe_write) = split_stream(probe);
@@ -116,6 +124,19 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
     write(&mut write_half, &RoomClient::Quit).await;
     let closing: RoomServer = read(&mut read_half, &mut reader).await;
     assert_eq!(closing, RoomServer::Closed);
+
+    let stop = client::connect(&sock).await.expect("quit connect");
+    let (_stop_read, mut stop_write) = split_stream(stop);
+    write(&mut stop_write, &ClientRequest::QuitDaemon).await;
+    drop(_stop_read);
+    drop(stop_write);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !shutting_down.load(Ordering::Relaxed) {
+        if tokio::time::Instant::now() > deadline {
+            panic!("QuitDaemon did not stop the secure daemon");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     serve.abort();
     let _ = session.room.to_actor.send(ActorMsg::Shutdown);

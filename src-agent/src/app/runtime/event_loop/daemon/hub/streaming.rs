@@ -106,6 +106,17 @@ impl DaemonHub {
         }
     }
 
+    /// `/security` set `secure_handoff_pending`. Tell the OpenTUI client to take
+    /// the session. Legacy ignores this frame and keeps drawing `Mode::Security`.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_secure_handoff(
+        &mut self,
+        state: &mut AppState,
+    ) {
+        if std::mem::take(&mut state.rest.secure_handoff_pending) {
+            self.send_to_controller(DaemonEvent::EnterSecure);
+        }
+    }
+
     /// Drain a pending EXTENSION `sessions.switch` to a session THIS daemon does NOT own (W7).
     /// The grant broker set `state.rest.ext_switch_pending = Some(uuid)` when a `sessions.switch`
     /// target uuid was not a live session in this daemon's `sessions` Vec (a live LOCAL target

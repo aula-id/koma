@@ -17,6 +17,7 @@ import { ModeSurface } from "./modes/surface.tsx"
 import { foregroundSession, modeName, type RemoteHandoff, type Snapshot } from "./protocol.ts"
 import { QuitScreen, quitState } from "./quit.tsx"
 import { rewindOf } from "./screens.tsx"
+import { RoomScreen } from "./room.tsx"
 import { DaemonLink } from "./socket.ts"
 import { SuspendedScreen } from "./suspended.tsx"
 import { themeFor, type Theme } from "./theme.ts"
@@ -56,6 +57,7 @@ export function SessionScreen({
   ctrlC?: { current: () => void }
 }) {
   const [attempt, setAttempt] = useState(0)
+  const [room, setRoom] = useState(false)
   const usageReaderRef = useRef<UsageReader | null>(null)
   const [usageReader, setUsageReader] = useState<UsageReader | null>(null)
   useEffect(() => {
@@ -177,6 +179,15 @@ export function SessionScreen({
           onRemote(control.remote)
           return
         }
+        if (control.kind === "secure") {
+          if (transport?.remote) {
+            report("/security stays on this machine. Open the session locally to enter the room.")
+            return
+          }
+          link.detach()
+          setRoom(true)
+          return
+        }
         if (control.kind === "update") {
           if (transport?.remote || !onUpdate) {
             report("/update only works in a local session. On the host, run `koma update`.")
@@ -247,6 +258,9 @@ export function SessionScreen({
   }, [ctrlC, interrupt])
 
   const theme = themeFor(snap?.global.palette ?? initialPalette)
+  if (room) {
+    return <RoomScreen id={id} theme={theme} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
+  }
   const session = snap ? foregroundSession(snap) : null
   const mode = snap ? modeName(snap.global.mode) : ""
   const quit = snap ? quitState(snap.global.mode) : null

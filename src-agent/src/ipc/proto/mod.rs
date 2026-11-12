@@ -1014,6 +1014,9 @@ pub enum DaemonEvent {
     Error(String),
     /// One-shot: the controller asked for the `/select` transcript dump.
     EnterSelect,
+    /// One-shot: `/security` in the OpenTUI client. The client quits this daemon
+    /// and attaches the secure room. The legacy screen still uses `Mode::Security`.
+    EnterSecure,
     /// One-shot: signal the foreground client to open its LOCAL daemon swapper
     /// (the `/resume` picker). Mirrors [`EnterSelect`] — a daemon-side `/resume`
     /// (or `OpenSessionHub`) emits this to the requesting client INSTEAD of building

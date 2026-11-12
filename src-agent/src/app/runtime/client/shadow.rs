@@ -119,6 +119,9 @@ pub(super) fn apply_frame(
             *select_requested = true;
             FrameEffect::none()
         }
+        // The main terminal hands the session to the secure room. This client
+        // stays in the coding chat; the status line already says so.
+        DaemonEvent::EnterSecure => FrameEffect::none(),
         // The build-skew handshake frame (task #142) is consumed BEFORE the render
         // loop, in the pre-render handshake (see `client_run`). If one still reaches
         // here (a re-attach mid-session re-emits it), it is non-visual: the version was

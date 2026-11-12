@@ -1,0 +1,100 @@
+import { createConnection, type Socket } from "node:net"
+import { encodeFrame, FrameReader } from "./protocol.ts"
+import { socketPath } from "./paths.ts"
+
+export type RoomFrame =
+  | { type: "hello"; kind: string }
+  | { type: "chief"; text: string }
+  | { type: "lane"; avatar: string; text: string }
+  | { type: "visible"; author: string; text: string }
+  | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number }
+  | { type: "closed" }
+
+/** One room wire value, or null when it is not a room frame. */
+export function parseRoomFrame(value: unknown): RoomFrame | null {
+  if (value === "hello") return { type: "hello", kind: "" }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const body = (key: string) => {
+    const found = record[key]
+    return found && typeof found === "object" ? found as Record<string, unknown> : null
+  }
+  const hello = body("hello")
+  if (hello) return { type: "hello", kind: String(hello.kind ?? "") }
+  const chief = body("chief")
+  if (chief) return { type: "chief", text: String(chief.text ?? "") }
+  const lane = body("lane_chat")
+  if (lane) return { type: "lane", avatar: String(lane.avatar ?? ""), text: String(lane.text ?? "") }
+  const visible = body("visible")
+  if (visible) return { type: "visible", author: String(visible.author ?? ""), text: String(visible.text ?? "") }
+  const status = body("status")
+  if (status) {
+    return {
+      type: "status",
+      digest: String(status.digest ?? ""),
+      timeline: String(status.timeline ?? ""),
+      shelf: String(status.shelf ?? ""),
+      trajectory: String(status.trajectory ?? ""),
+      open: Number(status.open ?? 0),
+      verified: Number(status.verified ?? 0),
+      returned: Number(status.returned ?? 0),
+      reports: Number(status.reports ?? 0),
+    }
+  }
+  if ("closed" in record) return { type: "closed" }
+  return null
+}
+
+/** Attach client for one secure daemon. */
+export class RoomLink {
+  private socket: Socket | null = null
+  private reader = new FrameReader()
+  private closed = false
+
+  constructor(private readonly onFrame: (frame: RoomFrame) => void, private readonly onError: (text: string) => void) {}
+
+  async start(sessionId: string): Promise<void> {
+    if (this.closed) return
+    const socket = createConnection({ path: socketPath(sessionId) })
+    this.socket = socket
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve())
+      socket.once("error", reject)
+    })
+    if (this.closed) { socket.destroy(); return }
+    socket.on("data", (data) => this.onData(data))
+    socket.on("close", () => { if (!this.closed) this.onError("the secure daemon closed the connection") })
+    socket.on("error", (error) => { if (!this.closed) this.onError(error.message) })
+    this.send("hello")
+  }
+
+  sendUser(text: string): void {
+    this.send({ user: { text } })
+  }
+
+  close(): void {
+    this.closed = true
+    this.socket?.end()
+    this.socket = null
+  }
+
+  private send(request: unknown): void {
+    if (!this.socket || this.closed) return
+    this.socket.write(encodeFrame(request))
+  }
+
+  private onData(data: Uint8Array): void {
+    let frames: unknown[]
+    try {
+      frames = this.reader.push(data)
+    } catch (error) {
+      this.onError(error instanceof Error ? error.message : String(error))
+      return
+    }
+    for (const frame of frames) {
+      const parsed = parseRoomFrame(frame)
+      if (parsed) this.onFrame(parsed)
+    }
+  }
+}
+

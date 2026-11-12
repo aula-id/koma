@@ -122,7 +122,13 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         drop(dummy_tx);
         let events = std::mem::replace(&mut session.room.events, dummy_rx);
         let to_actor = session.room.to_actor.clone();
-        let serve = tokio::spawn(super::serve::run(listener, to_actor, events, probe));
+        let serve = tokio::spawn(super::serve::run(
+            listener,
+            to_actor,
+            events,
+            probe,
+            Arc::clone(&shutting_down),
+        ));
         (session, serve)
     };
     while !shutting_down.load(Ordering::Relaxed) {

@@ -5,6 +5,8 @@
 //! the actor's events. The coding [`crate::ipc::server::accept_loop`] is not
 //! used here: it would hand the socket to the coding hub.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -22,6 +24,7 @@ pub async fn run(
     to_actor: UnboundedSender<ActorMsg>,
     mut events: UnboundedReceiver<RoomEvent>,
     status: SessionStatus,
+    shutting_down: Arc<AtomicBool>,
 ) {
     let (sub_tx, mut sub_rx) = unbounded_channel();
     let mut subscriber: Option<UnboundedSender<RoomServer>> = None;
@@ -33,8 +36,9 @@ pub async fn run(
                         let to_actor = to_actor.clone();
                         let sub_tx = sub_tx.clone();
                         let status = status.clone();
+                        let shutting_down = Arc::clone(&shutting_down);
                         tokio::spawn(async move {
-                            let _ = handle_conn(stream, to_actor, sub_tx, status).await;
+                            let _ = handle_conn(stream, to_actor, sub_tx, status, shutting_down).await;
                         });
                     }
                     Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
@@ -61,6 +65,7 @@ async fn handle_conn(
     to_actor: UnboundedSender<ActorMsg>,
     sub_tx: UnboundedSender<UnboundedSender<RoomServer>>,
     status: SessionStatus,
+    shutting_down: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     let (mut read, mut write) = split_stream(stream);
     let mut reader = FrameReader::new();
@@ -70,6 +75,10 @@ async fn handle_conn(
     if let Ok(ClientRequest::Status) = serde_json::from_value(value.clone()) {
         let frame = DaemonFrame { seq: 1, event: DaemonEvent::Status(status) };
         return write_json(&mut write, &frame).await;
+    }
+    if let Ok(ClientRequest::QuitDaemon) = serde_json::from_value(value.clone()) {
+        shutting_down.store(true, Ordering::Relaxed);
+        return Ok(());
     }
     let Ok(RoomClient::Hello) = serde_json::from_value(value) else {
         return Ok(());

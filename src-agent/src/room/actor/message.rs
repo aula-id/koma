@@ -55,4 +55,8 @@ pub struct StatusSnapshot {
     pub counts: crate::room::trajectory::gate::Counts,
     /// Avatars whose lane is currently paused.
     pub paused: Vec<String>,
+    /// Shelf keys, one per line.
+    pub shelf: String,
+    /// Trajectory outline.
+    pub trajectory: String,
 }

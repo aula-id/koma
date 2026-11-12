@@ -390,6 +390,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
         hub.drain_update_pending(state);
+        hub.drain_secure_handoff(state);
 
         // 3a-pre3b. `/remote` hand-off: `Action::RemoteConnect` set
         //     `state.rest.connect_remote_pending = Some(target)` INSTEAD of relying on the

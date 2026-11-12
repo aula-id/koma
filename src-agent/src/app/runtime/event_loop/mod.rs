@@ -96,6 +96,12 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // `/security` is the main terminal's handoff. This face stays a coding agent.
+        if std::mem::take(&mut state.rest.secure_handoff_pending) {
+            state.rest.fg_mut().status = "/security is not part of legacy".into();
+            dirty = true;
+        }
+
         // A background `/security` image pull: apply its outcome, and redraw while it runs.
         if crate::app::runtime::actions::security::poll_security_jobs(state)
             || crate::security::image_pull_busy_id().is_some()

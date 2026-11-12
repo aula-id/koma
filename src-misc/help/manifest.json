@@ -447,7 +447,7 @@
     },
     {
       "id": "tui-security",
-      "title": "TUI /security",
+      "title": "/security",
       "aliases": [
         "/security",
         "security"
