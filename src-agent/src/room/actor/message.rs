@@ -38,6 +38,10 @@ pub enum ActorMsg {
     /// A client attached and wants the current picture now, not at the next
     /// tick. Emits one status and does nothing else.
     Resync,
+    /// A client opened a browse screen: send the shelf, goals and reports.
+    Browse,
+    /// A client opened one shelf item.
+    Open { key: String },
     /// Stop the room.
     Shutdown,
 }
@@ -56,6 +60,12 @@ pub enum RoomEvent {
     Part { author: String, lane: String, part: LanePart },
     /// A fresh status snapshot (digest, swim lanes, gate counts).
     Status(StatusSnapshot),
+    /// The shelf, goals and reports, for the browse screens.
+    Browse(crate::room::browse::Browse),
+    /// One shelf item in full.
+    Item(crate::room::browse::Item),
+    /// A one-line answer for the client that asked.
+    Notice(String),
     /// The room is closing.
     Closed,
 }

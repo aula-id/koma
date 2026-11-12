@@ -12,7 +12,16 @@ export type RoomFrame =
   | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
   | { type: "notice"; text: string }
   | { type: "pasted"; insert: string }
+  | { type: "browse"; shelf: ShelfRow[]; goals: Goal[]; reports: Report[] }
+  | { type: "item"; key: string; revision: number; updated: number; content: string }
   | { type: "closed" }
+
+/** One row of the shelf tree. */
+export type ShelfRow = { key: string; revision: number; updated: number; kind: string; title: string; status: string }
+export type GoalNode = { id: string; label: string; kind: string; status: string; severity: string; note: string; resource_key: string; rank: number; row: number }
+export type GoalEdge = { from: string; to: string; rel: string }
+export type Goal = { goal_key: string; open: number; verified: number; returned: number; nodes: GoalNode[]; edges: GoalEdge[] }
+export type Report = { key: string; revision: number; updated: number; title: string; audience: string; severity_summary: string; go_no_go: string; finding_keys: string[]; markdown: string }
 
 /** One structured piece of a lane's turn: thinking, a tool call, a tool result. */
 export type LanePart =
@@ -106,6 +115,28 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
       lanes: rows("lanes").map((l) => ({ avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), lane: String(l.lane ?? ""), model: String(l.model ?? "") })),
     }
   }
+  const browse = body("browse")
+  if (browse) {
+    const rows = (key: string) => Array.isArray(browse[key]) ? browse[key] as Record<string, unknown>[] : []
+    const text = (r: Record<string, unknown>, k: string) => String(r[k] ?? "")
+    const num = (r: Record<string, unknown>, k: string) => Number(r[k] ?? 0)
+    return {
+      type: "browse",
+      shelf: rows("shelf").map((r) => ({ key: text(r, "key"), revision: num(r, "revision"), updated: num(r, "updated"), kind: text(r, "kind"), title: text(r, "title"), status: text(r, "status") })),
+      goals: rows("goals").map((g) => ({
+        goal_key: text(g, "goal_key"), open: num(g, "open"), verified: num(g, "verified"), returned: num(g, "returned"),
+        nodes: (Array.isArray(g.nodes) ? g.nodes as Record<string, unknown>[] : []).map((n) => ({ id: text(n, "id"), label: text(n, "label"), kind: text(n, "kind"), status: text(n, "status"), severity: text(n, "severity"), note: text(n, "note"), resource_key: text(n, "resource_key"), rank: num(n, "rank"), row: num(n, "row") })),
+        edges: (Array.isArray(g.edges) ? g.edges as Record<string, unknown>[] : []).map((e) => ({ from: text(e, "from"), to: text(e, "to"), rel: text(e, "rel") })),
+      })),
+      reports: rows("reports").map((r) => ({
+        key: text(r, "key"), revision: num(r, "revision"), updated: num(r, "updated"), title: text(r, "title"), audience: text(r, "audience"),
+        severity_summary: text(r, "severity_summary"), go_no_go: text(r, "go_no_go"), markdown: text(r, "markdown"),
+        finding_keys: Array.isArray(r.finding_keys) ? (r.finding_keys as unknown[]).map(String) : [],
+      })),
+    }
+  }
+  const item = body("item")
+  if (item) return { type: "item", key: String(item.key ?? ""), revision: Number(item.revision ?? 0), updated: Number(item.updated ?? 0), content: String(item.content ?? "") }
   const pasted = body("pasted")
   if (pasted) return { type: "pasted", insert: String(pasted.insert ?? "") }
   const notice = body("notice")
@@ -161,6 +192,16 @@ export class RoomLink {
   /** Ctrl+V: the daemon reads an image off the clipboard. */
   pasteImage(): void {
     this.send("paste_image")
+  }
+
+  /** Ask for the shelf, goals and reports. */
+  browse(): void {
+    this.send("browse")
+  }
+
+  /** Ask for one shelf item in full. */
+  open(key: string): void {
+    this.send({ open: { key } })
   }
 
   /** Esc: stop what the Chief and the specialists are saying. Their work keeps running. */

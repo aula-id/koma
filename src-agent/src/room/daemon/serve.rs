@@ -258,6 +258,12 @@ async fn handle_conn(
                         };
                         write_json(&mut write, &pasted_frame(pasted)).await?;
                     }
+                    RoomClient::Browse => {
+                        let _ = to_actor.send(ActorMsg::Browse);
+                    }
+                    RoomClient::Open { key } => {
+                        let _ = to_actor.send(ActorMsg::Open { key });
+                    }
                     RoomClient::Interrupt => {
                         let _ = to_actor.send(ActorMsg::Interrupt);
                     }
