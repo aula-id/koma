@@ -116,10 +116,6 @@ struct Harness {
 }
 
 fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
-    harness_with(replies, RoomConfig::default())
-}
-
-fn harness_with(replies: Vec<((&str, usize), ModelReply)>, config: RoomConfig) -> Harness {
     let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
     let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
     let coordinator = Arc::new(Coordinator::new(
@@ -144,7 +140,7 @@ fn harness_with(replies: Vec<((&str, usize), ModelReply)>, config: RoomConfig) -
         registry,
         model,
         Arc::new(StubBuiltins),
-        config,
+        RoomConfig::default(),
     );
     Harness {
         handle,
@@ -483,81 +479,28 @@ async fn shutdown_closes_the_room() {
 }
 
 fn visible(nonce: &str) -> Effect {
-    Effect::Visible { author: "room".into(), text: format!("line {nonce}"), nonce: nonce.into() }
+    Effect::Visible {
+        author: "room".into(),
+        text: format!("line {nonce}"),
+        nonce: nonce.into(),
+        work_id: "w1".into(),
+    }
 }
 
 #[tokio::test]
-async fn the_remembered_nonces_are_trimmed_once_they_pass_the_cap() {
-    let config = RoomConfig { nonce_cap: 3, nonce_keep: 2, ..RoomConfig::default() };
-    let mut h = harness_with(vec![], config);
-    let effects: Vec<Effect> = (0..6).map(|i| visible(&format!("n{i}"))).collect();
-    h.send(ActorMsg::Effects(effects));
-    h.wait_for("all six lines", |e| matches!(e, RoomEvent::Visible { text, .. } if text == "line n5"))
-        .await;
-    assert_eq!(h.coordinator.store().fired_nonces().expect("nonces").len(), 6);
-
-    h.tick();
-    h.wait_for("status after the prune", |e| matches!(e, RoomEvent::Status(_))).await;
-    let kept = h.coordinator.store().fired_nonces().expect("nonces");
-    assert_eq!(kept.len(), 2, "the store kept {kept:?}");
-    assert!(kept.contains("n4") && kept.contains("n5"), "the newest nonces must survive: {kept:?}");
-}
-
-#[tokio::test]
-async fn a_nonce_kept_by_the_prune_still_dedups_and_a_dropped_one_may_repeat() {
-    let config = RoomConfig { nonce_cap: 3, nonce_keep: 2, ..RoomConfig::default() };
-    let mut h = harness_with(vec![], config);
-    h.send(ActorMsg::Effects((0..6).map(|i| visible(&format!("n{i}"))).collect()));
-    h.wait_for("six lines", |e| matches!(e, RoomEvent::Visible { text, .. } if text == "line n5"))
-        .await;
-    h.tick();
-    h.wait_for("status", |e| matches!(e, RoomEvent::Status(_))).await;
-
-    h.drain();
-    h.send(ActorMsg::Effects(vec![visible("n5")]));
-    h.send(ActorMsg::Effects(vec![visible("n0")]));
+async fn a_visible_line_posts_once_and_the_store_alone_remembers_it() {
+    let mut h = harness(vec![]);
+    h.send(ActorMsg::Effects(vec![visible("group-dispatch:w1:r1:red")]));
+    h.send(ActorMsg::Effects(vec![visible("group-dispatch:w1:r1:red"), visible("group-dispatch:w1:r2:red")]));
     let events = h
-        .wait_for("the dropped nonce posts again", |e| matches!(e, RoomEvent::Visible { text, .. } if text == "line n0"))
+        .wait_for("the second dispatch", |e| matches!(e, RoomEvent::Visible { text, .. } if text.ends_with("r2:red")))
         .await;
-    assert!(
-        !events.iter().any(|e| matches!(e, RoomEvent::Visible { text, .. } if text == "line n5")),
-        "a kept nonce was posted twice: {events:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_oversized_database_is_pruned_before_the_room_loads_it() {
-    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
-    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
-    let coordinator = Arc::new(Coordinator::new(
-        WorkStore::open_in_memory().expect("store"),
-        Arc::clone(&shelf),
-        Arc::clone(&registry),
-    ));
-    for i in 0..50 {
-        coordinator.store().remember_nonce(&format!("old{i}")).expect("seed");
-    }
-    let config = RoomConfig { nonce_cap: 10, nonce_keep: 5, ..RoomConfig::default() };
-    let mut handle = spawn_room(
-        Arc::clone(&coordinator),
-        shelf,
-        registry,
-        Arc::new(ScriptedModel { script: Script { replies: HashMap::new(), seen: Mutex::new(HashMap::new()) }, fallback: "done".into() }),
-        Arc::new(StubBuiltins),
-        config,
-    );
-    handle.to_actor.send(ActorMsg::Tick).expect("actor alive");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
-            Ok(Some(RoomEvent::Status(_))) => break,
-            Ok(Some(_)) => continue,
-            other => panic!("no status: {other:?}"),
-        }
-    }
-    let kept = coordinator.store().fired_nonces().expect("nonces");
-    assert_eq!(kept.len(), 5);
-    assert!(kept.contains("old49") && !kept.contains("old0"));
+    let first = events
+        .iter()
+        .filter(|e| matches!(e, RoomEvent::Visible { text, .. } if text.ends_with("r1:red")))
+        .count();
+    assert_eq!(first, 1, "a repeated nonce posted twice: {events:?}");
+    assert_eq!(h.coordinator.store().nonce_count("w1").expect("count"), 2);
 }
 
 #[tokio::test]

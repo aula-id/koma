@@ -3,7 +3,6 @@
 //! The coordinator runs each tool call inside one transaction (`with_tx`), so
 //! a call either applies completely or not at all.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -125,8 +124,13 @@ impl WorkStore {
                  UNIQUE (work_id, claim_key, snapshot_hash)
              );
              CREATE TABLE IF NOT EXISTS fired_nonces (
-                 nonce TEXT PRIMARY KEY
+                 nonce TEXT PRIMARY KEY,
+                 work_id TEXT NOT NULL DEFAULT ''
              );",
+        ))?;
+        migrate_nonce_scope(&conn)?;
+        db(conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS fired_nonces_by_work ON fired_nonces (work_id);",
         ))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -135,30 +139,22 @@ impl WorkStore {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Nonces already fired in this database (wake, check-in, visible).
-    pub fn fired_nonces(&self) -> R<HashSet<String>> {
+    /// Record `nonce` for `work_id` if it is new. `Ok(true)` means this call
+    /// stored it. The unique key is the only record of what already fired, so
+    /// nothing is held in memory.
+    pub fn remember_nonce(&self, work_id: &str, nonce: &str) -> R<bool> {
+        self.with_tx(|conn| insert_fired_nonce(conn, work_id, nonce))
+    }
+
+    /// How many nonces are stored for `work_id`.
+    pub fn nonce_count(&self, work_id: &str) -> R<usize> {
         let conn = self.lock();
-        load_fired_nonces(&conn)
-    }
-
-    /// Record `nonce` if it is new. `Ok(true)` means this call stored it.
-    pub fn remember_nonce(&self, nonce: &str) -> R<bool> {
-        self.with_tx(|conn| insert_fired_nonce(conn, nonce))
-    }
-
-    /// Keep only the `keep` most recently stored nonces and return them. Old
-    /// check-in nonces carry a time bucket that never recurs, and dispatch,
-    /// result and finish nonces belong to batches that are already closed, so
-    /// dropping the oldest only risks one repeated line for a very old state.
-    pub fn prune_fired_nonces(&self, keep: usize) -> R<HashSet<String>> {
-        self.with_tx(|conn| {
-            db(conn.execute(
-                "DELETE FROM fired_nonces WHERE rowid NOT IN \
-                 (SELECT rowid FROM fired_nonces ORDER BY rowid DESC LIMIT ?1)",
-                params![keep as i64],
-            ))?;
-            load_fired_nonces(conn)
-        })
+        let n: i64 = db(conn.query_row(
+            "SELECT COUNT(*) FROM fired_nonces WHERE work_id = ?1",
+            params![work_id],
+            |r| r.get(0),
+        ))?;
+        Ok(n as usize)
     }
 
     /// Run `f` in one transaction: commit on `Ok`, roll back on `Err`.
@@ -173,20 +169,35 @@ impl WorkStore {
 
 // ---- queries (all take the transaction's connection) ----
 
-pub fn load_fired_nonces(conn: &Connection) -> R<HashSet<String>> {
-    let mut stmt = db(conn.prepare("SELECT nonce FROM fired_nonces"))?;
-    let rows = db(stmt.query_map([], |r| r.get(0)))?;
-    let mut out = HashSet::new();
-    for row in rows {
-        out.insert(db(row)?);
-    }
-    Ok(out)
+/// `Ok(true)` when `nonce` was not stored yet. The nonce belongs to `work_id`
+/// and goes when that work ends, see [`set_work_status`].
+pub fn insert_fired_nonce(conn: &Connection, work_id: &str, nonce: &str) -> R<bool> {
+    let n = db(conn.execute(
+        "INSERT OR IGNORE INTO fired_nonces (nonce, work_id) VALUES (?1, ?2)",
+        params![nonce, work_id],
+    ))?;
+    Ok(n > 0)
 }
 
-/// `Ok(true)` when `nonce` was not stored yet.
-pub fn insert_fired_nonce(conn: &Connection, nonce: &str) -> R<bool> {
-    let n = db(conn.execute("INSERT OR IGNORE INTO fired_nonces (nonce) VALUES (?1)", params![nonce]))?;
-    Ok(n > 0)
+/// Forget the nonces of a work that ended. The reconciler only visits active
+/// works, so none of them can fire again.
+pub fn purge_work_nonces(conn: &Connection, work_id: &str) -> R<()> {
+    db(conn.execute("DELETE FROM fired_nonces WHERE work_id = ?1", params![work_id]))?;
+    Ok(())
+}
+
+/// A database made before nonces were scoped has no `work_id` column. Add it;
+/// the old rows keep an empty scope and stay as they were.
+fn migrate_nonce_scope(conn: &Connection) -> R<()> {
+    let scoped: i64 = db(conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('fired_nonces') WHERE name = 'work_id'",
+        [],
+        |r| r.get(0),
+    ))?;
+    if scoped == 0 {
+        db(conn.execute_batch("ALTER TABLE fired_nonces ADD COLUMN work_id TEXT NOT NULL DEFAULT ''"))?;
+    }
+    Ok(())
 }
 
 pub fn assignments_of(conn: &Connection, work_id: &str) -> R<Vec<Assignment>> {
@@ -276,6 +287,9 @@ pub fn set_work_status(conn: &Connection, id: &str, status: WorkStatus, report: 
         "UPDATE works SET status = ?2, report = COALESCE(?3, report) WHERE id = ?1",
         params![id, enc(&status), report],
     ))?;
+    if status != WorkStatus::Active {
+        purge_work_nonces(conn, id)?;
+    }
     Ok(())
 }
 

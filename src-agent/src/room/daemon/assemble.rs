@@ -154,6 +154,7 @@ mod tests {
             author: "chief".into(),
             text: "Assignment for Red: probe".into(),
             nonce: "group-dispatch:w1:r1:red".into(),
+            work_id: "w1".into(),
         };
         session.room.to_actor.send(ActorMsg::Effects(vec![effect.clone()])).expect("send");
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

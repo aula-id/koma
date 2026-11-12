@@ -11,7 +11,6 @@
 //! delegate every verification by hand) is a later step; this one only syncs
 //! and wakes.
 
-use std::collections::HashSet;
 
 use rusqlite::Connection;
 
@@ -42,10 +41,10 @@ pub struct ReconcileOutcome {
     pub effects: Vec<Effect>,
 }
 
-/// Holds the nonces already fired, so the same state never wakes the Chief
-/// twice across passes.
+/// Wakes and check-ins, each at most once. What already fired is recorded in
+/// the store, scoped to its work, so the same state never wakes the Chief twice
+/// across passes or restarts and nothing accumulates in memory.
 pub struct Reconciler {
-    fired: HashSet<String>,
     window_ms: u64,
 }
 
@@ -57,27 +56,12 @@ impl Default for Reconciler {
 
 impl Reconciler {
     pub fn new() -> Self {
-        Self { fired: HashSet::new(), window_ms: CHECKIN_WINDOW_MS }
+        Self { window_ms: CHECKIN_WINDOW_MS }
     }
 
     /// A reconciler with a custom check-in window, for tests.
     pub fn with_window(window_ms: u64) -> Self {
-        Self { fired: HashSet::new(), window_ms }
-    }
-
-    /// Nonces already stored, loaded when a room opens again.
-    pub fn preload(&mut self, fired: HashSet<String>) {
-        self.fired.extend(fired);
-    }
-
-    /// Swap the remembered nonces for `fired`, used after the store is pruned.
-    pub fn replace_fired(&mut self, fired: HashSet<String>) {
-        self.fired = fired;
-    }
-
-    /// How many nonces are held in memory.
-    pub fn fired_len(&self) -> usize {
-        self.fired.len()
+        Self { window_ms }
     }
 
     /// Run one pass. `observe` reports the lane state behind each pending
@@ -102,10 +86,7 @@ impl Reconciler {
         now_ms: u64,
         dispatch: impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
     ) -> R<ReconcileOutcome> {
-        let mut claimed = Vec::new();
-        let out = store.with_tx(|conn| self.run(conn, &observe, now_ms, &dispatch, &mut claimed))?;
-        self.fired.extend(claimed);
-        Ok(out)
+        store.with_tx(|conn| self.run(conn, &observe, now_ms, &dispatch))
     }
 
     fn run(
@@ -114,7 +95,6 @@ impl Reconciler {
         observe: &impl Fn(&str) -> Observation,
         now_ms: u64,
         dispatch: &impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
-        claimed: &mut Vec<String>,
     ) -> R<ReconcileOutcome> {
         let mut out = ReconcileOutcome::default();
         for work_id in store::all_active_work_ids(conn)? {
@@ -148,31 +128,19 @@ impl Reconciler {
                 BatchState::Empty => {}
                 BatchState::Healthy => {
                     let nonce = checkin_nonce(&work_id, now_ms, self.window_ms);
-                    if self.claim(conn, claimed, nonce)? {
+                    if store::insert_fired_nonce(conn, &work_id, &nonce)? {
                         out.checkins.push(work_id.clone());
                     }
                 }
                 BatchState::NeedsChief => {
                     let pairs: Vec<(&str, AssignmentStatus)> =
                         assignments.iter().map(|a| (a.id.as_str(), a.status)).collect();
-                    if self.claim(conn, claimed, wake_nonce(&work_id, &pairs))? {
+                    if store::insert_fired_nonce(conn, &work_id, &wake_nonce(&work_id, &pairs))? {
                         out.wakes.push(work_id.clone());
                     }
                 }
             }
         }
         Ok(out)
-    }
-
-    /// `Ok(true)` the first time `nonce` is stored. A nonce already in memory
-    /// or in this database does not fire again. Memory is updated by the
-    /// caller after the transaction commits, so a rolled-back tick forgets it.
-    fn claim(&self, conn: &Connection, claimed: &mut Vec<String>, nonce: String) -> R<bool> {
-        if self.fired.contains(&nonce) || claimed.iter().any(|n| n == &nonce) {
-            return Ok(false);
-        }
-        let fresh = store::insert_fired_nonce(conn, &nonce)?;
-        claimed.push(nonce);
-        Ok(fresh)
     }
 }

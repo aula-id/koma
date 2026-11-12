@@ -13,6 +13,7 @@ pub enum Effect {
     /// Inject a steering message into the avatar's running lane (or hold it for
     /// the next turn if the lane is idle).
     Steer { avatar: String, text: String },
-    /// A message every chat view should show. `nonce` makes posting idempotent.
-    Visible { author: String, text: String, nonce: String },
+    /// A message every chat view should show. `nonce` makes posting idempotent,
+    /// and `work_id` ties it to its work so it goes when that work ends.
+    Visible { author: String, text: String, nonce: String, work_id: String },
 }

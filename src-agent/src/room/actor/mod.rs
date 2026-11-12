@@ -55,11 +55,6 @@ pub struct RoomConfig {
     pub chat_max_steps: usize,
     pub work_max_steps: usize,
     pub audit: AuditConfig,
-    /// Fired nonces held before the oldest are dropped (memory and `room.sqlite`).
-    pub nonce_cap: usize,
-    /// Fired nonces kept after a prune. Below `nonce_cap` so a prune is not
-    /// triggered again by the next nonce.
-    pub nonce_keep: usize,
 }
 
 impl Default for RoomConfig {
@@ -68,8 +63,6 @@ impl Default for RoomConfig {
             chat_max_steps: 12,
             work_max_steps: 60,
             audit: AuditConfig::default(),
-            nonce_cap: 10_000,
-            nonce_keep: 5_000,
         }
     }
 }
@@ -169,7 +162,6 @@ pub fn spawn_room(
         timeline: Timeline::new(),
         lanes: BTreeMap::new(),
         assignment_lane: BTreeMap::new(),
-        seen_nonces: HashSet::new(),
         chief_busy: false,
         to_actor: to_actor.clone(),
         out,
@@ -193,7 +185,6 @@ struct RoomActor {
     timeline: Timeline,
     lanes: BTreeMap<Slot, LaneHandle>,
     assignment_lane: BTreeMap<String, String>,
-    seen_nonces: HashSet<String>,
     chief_busy: bool,
     to_actor: UnboundedSender<ActorMsg>,
     out: UnboundedSender<RoomEvent>,
@@ -206,16 +197,6 @@ fn now_ms() -> u64 {
 
 impl RoomActor {
     async fn run(mut self, mut rx: UnboundedReceiver<ActorMsg>) {
-        // Prune before loading so an old, oversized database never fills memory.
-        let loaded = self
-            .coordinator
-            .store()
-            .prune_fired_nonces(self.config.nonce_keep)
-            .or_else(|_| self.coordinator.store().fired_nonces());
-        if let Ok(fired) = loaded {
-            self.reconciler.preload(fired.clone());
-            self.seen_nonces = fired;
-        }
         while let Some(msg) = rx.recv().await {
             match msg {
                 ActorMsg::User(text) => self.on_user(text),
@@ -418,15 +399,14 @@ impl RoomActor {
                     });
                 }
                 Effect::Steer { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
-                Effect::Visible { author, text, nonce } => {
-                    if self.seen_nonces.insert(nonce.clone()) {
-                        // `Ok(false)` means a previous process already posted it.
-                        // A storage error still posts: losing the line is worse
-                        // than a repeat after a crash.
-                        let fresh = self.coordinator.store().remember_nonce(&nonce).unwrap_or(true);
-                        if fresh {
-                            self.emit(RoomEvent::Visible { author, text });
-                        }
+                Effect::Visible { author, text, nonce, work_id } => {
+                    // The store's unique key decides, so a line posts once even
+                    // across a restart. `Ok(false)` means it was already posted. A
+                    // storage error still posts: losing the line is worse than a
+                    // repeat after a crash.
+                    let fresh = self.coordinator.store().remember_nonce(&work_id, &nonce).unwrap_or(true);
+                    if fresh {
+                        self.emit(RoomEvent::Visible { author, text });
                     }
                 }
             }
@@ -478,21 +458,7 @@ impl RoomActor {
 
     // ---- the periodic tick ----
 
-    /// Trim the remembered nonces once either copy outgrows the cap. A failed
-    /// prune leaves everything as it was and is retried on the next tick.
-    fn prune_nonces(&mut self) {
-        let held = self.seen_nonces.len().max(self.reconciler.fired_len());
-        if held <= self.config.nonce_cap {
-            return;
-        }
-        if let Ok(kept) = self.coordinator.store().prune_fired_nonces(self.config.nonce_keep) {
-            self.reconciler.replace_fired(kept.clone());
-            self.seen_nonces = kept;
-        }
-    }
-
     fn on_tick(&mut self) {
-        self.prune_nonces();
         self.reconcile();
         self.run_clerk();
         self.maybe_start_chief();

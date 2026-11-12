@@ -779,27 +779,70 @@ mod reconcile_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
-    fn pruning_keeps_the_newest_nonces_and_they_still_dedup() {
-        let store = WorkStore::open_in_memory().expect("store");
-        for i in 0..20 {
-            assert!(store.remember_nonce(&format!("n{i}")).expect("insert"));
-        }
-        let kept = store.prune_fired_nonces(5).expect("prune");
-        assert_eq!(kept.len(), 5);
-        assert!((15..20).all(|i| kept.contains(&format!("n{i}"))));
-        assert!(!store.remember_nonce("n19").expect("kept nonce"), "a kept nonce must not fire again");
-        assert!(store.remember_nonce("n0").expect("dropped nonce"), "a pruned nonce is forgotten");
+    fn two_works(store: &WorkStore) -> (String, String) {
+        store
+            .with_tx(|c| {
+                let a = store::insert_work(c, "ga", "A")?;
+                let b = store::insert_work(c, "gb", "B")?;
+                Ok((a.id, b.id))
+            })
+            .expect("works")
     }
 
     #[test]
-    fn pruning_below_the_limit_changes_nothing() {
+    fn a_nonce_fires_once_and_belongs_to_its_work() {
         let store = WorkStore::open_in_memory().expect("store");
-        for i in 0..3 {
-            store.remember_nonce(&format!("n{i}")).expect("insert");
+        let (a, _b) = two_works(&store);
+        assert!(store.remember_nonce(&a, "group-wake:a:1").expect("first"));
+        assert!(!store.remember_nonce(&a, "group-wake:a:1").expect("again"), "the same nonce must not fire twice");
+        assert_eq!(store.nonce_count(&a).expect("count"), 1);
+    }
+
+    #[test]
+    fn a_work_that_ends_takes_its_nonces_with_it_and_other_works_keep_theirs() {
+        let store = WorkStore::open_in_memory().expect("store");
+        let (a, b) = two_works(&store);
+        for i in 0..50 {
+            store.remember_nonce(&a, &format!("group-checkin:a:{i}")).expect("a");
         }
-        assert_eq!(store.prune_fired_nonces(10).expect("prune").len(), 3);
-        assert_eq!(store.prune_fired_nonces(0).expect("prune to nothing").len(), 0);
+        store.remember_nonce(&b, "group-wake:b:1").expect("b");
+
+        store.with_tx(|c| store::set_work_status(c, &a, WorkStatus::Completed, None)).expect("complete");
+        assert_eq!(store.nonce_count(&a).expect("a"), 0, "a finished work leaves no nonces behind");
+        assert_eq!(store.nonce_count(&b).expect("b"), 1);
+        assert!(!store.remember_nonce(&b, "group-wake:b:1").expect("b again"), "the active work must still dedup");
+    }
+
+    #[test]
+    fn a_cancelled_work_is_cleaned_up_too_and_an_active_one_never_loses_a_nonce() {
+        let store = WorkStore::open_in_memory().expect("store");
+        let (a, b) = two_works(&store);
+        store.remember_nonce(&a, "group-wake:a:1").expect("a");
+        store.remember_nonce(&b, "group-wake:b:1").expect("b");
+        store.with_tx(|c| store::set_work_status(c, &b, WorkStatus::Active, None)).expect("still active");
+        assert_eq!(store.nonce_count(&b).expect("b"), 1, "an update that keeps the work active keeps its nonces");
+        store.with_tx(|c| store::set_work_status(c, &a, WorkStatus::Cancelled, None)).expect("cancel");
+        assert_eq!(store.nonce_count(&a).expect("a"), 0);
+    }
+
+    #[test]
+    fn a_database_from_before_nonces_were_scoped_is_upgraded_in_place() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("koma-room-legacy-nonce-{nanos}.sqlite"));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE fired_nonces (nonce TEXT PRIMARY KEY);
+                 INSERT INTO fired_nonces (nonce) VALUES ('group-wake:old:1');",
+            )
+            .expect("legacy table");
+        }
+        let store = WorkStore::open(&path).expect("upgrade");
+        assert!(!store.remember_nonce("", "group-wake:old:1").expect("old"), "an old nonce still dedups");
+        assert!(store.remember_nonce("w", "group-wake:new:1").expect("new"), "a scoped nonce can be written");
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

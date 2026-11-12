@@ -598,6 +598,7 @@ impl Coordinator {
                 author: "chief".to_string(),
                 text: format!("Assignment for {display}: {}", item.prompt),
                 nonce: format!("group-dispatch:{}:{}:{}", work.id, input.dispatch_key, item.avatar),
+                work_id: work.id.clone(),
             });
             effects.push(Effect::StartLane { assignment: assignment.clone(), goal: work.prompt.clone() });
             created.push(assignment);
@@ -707,6 +708,7 @@ impl Coordinator {
                 author: avatar.clone(),
                 text: input.result,
                 nonce: format!("group-result:{}", own.id),
+                work_id: own.work_id.clone(),
             }],
         ))
     }
@@ -748,6 +750,7 @@ impl Coordinator {
                 author: "chief".to_string(),
                 text: input.report,
                 nonce: format!("group-finish:{}", active.id),
+                work_id: active.id.clone(),
             }],
         ))
     }

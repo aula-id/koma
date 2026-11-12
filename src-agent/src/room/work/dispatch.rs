@@ -71,6 +71,7 @@ fn assign(
             author: "chief".to_string(),
             text: format!("Assignment for {}: {prompt}", registry.display_of(avatar)),
             nonce: format!("group-dispatch:{}:{}:{}", work.id, dispatch_key, avatar),
+            work_id: work.id.clone(),
         },
         Effect::StartLane { assignment, goal: work.prompt.clone() },
     ])
