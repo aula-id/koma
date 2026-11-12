@@ -8,7 +8,14 @@ export type RoomFrame =
   | { type: "lane"; avatar: string; text: string }
   | { type: "visible"; author: string; text: string }
   | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number }
+  | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
+  | { type: "notice"; text: string }
   | { type: "closed" }
+
+/** A model registered in the coding agent. */
+export type ModelChoice = { id: string; name: string; model_id: string; provider: string }
+/** What one lane of one avatar runs. */
+export type LaneRow = { avatar: string; display: string; lane: string; model: string }
 
 /** One room wire value, or null when it is not a room frame. */
 export function parseRoomFrame(value: unknown): RoomFrame | null {
@@ -41,6 +48,17 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
       reports: Number(status.reports ?? 0),
     }
   }
+  const models = body("models")
+  if (models) {
+    const rows = (key: string) => Array.isArray(models[key]) ? models[key] as Record<string, unknown>[] : []
+    return {
+      type: "models",
+      choices: rows("choices").map((c) => ({ id: String(c.id ?? ""), name: String(c.name ?? ""), model_id: String(c.model_id ?? ""), provider: String(c.provider ?? "") })),
+      lanes: rows("lanes").map((l) => ({ avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), lane: String(l.lane ?? ""), model: String(l.model ?? "") })),
+    }
+  }
+  const notice = body("notice")
+  if (notice) return { type: "notice", text: String(notice.text ?? "") }
   if ("closed" in record) return { type: "closed" }
   return null
 }
@@ -70,6 +88,15 @@ export class RoomLink {
 
   sendUser(text: string): void {
     this.send({ user: { text } })
+  }
+
+  requestModels(): void {
+    this.send("models")
+  }
+
+  /** An empty `model` returns the lane to the session default. */
+  setModel(avatar: string, lane: string, model: string): void {
+    this.send({ set_model: { avatar, lane, model } })
   }
 
   close(): void {

@@ -4,10 +4,12 @@ import { BORDER_LEFT, scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
 import { Choice, promptMark } from "./chat.tsx"
 import { suggest } from "./room-suggest.ts"
-import { RoomLink, type RoomFrame } from "./room-link.ts"
+import { RoomLink, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
+import { ModelPicker } from "./room-model.tsx"
 import { switchDaemon } from "./paths.ts"
 
 export type Line = { id: string; author: string; text: string }
+export type ModelList = { choices: ModelChoice[]; lanes: LaneRow[] }
 export type Counts = { open: number; verified: number; returned: number; reports: number }
 
 /** The secure room. `/security` again returns to the coding daemon. */
@@ -26,6 +28,8 @@ export function RoomScreen({
   const [shelf, setShelf] = useState("")
   const [map, setMap] = useState("")
   const [counts, setCounts] = useState<Counts>({ open: 0, verified: 0, returned: 0, reports: 0 })
+  const [models, setModels] = useState<ModelList>({ choices: [], lanes: [] })
+  const [notice, setNotice] = useState("")
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
   const link = useRef<RoomLink | null>(null)
@@ -34,7 +38,7 @@ export function RoomScreen({
   useEffect(() => {
     let dead = false
     const room = new RoomLink(
-      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts) },
+      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice) },
       (text) => { if (!dead && !leaving.current) setPhase(text) },
     )
     link.current = room
@@ -74,14 +78,130 @@ export function RoomScreen({
       draft={draft}
       onDraft={setDraft}
       onSend={send}
+      models={models}
+      notice={notice}
+      onOpenModels={() => link.current?.requestModels()}
+      onSetModel={(avatar, lane, model) => { setNotice(""); link.current?.setModel(avatar, lane, model) }}
     />
   )
 }
 
-export type FullView = "status" | "shelf" | "trajectory"
-const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory" }
+export type Panes = { lanes: string; swim: string; shelf: string; map: string }
 
-function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: FullView; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
+/** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
+export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", onOpenModels = () => {}, onSetModel = () => {} }: {
+  theme: Theme
+  lines: Line[]
+  panes: Panes
+  counts: Counts
+  phase: string
+  draft: string
+  onDraft: (text: string) => void
+  onSend: () => void
+  models?: ModelList
+  notice?: string
+  onOpenModels?: () => void
+  onSetModel?: (avatar: string, lane: string, model: string) => void
+}) {
+  const [full, setFull] = useState<FullView | null>(null)
+  const options = suggest(draft)
+  const [pickedAt, setPickedAt] = useState(0)
+  const picked = Math.min(pickedAt, Math.max(0, options.rows.length - 1))
+  const open = options.rows.length > 0
+  const accept = (): boolean => {
+    const row = options.rows[picked]
+    if (!row || row.insert === draft) return false
+    onDraft(row.insert)
+    return true
+  }
+
+  useKeyboard((key) => {
+    if (key.eventType === "release") return
+    if (full) {
+      if (full !== "model" && (key.name === "escape" || key.name === "q")) setFull(null)
+      return
+    }
+    if (open && (key.name === "up" || key.name === "down")) {
+      setPickedAt((picked + (key.name === "up" ? -1 : 1) + options.rows.length) % options.rows.length)
+    } else if (open && key.name === "tab") accept()
+  })
+
+  const submit = () => {
+    if (accept()) return
+    const view = FULL_COMMANDS[draft.trim()]
+    if (view) {
+      if (view === "model") onOpenModels()
+      setFull(view)
+      onDraft("")
+      return
+    }
+    onSend()
+  }
+
+  if (full === "model") {
+    return <ModelPicker theme={theme} choices={models.choices} lanes={models.lanes} notice={notice} onSet={onSetModel} onBack={() => setFull(null)} />
+  }
+  if (full) {
+    return <FullScreenView view={full} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
+  }
+
+  const ready = phase === "connected"
+  return (
+    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
+      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
+        <text flexShrink={0}>
+          <span fg={theme.fg}>Koma</span>
+          <span fg={theme.dim}> | </span>
+          <span fg={theme.accent}>secure room</span>
+        </text>
+        <text fg={ready ? theme.success : phase === "the room closed" ? theme.warn : theme.dim} wrapMode="none">{ready ? tally(counts, true) : phase}</text>
+      </box>
+      <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY stickyScroll stickyStart="bottom" focusable={false} scrollbarOptions={scrollbars(theme)}>
+        {lines.length === 0 ? (
+          <box flexDirection="column" paddingTop={1}>
+            <text fg={theme.dim}>Message the Chief to start. The Chief hands work to the specialists.</text>
+            <text fg={theme.dim}>@red talks to a specialist directly. /status, /shelf, /trajectory and /model open full screen.</text>
+          </box>
+        ) : (
+          <box flexDirection="column" gap={1} paddingTop={1}>
+            {lines.map((line) => <Message key={line.id} line={line} theme={theme} />)}
+          </box>
+        )}
+      </scrollbox>
+      {open ? (
+        <box height={options.rows.length + 2} flexShrink={0} border borderStyle="rounded" borderColor={theme.dim} flexDirection="column" title={options.title} titleColor={theme.dim}>
+          {options.rows.map((row, index) => (
+            <Choice key={row.label} label={row.label} detail={row.detail} theme={theme} selected={index === picked} onPress={() => onDraft(row.insert)} />
+          ))}
+        </box>
+      ) : null}
+      <box height={3} flexShrink={0}>
+        <box border borderStyle="rounded" borderColor={ready ? theme.accent : theme.dim} title=" secure " titleAlignment="right" titleColor={theme.accent} flexGrow={1} flexDirection="row" paddingRight={2}>
+          <text fg={theme.accent} flexShrink={0}>{`${promptMark(draft)} `}</text>
+          <input
+            flexGrow={1}
+            value={draft}
+            focused
+            placeholder="Message the Chief, @red for a specialist, /status for the lanes"
+            placeholderColor={theme.dim}
+            textColor={theme.fg}
+            focusedTextColor={theme.fg}
+            backgroundColor={theme.bg}
+            focusedBackgroundColor={theme.bg}
+            cursorColor={theme.accent}
+            onInput={onDraft}
+            onSubmit={submit}
+          />
+        </box>
+      </box>
+    </box>
+  )
+}
+
+export type FullView = "status" | "shelf" | "trajectory" | "model"
+const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory", "/model": "model" }
+
+function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: Exclude<FullView, "model">; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
   const sections: { title: string; text: string; empty: string }[] =
     view === "status"
       ? [
@@ -101,180 +221,17 @@ function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: F
         </text>
         <Action label="Back (esc)" theme={theme} plain onPress={onBack} />
       </box>
-      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1} rowGap={0}>
-        {sections.map((section) => (
-          <Panel key={section.title} title={section.title} hot={false} theme={theme} status={view === "status" && section === sections[0] ? phase === "connected" ? tally(counts, true) : phase : undefined}>
+      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
+        {sections.map((section, index) => (
+          <Panel key={section.title} title={section.title} hot={false} theme={theme} status={view === "status" && index === 0 ? phase === "connected" ? tally(counts, true) : phase : undefined}>
             <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
               {section.text.trim()
-                ? section.text.split("\n").map((row, index) => <text key={index} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
+                ? section.text.split("\n").map((row, i) => <text key={i} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
                 : <text fg={theme.dim} paddingLeft={1}>{section.empty}</text>}
             </scrollbox>
           </Panel>
         ))}
       </box>
-    </box>
-  )
-}
-
-export type Panes = { lanes: string; swim: string; shelf: string; map: string }
-
-/** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, onSend }: {
-  theme: Theme
-  lines: Line[]
-  panes: Panes
-  counts: Counts
-  phase: string
-  draft: string
-  onDraft: (text: string) => void
-  onSend: () => void
-}) {
-  const { lanes, swim, shelf, map } = panes
-  const setDraft = onDraft
-  const send = onSend
-  const { width } = useTerminalDimensions()
-  const wide = width >= 100
-  const [tab, setTab] = useState<Tab | null>(null)
-  // Wide screens keep the chat beside one side pane; narrow ones show one pane at a time.
-  const active: Tab = wide ? (tab && tab !== "chat" ? tab : "lanes") : tab ?? "chat"
-
-  const [full, setFull] = useState<FullView | null>(null)
-  const options = suggest(draft)
-  const [pickedAt, setPickedAt] = useState(0)
-  const picked = Math.min(pickedAt, Math.max(0, options.rows.length - 1))
-  const open = options.rows.length > 0
-  const accept = (): boolean => {
-    const row = options.rows[picked]
-    if (!row || row.insert === draft) return false
-    setDraft(row.insert)
-    return true
-  }
-
-  useKeyboard((key) => {
-    if (key.eventType === "release") return
-    if (full) {
-      if (key.name === "escape" || key.name === "q") setFull(null)
-      return
-    }
-    if (open && (key.name === "up" || key.name === "down")) {
-      const step = key.name === "up" ? -1 : 1
-      setPickedAt((picked + step + options.rows.length) % options.rows.length)
-      return
-    }
-    if (open && key.name === "tab" && accept()) return
-    if (key.name !== "tab") return
-    const order = wide ? TABS.filter((t) => t !== "chat") : TABS
-    setTab(order[(order.indexOf(active) + 1) % order.length] ?? order[0])
-  })
-
-  const pick = (next: Tab) => setTab(next)
-  const body: Record<Exclude<Tab, "chat">, { text: string; empty: string }> = {
-    lanes: { text: lanes, empty: "No lane is running. Ask the Chief to start work." },
-    swim: { text: swim, empty: "Lane activity shows up here once work starts." },
-    shelf: { text: shelf, empty: "The shelf is empty. Findings land here as lanes write them." },
-    map: { text: map, empty: "No trajectory yet." },
-  }
-  const side = active === "chat" ? null : body[active]
-  const ready = phase === "connected"
-
-  const transcript = (
-    <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY stickyScroll stickyStart="bottom" focusable={false} scrollbarOptions={scrollbars(theme)}>
-      {lines.length === 0 ? (
-        <box flexDirection="column" paddingTop={1}>
-          <text fg={theme.dim}>Message the Chief to start. The Chief hands work to the specialists.</text>
-          <text fg={theme.dim}>@red talks to a specialist directly. /security returns to the coding chat.</text>
-        </box>
-      ) : (
-        <box flexDirection="column" gap={1} paddingTop={1}>
-          {lines.map((line) => <Message key={line.id} line={line} theme={theme} />)}
-        </box>
-      )}
-    </scrollbox>
-  )
-
-  const composer = (
-    <box height={3} flexShrink={0}>
-      <box
-        border
-        borderStyle="rounded"
-        borderColor={ready ? theme.accent : theme.dim}
-        title=" secure "
-        titleAlignment="right"
-        titleColor={theme.accent}
-        flexGrow={1}
-        flexDirection="row"
-        paddingRight={2}
-      >
-        <text fg={theme.accent} flexShrink={0}>{`${promptMark(draft)} `}</text>
-        <input
-          flexGrow={1}
-          value={draft}
-          focused
-          placeholder={wide ? "Message the Chief, @red for a specialist, /security to leave" : "Message the Chief, or @red"}
-          placeholderColor={theme.dim}
-          textColor={theme.fg}
-          focusedTextColor={theme.fg}
-          backgroundColor={theme.bg}
-          focusedBackgroundColor={theme.bg}
-          cursorColor={theme.accent}
-          onInput={setDraft}
-          onSubmit={() => {
-            if (accept()) return
-            const view = FULL_COMMANDS[draft.trim()]
-            if (view) { setFull(view); setDraft(""); return }
-            send()
-          }}
-        />
-      </box>
-    </box>
-  )
-
-  const tabs = (wide ? TABS.filter((t) => t !== "chat") : TABS).map((t) => (
-    <Action key={t} label={TAB_LABEL[t]} theme={theme} plain primary={t === active} onPress={() => pick(t)} />
-  ))
-
-  if (full) {
-    return <FullScreenView view={full} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
-  }
-
-  return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-        <text flexShrink={0}>
-          <span fg={theme.fg}>Koma</span>
-          <span fg={theme.dim}> | </span>
-          <span fg={theme.accent}>secure room</span>
-        </text>
-        <text fg={ready ? theme.success : phase === "the room closed" ? theme.warn : theme.dim} wrapMode="none">{ready ? tally(counts, wide) : phase}</text>
-      </box>
-      <box flexDirection="row" flexGrow={1} flexBasis={0} minHeight={0} columnGap={2}>
-        {active === "chat" || wide ? (
-          <box flexDirection="column" flexGrow={1} flexBasis={0} minWidth={0}>
-            {transcript}
-          </box>
-        ) : null}
-        {side ? (
-          <box flexDirection="column" width={wide ? 44 : undefined} flexGrow={wide ? 0 : 1} flexShrink={0} flexBasis={wide ? undefined : 0} minWidth={0} paddingTop={1}>
-            <box flexDirection="row" flexShrink={0} columnGap={1}>{tabs}</box>
-            <Panel title={PANE_TITLE[active]} hot={false} theme={theme}>
-              <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
-                {side.text.trim()
-                  ? side.text.split("\n").map((row, index) => <text key={index} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
-                  : <text fg={theme.dim} paddingLeft={1}>{side.empty}</text>}
-              </scrollbox>
-            </Panel>
-          </box>
-        ) : null}
-      </box>
-      {!wide && active === "chat" ? <box flexDirection="row" flexShrink={0} columnGap={1}>{tabs}</box> : null}
-      {open ? (
-        <box height={options.rows.length + 2} flexShrink={0} border borderStyle="rounded" borderColor={theme.dim} flexDirection="column" title={options.title} titleColor={theme.dim}>
-          {options.rows.map((row, index) => (
-            <Choice key={row.label} label={row.label} detail={row.detail} theme={theme} selected={index === picked} onPress={() => setDraft(row.insert)} />
-          ))}
-        </box>
-      ) : null}
-      {composer}
     </box>
   )
 }
@@ -312,24 +269,6 @@ const DOTTED_RAIL = {
   vertical: "┊", topT: " ", bottomT: " ", leftT: " ", rightT: " ", cross: " ",
 }
 
-type Tab = "chat" | "lanes" | "swim" | "shelf" | "map"
-const TABS: Tab[] = ["chat", "lanes", "swim", "shelf", "map"]
-const TAB_LABEL: Record<Tab, string> = {
-  chat: "Chat",
-  lanes: "Lanes",
-  swim: "Swim",
-  shelf: "Shelf",
-  map: "Trajectory",
-}
-
-const PANE_TITLE: Record<Tab, string> = {
-  chat: "Chat",
-  lanes: "Who is working",
-  swim: "Activity",
-  shelf: "Findings",
-  map: "Trajectory goals",
-}
-
 /** The Chief is the accent; specialists take the status colors so lanes read apart at a glance. */
 export function authorInk(author: string, theme: Theme): string {
   const name = author.toLowerCase()
@@ -349,6 +288,8 @@ function applyFrame(
   setMap: (text: string) => void,
   setPhase: (text: string) => void,
   setCounts: (counts: Counts) => void,
+  setModels: (models: ModelList) => void,
+  setNotice: (text: string) => void,
 ): void {
   const push = (author: string, text: string) => setLines((current) => [...current, { id: crypto.randomUUID(), author, text }])
   switch (frame.type) {
@@ -370,6 +311,12 @@ function applyFrame(
       setShelf(frame.shelf)
       setMap(frame.trajectory)
       setCounts({ open: frame.open, verified: frame.verified, returned: frame.returned, reports: frame.reports })
+      break
+    case "models":
+      setModels({ choices: frame.choices, lanes: frame.lanes })
+      break
+    case "notice":
+      setNotice(frame.text)
       break
     case "closed":
       setPhase("the room closed")

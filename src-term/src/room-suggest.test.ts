@@ -8,7 +8,7 @@ test("matching is by prefix and fills a trailing space", () => {
   expect(suggest("@rev").rows).toEqual([{ label: "@reviewer", detail: "verifies findings independently", insert: "@reviewer " }])
 })
 test("slash offers the way back to coding", () => {
-  expect(suggest("/").rows.map((r) => r.label)).toEqual(["/status", "/shelf", "/trajectory", "/security", "/leave"])
+  expect(suggest("/").rows.map((r) => r.label)).toEqual(["/model", "/status", "/shelf", "/trajectory", "/security", "/leave"])
 })
 test("nothing is offered once the word is finished or plain text", () => {
   expect(suggest("@red probe").rows).toEqual([])

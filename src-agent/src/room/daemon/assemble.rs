@@ -25,6 +25,8 @@ pub const TICK_MS: u64 = 1_000;
 /// [`ActorMsg::Shutdown`](super::super::actor::ActorMsg::Shutdown), ends both.
 pub struct RoomSession {
     pub room: RoomHandle,
+    /// The registry the room reads, so the daemon can reload it after an overlay edit.
+    pub registry: Arc<RegistryHandle>,
     ticker: JoinHandle<()>,
 }
 
@@ -42,7 +44,7 @@ impl RoomSession {
         let store = WorkStore::open(&db)?;
         let registry = Arc::new(RegistryHandle::with_overlay(overlay_dir_for(session_dir))?);
         let coordinator = Arc::new(Coordinator::new(store, Arc::clone(&shelf), Arc::clone(&registry)));
-        let room = spawn_room(coordinator, shelf, registry, model, builtins, config);
+        let room = spawn_room(coordinator, shelf, Arc::clone(&registry), model, builtins, config);
 
         let to_actor = room.to_actor.clone();
         let ticker = tokio::spawn(async move {
@@ -55,7 +57,7 @@ impl RoomSession {
                 }
             }
         });
-        Ok(Self { room, ticker })
+        Ok(Self { room, registry, ticker })
     }
 }
 

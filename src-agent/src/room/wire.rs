@@ -19,7 +19,30 @@ pub enum RoomClient {
     Hello,
     User { text: String },
     Control { command: RoomControl },
+    /// Ask for the registered models and what each lane runs.
+    Models,
+    /// Point one lane (`chat` or `work`) at a registered model by its id. An
+    /// empty id returns the lane to the session default.
+    SetModel { avatar: String, lane: String, model: String },
     Quit,
+}
+
+/// A model registered in the coding agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    pub id: String,
+    pub name: String,
+    pub model_id: String,
+    pub provider: String,
+}
+
+/// The model one lane runs, as a label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LaneRow {
+    pub avatar: String,
+    pub display: String,
+    pub lane: String,
+    pub model: String,
 }
 
 /// What the daemon sends to an attach client.
@@ -49,6 +72,10 @@ pub enum RoomServer {
         #[serde(default)]
         trajectory: String,
     },
+    /// The answer to [`RoomClient::Models`], and to every `SetModel`.
+    Models { choices: Vec<ModelChoice>, lanes: Vec<LaneRow> },
+    /// A one-line result for the client that asked, such as a refused model.
+    Notice { text: String },
     Closed,
 }
 

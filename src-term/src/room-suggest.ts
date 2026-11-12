@@ -9,6 +9,7 @@ const PEOPLE: Suggestion[] = [
 ]
 
 const COMMANDS: Suggestion[] = [
+  { label: "/model", detail: "choose the model each minion runs", insert: "/model" },
   { label: "/status", detail: "every lane at a glance", insert: "/status" },
   { label: "/shelf", detail: "findings on the shelf, full screen", insert: "/shelf" },
   { label: "/trajectory", detail: "the goal map, full screen", insert: "/trajectory" },

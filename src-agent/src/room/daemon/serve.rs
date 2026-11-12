@@ -21,6 +21,7 @@ use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, SessionStatus};
 use crate::ipc::{split_stream, IpcListener, IpcWriteHalf};
 use crate::room::actor::{ActorMsg, RoomEvent};
+use super::models::ModelBook;
 use crate::room::wire::{RoomClient, RoomServer};
 
 /// Spoken lines kept for a client that attaches late.
@@ -70,8 +71,9 @@ pub async fn run(
     events: UnboundedReceiver<RoomEvent>,
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
+    book: Arc<ModelBook>,
 ) {
-    serve(listener, to_actor, events, status, shutting_down, BACKLOG_CAP).await;
+    serve(listener, to_actor, events, status, shutting_down, book, BACKLOG_CAP).await;
 }
 
 async fn serve(
@@ -80,6 +82,7 @@ async fn serve(
     mut events: UnboundedReceiver<RoomEvent>,
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
+    book: Arc<ModelBook>,
     cap: usize,
 ) {
     let (sub_tx, mut sub_rx) = unbounded_channel::<Subscription>();
@@ -94,8 +97,9 @@ async fn serve(
                         let sub_tx = sub_tx.clone();
                         let status = status.clone();
                         let shutting_down = Arc::clone(&shutting_down);
+                        let book = Arc::clone(&book);
                         tokio::spawn(async move {
-                            let _ = handle_conn(stream, to_actor, sub_tx, status, shutting_down).await;
+                            let _ = handle_conn(stream, to_actor, sub_tx, status, shutting_down, book).await;
                         });
                     }
                     Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
@@ -129,6 +133,7 @@ async fn handle_conn(
     sub_tx: UnboundedSender<Subscription>,
     status: SessionStatus,
     shutting_down: Arc<AtomicBool>,
+    book: Arc<ModelBook>,
 ) -> std::io::Result<()> {
     let (mut read, mut write) = split_stream(stream);
     let mut reader = FrameReader::new();
@@ -173,6 +178,15 @@ async fn handle_conn(
                     RoomClient::Control { command } => {
                         let _ = to_actor.send(ActorMsg::Control(command.into()));
                     }
+                    RoomClient::Models => {
+                        write_json(&mut write, &models_frame(&book)).await?;
+                    }
+                    RoomClient::SetModel { avatar, lane, model } => {
+                        if let Err(text) = book.set(&avatar, &lane, &model) {
+                            write_json(&mut write, &RoomServer::Notice { text }).await?;
+                        }
+                        write_json(&mut write, &models_frame(&book)).await?;
+                    }
                     RoomClient::Quit => {
                         let _ = write_json(&mut write, &RoomServer::Closed).await;
                         break;
@@ -189,6 +203,10 @@ async fn handle_conn(
         }
     }
     Ok(())
+}
+
+fn models_frame(book: &ModelBook) -> RoomServer {
+    RoomServer::Models { choices: book.choices(), lanes: book.lanes() }
 }
 
 async fn write_json(write: &mut IpcWriteHalf, value: &impl serde::Serialize) -> std::io::Result<()> {

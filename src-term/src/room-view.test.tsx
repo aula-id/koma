@@ -24,28 +24,26 @@ async function frame(width: number, height: number, over: Partial<Parameters<typ
   return text
 }
 
-test("wide room shows the chat beside the lanes pane", async () => {
-  const text = await frame(120, 30)
-  expect(text).toContain("secure room")
-  expect(text).toContain("2 open · 1 verified")
-  expect(text).toContain("scan the staging api")
-  expect(text).toContain("Found a token")
-  expect(text).toContain("red running")
-  expect(text).toContain("[$]")
-})
-
-test("narrow room shows the chat alone with pane tabs", async () => {
-  const text = await frame(60, 24)
-  expect(text).toContain("Found a token")
-  expect(text).toContain("Lanes")
-  expect(text).not.toContain("red running")
+test("the chat is one full-width column at any size, never beside a pane", async () => {
+  for (const [w, h] of [[120, 30], [60, 24]] as const) {
+    const text = await frame(w, h)
+    expect(text).toContain("secure room")
+    expect(text).toContain("scan the staging api")
+    expect(text).toContain("Found a token")
+    expect(text).toContain("[$]")
+    expect(text).not.toContain("red running")
+    const rows = text.split("\n")
+    const chief = rows.findIndex((r) => r.includes("chief"))
+    const red = rows.findIndex((r) => r.trim().endsWith("red") || r.includes("┊ red"))
+    expect(chief).toBeGreaterThan(-1)
+    expect(red).toBeGreaterThan(chief)
+  }
 })
 
 test("an empty room says how to start", async () => {
   const text = await frame(100, 24, { lines: [], panes: { lanes: "", swim: "", shelf: "", map: "" }, phase: "starting the secure daemon" })
   expect(text).toContain("Message the Chief to start")
   expect(text).toContain("starting the secure daemon")
-  expect(text).toContain("No lane is running")
 })
 
 test("specialists take distinct inks", () => {
@@ -75,4 +73,50 @@ test("/status opens every lane full screen and esc comes back", async () => {
   expect(text).toContain("Who is working")
   expect(text).toContain("Activity")
   expect(text).not.toContain("[$]")
+})
+
+const models = {
+  choices: [
+    { id: "m1", name: "Fast", model_id: "fast-1", provider: "acme" },
+    { id: "m2", name: "Strong", model_id: "strong-1", provider: "other" },
+  ],
+  lanes: [
+    { avatar: "red", display: "Lab Red", lane: "chat", model: "session default" },
+    { avatar: "red", display: "Lab Red", lane: "work", model: "Strong" },
+    { avatar: "clerk", display: "Clerk", lane: "work", model: "session default" },
+  ],
+}
+
+test("/model walks minion, lane, then a searchable model and reports the choice", async () => {
+  const picks: string[][] = []
+  let asked = 0
+  let view!: Awaited<ReturnType<typeof testRender>>
+  await act(async () => {
+    view = await testRender(<RoomView theme={theme} lines={[]} panes={panes} counts={counts} phase="connected" draft="/model" onDraft={() => {}} onSend={() => {}} models={models} onOpenModels={() => { asked++ }} onSetModel={(a, l, m) => { picks.push([a, l, m]) }} />, { width: 100, height: 28 })
+  })
+  const text = async () => { await act(async () => { await view.renderOnce() }); return view.captureCharFrame() }
+  await act(async () => { await view.mockInput.pressEnter() })
+  expect(asked).toBe(1)
+  let t = await text()
+  expect(t).toContain("Which minion")
+  expect(t).toContain("Lab Red")
+  expect(t).toContain("work: Strong")
+  await act(async () => { await view.mockInput.pressEnter() })
+  t = await text()
+  expect(t).toContain("Lab Red · which lane")
+  await act(async () => { view.mockInput.pressArrow("down") })
+  await act(async () => { await view.mockInput.pressEnter() })
+  t = await text()
+  expect(t).toContain("Lab Red · work model")
+  expect(t).toContain("Search")
+  expect(t).toContain("Fast")
+  await act(async () => { await view.mockInput.typeText("stro") })
+  t = await text()
+  expect(t).toContain("Strong")
+  expect(t).not.toContain("Fast")
+  await act(async () => { await view.mockInput.pressEnter() })
+  expect(picks).toEqual([["red", "work", "m2"]])
+  t = await text()
+  expect(t).toContain("Which minion")
+  await act(async () => { await view.dispose() })
 })

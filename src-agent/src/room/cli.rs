@@ -287,6 +287,8 @@ mod attach {
                     *last_digest = digest.clone();
                 }
             }
+            RoomServer::Models { .. } => {}
+            RoomServer::Notice { text } => { let _ = writeln!(out, "room: {text}"); }
             RoomServer::Closed => {
                 let _ = writeln!(out, "room: closed");
                 return true;

@@ -4,6 +4,7 @@
 pub mod assemble;
 pub mod builtins;
 pub mod model_client;
+pub mod models;
 mod run;
 mod selftest;
 mod serve;

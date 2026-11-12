@@ -131,9 +131,11 @@ settings persistence.
   message is a `panel` card with a solid accent rail, every other author sits behind
   the dotted `┊` rail with the name inked (Chief accent, red `error`, reviewer `info`,
   reporter `warn`). The composer is the rounded `[$]` box with `secure` top-right.
-  At 100+ columns the chat sits beside one rounded side pane; below that one pane shows
-  at a time. Lanes, Swim, Shelf and Trajectory are tabs (Tab key or click), never stacked.
-  Width comes from `useTerminalDimensions`, since the frame-based reader starts narrow.
+  The chat is always one full-width column, never beside a pane. `/status`, `/shelf`,
+  `/trajectory` and `/model` open full screen and Esc returns. `@name` and `/command`
+  autocomplete in an overlay above the composer. `/model` lists the minions, then a
+  lane, then the models registered in the coding agent, with search; the daemon owns
+  the list and writes the choice to the session overlay.
 - Text editors fit their allocated height and retain the caret in view. Extension
   documents scroll to the selected action. Usage respects cost/token selection.
 - Hub, quit, loading, and the subagent viewer also have independent compositions

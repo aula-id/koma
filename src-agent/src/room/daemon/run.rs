@@ -12,6 +12,7 @@ use anyhow::{bail, Result};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::assemble::RoomSession;
+use super::models::ModelBook;
 use super::selftest::run_secure_selftest;
 use crate::app::resolve::resolve_role;
 use crate::app::runtime::{
@@ -124,12 +125,19 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         drop(dummy_tx);
         let events = std::mem::replace(&mut session.room.events, dummy_rx);
         let to_actor = session.room.to_actor.clone();
+        let book = Arc::new(ModelBook::new(
+            &state.rest.config,
+            &settings,
+            Arc::clone(&session.registry),
+            crate::room::registry::overlay_dir_for(&session_dir),
+        ));
         let serve = tokio::spawn(super::serve::run(
             listener,
             to_actor,
             events,
             probe,
             Arc::clone(&shutting_down),
+            book,
         ));
         (session, serve)
     };

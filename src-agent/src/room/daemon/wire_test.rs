@@ -82,6 +82,7 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
         events,
         status,
         Arc::clone(&shutting_down),
+        super::models::test_book(&dir),
     ));
 
     let probe = client::connect(&sock).await.expect("probe connect");
@@ -160,7 +161,7 @@ fn bench() -> Bench {
     let (events, events_rx) = unbounded_channel();
     let (to_actor, from_clients) = unbounded_channel();
     let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
-    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false))));
+    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(sock.parent().expect("dir"))));
     Bench { sock, events, from_clients, serve }
 }
 
@@ -251,4 +252,30 @@ async fn an_attach_to_a_quiet_room_replays_nothing() {
     let (_r, _w, _reader, replayed) = b.attach().await;
     assert_eq!(replayed, 0);
     b.stop();
+}
+
+#[tokio::test]
+async fn a_client_lists_models_and_sets_one() {
+    let bench = bench();
+    let (mut read_half, mut write_half, mut reader, _) = bench.attach().await;
+    write(&mut write_half, &RoomClient::Models).await;
+    let RoomServer::Models { choices, lanes } = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Models { .. })).await else { unreachable!() };
+    assert_eq!(choices.len(), 2);
+    assert!(lanes.iter().any(|l| l.avatar == "red" && l.lane == "work"));
+    write(&mut write_half, &RoomClient::SetModel { avatar: "red".into(), lane: "work".into(), model: "m2".into() }).await;
+    let RoomServer::Models { lanes, .. } = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Models { .. })).await else { unreachable!() };
+    assert_eq!(lanes.iter().find(|l| l.avatar == "red" && l.lane == "work").expect("row").model, "Strong");
+    write(&mut write_half, &RoomClient::SetModel { avatar: "red".into(), lane: "work".into(), model: "nope".into() }).await;
+    let note = next_matching(&mut read_half, &mut reader, |f| matches!(f, RoomServer::Notice { .. })).await;
+    assert_eq!(note, RoomServer::Notice { text: "that model is not registered".into() });
+    bench.stop();
+}
+
+async fn next_matching(read_half: &mut crate::ipc::IpcReadHalf, reader: &mut FrameReader, want: impl Fn(&RoomServer) -> bool) -> RoomServer {
+    loop {
+        let frame = next(read_half, reader).await;
+        if want(&frame) {
+            return frame;
+        }
+    }
 }
