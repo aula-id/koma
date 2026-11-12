@@ -258,9 +258,6 @@ export function SessionScreen({
   }, [ctrlC, interrupt])
 
   const theme = themeFor(snap?.global.palette ?? initialPalette)
-  if (room) {
-    return <RoomScreen id={id} theme={theme} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
-  }
   const session = snap ? foregroundSession(snap) : null
   const mode = snap ? modeName(snap.global.mode) : ""
   const quit = snap ? quitState(snap.global.mode) : null
@@ -309,11 +306,12 @@ export function SessionScreen({
   }
 
   usePaste((event) => {
+    if (room) return
     if (quit || exiting != null || approval && !warming) { event.preventDefault(); event.stopPropagation() }
   })
 
   useKeyboard((key) => {
-    if (key.eventType === "release" || phase === "error") return
+    if (key.eventType === "release" || phase === "error" || room) return
     if (exiting != null) { key.preventDefault(); key.stopPropagation(); return }
     if ((key.ctrl && key.name === "c") || key.sequence === "\u0003" || key.name === "ctrl+c") {
       interrupt()
@@ -407,6 +405,11 @@ export function SessionScreen({
     }
   })
 
+  // Every hook above runs on every render. Returning earlier changes the hook count
+  // and React throws "Rendered fewer hooks than expected" the moment `room` turns on.
+  if (room) {
+    return <RoomScreen id={id} theme={theme} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
+  }
   if (phase === "connecting") {
     return <OpeningSplash theme={theme} />
   }
