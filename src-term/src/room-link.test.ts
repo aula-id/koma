@@ -32,3 +32,30 @@ test("live delta parts parse", () => {
 test("a pasted frame carries the text to put in the draft", () => {
   expect(parseRoomFrame({ pasted: { insert: "[Image #1]" } })).toEqual({ type: "pasted", insert: "[Image #1]" })
 })
+
+import { createConnection, createServer } from "node:net"
+import { mkdtempSync } from "node:fs"
+import { FrameReader } from "./protocol.ts"
+import { RoomLink } from "./room-link.ts"
+
+test("a message sent before the daemon answers is delivered once it connects", async () => {
+  const sock = `${mkdtempSync("/tmp/koma-link-")}/s.sock`
+  const got: unknown[] = []
+  const server = createServer((c) => {
+    const reader = new FrameReader()
+    c.on("data", (d: Buffer) => { for (const f of reader.push(d)) got.push(f) })
+  })
+  await new Promise<void>((r) => server.listen(sock, () => r()))
+  const link = new RoomLink(() => {}, () => {})
+  link.sendUser("first words")
+  link.paste("pasted")
+  await Bun.sleep(20)
+  expect(got).toEqual([])
+  const socket = createConnection({ path: sock })
+  await new Promise<void>((r) => socket.once("connect", () => r()))
+  link.attach(socket)
+  await Bun.sleep(60)
+  link.close()
+  server.close()
+  expect(got).toEqual(["hello", { user: { text: "first words" } }, { paste: { text: "pasted" } }])
+})
