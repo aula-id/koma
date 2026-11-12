@@ -31,6 +31,9 @@ pub enum ActorMsg {
     Flag(InboxItem),
     /// A lane called `message_user`.
     MessageUser { from: String, text: String },
+    /// A client attached and wants the current picture now, not at the next
+    /// tick. Emits one status and does nothing else.
+    Resync,
     /// Stop the room.
     Shutdown,
 }
@@ -51,7 +54,7 @@ pub enum RoomEvent {
 }
 
 /// A point-in-time picture of the room for the status panes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusSnapshot {
     /// The work-digest text (per-lane current state).
     pub digest: String,

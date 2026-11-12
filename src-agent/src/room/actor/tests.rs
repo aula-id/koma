@@ -559,3 +559,11 @@ async fn an_oversized_database_is_pruned_before_the_room_loads_it() {
     assert_eq!(kept.len(), 5);
     assert!(kept.contains("old49") && !kept.contains("old0"));
 }
+
+#[tokio::test]
+async fn a_resync_answers_with_a_status_without_waiting_for_a_tick() {
+    let mut h = harness(vec![]);
+    h.send(ActorMsg::Resync);
+    let events = h.wait_for("status", |e| matches!(e, RoomEvent::Status(_))).await;
+    assert_eq!(events.len(), 1, "a resync only reports status: {events:?}");
+}

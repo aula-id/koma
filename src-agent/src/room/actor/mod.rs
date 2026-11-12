@@ -234,6 +234,7 @@ impl RoomActor {
                         RoomEvent::LaneChat { avatar: from, text }
                     });
                 }
+                ActorMsg::Resync => self.emit_status(),
                 ActorMsg::Shutdown => break,
             }
         }

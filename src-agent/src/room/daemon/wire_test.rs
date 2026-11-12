@@ -12,7 +12,7 @@ use crate::ipc::client;
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, SessionStatus};
 use crate::ipc::split_stream;
-use crate::room::actor::{ActorMsg, NoBuiltins, RoomConfig};
+use crate::room::actor::{ActorMsg, NoBuiltins, RoomConfig, RoomEvent, StatusSnapshot};
 use crate::room::lane::{ModelClient, ModelReply, ModelRequest};
 use crate::room::wire::{RoomClient, RoomServer};
 
@@ -104,7 +104,7 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
     let mut reader = FrameReader::new();
     write(&mut write_half, &RoomClient::Hello).await;
     let welcome: RoomServer = read(&mut read_half, &mut reader).await;
-    assert_eq!(welcome, RoomServer::hello());
+    assert!(matches!(&welcome, RoomServer::Hello { kind, .. } if kind == "secure"), "{welcome:?}");
     write(&mut write_half, &RoomClient::User { text: "hi".into() }).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -144,4 +144,111 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
     let _ = std::fs::remove_dir_all(&dir);
     #[cfg(unix)]
     let _ = std::fs::remove_file(&sock);
+}
+
+/// A serve loop fed by hand, with no actor, so the test controls what was said and when.
+struct Bench {
+    sock: PathBuf,
+    events: tokio::sync::mpsc::UnboundedSender<RoomEvent>,
+    from_clients: tokio::sync::mpsc::UnboundedReceiver<ActorMsg>,
+    serve: tokio::task::JoinHandle<()>,
+}
+
+fn bench() -> Bench {
+    let sock = sock_path();
+    let listener = crate::ipc::server::bind(&sock).expect("bind");
+    let (events, events_rx) = unbounded_channel();
+    let (to_actor, from_clients) = unbounded_channel();
+    let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
+    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false))));
+    Bench { sock, events, from_clients, serve }
+}
+
+impl Bench {
+    fn say(&self, text: &str) {
+        self.events.send(RoomEvent::Chief(text.into())).expect("serve alive");
+    }
+
+    fn status(&self, open: usize) {
+        let mut snapshot = StatusSnapshot::default();
+        snapshot.counts.open = open;
+        self.events.send(RoomEvent::Status(snapshot)).expect("serve alive");
+    }
+
+    /// Let the serve loop take what was sent before anyone attaches.
+    async fn settle(&self) {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    async fn attach(&self) -> (crate::ipc::IpcReadHalf, crate::ipc::IpcWriteHalf, FrameReader, usize) {
+        let stream = client::connect(&self.sock).await.expect("attach");
+        let (mut read_half, mut write_half) = split_stream(stream);
+        let mut reader = FrameReader::new();
+        write(&mut write_half, &RoomClient::Hello).await;
+        let welcome: RoomServer = read(&mut read_half, &mut reader).await;
+        let RoomServer::Hello { replayed, .. } = welcome else { panic!("first frame was {welcome:?}") };
+        (read_half, write_half, reader, replayed)
+    }
+
+    fn stop(self) {
+        self.serve.abort();
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&self.sock);
+    }
+}
+
+async fn next(read_half: &mut crate::ipc::IpcReadHalf, reader: &mut FrameReader) -> RoomServer {
+    let deadline = Duration::from_secs(5);
+    let bytes = tokio::time::timeout(deadline, read_frame_from(read_half, reader))
+        .await
+        .expect("timed out waiting for a frame")
+        .expect("read");
+    serde_json::from_slice(&bytes).expect("decode")
+}
+
+#[tokio::test]
+async fn a_client_that_attaches_late_gets_what_was_said_while_nobody_listened() {
+    let mut b = bench();
+    b.say("good morning");
+    b.say("scanning now");
+    b.status(1);
+    b.status(2);
+    b.settle().await;
+
+    let (mut r, _w, mut reader, replayed) = b.attach().await;
+    assert_eq!(replayed, 3, "the latest status and two lines");
+    assert!(matches!(next(&mut r, &mut reader).await, RoomServer::Status { open: 2, .. }));
+    assert_eq!(next(&mut r, &mut reader).await, RoomServer::Chief { text: "good morning".into() });
+    assert_eq!(next(&mut r, &mut reader).await, RoomServer::Chief { text: "scanning now".into() });
+    assert_eq!(b.from_clients.recv().await, Some(ActorMsg::Resync), "an attach asks for a current status");
+
+    b.say("live line");
+    assert_eq!(next(&mut r, &mut reader).await, RoomServer::Chief { text: "live line".into() });
+    b.stop();
+}
+
+#[tokio::test]
+async fn a_second_attach_sees_the_history_once_and_in_order() {
+    let b = bench();
+    b.say("one");
+    b.settle().await;
+    let (r1, w1, _reader1, replayed) = b.attach().await;
+    assert_eq!(replayed, 1);
+    drop((r1, w1));
+
+    b.say("two while detached");
+    b.settle().await;
+    let (mut r, _w, mut reader, replayed) = b.attach().await;
+    assert_eq!(replayed, 2);
+    assert_eq!(next(&mut r, &mut reader).await, RoomServer::Chief { text: "one".into() });
+    assert_eq!(next(&mut r, &mut reader).await, RoomServer::Chief { text: "two while detached".into() });
+    b.stop();
+}
+
+#[tokio::test]
+async fn an_attach_to_a_quiet_room_replays_nothing() {
+    let b = bench();
+    let (_r, _w, _reader, replayed) = b.attach().await;
+    assert_eq!(replayed, 0);
+    b.stop();
 }

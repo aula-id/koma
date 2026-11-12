@@ -14,7 +14,8 @@ use crate::room::lane::ControlCommand;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomClient {
-    /// The client's first frame. The daemon answers with [`RoomServer::Hello`].
+    /// The client's first frame. The daemon answers with [`RoomServer::Hello`],
+    /// replays recent history, then sends a fresh status.
     Hello,
     User { text: String },
     Control { command: RoomControl },
@@ -25,7 +26,13 @@ pub enum RoomClient {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomServer {
-    Hello { kind: String },
+    Hello {
+        kind: String,
+        /// How many history frames follow before live ones: the latest status
+        /// and the recent Chief, lane and visible lines.
+        #[serde(default)]
+        replayed: usize,
+    },
     Chief { text: String },
     LaneChat { avatar: String, text: String },
     Visible { author: String, text: String },
@@ -67,8 +74,15 @@ impl From<RoomControl> for ControlCommand {
 }
 
 impl RoomServer {
-    pub fn hello() -> Self {
-        RoomServer::Hello { kind: "secure".into() }
+    pub fn hello(replayed: usize) -> Self {
+        RoomServer::Hello { kind: "secure".into(), replayed }
+    }
+
+    /// True for the lines a late client should still see: what the Chief and the
+    /// lanes said. Status is replaced by the next snapshot and Closed ends the
+    /// connection, so neither is kept as history.
+    pub fn is_history(&self) -> bool {
+        matches!(self, RoomServer::Chief { .. } | RoomServer::LaneChat { .. } | RoomServer::Visible { .. })
     }
 
     pub fn from_event(event: RoomEvent) -> Self {

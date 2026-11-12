@@ -226,8 +226,8 @@ mod attach {
         let first = read_frame_from(&mut read, &mut reader).await.map_err(|e| e.to_string())?;
         let welcome: RoomServer = serde_json::from_slice(&first).map_err(|e| e.to_string())?;
         match welcome {
-            RoomServer::Hello { kind } if kind == "secure" => println!("room: secure"),
-            RoomServer::Hello { kind } => return Err(format!("daemon kind is '{kind}', not secure")),
+            RoomServer::Hello { kind, .. } if kind == "secure" => println!("room: secure"),
+            RoomServer::Hello { kind, .. } => return Err(format!("daemon kind is '{kind}', not secure")),
             _ => return Err("the daemon did not say hello".to_string()),
         }
 
