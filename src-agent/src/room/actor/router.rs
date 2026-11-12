@@ -23,8 +23,10 @@ use crate::dto::chat::ToolCall;
 /// tools; everything else goes here. The real implementation wraps a
 /// `ToolCtx`; tests use a stub.
 pub trait BuiltinHost: Send + Sync {
-    /// Run one built-in tool call, returning the text fed back to the model.
-    fn run(&self, call: &ToolCall) -> String;
+    /// Run one built-in tool call for the named lane, returning the text fed
+    /// back to the model. The avatar and kind let the host pick the right tool
+    /// context (a red lane's cyber lane differs from a reviewer's).
+    fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String;
     /// The built-in tools a lane of this kind may use.
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec>;
 }
@@ -33,7 +35,7 @@ pub trait BuiltinHost: Send + Sync {
 pub struct NoBuiltins;
 
 impl BuiltinHost for NoBuiltins {
-    fn run(&self, call: &ToolCall) -> String {
+    fn run(&self, _avatar: &str, _kind: LaneKind, call: &ToolCall) -> String {
         format!("error: no tool '{}' is available in this room", call.function.name)
     }
     fn specs(&self, _kind: LaneKind) -> Vec<ToolSpec> {
@@ -205,7 +207,7 @@ impl ToolRouter for RoomToolRouter {
         } else if is_shelf_tool(name) {
             self.run_shelf(name, &args)
         } else {
-            ToolRun { result: self.builtins.run(call), events: Vec::new() }
+            ToolRun { result: self.builtins.run(&self.lane.avatar, self.lane.kind, call), events: Vec::new() }
         }
     }
 }

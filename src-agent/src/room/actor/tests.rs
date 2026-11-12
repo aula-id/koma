@@ -88,7 +88,7 @@ fn text(t: &str) -> ModelReply {
 struct StubBuiltins;
 
 impl BuiltinHost for StubBuiltins {
-    fn run(&self, call: &ToolCall) -> String {
+    fn run(&self, _avatar: &str, _kind: crate::room::lane::LaneKind, call: &ToolCall) -> String {
         format!("ran {}", call.function.name)
     }
     fn specs(&self, _kind: crate::room::lane::LaneKind) -> Vec<ToolSpec> {

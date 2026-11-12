@@ -11,6 +11,7 @@
 pub mod actor;
 pub mod clerk;
 pub mod cli;
+pub mod daemon;
 pub mod lane;
 pub mod registry;
 pub mod shelf;
