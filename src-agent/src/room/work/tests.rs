@@ -198,7 +198,7 @@ fn the_first_batch_must_be_a_probe_and_each_kind_has_one_role() {
     assert!(error(&call(json!([{ "avatar": "reviewer", "kind": "investigation", "prompt": "p" }]))).contains("Start a probe"));
     assert!(error(&call(json!([{ "avatar": "reviewer", "kind": "probe", "prompt": "p" }]))).contains("Only Lab Red or Lab RE may take probe"));
     let with_probe = |avatar: &str, kind: &str| call(json!([{ "avatar": "red", "kind": "probe", "prompt": "p" }, { "avatar": avatar, "kind": kind, "prompt": "q" }]));
-    assert!(error(&with_probe("reporter", "investigation")).contains("Only Reviewer or Lab Researcher may take investigation"));
+    assert!(error(&with_probe("reporter", "investigation")).contains("Only Reviewer, Lab Researcher or Lab Blue may take investigation"));
     assert!(error(&with_probe("red", "verification")).contains("One assignment per specialist per batch"));
     assert!(error(&call(json!([{ "avatar": "clerk", "kind": "probe", "prompt": "p" }]))).contains("Clerk keeps its own loop"));
     assert!(error(&call(json!([{ "avatar": "chief", "kind": "probe", "prompt": "p" }]))).contains("Specialist membership required"));
@@ -631,7 +631,7 @@ fn a_second_avatar_gets_the_role_rules_and_no_more() {
     ok(&f.delegate_probe("Scan", "r1"));
     let call = |avatar: &str, kind: &str| f.chief("group_delegate", json!({ "goal_key": "g1", "goal": "Scan", "dispatch_key": "x",
         "assignments": [{ "avatar": avatar, "kind": kind, "prompt": "p" }] }));
-    assert!(error(&call("red-api", "investigation")).contains("Only Reviewer or Lab Researcher may take investigation"));
+    assert!(error(&call("red-api", "investigation")).contains("Only Reviewer, Lab Researcher or Lab Blue may take investigation"));
     assert!(error(&call("ghost", "probe")).contains("Specialist membership required"));
     assert!(error(&call("chief", "probe")).contains("Specialist membership required"));
     assert!(error(&call("clerk", "probe")).contains("Clerk keeps its own loop"));
@@ -1171,8 +1171,9 @@ fn the_extra_specialists_take_the_kinds_their_roles_allow() {
     // Lab RE takes a probe, and an execution may open a goal like a probe does.
     ok(&delegate("re", "probe"));
     ok(&delegate("builder", "execution"));
+    ok(&delegate("blue", "execution"));
     // The researcher investigates and nothing else; the builder builds and nothing else.
     assert!(error(&delegate("researcher", "probe")).contains("Only Lab Red or Lab RE may take probe"));
     assert!(error(&delegate("builder", "probe")).contains("Only Lab Red or Lab RE may take probe"));
-    assert!(error(&delegate("red", "execution")).contains("Only Lab Builder may take execution"));
+    assert!(error(&delegate("red", "execution")).contains("Only Lab Builder or Lab Blue may take execution"));
 }

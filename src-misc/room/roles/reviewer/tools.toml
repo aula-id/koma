@@ -153,3 +153,73 @@ handler = "load_image"
 description = "Look at an image file."
 [tool.schema]
 type = "object"
+
+[[tool]]
+name = "web_search"
+handler = "web_search"
+description = "Search the web."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_fetch"
+handler = "web_fetch"
+description = "Fetch one URL."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_tabs"
+handler = "browser_tabs"
+description = "List or open browser tabs."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_inspect"
+handler = "browser_inspect"
+description = "Inspect a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_interact"
+handler = "browser_interact"
+description = "Click, type, or scroll in a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_evaluate"
+handler = "browser_evaluate"
+description = "Run JavaScript in a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "git_operator"
+handler = "git_operator"
+description = "Run git commands safely."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_page"
+handler = "web_page"
+description = "Read a web page in full."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search_full"
+handler = "web_search_full"
+description = "Search the web with full results."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_download"
+handler = "web_download"
+description = "Download a file from the web."
+[tool.schema]
+type = "object"

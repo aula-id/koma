@@ -68,7 +68,7 @@ text = { type = "string", minLength = 1, maxLength = 4000 }
 
 # Host computer. Every lane of this role runs these on this machine, chat and
 # work alike. Schemas advertised to the model come from the compiled tools.
-# Red also gets the web and browser surface. Reviewer and reporter do not.
+# Every specialist gets the same host set, web and browser included.
 [[tool]]
 name = "read"
 handler = "read"

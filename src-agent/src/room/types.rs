@@ -39,10 +39,10 @@ impl AssignmentKind {
     pub fn roles(self) -> &'static [&'static str] {
         match self {
             AssignmentKind::Probe => &["red", "re"],
-            AssignmentKind::Investigation => &["reviewer", "researcher"],
+            AssignmentKind::Investigation => &["reviewer", "researcher", "blue"],
             AssignmentKind::Verification => &["reviewer"],
             AssignmentKind::Report => &["reporter"],
-            AssignmentKind::Execution => &["builder"],
+            AssignmentKind::Execution => &["builder", "blue"],
         }
     }
 
@@ -177,7 +177,8 @@ mod tests {
         assert!(AssignmentKind::Investigation.allows("reviewer") && AssignmentKind::Investigation.allows("researcher"));
         assert_eq!(AssignmentKind::Verification.roles(), ["reviewer"]);
         assert_eq!(AssignmentKind::Report.roles(), ["reporter"]);
-        assert_eq!(AssignmentKind::Execution.roles(), ["builder"]);
+        assert_eq!(AssignmentKind::Execution.roles(), ["builder", "blue"]);
+        assert!(AssignmentKind::Investigation.allows("blue"));
         assert!(!AssignmentKind::Execution.is_production());
         assert!(AssignmentKind::Probe.is_production());
         assert!(!AssignmentKind::Verification.is_production());

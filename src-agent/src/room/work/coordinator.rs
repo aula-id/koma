@@ -31,7 +31,7 @@ use crate::room::types::{
 
 /// A specialist that fails `group_task_complete` this many times is told to stop calling it.
 const COMPLETE_FAIL_LIMIT: u32 = 2;
-const SPECIALISTS: [&str; 6] = ["red", "re", "reviewer", "researcher", "reporter", "builder"];
+const SPECIALISTS: [&str; 7] = ["red", "re", "reviewer", "researcher", "reporter", "builder", "blue"];
 
 /// Who is calling a tool.
 #[derive(Debug, Clone, PartialEq)]
@@ -481,10 +481,10 @@ impl Coordinator {
             if !role.is_some_and(|r| item.kind.allows(r)) {
                 return Err(match item.kind {
                     AssignmentKind::Probe => "Only Lab Red or Lab RE may take probe",
-                    AssignmentKind::Investigation => "Only Reviewer or Lab Researcher may take investigation",
+                    AssignmentKind::Investigation => "Only Reviewer, Lab Researcher or Lab Blue may take investigation",
                     AssignmentKind::Verification => "Only Reviewer may take verification",
                     AssignmentKind::Report => "Only Lab Reporter may take report",
-                    AssignmentKind::Execution => "Only Lab Builder may take execution",
+                    AssignmentKind::Execution => "Only Lab Builder or Lab Blue may take execution",
                 }
                 .to_string());
             }

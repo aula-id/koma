@@ -200,13 +200,16 @@ fn specialists_and_the_chief_run_host_tools_and_the_clerk_does_not() {
     assert!(red.tools.iter().any(|t| t.handler == "browser_tabs"));
     let reviewer = reg.role("reviewer").expect("reviewer");
     assert!(reviewer.tools.iter().any(|t| t.handler == "bash"));
-    assert!(reviewer
-        .tools
-        .iter()
-        .all(|t| t.handler != "web_search" && t.handler != "browser_tabs"));
+    assert!(reviewer.tools.iter().any(|t| t.handler == "web_search") && reviewer.tools.iter().any(|t| t.handler == "web_fetch"));
+    for id in reg.roles.keys().filter(|id| id.as_str() != "clerk") {
+        let role = reg.role(id).expect("role");
+        for tool in ["web_search", "web_fetch"] {
+            assert!(role.tools.iter().any(|t| t.handler == tool), "the {id} role is missing {tool}");
+        }
+    }
     let reporter = reg.role("reporter").expect("reporter");
     assert!(reporter.tools.iter().any(|t| t.handler == "read"));
-    assert!(reporter.tools.iter().all(|t| t.handler != "web_fetch"));
+    assert!(reporter.tools.iter().any(|t| t.handler == "web_fetch"));
     let chief = reg.role("chief").expect("chief");
     for tool in ["bash", "read", "write", "edit", "grep", "web_search", "browser_tabs"] {
         assert!(chief.tools.iter().any(|t| t.handler == tool), "chief lacks {tool}");
@@ -233,7 +236,7 @@ fn overlay_can_narrow_host_tools_but_not_add_sec_or_another_roles_surface() {
     let widened = Tmp::new("widen-host");
     widened.write(
         "roles/reviewer/tools.toml",
-        "[[tool]]\nname = \"web_search\"\nhandler = \"web_search\"\ndescription = \"web\"\n[tool.schema]\ntype = \"object\"\n",
+        "[[tool]]\nname = \"clerk_flag\"\nhandler = \"clerk_flag\"\ndescription = \"flag\"\n[tool.schema]\ntype = \"object\"\n",
     );
     let handle = overlaid(&widened);
     assert!(handle
@@ -242,7 +245,7 @@ fn overlay_can_narrow_host_tools_but_not_add_sec_or_another_roles_surface() {
         .expect("reviewer")
         .tools
         .iter()
-        .all(|t| t.handler != "web_search"));
+        .all(|t| t.handler != "clerk_flag"));
     assert!(handle
         .report()
         .warnings
@@ -445,7 +448,7 @@ fn the_default_room_gives_every_role_an_avatar_and_red_has_three() {
     }
     let reds: Vec<&str> = reg.avatars_of("red").iter().map(|a| a.id.as_str()).collect();
     assert_eq!(reds, ["red", "red-api", "red-web"]);
-    for id in ["researcher", "re", "builder"] {
+    for id in ["researcher", "re", "builder", "blue"] {
         assert!(reg.avatar(id).is_some(), "avatar {id}");
     }
     assert_eq!((reg.alias_of("chief"), reg.alias_of("red"), reg.alias_of("reporter"), reg.alias_of("researcher")), ("CF".to_string(), "LR".to_string(), "RR".to_string(), "RS".to_string()));

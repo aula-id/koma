@@ -14,7 +14,7 @@ references = { type = "array", maxItems = 32, items = { type = "object", require
 
 # Host computer. The work lane runs these on this machine. Chat lanes do not
 # see them. Schemas advertised to the model come from the compiled tools.
-# Red also gets the web and browser surface. Reviewer and reporter do not.
+# Every specialist gets the same host set, web and browser included.
 [[tool]]
 name = "read"
 handler = "read"
