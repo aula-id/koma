@@ -8,7 +8,8 @@
 //! visible output leaves as a [`RoomEvent`].
 //!
 //! What the actor does:
-//! - keeps the Chief's chat lane and the specialist and clerk work lanes;
+//! - keeps a chat lane and a work lane for each avatar, so a specialist can
+//!   answer the user while its work lane is running;
 //! - starts a lane for each [`Effect::StartLane`] the coordinator returns, and
 //!   steers or shows the others;
 //! - folds each lane's events into the digest and the swim-lane timeline, and
@@ -18,8 +19,8 @@
 //! - drains the Chief's inbox into one chat turn when the Chief is idle, so an
 //!   unread user message always leads.
 //!
-//! The Chief has the chat lane the user talks to; specialists and the clerk run
-//! work lanes. Per-specialist chat lanes are a later enhancement.
+//! A bare user line goes to the Chief. `@avatar` opens that specialist's chat
+//! lane. The clerk has no chat lane: it only speaks to the Chief.
 
 mod message;
 mod router;
@@ -42,7 +43,7 @@ use crate::room::lane::{
     run_lane, ControlAction, ControlState, Digest, Inbox, InboxItem, LaneConfig, LaneEvent,
     LaneInput, LaneKind, ModelClient, Timeline,
 };
-use crate::room::registry::RegistryHandle;
+use crate::room::registry::{Registry, RegistryHandle};
 use crate::room::shelf::Shelf;
 use crate::room::transition::{LaneRunState, Observation};
 use crate::room::trajectory::gate;
@@ -74,6 +75,53 @@ struct LaneHandle {
     /// Stopped but not proven idle, so the reconciler reads it as uncertain.
     unsettled: bool,
     ended: bool,
+}
+
+/// Chat and work for one avatar are different lanes. The map key keeps them
+/// from displacing each other.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Slot {
+    avatar: String,
+    kind: LaneKind,
+}
+
+impl Slot {
+    fn new(avatar: impl Into<String>, kind: LaneKind) -> Self {
+        Self { avatar: avatar.into(), kind }
+    }
+}
+
+/// Where a typed line goes.
+enum Addressed {
+    /// The Chief's inbox, text unchanged.
+    Chief(String),
+    /// A specialist chat lane.
+    Avatar { id: String, body: String },
+    /// `@clerk` — the clerk does not take user chat.
+    Clerk,
+}
+
+fn addressed(registry: &Registry, text: &str) -> Addressed {
+    let Some(rest) = text.trim().strip_prefix('@') else {
+        return Addressed::Chief(text.to_string());
+    };
+    let (name, body) = match rest.split_once(char::is_whitespace) {
+        Some((name, body)) => (name, body.trim()),
+        None => (rest, ""),
+    };
+    if name.is_empty() || body.is_empty() {
+        return Addressed::Chief(text.to_string());
+    }
+    if name.eq_ignore_ascii_case("clerk") {
+        return Addressed::Clerk;
+    }
+    if name == "chief" {
+        return Addressed::Chief(body.to_string());
+    }
+    if registry.avatar(name).is_some() {
+        return Addressed::Avatar { id: name.to_string(), body: body.to_string() };
+    }
+    Addressed::Chief(text.to_string())
 }
 
 /// A started room: send it [`ActorMsg`]s and drain its [`RoomEvent`]s. The
@@ -132,7 +180,7 @@ struct RoomActor {
     control: ControlState,
     digest: Digest,
     timeline: Timeline,
-    lanes: BTreeMap<String, LaneHandle>,
+    lanes: BTreeMap<Slot, LaneHandle>,
     assignment_lane: BTreeMap<String, String>,
     seen_nonces: HashSet<String>,
     chief_busy: bool,
@@ -156,7 +204,7 @@ impl RoomActor {
                 ActorMsg::User(text) => self.on_user(text),
                 ActorMsg::Control(cmd) => self.on_control(cmd),
                 ActorMsg::Tick => self.on_tick(),
-                ActorMsg::LaneEvent { avatar, event } => self.on_lane_event(&avatar, event),
+                ActorMsg::LaneEvent { avatar, kind, event } => self.on_lane_event(&avatar, kind, event),
                 ActorMsg::Effects(effects) => self.apply_effects(effects),
                 ActorMsg::Flag(item) => {
                     self.inbox.push(item);
@@ -185,9 +233,22 @@ impl RoomActor {
     // ---- user and control ----
 
     fn on_user(&mut self, text: String) {
+        let registry = self.registry.current();
+        match addressed(&registry, &text) {
+            Addressed::Clerk => self.emit(RoomEvent::Visible {
+                author: "room".into(),
+                text: "the clerk only speaks to the chief".into(),
+            }),
+            Addressed::Avatar { id, body } => self.speak_to(&id, body),
+            Addressed::Chief(text) => self.tell_chief(text),
+        }
+    }
+
+    fn tell_chief(&mut self, text: String) {
+        let slot = Slot::new("chief", LaneKind::Chat);
         if self.chief_busy {
             // Preempt the running Chief turn: it sees the message at its next boundary.
-            if let Some(chief) = self.lanes.get("chief") {
+            if let Some(chief) = self.lanes.get(&slot) {
                 let _ = chief.inject.send(LaneInput::Steer(format!("The user says: {text}")));
             }
             return;
@@ -196,26 +257,66 @@ impl RoomActor {
         self.maybe_start_chief();
     }
 
+    /// Open or steer one specialist's chat lane. Its work lane, if any, keeps running.
+    fn speak_to(&mut self, avatar: &str, text: String) {
+        let slot = Slot::new(avatar, LaneKind::Chat);
+        if self.lanes.get(&slot).is_some_and(|lane| !lane.ended) {
+            if let Some(lane) = self.lanes.get(&slot) {
+                let _ = lane.inject.send(LaneInput::Steer(format!("The user says: {text}")));
+            }
+            return;
+        }
+        let registry = self.registry.current();
+        let prompt = registry.role_of(avatar).map(|role| role.prompt.clone()).unwrap_or_default();
+        let digest = self.digest.render();
+        let task = if digest.is_empty() {
+            text
+        } else {
+            format!("{digest}\n\nThe user says:\n{text}")
+        };
+        let model = registry.lane_model(avatar, LaneKind::Chat);
+        let config = LaneConfig {
+            avatar: avatar.to_string(),
+            kind: LaneKind::Chat,
+            system: prompt,
+            task,
+            model,
+            max_steps: self.config.chat_max_steps,
+        };
+        self.timeline.open(avatar, "chat", now_ms());
+        self.start_lane(config, LaneRef {
+            avatar: avatar.to_string(),
+            kind: LaneKind::Chat,
+            assignment_id: None,
+            is_chief: false,
+            is_clerk: false,
+        });
+    }
+
     fn on_control(&mut self, cmd: crate::room::lane::ControlCommand) {
-        let running: std::collections::BTreeSet<String> =
-            self.lanes.iter().filter(|(_, l)| !l.ended && !l.is_chief).map(|(a, _)| a.clone()).collect();
+        let running: std::collections::BTreeSet<String> = self
+            .lanes
+            .iter()
+            .filter(|(slot, lane)| slot.kind == LaneKind::Work && !lane.ended && !lane.is_chief)
+            .map(|(slot, _)| slot.avatar.clone())
+            .collect();
         match self.control.apply(cmd, &running) {
-            ControlAction::Pause(avatar) => self.inject(&avatar, LaneInput::Pause),
-            ControlAction::Resume(avatar) => self.inject(&avatar, LaneInput::Resume),
-            ControlAction::Stop(avatar) => self.stop_lane(&avatar),
-            ControlAction::Inject { avatar, text } => self.inject(&avatar, LaneInput::Steer(text)),
+            ControlAction::Pause(avatar) => self.inject_work(&avatar, LaneInput::Pause),
+            ControlAction::Resume(avatar) => self.inject_work(&avatar, LaneInput::Resume),
+            ControlAction::Stop(avatar) => self.stop_work(&avatar),
+            ControlAction::Inject { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
             ControlAction::Noop(reason) => self.emit(RoomEvent::Visible { author: "room".into(), text: reason }),
         }
     }
 
-    fn inject(&self, avatar: &str, input: LaneInput) {
-        if let Some(lane) = self.lanes.get(avatar) {
+    fn inject_work(&self, avatar: &str, input: LaneInput) {
+        if let Some(lane) = self.lanes.get(&Slot::new(avatar, LaneKind::Work)) {
             let _ = lane.inject.send(input);
         }
     }
 
-    fn stop_lane(&mut self, avatar: &str) {
-        if let Some(lane) = self.lanes.get_mut(avatar) {
+    fn stop_work(&mut self, avatar: &str) {
+        if let Some(lane) = self.lanes.get_mut(&Slot::new(avatar, LaneKind::Work)) {
             lane.abort.abort();
             lane.unsettled = true;
             lane.ended = true;
@@ -225,33 +326,43 @@ impl RoomActor {
 
     // ---- lane events ----
 
-    fn on_lane_event(&mut self, avatar: &str, event: LaneEvent) {
+    fn on_lane_event(&mut self, avatar: &str, kind: LaneKind, event: LaneEvent) {
         let now = now_ms();
-        self.digest.observe_at(avatar, &event, now);
-        self.timeline.record(avatar, &event, now);
-        let is_chief = self.lanes.get(avatar).is_some_and(|l| l.is_chief);
+        // Chat turns must not rewrite the work digest. A finished chat would
+        // otherwise look like the assignment ended.
+        if kind == LaneKind::Work {
+            self.digest.observe_at(avatar, &event, now);
+            self.timeline.record(avatar, &event, now);
+        }
+        let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
         match event {
             LaneEvent::Chat(text) if is_chief => self.emit(RoomEvent::Chief(text)),
             LaneEvent::Chat(text) => self.emit(RoomEvent::LaneChat { avatar: avatar.into(), text }),
-            LaneEvent::Finished { report } => self.lane_ended(avatar, LaneRunState::Completed, is_chief, Some(report)),
+            LaneEvent::Finished { report } => {
+                self.lane_ended(avatar, kind, LaneRunState::Completed, Some(report));
+            }
             LaneEvent::Failed { error } => {
                 self.emit(RoomEvent::Visible { author: avatar.into(), text: format!("lane failed: {error}") });
-                self.lane_ended(avatar, LaneRunState::Failed, is_chief, None);
+                self.lane_ended(avatar, kind, LaneRunState::Failed, None);
             }
             _ => {}
         }
     }
 
-    fn lane_ended(&mut self, avatar: &str, run: LaneRunState, is_chief: bool, report: Option<String>) {
-        if let Some(lane) = self.lanes.get_mut(avatar) {
+    fn lane_ended(&mut self, avatar: &str, kind: LaneKind, run: LaneRunState, report: Option<String>) {
+        let slot = Slot::new(avatar, kind);
+        let is_chief = self.lanes.get(&slot).is_some_and(|lane| lane.is_chief);
+        if let Some(lane) = self.lanes.get_mut(&slot) {
             lane.ended = true;
             lane.run = run;
         }
-        if is_chief {
-            self.chief_busy = false;
-            self.lanes.remove("chief");
-            let _ = report; // the chief's words already streamed as Chat events
-            self.maybe_start_chief();
+        if kind == LaneKind::Chat {
+            self.lanes.remove(&slot);
+            let _ = report; // the words already streamed as Chat events
+            if is_chief {
+                self.chief_busy = false;
+                self.maybe_start_chief();
+            }
         }
     }
 
@@ -261,8 +372,9 @@ impl RoomActor {
         for effect in effects {
             match effect {
                 Effect::StartLane { assignment, goal } => {
-                    if self.lanes.get(&assignment.avatar).is_some_and(|l| !l.ended) {
-                        continue; // one lane per avatar at a time
+                    let slot = Slot::new(&assignment.avatar, LaneKind::Work);
+                    if self.lanes.get(&slot).is_some_and(|lane| !lane.ended) {
+                        continue; // one work lane per avatar; chat may already be open
                     }
                     let registry = self.registry.current();
                     let role = registry.role_of(&assignment.avatar);
@@ -287,7 +399,7 @@ impl RoomActor {
                         is_clerk: false,
                     });
                 }
-                Effect::Steer { avatar, text } => self.inject(&avatar, LaneInput::Steer(text)),
+                Effect::Steer { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
                 Effect::Visible { author, text, nonce } => {
                     if self.seen_nonces.insert(nonce.clone()) {
                         // `Ok(false)` means a previous process already posted it.
@@ -362,14 +474,22 @@ impl RoomActor {
             .assignment_lane
             .iter()
             .map(|(id, avatar)| {
-                let obs = self.lanes.get(avatar).map_or(Observation::default(), |l| Observation {
-                    run: Some(l.run),
-                    unsettled: l.unsettled,
-                });
+                let obs = self
+                    .lanes
+                    .get(&Slot::new(avatar, LaneKind::Work))
+                    .map_or(Observation::default(), |lane| Observation {
+                        run: Some(lane.run),
+                        unsettled: lane.unsettled,
+                    });
                 (id.clone(), obs)
             })
             .collect();
-        let busy: HashSet<String> = self.lanes.iter().filter(|(_, l)| !l.ended).map(|(a, _)| a.clone()).collect();
+        let busy: HashSet<String> = self
+            .lanes
+            .iter()
+            .filter(|(slot, lane)| slot.kind == LaneKind::Work && !lane.ended)
+            .map(|(slot, _)| slot.avatar.clone())
+            .collect();
 
         let outcome = coordinator.reconcile(
             &mut self.reconciler,
@@ -389,7 +509,7 @@ impl RoomActor {
         for (id, status) in &outcome.status_changes {
             if !status.is_pending() {
                 if let Some(avatar) = self.assignment_lane.remove(id) {
-                    self.lanes.remove(&avatar);
+                    self.lanes.remove(&Slot::new(avatar, LaneKind::Work));
                 }
             }
         }
@@ -398,7 +518,7 @@ impl RoomActor {
 
     fn run_clerk(&mut self) {
         let Some(work) = self.coordinator.active_work() else { return };
-        if self.lanes.get("clerk").is_some_and(|l| !l.ended) {
+        if self.lanes.get(&Slot::new("clerk", LaneKind::Work)).is_some_and(|lane| !lane.ended) {
             return;
         }
         let paused: std::collections::BTreeSet<String> = self.control.paused().cloned().collect();
@@ -455,6 +575,7 @@ impl RoomActor {
     fn start_lane(&mut self, config: LaneConfig, lane: LaneRef) {
         let avatar = lane.avatar.clone();
         let (kind, is_chief, assignment_id) = (lane.kind, lane.is_chief, lane.assignment_id.clone());
+        let slot = Slot::new(&avatar, kind);
         let is_clerk = lane.is_clerk;
         let registry = self.registry.current();
         let router = Arc::new(RoomToolRouter::new(
@@ -473,16 +594,24 @@ impl RoomActor {
         // Forward the lane's events into the actor's one channel, tagged by avatar.
         let to_actor = self.to_actor.clone();
         let forward_avatar = avatar.clone();
+        let forward_kind = kind;
         tokio::spawn(async move {
             while let Some(event) = ev_rx.recv().await {
-                if to_actor.send(ActorMsg::LaneEvent { avatar: forward_avatar.clone(), event }).is_err() {
+                if to_actor
+                    .send(ActorMsg::LaneEvent {
+                        avatar: forward_avatar.clone(),
+                        kind: forward_kind,
+                        event,
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
         });
         let _ = is_clerk;
         self.lanes.insert(
-            avatar,
+            slot,
             LaneHandle {
                 kind,
                 assignment_id,

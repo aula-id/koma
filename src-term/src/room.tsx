@@ -69,7 +69,7 @@ export function RoomScreen({
         <input
           value={draft}
           focused
-          placeholder="message the Chief, or /security to return"
+          placeholder="message the Chief, @red for a specialist, or /security to return"
           textColor={theme.fg}
           focusedTextColor={theme.fg}
           backgroundColor={theme.bg}

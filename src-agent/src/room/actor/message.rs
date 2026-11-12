@@ -11,14 +11,20 @@ use crate::room::work::Effect;
 /// One thing for the actor to handle.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActorMsg {
-    /// A message the user typed to the Chief.
+    /// A message the user typed. `@avatar` addresses that member; anything else
+    /// goes to the Chief. The clerk is not addressable.
     User(String),
     /// A control command (pause / resume / stop / redirect a lane).
     Control(ControlCommand),
     /// The periodic tick that drives the reconciler and the clerk.
     Tick,
-    /// An event from a running lane, tagged with the avatar it came from.
-    LaneEvent { avatar: String, event: LaneEvent },
+    /// An event from a running lane, tagged with the avatar and which of its
+    /// two lanes produced it. Chat and work for the same avatar run together.
+    LaneEvent {
+        avatar: String,
+        kind: crate::room::lane::LaneKind,
+        event: LaneEvent,
+    },
     /// Coordinator effects from a chief tool call, for the actor to apply.
     Effects(Vec<Effect>),
     /// A clerk flag headed for the Chief's inbox.

@@ -217,6 +217,52 @@ async fn the_chief_answers_a_user_message_immediately() {
 }
 
 #[tokio::test]
+async fn a_message_addressed_to_red_is_answered_by_red() {
+    let mut h = harness(vec![(("red", 0), text("The login reflects the origin."))]);
+    h.user("@red what did you find");
+    let events = h
+        .wait_for("red chat", |e| {
+            matches!(e, RoomEvent::LaneChat { avatar, .. } if avatar == "red")
+        })
+        .await;
+    assert!(events.iter().any(|e| matches!(
+        e,
+        RoomEvent::LaneChat { avatar, text } if avatar == "red" && text.contains("reflects")
+    )));
+    assert!(chief_said(&events).is_empty());
+}
+
+#[tokio::test]
+async fn a_follow_up_to_a_busy_specialist_is_steered_into_that_chat() {
+    let mut h = harness(vec![
+        (("red", 0), tools("checking", vec![call("group_status", json!({}))])),
+        (("red", 1), text("I heard the follow-up.")),
+    ]);
+    h.user("@red first");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    h.user("@red second");
+    let events = h
+        .wait_for("steered red chat", |e| {
+            matches!(e, RoomEvent::LaneChat { text, .. } if text.contains("follow-up"))
+        })
+        .await;
+    assert!(chief_said(&events).is_empty());
+}
+
+#[tokio::test]
+async fn the_user_cannot_speak_to_the_clerk() {
+    let mut h = harness(vec![]);
+    h.user("@clerk hello");
+    let events = h
+        .wait_for("clerk refusal", |e| matches!(e, RoomEvent::Visible { .. }))
+        .await;
+    assert!(events.iter().any(|e| matches!(
+        e,
+        RoomEvent::Visible { text, .. } if text.contains("clerk only speaks")
+    )));
+}
+
+#[tokio::test]
 async fn a_user_message_while_the_chief_is_busy_is_injected_not_dropped() {
     // the chief's first turn calls a slow builtin, so it is busy when the second message arrives
     let mut h = harness(vec![
