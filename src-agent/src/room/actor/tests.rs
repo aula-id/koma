@@ -28,6 +28,8 @@ struct Script {
 
 struct ScriptedModel {
     script: Script,
+    /// Each request's (avatar, system prompt), in order.
+    systems: Arc<Mutex<Vec<(String, String)>>>,
     /// A default when no scripted reply matches: a bare final answer.
     fallback: String,
 }
@@ -51,6 +53,8 @@ fn avatar_of(history: &[ChatMessage]) -> String {
 impl ModelClient for ScriptedModel {
     fn stream<'a>(&'a self, request: ModelRequest) -> BoxFuture<'a, ModelReply> {
         let avatar = avatar_of(&request.history);
+        let system = request.history.first().map(|m| m.content.clone()).unwrap_or_default();
+        self.systems.lock().unwrap().push((avatar.clone(), system));
         let turn = {
             let mut seen = self.script.seen.lock().unwrap();
             let n = seen.entry(avatar.clone()).or_default();
@@ -110,6 +114,7 @@ impl BuiltinHost for StubBuiltins {
 }
 
 struct Harness {
+    systems: Arc<Mutex<Vec<(String, String)>>>,
     handle: RoomHandle,
     shelf: Arc<Shelf>,
     coordinator: Arc<Coordinator>,
@@ -130,8 +135,10 @@ fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
             .collect(),
         seen: Mutex::new(HashMap::new()),
     };
+    let systems = Arc::new(Mutex::new(Vec::new()));
     let model = Arc::new(ScriptedModel {
         script,
+        systems: Arc::clone(&systems),
         fallback: "done".into(),
     });
     let handle = spawn_room(
@@ -143,6 +150,7 @@ fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
         RoomConfig::default(),
     );
     Harness {
+        systems,
         handle,
         shelf,
         coordinator,
@@ -551,4 +559,17 @@ async fn the_status_lists_the_whole_roster_and_repeated_turns_do_not_fill_the_ti
     assert!(status.now_ms > 0);
     assert!(!status.timeline.contains("◆ chief"), "chief turns no longer add a milestone each: {:?}", status.timeline);
     assert!(status.events.iter().all(|e| e.avatar != "chief"), "{:?}", status.events);
+}
+
+#[tokio::test]
+async fn a_specialists_chat_lane_gets_the_chat_register_on_top_of_its_role() {
+    let mut h = harness(vec![(("red", 0), text("Hi, what do you need?"))]);
+    h.user("@red hello");
+    h.wait_for("red answers", |e| matches!(e, RoomEvent::LaneChat { avatar, .. } if avatar == "red")).await;
+    let systems = h.systems.lock().unwrap().clone();
+    let (_, system) = systems.iter().find(|(avatar, _)| avatar == "red").expect("red was asked");
+    assert!(system.contains("You are Lab Red"), "the role stays: {system}");
+    assert!(system.contains("You are talking with the user now"), "the chat register is added: {system}");
+    let registry = crate::room::registry::RegistryHandle::embedded().expect("registry").current();
+    assert!(!registry.role("red").expect("red").prompt.contains("talking with the user"), "the work prompt is unchanged");
 }

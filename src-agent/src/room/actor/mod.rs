@@ -310,7 +310,12 @@ impl RoomActor {
             return;
         }
         let registry = self.registry.current();
-        let prompt = registry.role_of(avatar).map(|role| role.prompt.clone()).unwrap_or_default();
+        // A chat lane is the same agent with the same tools, spoken to in a friendlier register.
+        let mut prompt = registry.role_of(avatar).map(|role| role.prompt.clone()).unwrap_or_default();
+        if let Ok(chat) = registry.render("chat_lane", &[]) {
+            prompt.push_str("\n\n");
+            prompt.push_str(&chat);
+        }
         let digest = self.digest.render();
         let task = if digest.is_empty() {
             text
