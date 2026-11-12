@@ -139,9 +139,13 @@ fn every_lane_of_a_role_is_offered_the_hosts_tools_its_role_grants() {
 
     let reviewer = names_for("reviewer", LaneKind::Work);
     assert!(reviewer.iter().any(|n| n == "bash"));
-    assert!(reviewer
-        .iter()
-        .all(|n| n != "web_search" && n != "browser_tabs"));
+    assert!(reviewer.iter().any(|n| n == "web_search" && n == "web_search") && reviewer.iter().any(|n| n == "web_fetch") && reviewer.iter().any(|n| n == "browser_tabs"));
+    for role in ["red", "red-web", "red-api", "re", "researcher", "builder", "blue", "reviewer", "reporter", "chief"] {
+        let names = names_for(role, LaneKind::Chat);
+        for tool in ["web_search", "web_fetch"] {
+            assert!(names.iter().any(|n| n == tool), "{role} is missing {tool}");
+        }
+    }
 
     let chief = names_for("chief", LaneKind::Chat);
     assert!(chief.iter().any(|n| n == "group_delegate"));

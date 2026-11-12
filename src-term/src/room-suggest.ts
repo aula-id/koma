@@ -11,6 +11,7 @@ const PEOPLE: Suggestion[] = [
   { label: "@researcher", detail: "looks into questions", insert: "@researcher " },
   { label: "@re", detail: "reverse engineers binaries", insert: "@re " },
   { label: "@builder", detail: "implements coding tasks", insert: "@builder " },
+  { label: "@blue", detail: "defends and hardens", insert: "@blue " },
 ]
 
 const COMMANDS: Suggestion[] = [
