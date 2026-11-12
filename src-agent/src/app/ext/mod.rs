@@ -402,7 +402,7 @@ impl ExtHostManager {
     /// [`Self::invoke`] with an explicit round-trip `timeout` instead of the default
     /// [`CALL_TIMEOUT`].
     ///
-    /// THE SYNC→ASYNC BRIDGE (mirrors `SecDaemonManager::execute_blocking`): under a
+    /// THE SYNC→ASYNC BRIDGE: under a
     /// brief lock it grabs the writer + a fresh id + a clone of the `pending` map, drops
     /// the lock, registers a `oneshot`, spawns the write, and bridges the `oneshot` to a
     /// `std::sync::mpsc` this thread blocks on with `recv_timeout`.
