@@ -5,7 +5,8 @@ import { scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
 import { MarkdownBody } from "./chat.tsx"
 import type { Goal, GoalNode, Report } from "./room-link.ts"
-import { around, fields, goalRows, press, reportRows, shelfRows, windowOf, type TreeRow } from "./room-tree.ts"
+import { describe, fields, goalRows, press, reportRows, shelfRows, windowOf, type TreeRow } from "./room-tree.ts"
+import { boxAt, drawGraph, layoutGraph, pan, readingOrder, reveal, windowLines, type Tone } from "./room-graph.ts"
 
 export type BrowseView = "shelf" | "trajectory" | "report"
 export type OpenItem = { key: string; revision: number; updated: number; content: string }
@@ -48,6 +49,16 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const [trail, setTrail] = useState<Detail[]>([])
   const [pick, setPick] = useState(0)
   const detail = trail.at(-1) ?? null
+  // The trajectory has a second way to look: the graph, drawn in boxes you can scroll across.
+  const [mode, setMode] = useState<"tree" | "graph">("tree")
+  const [goalAt, setGoalAt] = useState(0)
+  const [boxId, setBoxId] = useState<string | null>(null)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const canvas = useRef<import("@opentui/core").BoxRenderable | null>(null)
+  const graphOn = view === "trajectory" && mode === "graph"
+  const goal = data?.goals[Math.min(goalAt, Math.max(0, (data?.goals.length ?? 1) - 1))] ?? null
+  const layout = useMemo(() => (goal ? layoutGraph(goal) : null), [goal])
+  const grid = useMemo(() => (layout ? drawGraph(layout, boxId) : []), [layout, boxId])
 
   // Fresh data while the screen is open: findings arrive as the lanes work.
   useEffect(() => {
@@ -62,6 +73,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   }, [data, view, collapsed])
 
   const listHeight = Math.max(3, height - 9)
+  const viewSize = { width: Math.max(10, width - 8), height: listHeight }
   const shown = windowOf(rows, selected, start, listHeight)
   useEffect(() => { if (shown.from !== start) setStart(shown.from) }, [shown.from])
   useEffect(() => { if (!selected && rows[0]) setSelected(rows[0].id) }, [rows, selected])
@@ -95,6 +107,43 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
       return
     }
     if (name === "escape" || name === "q") { onBack(); return }
+    if (view === "trajectory" && name === "g" && goal && layout) {
+      // Start the graph at what the tree had selected.
+      const node = selected.startsWith("node:") ? selected.split(":").slice(2).join(":") : null
+      const sel = node && layout.boxes.some((b) => b.id === node) ? node : readingOrder(layout)[0]?.id ?? null
+      setBoxId(sel)
+      const box = layout.boxes.find((b) => b.id === sel)
+      setOffset(box ? reveal({ x: 0, y: 0 }, box, layout, viewSize) : { x: 0, y: 0 })
+      setMode("graph")
+      return
+    }
+    if (graphOn && layout) {
+      const move = (dx: number, dy: number) => setOffset((o) => pan(o, dx, dy, layout, viewSize))
+      const cycle = (by: number) => {
+        const order = readingOrder(layout)
+        if (!order.length) return
+        const at = Math.max(0, order.findIndex((b) => b.id === boxId))
+        const next = order[(at + by + order.length) % order.length]!
+        setBoxId(next.id)
+        setOffset((o) => reveal(o, next, layout, viewSize))
+      }
+      if (name === "t" || name === "g") setMode("tree")
+      else if (name === "left" || name === "h") move(-6, 0)
+      else if (name === "right" || name === "l") move(6, 0)
+      else if (name === "up" || name === "k") move(0, -2)
+      else if (name === "down" || name === "j") move(0, 2)
+      else if (name === "pageup") move(0, -viewSize.height)
+      else if (name === "pagedown") move(0, viewSize.height)
+      else if (name === "home") setOffset({ x: 0, y: 0 })
+      else if (name === "end") move(layout.width, layout.height)
+      else if (name === "tab") cycle(key.shift ? -1 : 1)
+      else if (name === "n") cycle(1)
+      else if (name === "p") cycle(-1)
+      else if (name === "]" || name === "}") { setGoalAt((g) => Math.min((data?.goals.length ?? 1) - 1, g + 1)); setBoxId(null); setOffset({ x: 0, y: 0 }) }
+      else if (name === "[" || name === "{") { setGoalAt((g) => Math.max(0, g - 1)); setBoxId(null); setOffset({ x: 0, y: 0 }) }
+      else if ((name === "return" || name === "enter") && boxId && goal) follow({ type: "node", goal: goal.goal_key, node: boxId })
+      return
+    }
     step(name === "space" ? "space" : name)
   })
 
@@ -111,7 +160,11 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   )
   const hint = detail
     ? (links.length ? "↑↓ choose a link · enter follows it · esc goes back" : "esc goes back")
-    : "↑↓ move · → or enter opens · ← closes · click a folder to fold it, a line to open it · esc closes"
+    : graphOn
+      ? "←→↑↓ scroll · pgup/pgdn · tab next node · enter opens · [ ] goal · t tree · esc closes"
+      : view === "trajectory"
+        ? "↑↓ move · enter opens · space or ←→ folds · g graph · click the arrow to fold, the line to open · esc closes"
+        : "↑↓ move · → or enter opens · ← closes · click a folder to fold it, a line to open it · esc closes"
 
   return (
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
@@ -120,25 +173,74 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
         {detail ? (
           <DetailView detail={detail} data={data} item={item} links={links} pick={pick} onPick={setPick} onFollow={follow} theme={theme} syntaxStyle={syntaxStyle} width={width} />
         ) : (
+          graphOn ? (
+            <Panel title="trajectory · graph" hot={false} theme={theme} status={layout && goal ? `${goal.goal_key} ${goalAt + 1}/${data?.goals.length ?? 1} · x ${offset.x}/${Math.max(0, layout.width - viewSize.width)} · y ${offset.y}/${Math.max(0, layout.height - viewSize.height)}` : ""}>
+              {!layout || layout.boxes.length === 0 ? <text fg={theme.dim} paddingLeft={1}>{goal ? "This goal has no steps yet." : EMPTY.trajectory}</text> : (
+                <box
+                  ref={canvas}
+                  flexDirection="column"
+                  flexGrow={1}
+                  flexBasis={0}
+                  minHeight={0}
+                  paddingLeft={1}
+                  onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+                    const d = event.scroll?.direction
+                    setOffset((o) => pan(o, d === "left" ? -6 : d === "right" ? 6 : 0, d === "up" ? -2 : d === "down" ? 2 : 0, layout, viewSize))
+                  }}
+                  onMouseDown={(event: { x: number; y: number }) => {
+                    const c = canvas.current
+                    if (!c) return
+                    const hit = boxAt(layout, event.x - c.x - 1 + offset.x, event.y - c.y + offset.y)
+                    if (!hit) return
+                    setBoxId(hit.id)
+                    if (goal) follow({ type: "node", goal: goal.goal_key, node: hit.id })
+                  }}
+                >
+                  {windowLines(grid, offset, viewSize).map((runs, row) => (
+                    <text key={row} wrapMode="none" fg={theme.dim}>
+                      {runs.map((run, i) => <span key={i} fg={graphInk(run.tone, theme)}>{run.text}</span>)}
+                    </text>
+                  ))}
+                </box>
+              )}
+            </Panel>
+          ) : (
           <Panel title={TITLES[view]} hot={false} theme={theme} status={data ? summary(view, data) : "loading…"}>
             {rows.length === 0
               ? <text fg={theme.dim} paddingLeft={1}>{data ? EMPTY[view] : "Loading…"}</text>
               : <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
                   {shown.rows.map((row) => (
                     <Line key={row.id} row={row} on={row.id === selected} theme={theme} width={width - 8}
+                      onFold={() => {
+                        setSelected(row.id)
+                        setCollapsed((c) => { const n = new Set(c); if (n.has(row.id)) n.delete(row.id); else n.add(row.id); return n })
+                      }}
                       onPress={() => {
                         setSelected(row.id)
-                        if (row.kind === "leaf") { open(row); return }
+                        if (row.ref) { open(row); return }
                         setCollapsed((c) => { const n = new Set(c); if (n.has(row.id)) n.delete(row.id); else n.add(row.id); return n })
                       }} />
                   ))}
                 </box>}
           </Panel>
+          )
         )}
       </box>
       <text fg={theme.dim} wrapMode="none">{` ${hint}`}</text>
     </box>
   )
+}
+
+function graphInk(tone: Tone, theme: Theme): string {
+  switch (tone) {
+    case "select": return theme.accent
+    case "success": return theme.success
+    case "warn": return theme.warn
+    case "error": return theme.error
+    case "info": return theme.info
+    case "box": return theme.fg
+    default: return theme.dim
+  }
 }
 
 function summary(view: BrowseView, data: BrowseData): string {
@@ -153,24 +255,33 @@ function crumb(detail: Detail): string {
 
 const MARKS: Record<string, "error" | "warn" | "info" | "success"> = { critical: "error", high: "error", medium: "warn", low: "info", info: "info", open: "warn", confirmed: "success", verified: "success", returned: "warn", dismissed: "info", "no-go": "error", go: "success" }
 
-function Line({ row, on, theme, width, onPress }: { row: TreeRow; on: boolean; theme: Theme; width: number; onPress: () => void }) {
+function Line({ row, on, theme, width, onPress, onFold }: { row: TreeRow; on: boolean; theme: Theme; width: number; onPress: () => void; onFold: () => void }) {
   const glyph = row.kind === "folder" ? (row.open ? "▾" : "▸") : "•"
   const tone = MARKS[row.mark.toLowerCase()]
-  const mark = row.mark ? (row.kind === "folder" ? `(${row.mark})` : row.mark) : ""
-  const room = Math.max(10, width - row.depth * 2 - 4 - (mark ? mark.length + 1 : 0))
+  const mark = row.mark ? (row.kind === "folder" && !row.ref ? `(${row.mark})` : row.mark) : ""
+  const front = `${row.guide ?? "  ".repeat(row.depth)}${glyph} `
+  const number = row.number ? `(${row.number}) ` : ""
+  const refs = row.refs?.length ? ` [${row.refs.map((r) => `(${r})`).join(", ")}]` : ""
+  const room = Math.max(10, width - [...front].length - number.length - (mark ? mark.length + 1 : 0) - refs.length)
   const text = row.detail ? `${row.label}  ${row.detail}` : row.label
   const clipped = [...text].length > room ? `${[...text].slice(0, room - 1).join("")}…` : text
   const labelLen = Math.min([...row.label].length, [...clipped].length)
   const label = [...clipped].slice(0, labelLen).join("")
   const rest = [...clipped].slice(labelLen).join("")
   return (
-    <box height={1} flexShrink={0} flexDirection="row" backgroundColor={on ? theme.panel : undefined} paddingLeft={1} onMouseDown={onPress}>
-      <text wrapMode="none" fg={theme.fg}>
-        <span fg={on ? theme.accent : theme.dim}>{`${"  ".repeat(row.depth)}${glyph} `}</span>
-        <span fg={row.kind === "folder" ? theme.accent : theme.fg}>{label}</span>
-        <span fg={theme.dim}>{rest}</span>
-        {mark ? <span fg={tone ? theme[tone] : theme.dim}>{` ${mark}`}</span> : null}
-      </text>
+    <box height={1} flexShrink={0} flexDirection="row" backgroundColor={on ? theme.panel : undefined} paddingLeft={1}>
+      <box flexShrink={0} onMouseDown={onFold}>
+        <text wrapMode="none" fg={on ? theme.accent : theme.dim}>{front}</text>
+      </box>
+      <box flexGrow={1} minWidth={0} onMouseDown={onPress}>
+        <text wrapMode="none" fg={theme.fg}>
+          {number ? <span fg={theme.dim}>{number}</span> : null}
+          <span fg={row.kind === "folder" && !row.ref ? theme.accent : theme.fg}>{label}</span>
+          <span fg={theme.dim}>{rest}</span>
+          {mark ? <span fg={tone ? theme[tone] : theme.dim}>{` ${mark}`}</span> : null}
+          {refs ? <span fg={theme.info}>{refs}</span> : null}
+        </text>
+      </box>
     </box>
   )
 }
@@ -181,11 +292,13 @@ function linksOf(detail: Detail, data: BrowseData | null, item: OpenItem | null)
     const goal = data.goals.find((g) => g.goal_key === detail.goal)
     const node = goal?.nodes.find((n) => n.id === detail.node)
     if (!goal || !node) return []
-    const near = around(goal, node.id)
+    const near = describe(goal, node.id)
     const out: Link[] = []
+    const to = (n: { id: string }): Detail => ({ type: "node", goal: goal.goal_key, node: n.id })
     if (node.resource_key) out.push({ label: node.resource_key, hint: "the shelf item", to: { type: "item", key: node.resource_key } })
-    for (const e of near.from) out.push({ label: e.node.label || e.node.id, hint: `${e.rel || "leads"} → this`, to: { type: "node", goal: goal.goal_key, node: e.node.id } })
-    for (const e of near.to) out.push({ label: e.node.label || e.node.id, hint: `this ${e.rel || "leads"} →`, to: { type: "node", goal: goal.goal_key, node: e.node.id } })
+    for (const e of near?.from ?? []) out.push({ label: `(${e.number}) ${e.node.label || e.node.id}`, hint: `reference from${e.rel ? ` · ${e.rel}` : ""}`, to: to(e.node) })
+    for (const e of near?.to ?? []) out.push({ label: `(${e.number}) ${e.node.label || e.node.id}`, hint: `reference to${e.rel ? ` · ${e.rel}` : ""}`, to: to(e.node) })
+    for (const e of near?.related ?? []) out.push({ label: `(${e.number}) ${e.node.label || e.node.id}`, hint: "related", to: to(e.node) })
     return out
   }
   if (detail.type === "report") {
@@ -265,7 +378,8 @@ function ItemBody({ item, theme, syntaxStyle }: { item: OpenItem; theme: Theme; 
 }
 
 function NodeBody({ node, goal, theme, syntaxStyle }: { node: GoalNode; goal: Goal; theme: Theme; syntaxStyle: SyntaxStyle }) {
-  const rows: [string, string][] = [["goal", goal.goal_key], ["kind", node.kind], ["status", node.status], ["severity", node.severity], ["shelf item", node.resource_key]]
+  const number = describe(goal, node.id)?.number ?? ""
+  const rows: [string, string][] = [["number", number ? `(${number})` : ""], ["goal", goal.goal_key], ["kind", node.kind], ["status", node.status], ["severity", node.severity], ["shelf item", node.resource_key]]
   return (
     <>
       {rows.filter(([, v]) => v).map(([name, value]) => <Field key={name} name={name} value={value} theme={theme} syntaxStyle={syntaxStyle} />)}

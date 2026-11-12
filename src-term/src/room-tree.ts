@@ -14,6 +14,12 @@ export type TreeRow = {
   ref: { type: "item"; key: string } | { type: "node"; goal: string; node: string } | { type: "report"; key: string } | null
   /** Short mark for the row: a count, a severity, a status. */
   mark: string
+  /** Branch lines in front of a tree node, such as `│  ├─`. */
+  guide?: string
+  /** A trajectory node's place in the tree, such as `1.1.2`. */
+  number?: string
+  /** Where else this node is linked from, as numbers. */
+  refs?: string[]
 }
 
 export type Collapsed = ReadonlySet<string>
@@ -53,7 +59,83 @@ export function shelfRows(rows: ShelfRow[], collapsed: Collapsed): TreeRow[] {
   return out
 }
 
-/** Goals as folders, each holding its nodes in the order of the links. */
+/** One node of a goal's tree: where it sits and where else it is linked from. */
+export type TNode = {
+  node: GoalNode
+  /** `1.1.2`: the position among its parents' children, all the way down. */
+  number: string
+  depth: number
+  parent: string | null
+  children: string[]
+  /** Whether it is the last child, for the branch glyph. */
+  last: boolean
+  /** The numbers of the other nodes that link here. */
+  alsoFrom: string[]
+}
+
+/**
+ * A goal's links as a tree. A node sits once, under the first node that reaches it, and any other
+ * node linking to it is listed on it as a number, so nothing is drawn twice.
+ */
+export function trajectoryTree(goal: Goal): { order: TNode[]; byId: Map<string, TNode> } {
+  const nodes = new Map(goal.nodes.map((n) => [n.id, n]))
+  const out = new Map<string, string[]>()
+  const incoming = new Set<string>()
+  for (const e of goal.edges) {
+    if (e.from === e.to || !nodes.has(e.from) || !nodes.has(e.to)) continue
+    const list = out.get(e.from) ?? []
+    if (!list.includes(e.to)) list.push(e.to)
+    out.set(e.from, list)
+    incoming.add(e.to)
+  }
+  const rank = (id: string) => nodes.get(id)!
+  const roots = goal.nodes.filter((n) => !incoming.has(n.id)).sort((a, b) => Number(b.kind === "start") - Number(a.kind === "start") || a.rank - b.rank || a.row - b.row).map((n) => n.id)
+  const byId = new Map<string, TNode>()
+  const order: TNode[] = []
+  const place = (id: string, parent: TNode | null, index: number, depth: number) => {
+    if (byId.has(id) || depth > 200) return
+    const t: TNode = { node: rank(id), number: parent ? `${parent.number}.${index}` : `${index}`, depth, parent: parent?.node.id ?? null, children: [], last: false, alsoFrom: [] }
+    byId.set(id, t)
+    order.push(t)
+    if (parent) parent.children.push(id)
+    let n = 0
+    for (const child of out.get(id) ?? []) {
+      if (byId.has(child)) continue
+      place(child, t, ++n, depth + 1)
+    }
+  }
+  let top = 0
+  for (const id of roots) place(id, null, ++top, 0)
+  // A loop with no way in still gets drawn: start at its first node.
+  for (const n of [...goal.nodes].sort((a, b) => a.rank - b.rank || a.row - b.row)) if (!byId.has(n.id)) place(n.id, null, ++top, 0)
+  for (const t of order) {
+    const siblings = t.parent ? byId.get(t.parent)!.children : roots.filter((r) => byId.get(r)!.parent === null)
+    t.last = siblings.at(-1) === t.node.id
+  }
+  for (const [from, list] of out) {
+    for (const to of list) {
+      const target = byId.get(to)
+      const source = byId.get(from)
+      if (target && source && target.parent !== from && !target.alsoFrom.includes(source.number)) target.alsoFrom.push(source.number)
+    }
+  }
+  return { order, byId }
+}
+
+/** The branch glyphs in front of a node: `│  ` for each ancestor with more to come, then `├─` or `└─`. */
+function guideOf(t: TNode, byId: Map<string, TNode>): string {
+  let prefix = ""
+  let at = t.parent ? byId.get(t.parent) : undefined
+  const stack: string[] = []
+  while (at) {
+    stack.push(at.last ? "   " : "│  ")
+    at = at.parent ? byId.get(at.parent) : undefined
+  }
+  prefix = stack.reverse().join("")
+  return `${prefix}${t.last ? "└─" : "├─"}`
+}
+
+/** Goals as folders holding their tree. Every node is open unless it was folded. */
 export function goalRows(goals: Goal[], collapsed: Collapsed): TreeRow[] {
   const out: TreeRow[] = []
   for (const goal of goals) {
@@ -61,8 +143,21 @@ export function goalRows(goals: Goal[], collapsed: Collapsed): TreeRow[] {
     const open = !collapsed.has(id)
     out.push({ id, depth: 0, kind: "folder", label: goal.goal_key, detail: `${goal.open} open · ${goal.verified} verified · ${goal.returned} returned`, open, ref: null, mark: `${goal.nodes.length}` })
     if (!open) continue
-    for (const node of goal.nodes) {
-      out.push({ id: `node:${goal.goal_key}:${node.id}`, depth: 1, kind: "leaf", label: node.label || node.id, detail: node.kind, open: false, ref: { type: "node", goal: goal.goal_key, node: node.id }, mark: node.severity || node.status })
+    const { order, byId } = trajectoryTree(goal)
+    for (const t of order) {
+      const rowId = `node:${goal.goal_key}:${t.node.id}`
+      // Hidden while a node above it is folded.
+      let hidden = false
+      for (let up = t.parent ? byId.get(t.parent) : undefined; up; up = up.parent ? byId.get(up.parent) : undefined) {
+        if (collapsed.has(`node:${goal.goal_key}:${up.node.id}`)) { hidden = true; break }
+      }
+      if (hidden) continue
+      const folds = t.children.length > 0
+      out.push({
+        id: rowId, depth: t.depth + 1, kind: folds ? "folder" : "leaf", label: t.node.label || t.node.id, detail: t.node.kind,
+        open: folds && !collapsed.has(rowId), ref: { type: "node", goal: goal.goal_key, node: t.node.id }, mark: t.node.severity || t.node.status,
+        guide: guideOf(t, byId), number: t.number, refs: t.alsoFrom,
+      })
     }
   }
   return out
@@ -114,13 +209,17 @@ export function press(rows: TreeRow[], selected: string, collapsed: Collapsed, k
     case "right":
       if (row.kind === "folder" && !row.open) return { ...keep, collapsed: toggled(collapsed, row.id) }
       if (row.kind === "folder") return { ...keep, selected: move(rows, row.id, 1) }
-      return { ...keep, open: row }
+      return row.ref ? { ...keep, open: row } : keep
     case "left":
       if (row.kind === "folder" && row.open) return { ...keep, collapsed: toggled(collapsed, row.id) }
       return { ...keep, selected: parentOf(rows, row.id) ?? row.id }
-    case "return": case "enter": case "space":
+    case "space":
       if (row.kind === "folder") return { ...keep, collapsed: toggled(collapsed, row.id) }
       return { ...keep, open: row }
+    case "return": case "enter":
+      if (row.ref) return { ...keep, open: row }
+      if (row.kind === "folder") return { ...keep, collapsed: toggled(collapsed, row.id) }
+      return keep
     default: return keep
   }
 }
@@ -136,12 +235,26 @@ export function windowOf(rows: TreeRow[], selected: string, start: number, heigh
   return { from, rows: rows.slice(from, from + height) }
 }
 
-/** The edges around one node, for its detail screen. */
-export function around(goal: Goal, nodeId: string): { from: { node: GoalNode; rel: string }[]; to: { node: GoalNode; rel: string }[] } {
-  const byId = new Map(goal.nodes.map((n) => [n.id, n]))
-  const from = goal.edges.filter((e) => e.to === nodeId).flatMap((e) => byId.get(e.from) ? [{ node: byId.get(e.from)!, rel: e.rel }] : [])
-  const to = goal.edges.filter((e) => e.from === nodeId).flatMap((e) => byId.get(e.to) ? [{ node: byId.get(e.to)!, rel: e.rel }] : [])
-  return { from, to }
+/** What a node is connected to, for its detail screen. */
+export type Around = {
+  number: string
+  /** Every node that links here, the first being the one it hangs under. */
+  from: { node: GoalNode; number: string; rel: string }[]
+  /** Every node it links to. */
+  to: { node: GoalNode; number: string; rel: string }[]
+  /** Nodes that share a parent with it. */
+  related: { node: GoalNode; number: string }[]
+}
+
+export function describe(goal: Goal, nodeId: string): Around | null {
+  const { byId } = trajectoryTree(goal)
+  const me = byId.get(nodeId)
+  if (!me) return null
+  const numberOf = (id: string) => byId.get(id)?.number ?? ""
+  const from = goal.edges.filter((e) => e.to === nodeId && byId.has(e.from)).map((e) => ({ node: byId.get(e.from)!.node, number: numberOf(e.from), rel: e.rel }))
+  const to = goal.edges.filter((e) => e.from === nodeId && byId.has(e.to)).map((e) => ({ node: byId.get(e.to)!.node, number: numberOf(e.to), rel: e.rel }))
+  const siblings = me.parent ? byId.get(me.parent)!.children.filter((id) => id !== nodeId) : []
+  return { number: me.number, from, to, related: siblings.map((id) => ({ node: byId.get(id)!.node, number: numberOf(id) })) }
 }
 
 /** A record as `name  value` lines, in a readable order. Long text stays whole. */

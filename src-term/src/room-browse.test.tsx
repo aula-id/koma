@@ -123,3 +123,81 @@ test("an empty shelf says so, and escape closes the screen", async () => {
   expect(log).toEqual(["back"])
   await act(async () => { await screen.dispose() })
 })
+
+const node = (id: string, label: string, rank: number, row: number, kind = "fact", severity = "", resource_key = "") => ({ id, label, kind, status: "", severity, note: "", resource_key, rank, row })
+const rich: BrowseData = {
+  shelf: [], reports: [],
+  goals: [{
+    goal_key: "review", open: 1, verified: 0, returned: 0,
+    nodes: [node("s", "start in-scope", 0, 0, "start"), node("a1", "asset one", 1, 0, "asset"), node("a2", "asset two", 1, 4, "asset"), node("c", "SSRF claim", 2, 0, "claim", "high", "claims/web/ssrf"), node("e", "output", 3, 0, "evidence")],
+    edges: [{ from: "s", to: "a1", rel: "maps" }, { from: "s", to: "a2", rel: "maps" }, { from: "a1", to: "c", rel: "hosts" }, { from: "a2", to: "c", rel: "hosts" }, { from: "c", to: "e", rel: "supports" }],
+  }],
+}
+
+async function openRich() {
+  let screen!: View
+  const opened: string[] = []
+  await act(async () => { screen = await testRender(<Host view="trajectory" theme={theme} data={rich} item={null} onOpenItem={(k) => opened.push(k)} onRefresh={() => {}} onBack={() => opened.push("back")} />, { width: 110, height: 34 }) })
+  const settle = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 40)); await screen.renderOnce() }) }
+  const press = async (run: () => unknown) => { await act(async () => { await run() }); await settle() }
+  await settle()
+  return { screen, opened, settle, press, text: () => screen.captureCharFrame() }
+}
+
+test("the trajectory is a numbered tree and a node linked twice shows where else it is linked from", async () => {
+  const t = await openRich()
+  const text = t.text()
+  expect(text).toContain("(1) start in-scope")
+  expect(text).toContain("(1.1) asset one")
+  expect(text).toContain("(1.1.1) SSRF claim")
+  expect(text).toContain("[(1.2)]")
+  expect(text).toContain("├─")
+  expect(text).toContain("└─")
+  expect(text.match(/SSRF claim/g)?.length).toBe(1)
+  await act(async () => { await t.screen.dispose() })
+})
+
+test("a node's detail lists what it is referenced from, what it references and its relatives", async () => {
+  const t = await openRich()
+  for (let i = 0; i < 3; i++) await t.press(() => t.screen.mockInput.pressArrow("down"))
+  await t.press(() => t.screen.mockInput.pressEnter())
+  const text = t.text()
+  expect(text).toContain("(1.1.1)")
+  expect(text).toContain("reference from · hosts")
+  expect(text).toContain("reference to · supports")
+  expect(text).toContain("claims/web/ssrf")
+  await act(async () => { await t.screen.dispose() })
+})
+
+test("g draws the graph in boxes, arrows and scrolls sideways, and t comes back to the tree", async () => {
+  const t = await openRich()
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  const graph = t.text()
+  expect(graph).toContain("trajectory · graph")
+  expect(graph).toContain("╭")
+  expect(graph).toContain("▼")
+  expect(graph).toContain("(1.1.1) SSRF claim")
+  expect(graph).toMatch(/x 0\/\d+/)
+  await t.press(() => t.screen.mockInput.pressArrow("right"))
+  expect(t.text()).toMatch(/x 6\//)
+  await t.press(() => t.screen.mockInput.pressKey("home"))
+  expect(t.text()).toMatch(/x 0\//)
+  await t.press(() => t.screen.mockInput.pressKey("t"))
+  expect(t.text()).not.toContain("trajectory · graph")
+  expect(t.text()).toContain("(1.1) asset one")
+  await act(async () => { await t.screen.dispose() })
+})
+
+test("in the graph tab walks the nodes and enter opens the one that is chosen", async () => {
+  const t = await openRich()
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  for (let i = 0; i < 3; i++) await t.press(() => t.screen.mockInput.pressTab())
+  await t.press(() => t.screen.mockInput.pressEnter())
+  const text = t.text()
+  expect(text).toContain("SSRF claim")
+  expect(text).toContain("reference to · supports")
+  await act(async () => { t.screen.mockInput.pressEscape(); await new Promise((r) => setTimeout(r, 100)) })
+  await t.settle()
+  expect(t.text()).toContain("trajectory · graph")
+  await act(async () => { await t.screen.dispose() })
+})
