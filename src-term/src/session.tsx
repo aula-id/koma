@@ -408,7 +408,7 @@ export function SessionScreen({
   // Every hook above runs on every render. Returning earlier changes the hook count
   // and React throws "Rendered fewer hooks than expected" the moment `room` turns on.
   if (room) {
-    return <RoomScreen id={id} theme={theme} ctrlC={ctrlC} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
+    return <RoomScreen id={id} theme={theme} syntaxStyle={syntaxStyle} ctrlC={ctrlC} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
   }
   if (phase === "connecting") {
     return <OpeningSplash theme={theme} />

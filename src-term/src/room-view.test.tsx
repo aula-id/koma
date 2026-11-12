@@ -1,14 +1,15 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
-import { RoomView, authorInk, type Line } from "./room.tsx"
+import { RoomView, authorInk } from "./room.tsx"
+import { say, type Line } from "./room-turns.ts"
 import { themeFor } from "./theme.ts"
 
 const theme = themeFor("dark")
 const lines: Line[] = [
-  { id: "1", author: "you", text: "scan the staging api" },
-  { id: "2", author: "chief", text: "Scope check first. I will ask red to probe auth." },
-  { id: "3", author: "red", text: "Found a token in /debug." },
+  say("you", "scan the staging api"),
+  say("chief", "Scope check first. I will ask red to probe auth.", "chat"),
+  say("red", "Found a token in /debug.", "chat"),
 ]
 const panes = { lanes: "red running 4 steps\nreviewer done", swim: "red  ▶ probe ▶ probe", shelf: "claims/auth-1\nscope/api", map: "goal api\n ○ claim auth" }
 const counts = { open: 2, verified: 1, returned: 0, reports: 0 }
@@ -18,7 +19,7 @@ async function frame(width: number, height: number, over: Partial<Parameters<typ
   await act(async () => {
     view = await testRender(<RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft="" onDraft={() => {}} onSend={() => {}} {...over} />, { width, height })
   })
-  await act(async () => { await view.renderOnce() })
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); await view.waitForVisualIdle(); await view.renderOnce() })
   const text = view.captureCharFrame()
   await act(async () => { await view.dispose() })
   return text
@@ -135,4 +136,24 @@ test("ctrl+c asks to quit to chat; enter confirms and esc stays", async () => {
   await act(async () => { view.mockInput.pressEscape(); await Bun.sleep(80) })
   expect(answers).toEqual([true, false])
   await act(async () => { await view.dispose() })
+})
+
+test("a turn shows collapsed thinking, a tool card and markdown, and long lines wrap", async () => {
+  const long = "The working directory is /Users/someone/Projects/retas/koma and nothing else is attached to this room right now, so I ran pwd myself."
+  const turn: Line = {
+    id: "t", author: "chief", lane: "chat",
+    items: [
+      { kind: "reasoning", text: "The user wants the cwd, run pwd." },
+      { kind: "tool", id: "c1", name: "bash", args: '{"command":"pwd"}', result: { ok: true, text: "/Users/someone/Projects/retas/koma" } },
+      { kind: "text", text: `**Short answer:** ${long}` },
+    ],
+  }
+  const text = await frame(70, 30, { lines: [say("you", "pwd?"), turn] })
+  expect(text).toContain("reasoning")
+  expect(text).not.toContain("The user wants the cwd")
+  expect(text).toContain("bash")
+  expect(text).toContain("pwd")
+  expect(text).toContain("Short answer:")
+  expect(text).not.toContain("**")
+  expect(text).toContain("so I ran pwd myself.")
 })

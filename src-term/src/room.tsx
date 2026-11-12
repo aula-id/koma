@@ -1,14 +1,17 @@
-import { useEffect, useRef, useState } from "react"
-import { useKeyboard, useTerminalDimensions } from "@opentui/react"
-import { BORDER_LEFT, scrollbars, type Theme } from "./theme.ts"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { SyntaxStyle } from "@opentui/core"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
+import { scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
-import { Choice, promptMark } from "./chat.tsx"
+import { AssistantCard, Choice, MarkdownBody, Reasoning, ToolCard, promptMark } from "./chat.tsx"
+import { syntaxStyles } from "./syntax.ts"
+import { reduceLines, say, type Item, type Line } from "./room-turns.ts"
 import { suggest } from "./room-suggest.ts"
 import { RoomLink, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { switchDaemon } from "./paths.ts"
 
-export type Line = { id: string; author: string; text: string }
+export type { Line } from "./room-turns.ts"
 export type ModelList = { choices: ModelChoice[]; lanes: LaneRow[] }
 export type Counts = { open: number; verified: number; returned: number; reports: number }
 
@@ -16,11 +19,13 @@ export type Counts = { open: number; verified: number; returned: number; reports
 export function RoomScreen({
   id,
   theme,
+  syntaxStyle,
   onLeave,
   ctrlC,
 }: {
   id: string
   theme: Theme
+  syntaxStyle?: SyntaxStyle
   onLeave: () => void
   ctrlC?: { current: () => void }
 }) {
@@ -85,13 +90,14 @@ export function RoomScreen({
       leave()
       return
     }
-    setLines((current) => [...current, { id: crypto.randomUUID(), author: "you", text }])
+    setLines((current) => [...current, say("you", text)])
     link.current?.sendUser(text)
   }
 
   return (
     <RoomView
       theme={theme}
+      syntaxStyle={syntaxStyle}
       lines={lines}
       panes={{ lanes, swim, shelf, map }}
       counts={counts}
@@ -112,8 +118,9 @@ export function RoomScreen({
 export type Panes = { lanes: string; swim: string; shelf: string; map: string }
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
+  syntaxStyle?: SyntaxStyle
   lines: Line[]
   panes: Panes
   counts: Counts
@@ -129,6 +136,9 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
   onOpenModels?: () => void
   onSetModel?: (avatar: string, lane: string, model: string) => void
 }) {
+  const renderer = useRenderer()
+  const ownStyle = useMemo(() => syntaxStyle ?? SyntaxStyle.fromStyles(syntaxStyles(theme), renderer.nativeScene), [syntaxStyle, theme, renderer])
+  useEffect(() => () => { if (!syntaxStyle) ownStyle.destroy() }, [syntaxStyle, ownStyle])
   const [full, setFull] = useState<FullView | null>(null)
   const options = suggest(draft)
   const [pickedAt, setPickedAt] = useState(0)
@@ -196,7 +206,7 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
           </box>
         ) : (
           <box flexDirection="column" gap={1} paddingTop={1}>
-            {lines.map((line) => <Message key={line.id} line={line} theme={theme} />)}
+            {lines.map((line) => <Message key={line.id} line={line} theme={theme} syntaxStyle={ownStyle} />)}
           </box>
         )}
       </scrollbox>
@@ -277,37 +287,41 @@ function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: E
   )
 }
 
-function Message({ line, theme }: { line: Line; theme: Theme }) {
+function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; syntaxStyle: SyntaxStyle }) {
   if (line.author === "you") {
+    const first = line.items[0]
     return (
       <box flexDirection="row" backgroundColor={theme.panel}>
         <box width={1} backgroundColor={theme.accent} />
-        <box flexGrow={1} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} backgroundColor={theme.panel}>
-          <text fg={theme.fg}>{line.text}</text>
+        <box flexGrow={1} minWidth={0} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} backgroundColor={theme.panel}>
+          <text fg={theme.fg} wrapMode="word">{first?.kind === "text" ? first.text : ""}</text>
         </box>
       </box>
     )
   }
+  const label = line.lane === "work" ? `${line.author} · working` : line.author
   return (
-    <box flexDirection="row">
-      <box width={1} border={BORDER_LEFT} borderColor={theme.fg} customBorderChars={DOTTED_RAIL} />
-      <box flexGrow={1} flexDirection="column" paddingLeft={1}>
-        <text fg={authorInk(line.author, theme)}>{line.author}</text>
-        <text fg={theme.fg}>{line.text}</text>
-      </box>
-    </box>
+    <AssistantCard theme={theme}>
+      <text fg={authorInk(line.author, theme)}>{label}</text>
+      {line.items.map((item, index) => <Piece key={index} item={item} theme={theme} syntaxStyle={syntaxStyle} />)}
+    </AssistantCard>
   )
+}
+
+function Piece({ item, theme, syntaxStyle }: { item: Item; theme: Theme; syntaxStyle: SyntaxStyle }) {
+  if (item.kind === "reasoning") return <Reasoning text={item.text} theme={theme} syntaxStyle={syntaxStyle} defaultOpen={false} />
+  if (item.kind === "tool") {
+    const call = { id: item.id, type: "function", function: { name: item.name, arguments: item.args } }
+    const result = item.result ? { role: "tool", content: item.result.text, tool_call_id: item.id } : undefined
+    return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} />
+  }
+  return <MarkdownBody content={item.text} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} />
 }
 
 /** Counts of the shelf by gate state; the narrow form keeps what decides the next step. */
 export function tally(counts: Counts, full: boolean): string {
   const core = `${counts.open} open · ${counts.verified} verified`
   return full ? `${core} · ${counts.returned} returned · ${counts.reports} reports` : core
-}
-
-const DOTTED_RAIL = {
-  topLeft: " ", topRight: " ", bottomLeft: " ", bottomRight: " ", horizontal: " ",
-  vertical: "┊", topT: " ", bottomT: " ", leftT: " ", rightT: " ", cross: " ",
 }
 
 /** The Chief is the accent; specialists take the status colors so lanes read apart at a glance. */
@@ -332,19 +346,15 @@ function applyFrame(
   setModels: (models: ModelList) => void,
   setNotice: (text: string) => void,
 ): void {
-  const push = (author: string, text: string) => setLines((current) => [...current, { id: crypto.randomUUID(), author, text }])
   switch (frame.type) {
     case "hello":
       setPhase(frame.kind === "secure" ? "connected" : `daemon kind is ${frame.kind}`)
       break
     case "chief":
-      push("chief", frame.text)
-      break
     case "lane":
-      push(frame.avatar, frame.text)
-      break
     case "visible":
-      push(frame.author, frame.text)
+    case "part":
+      setLines((current) => reduceLines(current, frame))
       break
     case "status":
       setLanes(frame.digest)

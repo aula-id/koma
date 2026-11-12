@@ -672,7 +672,7 @@ const DOTTED_RAIL = {
   cross: " ",
 }
 
-function AssistantCard({ theme, children }: { theme: Theme; children: ReactNode }) {
+export function AssistantCard({ theme, children }: { theme: Theme; children: ReactNode }) {
   return (
     <box flexDirection="row">
       <box width={1} border={BORDER_LEFT} borderColor={theme.fg} customBorderChars={DOTTED_RAIL} />
@@ -824,7 +824,7 @@ function dressList(list: ListNode) {
   }
 }
 
-function Reasoning({
+export function Reasoning({
   text,
   theme,
   syntaxStyle,
@@ -864,7 +864,7 @@ export function AttachmentPile({ attachments, theme }: {attachments: Attachment[
   </box>
 }
 
-function ToolCard({
+export function ToolCard({
   call,
   result,
   theme,

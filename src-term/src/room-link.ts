@@ -7,10 +7,17 @@ export type RoomFrame =
   | { type: "chief"; text: string }
   | { type: "lane"; avatar: string; text: string }
   | { type: "visible"; author: string; text: string }
+  | { type: "part"; author: string; lane: string; part: LanePart }
   | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number }
   | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
   | { type: "notice"; text: string }
   | { type: "closed" }
+
+/** One structured piece of a lane's turn: thinking, a tool call, a tool result. */
+export type LanePart =
+  | { kind: "reasoning"; text: string }
+  | { kind: "tool_call"; id: string; name: string; args: string }
+  | { kind: "tool_result"; id: string; ok: boolean; result: string }
 
 /** A model registered in the coding agent. */
 export type ModelChoice = { id: string; name: string; model_id: string; provider: string }
@@ -34,6 +41,17 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
   if (lane) return { type: "lane", avatar: String(lane.avatar ?? ""), text: String(lane.text ?? "") }
   const visible = body("visible")
   if (visible) return { type: "visible", author: String(visible.author ?? ""), text: String(visible.text ?? "") }
+  const part = body("part")
+  if (part) {
+    const inner = part.part && typeof part.part === "object" ? part.part as Record<string, unknown> : undefined
+    const kind = String(inner?.kind ?? "")
+    const author = String(part.author ?? "")
+    const lane = String(part.lane ?? "chat")
+    if (kind === "reasoning") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") } }
+    if (kind === "tool_call") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), name: String(inner?.name ?? ""), args: String(inner?.args ?? "") } }
+    if (kind === "tool_result") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), ok: Boolean(inner?.ok), result: String(inner?.result ?? "") } }
+    return null
+  }
   const status = body("status")
   if (status) {
     return {
