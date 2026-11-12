@@ -96,6 +96,7 @@ impl Digest {
             LaneEvent::Submitted => {
                 lane.phase = Phase::Submitted;
             }
+            LaneEvent::Flag { .. } => {}
             LaneEvent::Finished { .. } => {
                 if lane.phase != Phase::Failed {
                     lane.phase = Phase::Done;

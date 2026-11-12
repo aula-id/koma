@@ -17,6 +17,9 @@ pub enum LaneEvent {
     Chat(String),
     /// The lane submitted its assignment (`group_task_complete` passed).
     Submitted,
+    /// The Clerk raised a flag to the Chief (`clerk_flag`). Only the clerk lane
+    /// produces this; the actor turns it into a Chief inbox item.
+    Flag { severity: String, note: String },
     /// The lane ended; `report` is its final text.
     Finished { report: String },
     /// The lane failed fatally; `error` is the cause.

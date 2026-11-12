@@ -17,6 +17,7 @@ pub mod control;
 pub mod digest;
 pub mod event;
 pub mod inbox;
+pub mod runner;
 
 #[cfg(test)]
 mod tests;
@@ -29,3 +30,8 @@ pub use digest::{Digest, LaneStatus, Phase};
 pub use event::LaneEvent;
 #[allow(unused_imports)]
 pub use inbox::{Inbox, Item as InboxItem, Priority};
+#[allow(unused_imports)]
+pub use runner::{
+    run_lane, LaneConfig, LaneInput, LaneKind, ModelClient, ModelReply, ModelRequest, ToolRouter,
+    ToolRun, ToolSpec, Usage,
+};
