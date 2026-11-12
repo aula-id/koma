@@ -94,6 +94,9 @@ impl ModelClient for ProviderModelClient {
         let history = request.history;
         let sink = request.deltas;
         let archive_dir = request.archive_dir;
+        // Images a lane has loaded live in its own directory, so that is where the wire reads them.
+        // A model the catalogue does not rule out is assumed to take images, as in a cold chat session.
+        let image_ctx = archive_dir.clone().map(|dir| crate::dto::openrouter::ImageWireCtx { session_dir: dir, model_takes_images: true });
         let objective = request.objective;
         let settings = self.settings.clone();
         let settings_cap = self.settings_cap;
@@ -139,7 +142,7 @@ impl ModelClient for ProviderModelClient {
                 // Room tools are all presented as function defs; no koma-builtin-by-name set.
                 let _ = client
                     .stream_complete(
-                        conn, &model_id, &provider, &effort, history, &advertise, &defs, None, max_tokens, tx,
+                        conn, &model_id, &provider, &effort, history, &advertise, &defs, image_ctx, max_tokens, tx,
                     )
                     .await;
             });

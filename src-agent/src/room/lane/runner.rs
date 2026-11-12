@@ -91,6 +91,9 @@ pub struct ToolRun {
     /// Events this call produced, forwarded as the lane's own (a shelf publish,
     /// a submit, a clerk flag).
     pub events: Vec<LaneEvent>,
+    /// Messages the call adds to the conversation after the round's tool results,
+    /// such as a loaded image attached to a user turn.
+    pub messages: Vec<ChatMessage>,
 }
 
 /// The seam to the tools. One router is built per lane; it routes the room's
@@ -266,6 +269,7 @@ pub async fn run_lane(
         let mut assistant = ChatMessage::assistant_with_tools(reply.text.clone(), reply.tool_calls.clone());
         assistant.reasoning = reply.reasoning.clone();
         convo.push(assistant);
+        let mut after_results: Vec<ChatMessage> = Vec::new();
         for call in &reply.tool_calls {
             emit(&events, LaneEvent::ToolStarted { name: call.function.name.clone() });
             emit(&events, LaneEvent::ToolCall {
@@ -281,6 +285,11 @@ pub async fn run_lane(
                 emit(&events, event);
             }
             convo.push(ChatMessage::tool_result(call.id.clone(), run.result));
+            after_results.extend(run.messages);
+        }
+        // Added only once every call has its result, so the round stays one unit.
+        for message in after_results {
+            convo.push(message);
         }
 
         step += 1;
@@ -369,6 +378,7 @@ mod tests {
             self.runs.lock().unwrap().get(&call.function.name).cloned().unwrap_or(ToolRun {
                 result: format!("error: no such tool {}", call.function.name),
                 events: Vec::new(),
+                ..Default::default()
             })
         }
     }
@@ -460,12 +470,13 @@ mod tests {
             reply_text("done"),
         ]);
         let router = FakeRouter::new();
-        router.on("sec_run", ToolRun { result: "open port 443".into(), events: vec![] });
+        router.on("sec_run", ToolRun { result: "open port 443".into(), events: vec![], messages: vec![] });
         router.on(
             "put_claim",
             ToolRun {
                 result: "{\"key\":\"claims/a\",\"revision\":1}".into(),
                 events: vec![LaneEvent::Published { key: "claims/a".into(), revision: 1 }],
+                ..Default::default()
             },
         );
         let (_in_tx, in_rx) = unbounded_channel();
@@ -486,7 +497,7 @@ mod tests {
         thinking.reasoning = Some("I should look at the working directory first.".into());
         let model = ScriptedModel::new(vec![thinking, reply_text("It is /work.")]);
         let router = FakeRouter::new();
-        router.on("bash", ToolRun { result: "/work".into(), events: vec![] });
+        router.on("bash", ToolRun { result: "/work".into(), events: vec![], messages: vec![] });
         let (_in_tx, in_rx) = unbounded_channel();
         let (ev_tx, ev_rx) = unbounded_channel();
         run_lane(config(LaneKind::Chat), model, router, in_rx, ev_tx).await;
@@ -549,10 +560,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn messages_a_tool_adds_follow_every_result_of_its_round() {
+        let model = ScriptedModel::new(vec![reply_tools("", vec![call("load_image"), call("bash")]), reply_text("I see it.")]);
+        let router = FakeRouter::new();
+        router.on("load_image", ToolRun { result: "image loaded".into(), events: vec![], messages: vec![ChatMessage::new(Role::User, "[Image loaded: login]")] });
+        router.on("bash", ToolRun { result: "ok".into(), events: vec![], messages: vec![] });
+        let (_in_tx, in_rx) = unbounded_channel();
+        let (ev_tx, _ev_rx) = unbounded_channel();
+        run_lane(config(LaneKind::Chat), model.clone(), router, in_rx, ev_tx).await;
+        let seen = model.last_history();
+        let roles: Vec<Role> = seen.iter().map(|m| m.role).collect();
+        let tail = &roles[roles.len() - 4..];
+        assert_eq!(tail, [Role::Assistant, Role::Tool, Role::Tool, Role::User], "both results come first, then the image turn: {roles:?}");
+        assert!(seen.last().unwrap().content.contains("Image loaded"));
+    }
+
+    #[tokio::test]
     async fn an_error_result_marks_the_tool_not_ok() {
         let model = ScriptedModel::new(vec![reply_tools("", vec![call("bash")]), reply_text("ok")]);
         let router = FakeRouter::new();
-        router.on("bash", ToolRun { result: "error: command failed".into(), events: vec![] });
+        router.on("bash", ToolRun { result: "error: command failed".into(), events: vec![], messages: vec![] });
         let (_in_tx, in_rx) = unbounded_channel();
         let (ev_tx, ev_rx) = unbounded_channel();
         run_lane(config(LaneKind::Work), model, router, in_rx, ev_tx).await;
@@ -576,7 +603,7 @@ mod tests {
         let replies = (0..20).map(|i| reply_tools(&format!("step {i}"), vec![call("sec_run")])).collect();
         let model = ScriptedModel::new(replies);
         let router = FakeRouter::new();
-        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![] });
+        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![], messages: vec![] });
         let mut cfg = config(LaneKind::Work);
         cfg.max_steps = 3;
         let (_in_tx, in_rx) = unbounded_channel();
@@ -595,7 +622,7 @@ mod tests {
             reply_text("adjusted"),
         ]);
         let router = FakeRouter::new();
-        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![] });
+        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![], messages: vec![] });
         let (in_tx, in_rx) = unbounded_channel();
         let (ev_tx, ev_rx) = unbounded_channel();
         // steer before the second turn: queued now, drained at the next boundary
@@ -614,7 +641,7 @@ mod tests {
     async fn stop_ends_the_lane_at_the_next_boundary() {
         let model = ScriptedModel::new(vec![reply_tools("", vec![call("sec_run")]); 5]);
         let router = FakeRouter::new();
-        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![] });
+        router.on("sec_run", ToolRun { result: "ok".into(), events: vec![], messages: vec![] });
         let (in_tx, in_rx) = unbounded_channel();
         let (ev_tx, ev_rx) = unbounded_channel();
         in_tx.send(LaneInput::Stop).unwrap();

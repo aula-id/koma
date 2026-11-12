@@ -146,3 +146,10 @@ handler = "graph_query"
 description = "Query the code graph."
 [tool.schema]
 type = "object"
+
+[[tool]]
+name = "load_image"
+handler = "load_image"
+description = "Look at an image file."
+[tool.schema]
+type = "object"

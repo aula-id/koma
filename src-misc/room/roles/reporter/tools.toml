@@ -125,3 +125,10 @@ handler = "checklist"
 description = "Keep a task checklist for this lane."
 [tool.schema]
 type = "object"
+
+[[tool]]
+name = "load_image"
+handler = "load_image"
+description = "Look at an image file."
+[tool.schema]
+type = "object"

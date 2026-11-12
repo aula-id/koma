@@ -28,6 +28,11 @@ pub trait BuiltinHost: Send + Sync {
     /// back to the model. The avatar and kind let the host pick the right tool
     /// context (a red lane's cyber lane differs from a reviewer's).
     fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String;
+    /// Like [`run`](Self::run), for a tool that also adds messages to the
+    /// conversation (an image the model asked to see).
+    fn run_with_messages(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> (String, Vec<crate::dto::chat::ChatMessage>) {
+        (self.run(avatar, kind, call), Vec::new())
+    }
     /// The built-in tools a lane of this kind may use.
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec>;
 }
@@ -177,6 +182,7 @@ impl RoomToolRouter {
         ToolRun {
             result: outcome.value.to_string(),
             events,
+            ..Default::default()
         }
     }
 
@@ -202,11 +208,13 @@ impl RoomToolRouter {
                 ToolRun {
                     result: value.to_string(),
                     events,
+                    ..Default::default()
                 }
             }
             Err(e) => ToolRun {
                 result: format!("error: {}", e.0),
                 events: Vec::new(),
+                ..Default::default()
             },
         }
     }
@@ -231,11 +239,13 @@ impl RoomToolRouter {
                 ToolRun {
                     result: value.to_string(),
                     events: vec![LaneEvent::Flag { severity, note }],
+                    ..Default::default()
                 }
             }
             Err(e) => ToolRun {
                 result: format!("error: {e}"),
                 events: Vec::new(),
+                ..Default::default()
             },
         }
     }
@@ -250,11 +260,13 @@ impl RoomToolRouter {
                 ToolRun {
                     result: json!({ "ok": true }).to_string(),
                     events: Vec::new(),
+                    ..Default::default()
                 }
             }
             _ => ToolRun {
                 result: "error: message_user needs non-empty text".to_string(),
                 events: Vec::new(),
+                ..Default::default()
             },
         }
     }
@@ -272,6 +284,7 @@ impl ToolRouter for RoomToolRouter {
             return ToolRun {
                 result: format!("error: tool '{name}' is not available to this lane"),
                 events: Vec::new(),
+                ..Default::default()
             };
         }
         let args = Self::args_of(call);
@@ -284,10 +297,8 @@ impl ToolRouter for RoomToolRouter {
         } else if is_shelf_tool(name) {
             self.run_shelf(name, &args)
         } else {
-            ToolRun {
-                result: self.builtins.run(&self.lane.avatar, self.lane.kind, call),
-                events: Vec::new(),
-            }
+            let (result, messages) = self.builtins.run_with_messages(&self.lane.avatar, self.lane.kind, call);
+            ToolRun { result, events: Vec::new(), messages }
         }
     }
 }

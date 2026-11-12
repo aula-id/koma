@@ -308,7 +308,6 @@ const NOT_IN_THE_ROOM: &[(&str, &str)] = &[
     ("dir_cache_update", "internal plumbing"),
     ("git_cred", "stores credentials in the coding session's settings"),
     ("git_worktree", "shadow worktrees of the coding session's project bucket"),
-    ("load_image", "injects image messages into the conversation; lanes are text-only for now"),
     ("load_screenshot", "image messages"),
     ("show_image", "image messages"),
     ("search_screenshots", "screenshot library of the coding session"),
@@ -339,4 +338,39 @@ fn every_coding_agent_tool_is_in_the_room_or_has_a_stated_reason_not_to_be() {
     for name in HOST_HANDLERS {
         assert!(compiled.iter().any(|s| s.name == *name), "{name} is a host handler with no compiled tool");
     }
+}
+
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+#[test]
+fn a_lane_can_load_an_image_the_user_pointed_at() {
+    let root = std::env::temp_dir().join(format!("koma-room-image-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let shot = root.join("login.png");
+    std::fs::write(&shot, PNG_1X1).expect("write png");
+    let b = lane_builtins(&root);
+
+    let (result, messages) = b.run_with_messages("red", LaneKind::Chat, &call("load_image", json!({ "path": shot.to_string_lossy() })));
+    assert!(result.contains("image loaded: login") && result.contains("[Image #1]"), "{result}");
+    assert_eq!(messages.len(), 1);
+    let message = &messages[0];
+    assert_eq!(message.role, crate::dto::chat::Role::User);
+    assert_eq!(message.attachments.len(), 1);
+    let kept = root.join("session/lanes/red.chat").join(&message.attachments[0].rel_path);
+    assert!(kept.is_file(), "the lane keeps its own copy: {}", kept.display());
+
+    // The wire builder reads it back from the lane's directory.
+    let ctx = crate::dto::openrouter::ImageWireCtx { session_dir: root.join("session/lanes/red.chat"), model_takes_images: true };
+    let wire = crate::dto::openrouter::to_wire_with_images(messages, Some(&ctx), false);
+    let json = serde_json::to_string(&wire).expect("wire");
+    assert!(json.contains("image_url") && json.contains("data:image/png"), "{json}");
+
+    // A file outside the workspace, and a text file, are refused with a reason.
+    let (outside, none) = b.run_with_messages("red", LaneKind::Chat, &call("load_image", json!({ "path": "/etc/hosts" })));
+    assert!(outside.starts_with("error:") && none.is_empty(), "{outside}");
 }

@@ -81,9 +81,74 @@ pub fn host_tool_specs() -> Vec<ToolSpec> {
         .collect()
 }
 
+impl CtxBuiltins {
+    /// `load_image`: read an image the user pointed at (or one already in this
+    /// lane's `images/`), keep a copy in the lane's own directory, and attach it
+    /// to a user turn so the model sees it on its next step. `attach: false`
+    /// asks for numeric inspection only, as in the coding chat.
+    fn load_image(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> (String, Vec<crate::dto::chat::ChatMessage>) {
+        use crate::tool::internet::{image_inspection, load_image};
+        let fail = |message: String| (format!("error: {message}"), Vec::new());
+        let Some(root) = &self.lanes_dir else { return fail("this room keeps no lane directory to hold the image".into()) };
+        let lane_dir = crate::room::lane::lane_dir(root, avatar, kind);
+        let lane = format!("{avatar}.{}", if kind == LaneKind::Chat { "chat" } else { "work" });
+        let args: serde_json::Value = serde_json::from_str(&crate::dto::chat::sanitize_tool_arguments(&call.function.arguments))
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let mut ctx = self.ctx(avatar).clone();
+        if let Some(cwd) = self.state.cwd(&lane) {
+            ctx.workspace = cwd;
+        }
+        // The lane's directory is its "session": `image_n` and its images/ live there.
+        ctx.session_dir = Some(lane_dir.clone());
+        let (path, bytes) = match load_image::read_validated_image_from_args(&ctx, &args) {
+            Ok(found) => found,
+            Err(e) => return fail(e.to_string()),
+        };
+        let (name, bytes, metadata) = if load_image::inspection_requested(&args) {
+            let mut inspection = match image_inspection::inspect(&bytes, &args) {
+                Ok(value) => value,
+                Err(e) => return fail(e.to_string()),
+            };
+            inspection.metadata["source"]["path"] = path.to_string_lossy().to_string().into();
+            match inspection.png {
+                Some(png) => ("image-inspection.png".to_string(), png, Some(inspection.metadata)),
+                None => return (inspection.metadata.to_string(), Vec::new()),
+            }
+        } else {
+            let basename = path.file_name().and_then(|v| v.to_str()).unwrap_or("image.png").to_string();
+            (basename, bytes, None)
+        };
+        let (attachment, marker) = match crate::model::attachment::ingest_image_bytes(&lane_dir.join("images"), &name, &bytes) {
+            Ok(done) => done,
+            Err(e) => return fail(format!("failed to keep the image: {e}")),
+        };
+        let shown = path.file_stem().and_then(|v| v.to_str()).unwrap_or("image").to_string();
+        let result = match metadata {
+            Some(mut metadata) => {
+                metadata["image_n"] = attachment.marker_n.into();
+                metadata.to_string()
+            }
+            None => format!("image loaded: {shown} → {marker}\n{}", path.display()),
+        };
+        let mut message = crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::User, format!("[Image loaded: {shown}]"));
+        message.attachments = vec![attachment];
+        (result, vec![message])
+    }
+}
+
 impl BuiltinHost for CtxBuiltins {
+    fn run_with_messages(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> (String, Vec<crate::dto::chat::ChatMessage>) {
+        if call.function.name == "load_image" {
+            return self.load_image(avatar, kind, call);
+        }
+        (self.run(avatar, kind, call), Vec::new())
+    }
+
     fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String {
         let name = call.function.name.as_str();
+        if name == "load_image" {
+            return self.load_image(avatar, kind, call).0;
+        }
         if name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
             return format!("error: tool '{name}' is not available to this lane");
         }
