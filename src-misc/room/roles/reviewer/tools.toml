@@ -112,3 +112,37 @@ description = "List or load a skill."
 [tool.schema]
 type = "object"
 
+[[tool]]
+name = "bash_output"
+handler = "bash_output"
+description = "Poll a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash_kill"
+handler = "bash_kill"
+description = "Stop a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "cd"
+handler = "cd"
+description = "Change this lane's working directory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "checklist"
+handler = "checklist"
+description = "Keep a task checklist for this lane."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "graph_query"
+handler = "graph_query"
+description = "Query the code graph."
+[tool.schema]
+type = "object"

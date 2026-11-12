@@ -71,7 +71,7 @@ impl Timeline {
             .iter()
             .flat_map(|(avatar, marks)| marks.iter().map(move |m| (m.at_ms, avatar.clone(), m.marker, m.label.clone())))
             .collect();
-        all.sort_by(|a, b| b.0.cmp(&a.0));
+        all.sort_by_key(|event| std::cmp::Reverse(event.0));
         all.truncate(limit);
         all
     }

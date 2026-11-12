@@ -24,6 +24,8 @@ pub struct CtxBuiltins {
     work_specs: Vec<ToolSpec>,
     /// `<session>/lanes`, where each lane keeps its archive.
     lanes_dir: Option<std::path::PathBuf>,
+    /// Background jobs and the working directory, per lane.
+    state: super::lane_state::LaneState,
 }
 
 impl CtxBuiltins {
@@ -35,6 +37,7 @@ impl CtxBuiltins {
     ) -> Self {
         Self {
             lanes_dir: fallback.session_dir.as_ref().map(|dir| dir.join("lanes")),
+            state: Default::default(),
             by_avatar,
             fallback,
             chat_specs,
@@ -48,6 +51,7 @@ impl CtxBuiltins {
         ctx.plan_read_only.store(false, Ordering::Release);
         Self {
             lanes_dir: ctx.session_dir.as_ref().map(|dir| dir.join("lanes")),
+            state: Default::default(),
             by_avatar: BTreeMap::new(),
             fallback: Arc::new(ctx),
             chat_specs: host_tool_specs(),
@@ -83,16 +87,52 @@ impl BuiltinHost for CtxBuiltins {
         if name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
             return format!("error: tool '{name}' is not available to this lane");
         }
-        // A lane recalls its own history: message_find and message_load read
-        // the lane's archive, not the daemon session's.
-        if matches!(name, "message_find" | "message_load") {
-            if let Some(root) = &self.lanes_dir {
-                let mut ctx = self.ctx(avatar).clone();
-                ctx.session_dir = Some(crate::room::lane::lane_dir(root, avatar, kind));
-                return execute_tool(&ctx, call);
-            }
+        let lane = format!("{avatar}.{}", if kind == LaneKind::Chat { "chat" } else { "work" });
+        let args: serde_json::Value = serde_json::from_str(&crate::dto::chat::sanitize_tool_arguments(&call.function.arguments))
+            .unwrap_or_else(|_| serde_json::json!({}));
+        // The lane's own view of the session context: where it has `cd`'d to, and
+        // its own archive for recalling history and keeping a checklist.
+        let mut ctx = self.ctx(avatar).clone();
+        if let Some(cwd) = self.state.cwd(&lane) {
+            ctx.workspace = cwd;
         }
-        execute_tool(self.ctx(avatar), call)
+        let lane_dir = self.lanes_dir.as_ref().map(|root| crate::room::lane::lane_dir(root, avatar, kind));
+        match name {
+            "message_find" | "message_load" => {
+                if let Some(dir) = lane_dir {
+                    ctx.session_dir = Some(dir);
+                }
+            }
+            "checklist" => {
+                if let Some(dir) = lane_dir {
+                    ctx.memory_dir = Some(dir);
+                }
+            }
+            "bash" if args.get("run_in_background").and_then(serde_json::Value::as_bool).unwrap_or(false) => {
+                let command = args.get("command").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+                if command.is_empty() {
+                    return "error: bash requires a non-empty 'command'".into();
+                }
+                if ctx.workspaces.is_empty() || ctx.workspace.as_os_str().is_empty() {
+                    return "error: no writable workspace root; cannot run bash".into();
+                }
+                // `bash` refuses git and points at git_operator. A background job must too.
+                static GIT_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+                let git = GIT_RE.get_or_init(|| crate::re_util::static_re(r"(?:^|[\s;&|(])git\b"));
+                if git.is_match(command) {
+                    return "error: use the git_operator tool for git commands, not bash. git_operator runs git directly \
+                            (no shell-injection risk), injects the session SSH key automatically, and gates destructive \
+                            operations. Example: git_operator({\"args\": [\"log\", \"--oneline\", \"-5\"]})"
+                        .into();
+                }
+                return self.state.start(&lane, command, ctx.workspace.clone());
+            }
+            "bash_output" => return self.state.output(&lane, &args),
+            "bash_kill" => return self.state.kill(&lane, &args),
+            "cd" => return self.state.apply_cd(&lane, execute_tool(&ctx, call)),
+            _ => {}
+        }
+        execute_tool(&ctx, call)
     }
 
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec> {

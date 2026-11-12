@@ -218,3 +218,125 @@ fn drss_shapes_a_long_lane_from_its_archive_and_keeps_the_live_turn() {
     assert_eq!(shaped.history.last().map(|m| m.content.as_str()), Some("what is the staging host?"), "the live user turn is protected");
     assert_eq!(lane.messages().len(), before - 1, "the lane's own record is untouched (all turns, no system message)");
 }
+
+fn lane_builtins(root: &std::path::Path) -> CtxBuiltins {
+    let mut ctx = context(root);
+    ctx.session_dir = Some(root.join("session"));
+    CtxBuiltins::from_ctx(ctx)
+}
+
+fn text_of(builtins: &CtxBuiltins, avatar: &str, kind: LaneKind, name: &str, args: serde_json::Value) -> String {
+    builtins.run(avatar, kind, &call(name, args))
+}
+
+#[test]
+fn a_lane_runs_a_background_job_and_polls_it() {
+    let root = std::env::temp_dir().join(format!("koma-room-bg-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let b = lane_builtins(&root);
+    let started = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "echo first; sleep 1; echo second", "run_in_background": true }));
+    assert!(started.contains("bash-1"), "{started}");
+    // Another lane has its own numbering and cannot see this job.
+    let other = text_of(&b, "chief", LaneKind::Chat, "bash_output", json!({ "job_id": "bash-1" }));
+    assert!(other.contains("no such job"), "{other}");
+
+    let mut seen = String::new();
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        seen = text_of(&b, "red", LaneKind::Work, "bash_output", json!({ "job_id": "bash-1", "tail_lines": 5 }));
+        if seen.contains("[exit 0]") {
+            break;
+        }
+    }
+    assert!(seen.contains("[exit 0]") && seen.contains("first") && seen.contains("second"), "{seen}");
+
+    let long = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "sleep 30", "run_in_background": true }));
+    assert!(long.contains("bash-2"), "{long}");
+    let killed = text_of(&b, "red", LaneKind::Work, "bash_kill", json!({ "job_id": "bash-2" }));
+    assert!(killed.contains("killed"), "{killed}");
+    let status = text_of(&b, "red", LaneKind::Work, "bash_output", json!({ "job_id": "bash-2" }));
+    assert!(status.contains("[killed]"), "{status}");
+
+    let git = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "git status", "run_in_background": true }));
+    assert!(git.contains("git_operator"), "{git}");
+    assert!(text_of(&b, "red", LaneKind::Work, "bash_output", json!({ "job_id": "bash-9" })).contains("no such job"));
+}
+
+#[test]
+fn cd_moves_only_the_lane_that_asked() {
+    let root = std::env::temp_dir().join(format!("koma-room-cd-{}", std::process::id()));
+    let inner = root.join("inner");
+    std::fs::create_dir_all(&inner).expect("mkdir");
+    let b = lane_builtins(&root);
+    let moved = text_of(&b, "red", LaneKind::Work, "cd", json!({ "path": inner.to_string_lossy() }));
+    assert!(moved.contains("working directory is now"), "{moved}");
+    let red = text_of(&b, "red", LaneKind::Work, "bash", json!({ "command": "pwd" }));
+    assert!(red.contains("inner"), "red runs in the new directory: {red}");
+    let chief = text_of(&b, "chief", LaneKind::Chat, "bash", json!({ "command": "pwd" }));
+    assert!(!chief.contains("inner"), "the chief did not move: {chief}");
+    let refused = text_of(&b, "red", LaneKind::Work, "cd", json!({ "path": "/" }));
+    assert!(!refused.contains("working directory is now"), "outside the roots is refused: {refused}");
+}
+
+/// Tools the coding agent has that room lanes deliberately do not, each with the reason.
+/// Every other chat tool must be a host handler, so adding a chat tool forces a decision.
+const NOT_IN_THE_ROOM: &[(&str, &str)] = &[
+    ("computer_windows", "desktop control; the lab works through the shell and the browser tools"),
+    ("computer_select_window", "desktop control"),
+    ("computer_observe", "desktop control"),
+    ("computer_act", "desktop control"),
+    ("screen_browser_tabs", "desktop browser control; the lab has browser_* tools"),
+    ("screen_browser_observe", "desktop browser control"),
+    ("screen_browser_act", "desktop browser control"),
+    ("screen_browser_read", "desktop browser control"),
+    ("screen_browser_eval", "desktop browser control"),
+    ("screen_browser_wait_human", "desktop browser control"),
+    ("task", "sub-agents; the room delegates with group_delegate to its own specialists"),
+    ("task_output", "sub-agents"),
+    ("task_kill", "sub-agents"),
+    ("task_send", "sub-agents"),
+    ("plan_enter", "the coding session's Plan mode"),
+    ("plan_ready", "the coding session's Plan mode"),
+    ("mission_ready", "the coding session's SDLC mode"),
+    ("mission_draft", "the coding session's SDLC mode"),
+    ("mission_clear", "the coding session's SDLC mode"),
+    ("mission_verify", "the coding session's SDLC mode"),
+    ("mission_prepare", "the coding session's SDLC mode"),
+    ("mission_integrate", "the coding session's SDLC mode"),
+    ("seqthink", "internal to the coding session"),
+    ("pong", "internal plumbing"),
+    ("dir_cache_update", "internal plumbing"),
+    ("git_cred", "stores credentials in the coding session's settings"),
+    ("git_worktree", "shadow worktrees of the coding session's project bucket"),
+    ("load_image", "injects image messages into the conversation; lanes are text-only for now"),
+    ("load_screenshot", "image messages"),
+    ("show_image", "image messages"),
+    ("search_screenshots", "screenshot library of the coding session"),
+    ("describe_screenshot", "screenshot library of the coding session"),
+];
+
+#[test]
+fn every_coding_agent_tool_is_in_the_room_or_has_a_stated_reason_not_to_be() {
+    use crate::room::registry::HOST_HANDLERS;
+    let mut unclassified = Vec::new();
+    for name in crate::tool::main_tool_names() {
+        let hosted = HOST_HANDLERS.contains(&name.as_str());
+        let excluded = NOT_IN_THE_ROOM.iter().any(|(n, _)| *n == name);
+        assert!(!(hosted && excluded), "{name} is both hosted and excluded");
+        if !hosted && !excluded {
+            unclassified.push(name);
+        }
+    }
+    assert!(unclassified.is_empty(), "decide for each: host it in the room or list it in NOT_IN_THE_ROOM: {unclassified:?}");
+    for (name, _) in NOT_IN_THE_ROOM {
+        assert!(
+            crate::tool::all_tools().iter().any(|t| t.name() == *name),
+            "{name} is listed as excluded but is not a tool any more; remove it"
+        );
+    }
+    // Every hosted handler is a real compiled tool, so the allowlist cannot advertise a ghost.
+    let compiled = super::builtins::host_tool_specs();
+    for name in HOST_HANDLERS {
+        assert!(compiled.iter().any(|s| s.name == *name), "{name} is a host handler with no compiled tool");
+    }
+}

@@ -155,3 +155,65 @@ description = "Run JavaScript in a browser tab."
 [tool.schema]
 type = "object"
 
+[[tool]]
+name = "bash_output"
+handler = "bash_output"
+description = "Poll a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash_kill"
+handler = "bash_kill"
+description = "Stop a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "cd"
+handler = "cd"
+description = "Change this lane's working directory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "checklist"
+handler = "checklist"
+description = "Keep a task checklist for this lane."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "git_operator"
+handler = "git_operator"
+description = "Run git commands safely."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_page"
+handler = "web_page"
+description = "Read a web page in full."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search_full"
+handler = "web_search_full"
+description = "Search the web with full results."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_download"
+handler = "web_download"
+description = "Download a file from the web."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "graph_query"
+handler = "graph_query"
+description = "Query the code graph."
+[tool.schema]
+type = "object"
