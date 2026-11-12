@@ -308,7 +308,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
 /** Who is thinking and who is ready, under the composer. */
 function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
   const items = standing(rows)
-  if (!items.length) return null
+  if (!items.length) return <text fg={theme.dim} wrapMode="none">starting the room…</text>
   const ink = { success: theme.success, info: theme.info, warn: theme.warn, error: theme.error, dim: theme.dim }
   return (
     <text wrapMode="none" fg={theme.dim}>

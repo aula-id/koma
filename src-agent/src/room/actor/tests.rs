@@ -780,3 +780,51 @@ async fn esc_stops_the_chiefs_turn_and_the_next_message_is_answered() {
     handle.to_actor.send(ActorMsg::User("hello".into())).unwrap();
     status_where(&mut handle, |s| phase_of(s, "chief", "chat") == "running").await;
 }
+
+/// Like [`hanging_room`], over a store and shelf the caller keeps.
+fn hanging_room_with(
+    coordinator: Arc<Coordinator>,
+    shelf: Arc<Shelf>,
+    registry: Arc<RegistryHandle>,
+    hang: &'static [&'static str],
+    replies: Vec<((&str, usize), ModelReply)>,
+) -> RoomHandle {
+    let script = Script {
+        replies: replies.into_iter().map(|((a, n), r)| ((a.to_string(), n), r)).collect(),
+        seen: Mutex::new(HashMap::new()),
+    };
+    let model = Arc::new(Hangs { inner: ScriptedModel { script, systems: Arc::new(Mutex::new(Vec::new())), fallback: "done".into() }, hang });
+    spawn_room(coordinator, shelf, registry, model, Arc::new(StubBuiltins), RoomConfig::default())
+}
+
+#[tokio::test]
+async fn a_room_entered_again_continues_the_assignment_it_left() {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe the login" }] }),
+    );
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    // First room: Red is mid-assignment when it is closed.
+    let mut first = hanging_room_with(Arc::clone(&coordinator), Arc::clone(&shelf), Arc::clone(&registry), &["red"], vec![(("chief", 0), tools("Sending Red.", vec![delegate]))]);
+    first.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut first, |s| phase_of(s, "red", "work") == "running").await;
+    first.task.abort();
+    // Second room over the same store: Red picks the assignment up and is told it is a continuation.
+    let turns = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(SeenModel {
+        inner: ScriptedModel { script: Script::default(), systems: Arc::new(Mutex::new(Vec::new())), fallback: "done".into() },
+        turns: Arc::clone(&turns),
+    });
+    let _second = spawn_room(coordinator, shelf, registry, model, Arc::new(StubBuiltins), RoomConfig::default());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !turns.lock().unwrap().iter().any(|(a, _, _)| a == "red") {
+        assert!(tokio::time::Instant::now() < deadline, "red never resumed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let turns = turns.lock().unwrap();
+    let red = turns.iter().find(|(a, _, _)| a == "red").unwrap();
+    assert!(red.2.contains("entered again") && red.2.contains("probe the login"), "{}", red.2);
+}

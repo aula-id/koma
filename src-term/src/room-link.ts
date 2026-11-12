@@ -119,22 +119,34 @@ export class RoomLink {
   private socket: Socket | null = null
   private reader = new FrameReader()
   private closed = false
+  /** What was sent before the connection was up. A first message typed while the daemon starts is not lost. */
+  private outbox: unknown[] = []
+  private connected = false
 
   constructor(private readonly onFrame: (frame: RoomFrame) => void, private readonly onError: (text: string) => void) {}
 
   async start(sessionId: string): Promise<void> {
     if (this.closed) return
     const socket = createConnection({ path: socketPath(sessionId) })
-    this.socket = socket
     await new Promise<void>((resolve, reject) => {
       socket.once("connect", () => resolve())
       socket.once("error", reject)
     })
+    this.attach(socket)
+  }
+
+  /** Use a connected socket: greet the daemon, then send what was queued while it was starting. */
+  attach(socket: Socket): void {
     if (this.closed) { socket.destroy(); return }
+    this.socket = socket
     socket.on("data", (data: Buffer) => this.onData(data))
     socket.on("close", () => { if (!this.closed) this.onError("the secure daemon closed the connection") })
     socket.on("error", (error) => { if (!this.closed) this.onError(error.message) })
-    this.send("hello")
+    this.connected = true
+    socket.write(encodeFrame("hello"))
+    const waiting = this.outbox
+    this.outbox = []
+    for (const request of waiting) this.send(request)
   }
 
   sendUser(text: string): void {
@@ -177,7 +189,11 @@ export class RoomLink {
   }
 
   private send(request: unknown): void {
-    if (!this.socket || this.closed) return
+    if (this.closed) return
+    if (!this.connected || !this.socket) {
+      this.outbox.push(request)
+      return
+    }
     this.socket.write(encodeFrame(request))
   }
 

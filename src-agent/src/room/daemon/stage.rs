@@ -38,6 +38,11 @@ impl Staging {
         Self { dir: dir.to_path_buf(), pending: Mutex::new(Vec::new()) }
     }
 
+    /// The session directory this room lives in.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Attachment>> {
         self.pending.lock().unwrap_or_else(|e| e.into_inner())
     }

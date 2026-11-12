@@ -181,6 +181,7 @@ pub fn spawn_room_in(
         lanes: BTreeMap::new(),
         assignment_lane: BTreeMap::new(),
         chief_busy: false,
+        resuming: false,
         turn_images: Vec::new(),
         chief_images: Vec::new(),
         lanes_dir,
@@ -209,6 +210,8 @@ struct RoomActor {
     lanes: BTreeMap<Slot, LaneHandle>,
     assignment_lane: BTreeMap<String, String>,
     chief_busy: bool,
+    /// Lanes are being started again after the room was entered anew.
+    resuming: bool,
     /// Images from the user's latest message, handed to the lanes the Chief starts this turn.
     turn_images: Vec<UserImage>,
     /// Images waiting for the Chief's next turn.
@@ -233,6 +236,7 @@ fn now_ms() -> u64 {
 
 impl RoomActor {
     async fn run(mut self, mut rx: UnboundedReceiver<ActorMsg>) {
+        self.resume_work();
         while let Some(msg) = rx.recv().await {
             match msg {
                 ActorMsg::User(text) => self.on_user(text, Vec::new()),
@@ -514,6 +518,25 @@ impl RoomActor {
         }
     }
 
+    /// A room entered again picks its assignments up where they were: a specialist that was
+    /// mid-assignment when the room closed continues its own conversation instead of being
+    /// written off as failed.
+    fn resume_work(&mut self) {
+        let Some(work) = self.coordinator.active_work() else { return };
+        let effects: Vec<Effect> = work
+            .assignments
+            .iter()
+            .filter(|a| a.status.is_pending() && a.status != crate::room::types::AssignmentStatus::Submitted)
+            .map(|a| Effect::StartLane { assignment: a.clone(), goal: work.prompt.clone() })
+            .collect();
+        if effects.is_empty() {
+            return;
+        }
+        self.resuming = true;
+        self.apply_effects(effects);
+        self.resuming = false;
+    }
+
     // ---- effects from coordinator tool calls ----
 
     fn apply_effects(&mut self, effects: Vec<Effect>) {
@@ -527,7 +550,12 @@ impl RoomActor {
                     let registry = self.registry.current();
                     let role = registry.role_of(&assignment.avatar);
                     let prompt = role.map(|r| r.prompt.clone()).unwrap_or_default();
-                    let task = format!("Goal: {goal}\n\nYour assignment:\n{}", assignment.prompt);
+                    let mut task = format!("Goal: {goal}\n\nYour assignment:\n{}", assignment.prompt);
+                    if self.resuming {
+                        task = format!(
+                            "The room was closed and has been entered again. Your conversation above is intact. Carry on with this assignment from where you stopped: check the shelf for what is already published, and do not repeat finished work.\n\n{task}"
+                        );
+                    }
                     let model = registry.lane_model(&assignment.avatar, LaneKind::Work);
                     let config = LaneConfig {
                         avatar: assignment.avatar.clone(),
