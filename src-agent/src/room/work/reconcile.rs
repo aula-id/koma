@@ -15,6 +15,8 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
+use super::effects::Effect;
+use super::model::Work;
 use super::store::{self, WorkStore, R};
 use crate::room::transition::{
     checkin_nonce, classify_batch, derive_assignment_status, wake_nonce, work_status_after_sync,
@@ -36,6 +38,8 @@ pub struct ReconcileOutcome {
     pub checkins: Vec<String>,
     /// Assignment ids whose status moved this pass, and to what.
     pub status_changes: Vec<(String, AssignmentStatus)>,
+    /// Reviews, feedback and report hand-overs the dispatch hook produced.
+    pub effects: Vec<Effect>,
 }
 
 /// Holds the nonces already fired, so the same state never wakes the Chief
@@ -69,7 +73,21 @@ impl Reconciler {
         observe: impl Fn(&str) -> Observation,
         now_ms: u64,
     ) -> R<ReconcileOutcome> {
-        store.with_tx(|conn| self.run(conn, &observe, now_ms))
+        self.tick_with(store, observe, now_ms, |_, _| Ok(Vec::new()))
+    }
+
+    /// Like [`Reconciler::tick`], with a hook that runs after the statuses are
+    /// synced and before the Chief is woken. The hook starts reviews and report
+    /// hand-overs, so a probe that just finished has its review queued before the
+    /// Chief is told the batch settled.
+    pub fn tick_with(
+        &mut self,
+        store: &WorkStore,
+        observe: impl Fn(&str) -> Observation,
+        now_ms: u64,
+        dispatch: impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
+    ) -> R<ReconcileOutcome> {
+        store.with_tx(|conn| self.run(conn, &observe, now_ms, &dispatch))
     }
 
     fn run(
@@ -77,6 +95,7 @@ impl Reconciler {
         conn: &Connection,
         observe: &impl Fn(&str) -> Observation,
         now_ms: u64,
+        dispatch: &impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
     ) -> R<ReconcileOutcome> {
         let mut out = ReconcileOutcome::default();
         for work_id in store::all_active_work_ids(conn)? {
@@ -94,12 +113,18 @@ impl Reconciler {
                 }
             }
             // Reload the statuses the writes produced before classifying.
-            let assignments = store::assignments_of(conn, &work_id)?;
-            let statuses: Vec<AssignmentStatus> = assignments.iter().map(|a| a.status).collect();
+            let statuses: Vec<AssignmentStatus> =
+                store::assignments_of(conn, &work_id)?.iter().map(|a| a.status).collect();
             if let Some(ws) = work_status_after_sync(false, &statuses) {
                 store::set_work_status(conn, &work_id, ws, None)?;
                 continue;
             }
+            // Start reviews and hand-overs now, so the batch is classified with them.
+            if let Some(fresh) = store::work_by_id(conn, &work_id)? {
+                out.effects.extend(dispatch(conn, &fresh)?);
+            }
+            let assignments = store::assignments_of(conn, &work_id)?;
+            let statuses: Vec<AssignmentStatus> = assignments.iter().map(|a| a.status).collect();
             match classify_batch(&statuses) {
                 BatchState::Empty => {}
                 BatchState::Healthy => {

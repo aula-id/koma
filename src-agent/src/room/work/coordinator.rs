@@ -17,10 +17,13 @@ use super::effects::Effect;
 use super::finish::{assert_finishable, required_review_references};
 use super::goals::{append_goal, open_trajectory_goals};
 use super::model::{Assignment, ReviewItem, ReviewStatus, Work};
-use super::queue::complete_review_queue;
+use super::dispatch::{report_dispatch, review_queue};
+use super::queue::{complete_review_queue, enqueue_claim};
+use super::reconcile::{ReconcileOutcome, Reconciler};
 use super::store::{self, new_id, WorkStore, R};
 use crate::room::registry::RegistryHandle;
 use crate::room::shelf::Shelf;
+use crate::room::transition::Observation;
 use crate::room::types::{
     covers_references, same_references, validate_references, AssignmentKind, AssignmentStatus, Outcome,
     Reference, WorkStatus,
@@ -153,6 +156,51 @@ impl Coordinator {
 
     pub fn store(&self) -> &WorkStore {
         &self.store
+    }
+
+    /// One reconciler pass: sync assignments from their lanes, start reviews and
+    /// report hand-overs, then decide whether to wake the Chief. `lane_idle`
+    /// says whether an avatar's lane is free to take new work.
+    pub fn reconcile(
+        &self,
+        reconciler: &mut Reconciler,
+        observe: impl Fn(&str) -> Observation,
+        lane_idle: impl Fn(&str) -> bool,
+        now_ms: u64,
+    ) -> R<ReconcileOutcome> {
+        let registry = self.registry.current();
+        reconciler.tick_with(&self.store, observe, now_ms, |conn, work| {
+            let mut effects = review_queue(conn, &self.shelf, &registry, work, &lane_idle)?;
+            effects.extend(report_dispatch(conn, &self.shelf, &registry, work, &lane_idle)?);
+            Ok(effects)
+        })
+    }
+
+    /// A probe lane just wrote to the shelf. If it was a claim or its evidence,
+    /// queue the claim for review now instead of waiting for the lane to end.
+    /// Returns why the claim was not queued, so the lane can fix it.
+    pub fn on_publish(&self, avatar: &str, assignment_id: &str, tool: &str, args: &Value) -> Option<String> {
+        let claim_key = match tool {
+            "put_claim" => args.get("key"),
+            "put_evidence" => args.get("claim_key"),
+            _ => return None,
+        }?
+        .as_str()?
+        .to_string();
+        self.store
+            .with_tx(|conn| {
+                let Some(work) = store::active_work(conn)? else {
+                    return Ok(None);
+                };
+                let source = work.assignments.iter().find(|a| {
+                    a.id == assignment_id && a.avatar == avatar && a.kind == AssignmentKind::Probe && a.status.is_pending()
+                });
+                match source {
+                    Some(source) => enqueue_claim(conn, &self.shelf, source, &claim_key),
+                    None => Ok(None),
+                }
+            })
+            .unwrap_or(None)
     }
 
     /// Run a coordinator tool. Failures come back as `{"error": "..."}` so the

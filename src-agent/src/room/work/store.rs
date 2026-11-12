@@ -343,6 +343,12 @@ pub fn retire_items(conn: &Connection, work_id: &str, claim_key: &str, from: &[R
     Ok(())
 }
 
+/// Record that a returned claim's feedback reached the originating Red.
+pub fn mark_feedback_sent(conn: &Connection, id: &str) -> R<()> {
+    db(conn.execute("UPDATE review_items SET feedback_sent = 1 WHERE id = ?1", params![id]))?;
+    Ok(())
+}
+
 /// Re-point failed review items from a retried review assignment onto its replacement.
 pub fn reassign_failed_items(conn: &Connection, old_review_id: &str, new_review_id: &str) -> R<()> {
     db(conn.execute(

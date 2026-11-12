@@ -797,3 +797,268 @@ mod reconcile_tests {
         assert_eq!(out.wakes, [wid]);
     }
 }
+
+// ---- dispatch: reviews, feedback and the report hand-over ----
+
+mod dispatch_tests {
+    use super::super::model::ReviewItem;
+    use super::super::reconcile::{ReconcileOutcome, Reconciler};
+    use super::super::store;
+    use super::*;
+    use crate::room::transition::{LaneRunState, Observation};
+
+    fn tick_with(f: &Fx, rec: &mut Reconciler, idle: impl Fn(&str) -> bool) -> ReconcileOutcome {
+        f.co.reconcile(rec, |_| Observation { run: Some(LaneRunState::Running), unsettled: false }, idle, 0)
+            .expect("reconcile")
+    }
+
+    fn tick(f: &Fx, rec: &mut Reconciler) -> ReconcileOutcome {
+        tick_with(f, rec, |_| true)
+    }
+
+    fn items(f: &Fx) -> Vec<ReviewItem> {
+        let work_id = f.work().id;
+        f.co.store().with_tx(|c| store::review_items(c, &work_id)).expect("items")
+    }
+
+    fn starts(out: &ReconcileOutcome) -> Vec<(String, AssignmentKind)> {
+        out.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::StartLane { assignment, .. } => Some((assignment.avatar.clone(), assignment.kind)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Publish a claim and its evidence for `claim`/`evidence` keys.
+    fn publish(f: &Fx, claim: &str, evidence: &str) {
+        f.put("put_claim", json!({ "key": claim, "vulnclass": "cors", "name": "CORS", "severity": "high",
+            "summary": "s", "host": "h", "poc": "curl", "expected_revision": 0 }));
+        f.put("put_evidence", json!({ "key": evidence, "claim_key": claim, "evidence_kind": "http", "body": "b", "expected_revision": 0 }));
+    }
+
+    #[test]
+    fn a_published_claim_is_queued_and_the_next_pass_hands_it_to_the_reviewer() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+
+        f.put("put_claim", json!({ "key": "claims/a", "vulnclass": "cors", "name": "CORS", "severity": "high",
+            "summary": "s", "host": "h", "poc": "curl", "expected_revision": 0 }));
+        let skipped = f.co.on_publish("red", &probe.id, "put_claim", &json!({ "key": "claims/a" }));
+        assert!(skipped.expect("skip reason").contains("no evidence supports this claim"));
+        f.put("put_evidence", json!({ "key": "evidence/e", "claim_key": "claims/a", "evidence_kind": "http", "body": "b", "expected_revision": 0 }));
+        assert_eq!(f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": "claims/a" })), None);
+        assert_eq!(items(&f)[0].status, ReviewStatus::Queued);
+        assert_eq!(f.co.on_publish("red", &probe.id, "put_asset", &json!({})), None, "other tools queue nothing");
+
+        let mut rec = Reconciler::new();
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out), [("reviewer".to_string(), AssignmentKind::Verification)]);
+        let review = f.assignment(1);
+        assert_eq!((review.avatar.as_str(), review.kind), ("reviewer", AssignmentKind::Verification));
+        assert_eq!(review.reviews_id.as_deref(), Some(probe.id.as_str()));
+        assert_eq!(review.references, [r("claims/a", 2), r("evidence/e", 1)], "the claim moved to revision 2 when its evidence linked");
+        assert!(review.prompt.contains("claims/a") && review.prompt.contains("Scan"), "{}", review.prompt);
+        let queue = items(&f);
+        assert_eq!((queue[0].status, queue[0].review_assignment_id.as_deref()), (ReviewStatus::Assigned, Some(review.id.as_str())));
+        assert!(out.wakes.is_empty(), "the batch is still running, so only a check-in is due");
+
+        let again = tick(&f, &mut rec);
+        assert!(starts(&again).is_empty(), "the reviewer is busy, so no second review");
+        assert_eq!(f.work().assignments.len(), 2);
+    }
+
+    #[test]
+    fn a_reviewer_that_is_not_idle_leaves_claims_queued() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        publish(&f, "claims/a", "evidence/e");
+        f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": "claims/a" }));
+        let mut rec = Reconciler::new();
+        let out = tick_with(&f, &mut rec, |avatar| avatar != "reviewer");
+        assert!(starts(&out).is_empty());
+        assert_eq!(items(&f)[0].status, ReviewStatus::Queued);
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out).len(), 1, "dispatched once the reviewer is free");
+    }
+
+    #[test]
+    fn a_review_takes_at_most_eight_claims() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        for i in 0..9 {
+            publish(&f, &format!("claims/c{i}"), &format!("evidence/e{i}"));
+            f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": format!("claims/c{i}") }));
+        }
+        let mut rec = Reconciler::new();
+        tick(&f, &mut rec);
+        let queue = items(&f);
+        assert_eq!(queue.iter().filter(|i| i.status == ReviewStatus::Assigned).count(), 8);
+        assert_eq!(queue.iter().filter(|i| i.status == ReviewStatus::Queued).count(), 1);
+        assert_eq!(f.assignment(1).references.len(), 16, "eight claims and their evidence");
+    }
+
+    /// The reviewer returns the claim: complete its review with a `returned` verdict.
+    fn return_claim(f: &Fx, review_id: &str) {
+        f.put("put_verdict", json!({ "key": "verdicts/v", "claim_key": "claims/a", "claim_revision": 2,
+            "verdict": "returned", "note": "need a second origin", "expected_revision": 0 }));
+        ok(&f.lane("reviewer", review_id, "group_task_complete", json!({ "result": "returned", "outcome": "passed",
+            "references": refs(&[r("claims/a", 2), r("evidence/e", 1), r("verdicts/v", 1)]) })));
+        f.settle(review_id, AssignmentStatus::Completed);
+    }
+
+    #[test]
+    fn a_returned_claim_steers_a_busy_red_exactly_once() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        publish(&f, "claims/a", "evidence/e");
+        f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": "claims/a" }));
+        let mut rec = Reconciler::new();
+        tick(&f, &mut rec);
+        let review = f.assignment(1);
+        return_claim(&f, &review.id);
+        assert_eq!(items(&f)[0].status, ReviewStatus::Returned);
+
+        let out = tick(&f, &mut rec);
+        let steers: Vec<&Effect> = out.effects.iter().filter(|e| matches!(e, Effect::Steer { .. })).collect();
+        assert_eq!(steers.len(), 1);
+        match steers[0] {
+            Effect::Steer { avatar, text } => {
+                assert_eq!(avatar, "red");
+                assert!(text.contains("claims/a") && text.contains("need a second origin"), "{text}");
+            }
+            _ => unreachable!(),
+        }
+        assert!(items(&f)[0].feedback_sent);
+        let again = tick(&f, &mut rec);
+        assert!(!again.effects.iter().any(|e| matches!(e, Effect::Steer { .. })), "feedback goes out once");
+    }
+
+    #[test]
+    fn a_returned_claim_restarts_an_idle_red_with_the_note_and_the_original_goal() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        return_claim(&f, &review.id);
+        let mut rec = Reconciler::new();
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out), [("red".to_string(), AssignmentKind::Probe)]);
+        let again = f.work().assignments.last().cloned().expect("new assignment");
+        assert!(again.dispatch_key.starts_with("review-return:"), "{}", again.dispatch_key);
+        assert!(again.prompt.contains("need a second origin") && again.prompt.contains("Original goal: Scan"), "{}", again.prompt);
+        assert!(items(&f)[0].feedback_sent);
+        let none = tick(&f, &mut rec);
+        assert!(starts(&none).is_empty(), "no second restart");
+    }
+
+    #[test]
+    fn a_lane_that_is_not_provably_idle_defers_the_feedback() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        return_claim(&f, &review.id);
+        let mut rec = Reconciler::new();
+        let held = tick_with(&f, &mut rec, |_| false);
+        assert!(held.effects.is_empty() && !items(&f)[0].feedback_sent);
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out).len(), 1, "sent on the next pass");
+    }
+
+    #[test]
+    fn a_review_that_fails_fails_its_items() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        f.settle(&review.id, AssignmentStatus::Failed);
+        let mut rec = Reconciler::new();
+        tick(&f, &mut rec);
+        assert_eq!(items(&f)[0].status, ReviewStatus::Failed);
+    }
+
+    /// Confirm the claim, publish the finding and complete the review.
+    fn confirm_claim(f: &Fx, review_id: &str) {
+        f.put("put_verdict", json!({ "key": "verdicts/v", "claim_key": "claims/a", "claim_revision": 2,
+            "verdict": "confirmed", "note": "ok", "expected_revision": 0 }));
+        f.put("put_finding", json!({ "key": "findings/f", "claim_key": "claims/a", "verdict_key": "verdicts/v",
+            "vulnclass": "cors", "name": "CORS", "severity": "high", "summary": "s", "host": "h", "expected_revision": 0 }));
+        ok(&f.lane("reviewer", review_id, "group_task_complete", json!({ "result": "confirmed", "outcome": "passed",
+            "references": refs(&[r("claims/a", 2), r("evidence/e", 1), r("verdicts/v", 1), r("findings/f", 1)]) })));
+        f.settle(review_id, AssignmentStatus::Completed);
+    }
+
+    #[test]
+    fn findings_after_a_passed_review_are_handed_to_the_reporter_until_the_pack_is_complete() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        confirm_claim(&f, &review.id);
+
+        let mut rec = Reconciler::new();
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out), [("reporter".to_string(), AssignmentKind::Report)]);
+        let report = f.work().assignments.last().cloned().expect("report");
+        assert!(report.dispatch_key.starts_with("report-queue:"), "{}", report.dispatch_key);
+        assert_eq!(report.reviews_id.as_deref(), Some(review.id.as_str()));
+        assert!(report.references.iter().any(|x| x.key == "findings/f"), "the snapshot includes the finding");
+        assert!(report.prompt.contains("Findings to cover: findings/f") && report.prompt.contains("missing audience=technical"), "{}", report.prompt);
+
+        let busy = tick(&f, &mut rec);
+        assert!(starts(&busy).is_empty(), "one report at a time");
+
+        // the reporter writes the pack and finishes
+        f.put("put_report", json!({ "key": "reports/f", "audience": "technical", "finding_key": "findings/f", "title": "t",
+            "markdown": format!("# CORS\n\n{}", "detail ".repeat(80)), "expected_revision": 0 }));
+        f.put("put_report", json!({ "key": "reports/exec", "audience": "manager", "finding_key": "findings/f",
+            "finding_keys": ["findings/f"], "title": "Executive", "markdown": "# Executive\n\nFix CORS.", "expected_revision": 0 }));
+        f.settle(&report.id, AssignmentStatus::Completed);
+        let done = tick(&f, &mut rec);
+        assert!(starts(&done).is_empty(), "a complete pack needs no further hand-over");
+    }
+
+    #[test]
+    fn no_findings_means_no_report_hand_over() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        f.put("put_verdict", json!({ "key": "verdicts/v", "claim_key": "claims/a", "claim_revision": 2,
+            "verdict": "dismissed", "note": "not exploitable", "expected_revision": 0 }));
+        ok(&f.lane("reviewer", &review.id, "group_task_complete", json!({ "result": "dismissed", "outcome": "passed",
+            "references": refs(&[r("claims/a", 2), r("evidence/e", 1), r("verdicts/v", 1)]) })));
+        f.settle(&review.id, AssignmentStatus::Completed);
+        let mut rec = Reconciler::new();
+        let out = tick(&f, &mut rec);
+        assert!(starts(&out).is_empty());
+    }
+
+    #[test]
+    fn the_report_waits_for_an_idle_reporter() {
+        let f = fx();
+        let (_probe, review) = probe_done(&f);
+        confirm_claim(&f, &review.id);
+        let mut rec = Reconciler::new();
+        let held = tick_with(&f, &mut rec, |avatar| avatar != "reporter");
+        assert!(starts(&held).is_empty());
+        assert_eq!(starts(&tick(&f, &mut rec)).len(), 1);
+    }
+
+    #[test]
+    fn dispatch_happens_before_the_wake_so_a_finished_probe_starts_its_review_first() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        publish(&f, "claims/a", "evidence/e");
+        f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": "claims/a" }));
+        ok(&f.lane("red", &probe.id, "group_task_complete", json!({ "result": "found", "outcome": "passed",
+            "references": refs(&[r("claims/a", 2), r("evidence/e", 1)]) })));
+        // the probe's lane ended, so the reconciler sees it complete and in the same pass starts the review
+        let mut rec = Reconciler::new();
+        let out = f
+            .co
+            .reconcile(&mut rec, |_| Observation { run: Some(LaneRunState::Completed), unsettled: false }, |_| true, 0)
+            .expect("reconcile");
+        assert_eq!(f.assignment(0).status, AssignmentStatus::Completed);
+        assert_eq!(starts(&out), [("reviewer".to_string(), AssignmentKind::Verification)]);
+        assert!(out.wakes.is_empty(), "the Chief is not woken for a batch that just gained a review");
+        assert_eq!(out.checkins.len(), 1);
+    }
+}

@@ -5,6 +5,7 @@
 //! lanes, and the queue's dispatch half, come with the lane runner.
 
 mod coordinator;
+mod dispatch;
 mod effects;
 mod finish;
 mod goals;
