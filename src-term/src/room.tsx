@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { BORDER_LEFT, scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
-import { promptMark } from "./chat.tsx"
+import { Choice, promptMark } from "./chat.tsx"
+import { suggest } from "./room-suggest.ts"
 import { RoomLink, type RoomFrame } from "./room-link.ts"
 import { switchDaemon } from "./paths.ts"
 
@@ -99,8 +100,26 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
   // Wide screens keep the chat beside one side pane; narrow ones show one pane at a time.
   const active: Tab = wide ? (tab && tab !== "chat" ? tab : "lanes") : tab ?? "chat"
 
+  const options = suggest(draft)
+  const [pickedAt, setPickedAt] = useState(0)
+  const picked = Math.min(pickedAt, Math.max(0, options.rows.length - 1))
+  const open = options.rows.length > 0
+  const accept = (): boolean => {
+    const row = options.rows[picked]
+    if (!row || row.insert === draft) return false
+    setDraft(row.insert)
+    return true
+  }
+
   useKeyboard((key) => {
-    if (key.eventType === "release" || key.name !== "tab") return
+    if (key.eventType === "release") return
+    if (open && (key.name === "up" || key.name === "down")) {
+      const step = key.name === "up" ? -1 : 1
+      setPickedAt((picked + step + options.rows.length) % options.rows.length)
+      return
+    }
+    if (open && key.name === "tab" && accept()) return
+    if (key.name !== "tab") return
     const order = wide ? TABS.filter((t) => t !== "chat") : TABS
     setTab(order[(order.indexOf(active) + 1) % order.length] ?? order[0])
   })
@@ -156,7 +175,7 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
           focusedBackgroundColor={theme.bg}
           cursorColor={theme.accent}
           onInput={setDraft}
-          onSubmit={send}
+          onSubmit={() => { if (!accept()) send() }}
         />
       </box>
     </box>
@@ -196,6 +215,13 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
         ) : null}
       </box>
       {!wide && active === "chat" ? <box flexDirection="row" flexShrink={0} columnGap={1}>{tabs}</box> : null}
+      {open ? (
+        <box height={options.rows.length + 2} flexShrink={0} border borderStyle="rounded" borderColor={theme.dim} flexDirection="column" title={options.title} titleColor={theme.dim}>
+          {options.rows.map((row, index) => (
+            <Choice key={row.label} label={row.label} detail={row.detail} theme={theme} selected={index === picked} onPress={() => setDraft(row.insert)} />
+          ))}
+        </box>
+      ) : null}
       {composer}
     </box>
   )

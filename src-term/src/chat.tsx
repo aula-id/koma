@@ -1652,7 +1652,7 @@ function usageReadout(session: SessionSnap): string | null {
   return `${context} ↑${fmtCount(input)}${cache} ↓${fmtCount(session.tokens_out)} $${session.cost.toFixed(4)}`
 }
 
-function Choice({
+export function Choice({
   label,
   detail,
   theme,

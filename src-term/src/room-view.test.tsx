@@ -53,3 +53,11 @@ test("specialists take distinct inks", () => {
   expect(authorInk("red-api", theme)).toBe(theme.error)
   expect(authorInk("reviewer", theme)).toBe(theme.info)
 })
+
+test("typing @r offers the specialists above the composer", async () => {
+  const text = await frame(100, 24, { draft: "@r" })
+  expect(text).toContain("people")
+  expect(text).toContain("@red")
+  expect(text).toContain("@reviewer")
+  expect(text).not.toContain("@chief")
+})
