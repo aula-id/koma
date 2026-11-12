@@ -19,7 +19,7 @@ async function frame(width: number, height: number, over: Partial<Parameters<typ
   await act(async () => {
     view = await testRender(<RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft="" onDraft={() => {}} onSend={() => {}} {...over} />, { width, height })
   })
-  await act(async () => { await new Promise((r) => setTimeout(r, 30)); await view.waitForVisualIdle(); await view.renderOnce() })
+  await act(async () => { await new Promise((r) => setTimeout(r, 80)); await view.waitForVisualIdle(); await view.renderOnce(); await new Promise((r) => setTimeout(r, 40)); await view.renderOnce() })
   const text = view.captureCharFrame()
   await act(async () => { await view.dispose() })
   return text
@@ -71,7 +71,8 @@ test("/status opens every lane full screen and esc comes back", async () => {
   const text = view.captureCharFrame()
   await act(async () => { await view.dispose() })
   expect(text).toContain("secure room · status")
-  expect(text).toContain("Who is working")
+  expect(text).toContain("Lanes")
+  expect(text).toContain("Goals and gates")
   expect(text).toContain("Activity")
   expect(text).not.toContain("[$]")
 })
@@ -219,4 +220,28 @@ test("enter on a bare name only writes it and waits for the message; esc closes 
     (view) => view.mockInput.pressEscape(),
   ])
   expect(second.text).not.toContain("commands")
+})
+
+test("the status screen is a roster table, a gates panel and a readable timeline", async () => {
+  const table = [
+    { avatar: "chief", display: "Chief", role: "chief", lane: "chat", phase: "running", task: "answering you", started_ms: 1000, last_event_ms: 98_000, steps: 3, last_tool: "bash", error: "" },
+    { avatar: "red", display: "Red", role: "red", lane: "work", phase: "running", task: "probe: check the login", started_ms: 1000, last_event_ms: 97_000, steps: 12, last_tool: "grep", error: "" },
+    { avatar: "reviewer", display: "Reviewer", role: "reviewer", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
+  ]
+  const events = [
+    { at_ms: 99_000, avatar: "red", marker: "○", label: "claims/auth-1" },
+    { at_ms: 90_000, avatar: "red", marker: "◆", label: "probe" },
+  ]
+  let view!: Awaited<ReturnType<typeof testRender>>
+  await act(async () => {
+    view = await testRender(<RoomView theme={theme} lines={lines} panes={{ ...panes, table, events, nowMs: 100_000 }} counts={counts} phase="connected" draft="/status" onDraft={() => {}} onSend={() => {}} />, { width: 120, height: 36 })
+  })
+  await act(async () => { await view.mockInput.pressEnter() })
+  await act(async () => { await view.renderOnce() })
+  const text = view.captureCharFrame()
+  await act(async () => { await view.dispose() })
+  for (const word of ["Chief", "answering you", "probe: check the login", "grep", "Reviewer", "idle", "3s", "claims/auth-1", "10s", "2 running · 1 idle", "last tool"]) expect(text).toContain(word)
+  expect(text).not.toContain("chief ◆ chief")
+  const rows = text.split("\n")
+  expect(rows.findIndex((r) => r.includes("claims/auth-1"))).toBeLessThan(rows.findIndex((r) => r.includes("probe") && r.includes("◆")))
 })

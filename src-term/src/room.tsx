@@ -8,7 +8,8 @@ import { RoomComposer } from "./room-composer.tsx"
 import { CLOSED, chosen, completion, dismissed, moved, popupView, type PopupState } from "./room-popup.ts"
 import { syntaxStyles } from "./syntax.ts"
 import { reduceLines, say, type Item, type Line } from "./room-turns.ts"
-import { RoomLink, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
+import { RoomLink, type EventInfo, type LaneInfo, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
+import { busySummary, eventCells, laneCells, laneHeader, phaseMark } from "./room-status.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { switchDaemon } from "./paths.ts"
 
@@ -35,6 +36,7 @@ export function RoomScreen({
   const [swim, setSwim] = useState("")
   const [shelf, setShelf] = useState("")
   const [map, setMap] = useState("")
+  const [roster, setRoster] = useState<Roster>({ table: [], events: [], nowMs: 0 })
   const [counts, setCounts] = useState<Counts>({ open: 0, verified: 0, returned: 0, reports: 0 })
   const [models, setModels] = useState<ModelList>({ choices: [], lanes: [] })
   const [notice, setNotice] = useState("")
@@ -47,7 +49,7 @@ export function RoomScreen({
   useEffect(() => {
     let dead = false
     const room = new RoomLink(
-      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice) },
+      (frame) => { if (!dead) applyFrame(frame, setLines, setLanes, setSwim, setShelf, setMap, setPhase, setCounts, setModels, setNotice, setRoster) },
       (text) => { if (!dead && !leaving.current) setPhase(text) },
     )
     link.current = room
@@ -100,7 +102,7 @@ export function RoomScreen({
       theme={theme}
       syntaxStyle={syntaxStyle}
       lines={lines}
-      panes={{ lanes, swim, shelf, map }}
+      panes={{ lanes, swim, shelf, map, ...roster }}
       counts={counts}
       phase={phase}
       draft={draft}
@@ -116,7 +118,8 @@ export function RoomScreen({
   )
 }
 
-export type Panes = { lanes: string; swim: string; shelf: string; map: string }
+export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
+export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
 export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
@@ -253,37 +256,93 @@ export type FullView = "status" | "shelf" | "trajectory" | "model"
 const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory", "/model": "model" }
 
 function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: Exclude<FullView, "model">; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
-  const sections: { title: string; text: string; empty: string }[] =
-    view === "status"
-      ? [
-          { title: "Who is working", text: panes.lanes, empty: "No lane is running." },
-          { title: "Activity", text: panes.swim, empty: "No lane activity yet." },
-        ]
-      : view === "shelf"
-        ? [{ title: "Findings", text: panes.shelf, empty: "The shelf is empty." }]
-        : [{ title: "Trajectory goals", text: panes.map, empty: "No trajectory yet." }]
-  return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-        <text flexShrink={0}>
-          <span fg={theme.fg}>Koma</span>
-          <span fg={theme.dim}> | </span>
-          <span fg={theme.accent}>{`secure room · ${view}`}</span>
-        </text>
-        <Action label="Back (esc)" theme={theme} plain onPress={onBack} />
-      </box>
-      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
-        {sections.map((section, index) => (
-          <Panel key={section.title} title={section.title} hot={false} theme={theme} status={view === "status" && index === 0 ? phase === "connected" ? tally(counts, true) : phase : undefined}>
+  const { width } = useTerminalDimensions()
+  const header = (
+    <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
+      <text flexShrink={0}>
+        <span fg={theme.fg}>Koma</span>
+        <span fg={theme.dim}> | </span>
+        <span fg={theme.accent}>{`secure room · ${view}`}</span>
+      </text>
+      <Action label="Back (esc)" theme={theme} plain onPress={onBack} />
+    </box>
+  )
+  if (view === "status") {
+    const table = panes.table ?? []
+    const events = panes.events ?? []
+    const nowMs = panes.nowMs ?? 0
+    const inner = Math.max(40, width - 8)
+    return (
+      <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        {header}
+        <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
+          <Panel title="Lanes" hot={false} theme={theme} maxLines={Math.max(2, table.length + 1)} status={table.length ? busySummary(table) : phase === "connected" ? undefined : phase}>
+            {table.length === 0 ? <text fg={theme.dim} paddingLeft={1}>No lane has reported yet.</text> : (
+              <box flexDirection="column" paddingLeft={1}>
+                <text fg={theme.dim} wrapMode="none">{laneHeader(inner)}</text>
+                {table.map((row) => <LaneRowView key={`${row.avatar}-${row.lane}`} row={row} nowMs={nowMs} width={inner} theme={theme} />)}
+              </box>
+            )}
+          </Panel>
+          <Panel title="Goals and gates" hot={false} theme={theme} status={tally(counts, true)}>
             <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
-              {section.text.trim()
-                ? section.text.split("\n").map((row, i) => <text key={i} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
-                : <text fg={theme.dim} paddingLeft={1}>{section.empty}</text>}
+              {panes.map.trim()
+                ? panes.map.split("\n").map((row, i) => <text key={i} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
+                : <text fg={theme.dim} paddingLeft={1}>No goals yet. The Chief sets them when it hands work out.</text>}
             </scrollbox>
           </Panel>
-        ))}
+          <Panel title="Activity" hot={false} theme={theme}>
+            <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
+              {events.length === 0
+                ? <text fg={theme.dim} paddingLeft={1}>Nothing has happened yet.</text>
+                : events.map((event, i) => {
+                    const cells = eventCells(event, nowMs)
+                    return (
+                      <text key={i} wrapMode="none" paddingLeft={1}>
+                        <span fg={theme.dim}>{`${cells.age}  `}</span>
+                        <span fg={authorInk(event.avatar, theme)}>{cells.avatar}</span>
+                        <span fg={theme.fg}>{` ${cells.marker} ${cells.label}`}</span>
+                      </text>
+                    )
+                  })}
+            </scrollbox>
+          </Panel>
+        </box>
+      </box>
+    )
+  }
+  const section = view === "shelf" ? { title: "Findings", text: panes.shelf, empty: "The shelf is empty." } : { title: "Trajectory goals", text: panes.map, empty: "No trajectory yet." }
+  return (
+    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
+      {header}
+      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
+        <Panel title={section.title} hot={false} theme={theme}>
+          <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
+            {section.text.trim()
+              ? section.text.split("\n").map((row, i) => <text key={i} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
+              : <text fg={theme.dim} paddingLeft={1}>{section.empty}</text>}
+          </scrollbox>
+        </Panel>
       </box>
     </box>
+  )
+}
+
+function LaneRowView({ row, nowMs, width, theme }: { row: LaneInfo; nowMs: number; width: number; theme: Theme }) {
+  const cells = laneCells(row, nowMs, width)
+  const tone = theme[phaseMark(row.phase).tone]
+  const idle = row.phase === "idle"
+  return (
+    <text wrapMode="none">
+      <span fg={tone}>{`${cells.glyph} `}</span>
+      <span fg={authorInk(row.avatar, theme)}>{cells.name}</span>
+      <span fg={theme.dim}>{` ${cells.lane} `}</span>
+      <span fg={tone}>{cells.phase}</span>
+      <span fg={idle ? theme.dim : theme.fg}>{` ${cells.task} `}</span>
+      <span fg={theme.dim}>{cells.steps}</span>
+      {cells.tool ? <span fg={theme.dim}>{` ${cells.tool}`}</span> : null}
+      <span fg={theme.dim}>{` ${cells.age}`}</span>
+    </text>
   )
 }
 
@@ -345,6 +404,7 @@ function applyFrame(
   setCounts: (counts: Counts) => void,
   setModels: (models: ModelList) => void,
   setNotice: (text: string) => void,
+  setRoster: (roster: Roster) => void,
 ): void {
   switch (frame.type) {
     case "hello":
@@ -361,6 +421,7 @@ function applyFrame(
       setSwim(frame.timeline)
       setShelf(frame.shelf)
       setMap(frame.trajectory)
+      setRoster({ table: frame.lanes, events: frame.events, nowMs: frame.now_ms })
       setCounts({ open: frame.open, verified: frame.verified, returned: frame.returned, reports: frame.reports })
       break
     case "models":

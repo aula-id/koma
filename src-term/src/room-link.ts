@@ -8,7 +8,7 @@ export type RoomFrame =
   | { type: "lane"; avatar: string; text: string }
   | { type: "visible"; author: string; text: string }
   | { type: "part"; author: string; lane: string; part: LanePart }
-  | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number }
+  | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number; lanes: LaneInfo[]; events: EventInfo[]; now_ms: number }
   | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
   | { type: "notice"; text: string }
   | { type: "closed" }
@@ -18,6 +18,25 @@ export type LanePart =
   | { kind: "reasoning"; text: string }
   | { kind: "tool_call"; id: string; name: string; args: string }
   | { kind: "tool_result"; id: string; ok: boolean; result: string }
+
+/** One lane in the status table. */
+export type LaneInfo = {
+  avatar: string
+  display: string
+  role: string
+  /** `chat`, `work`, or empty for an avatar with no lane running. */
+  lane: string
+  /** `running`, `idle`, `paused`, `submitted`, `done` or `failed`. */
+  phase: string
+  task: string
+  started_ms: number
+  last_event_ms: number
+  steps: number
+  last_tool: string
+  error: string
+}
+/** One milestone on the timeline. */
+export type EventInfo = { at_ms: number; avatar: string; marker: string; label: string }
 
 /** A model registered in the coding agent. */
 export type ModelChoice = { id: string; name: string; model_id: string; provider: string }
@@ -54,6 +73,7 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
   }
   const status = body("status")
   if (status) {
+    const rows = (value: unknown) => Array.isArray(value) ? value as Record<string, unknown>[] : []
     return {
       type: "status",
       digest: String(status.digest ?? ""),
@@ -64,6 +84,13 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
       verified: Number(status.verified ?? 0),
       returned: Number(status.returned ?? 0),
       reports: Number(status.reports ?? 0),
+      lanes: rows(status.lanes).map((l) => ({
+        avatar: String(l.avatar ?? ""), display: String(l.display ?? ""), role: String(l.role ?? ""), lane: String(l.lane ?? ""),
+        phase: String(l.phase ?? "idle"), task: String(l.task ?? ""), started_ms: Number(l.started_ms ?? 0), last_event_ms: Number(l.last_event_ms ?? 0),
+        steps: Number(l.steps ?? 0), last_tool: String(l.last_tool ?? ""), error: String(l.error ?? ""),
+      })),
+      events: rows(status.events).map((e) => ({ at_ms: Number(e.at_ms ?? 0), avatar: String(e.avatar ?? ""), marker: String(e.marker ?? ""), label: String(e.label ?? "") })),
+      now_ms: Number(status.now_ms ?? 0),
     }
   }
   const models = body("models")
