@@ -9,7 +9,6 @@ mod recovery;
 mod window;
 
 pub use frame::retain_latest_computer_frame;
-#[cfg(test)]
 pub use goal::GoalWire;
 pub use goal::{load_mission_snap, refresh_goal_state, wipe_chat_doctrine};
 pub use window::shape;

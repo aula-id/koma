@@ -47,10 +47,22 @@ pub enum RoomEvent {
     LaneChat { avatar: String, text: String },
     /// A dispatch, result or finish line that every view should show.
     Visible { author: String, text: String },
+    /// A piece of a lane's turn: thinking, a tool call, a tool result. The text
+    /// itself still arrives as `Chief` or `LaneChat`.
+    Part { author: String, lane: String, part: LanePart },
     /// A fresh status snapshot (digest, swim lanes, gate counts).
     Status(StatusSnapshot),
     /// The room is closing.
     Closed,
+}
+
+/// One structured piece of a lane's turn, in the order the lane produced it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LanePart {
+    Reasoning { text: String },
+    ToolCall { id: String, name: String, args: String },
+    ToolResult { id: String, ok: bool, result: String },
 }
 
 /// A point-in-time picture of the room for the status panes.

@@ -215,6 +215,9 @@ pub async fn run_lane(
             emit(&events, LaneEvent::Failed { error });
             return;
         }
+        if let Some(thinking) = reply.reasoning.as_deref().filter(|t| !t.trim().is_empty()) {
+            emit(&events, LaneEvent::Reasoning(thinking.to_string()));
+        }
         if !reply.text.trim().is_empty() {
             last_text = reply.text.clone();
             if config.kind == LaneKind::Chat {
@@ -240,8 +243,14 @@ pub async fn run_lane(
         convo.push(assistant);
         for call in &reply.tool_calls {
             emit(&events, LaneEvent::ToolStarted { name: call.function.name.clone() });
+            emit(&events, LaneEvent::ToolCall {
+                id: call.id.clone(),
+                name: call.function.name.clone(),
+                args: clip(&call.function.arguments, DISPLAY_CLIP),
+            });
             let run = router.run(call);
             let ok = !run.result.starts_with("error:") && !run.result.starts_with("blocked");
+            emit(&events, LaneEvent::ToolResult { id: call.id.clone(), ok, result: clip(&run.result, DISPLAY_CLIP) });
             emit(&events, LaneEvent::ToolDone { name: call.function.name.clone(), ok });
             for event in run.events {
                 emit(&events, event);
@@ -255,6 +264,18 @@ pub async fn run_lane(
             return;
         }
     }
+}
+
+/// The most of a tool's arguments or result a display event carries. The model
+/// still gets the full result; this only bounds what is streamed to screens.
+const DISPLAY_CLIP: usize = 8_000;
+
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max).collect();
+    format!("{kept}\n… ({} more characters)", text.chars().count() - max)
 }
 
 fn stopped_report(last_text: &str) -> String {
@@ -432,6 +453,37 @@ mod tests {
         // a work lane does not narrate to the user
         assert!(!events.iter().any(|e| matches!(e, LaneEvent::Chat(_))));
         assert_eq!(events.last(), Some(&LaneEvent::Finished { report: "done".into() }));
+    }
+
+    #[tokio::test]
+    async fn a_step_streams_its_thinking_then_text_then_each_tool_call_and_result() {
+        let mut thinking = reply_tools("checking", vec![call("bash")]);
+        thinking.reasoning = Some("I should look at the working directory first.".into());
+        let model = ScriptedModel::new(vec![thinking, reply_text("It is /work.")]);
+        let router = FakeRouter::new();
+        router.on("bash", ToolRun { result: "/work".into(), events: vec![] });
+        let (_in_tx, in_rx) = unbounded_channel();
+        let (ev_tx, ev_rx) = unbounded_channel();
+        run_lane(config(LaneKind::Chat), model, router, in_rx, ev_tx).await;
+        let events = collect(ev_rx).await;
+        let shown: Vec<&LaneEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LaneEvent::Reasoning(_) | LaneEvent::Chat(_) | LaneEvent::ToolCall { .. } | LaneEvent::ToolResult { .. }))
+            .collect();
+        assert!(matches!(shown[0], LaneEvent::Reasoning(t) if t.contains("working directory")));
+        assert!(matches!(shown[1], LaneEvent::Chat(t) if t == "checking"));
+        assert!(matches!(shown[2], LaneEvent::ToolCall { name, .. } if name == "bash"));
+        assert!(matches!(shown[3], LaneEvent::ToolResult { ok: true, result, .. } if result == "/work"));
+        assert!(matches!(shown[4], LaneEvent::Chat(t) if t == "It is /work."));
+    }
+
+    #[test]
+    fn a_long_tool_result_is_clipped_for_display_only() {
+        let long = "x".repeat(DISPLAY_CLIP + 500);
+        let shown = clip(&long, DISPLAY_CLIP);
+        assert!(shown.chars().count() < long.chars().count());
+        assert!(shown.ends_with("(500 more characters)"));
+        assert_eq!(clip("short", DISPLAY_CLIP), "short");
     }
 
     #[tokio::test]

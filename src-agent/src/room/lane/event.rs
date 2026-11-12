@@ -13,6 +13,12 @@ pub enum LaneEvent {
     ToolDone { name: String, ok: bool },
     /// This lane wrote a shelf key at this revision (from a `put_*` call).
     Published { key: String, revision: i64 },
+    /// The model's thinking for a step, shown collapsed beside its reply.
+    Reasoning(String),
+    /// The model asked for a tool: what it is and the arguments it sent.
+    ToolCall { id: String, name: String, args: String },
+    /// A tool's result, clipped for display.
+    ToolResult { id: String, ok: bool, result: String },
     /// A chunk of chat text headed for the user (chat lanes only).
     Chat(String),
     /// The lane submitted its assignment (`group_task_complete` passed).

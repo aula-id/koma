@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::{AbortHandle, JoinHandle};
 
-pub use message::{ActorMsg, RoomEvent, StatusSnapshot};
+pub use message::{ActorMsg, LanePart, RoomEvent, StatusSnapshot};
 #[allow(unused_imports)]
 pub use router::{BuiltinHost, LaneRef, NoBuiltins, RoomToolRouter};
 
@@ -377,6 +377,9 @@ impl RoomActor {
         }
         let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
         match event {
+            LaneEvent::Reasoning(text) => self.emit_part(avatar, kind, LanePart::Reasoning { text }),
+            LaneEvent::ToolCall { id, name, args } => self.emit_part(avatar, kind, LanePart::ToolCall { id, name, args }),
+            LaneEvent::ToolResult { id, ok, result } => self.emit_part(avatar, kind, LanePart::ToolResult { id, ok, result }),
             LaneEvent::Chat(text) if is_chief => self.emit(RoomEvent::Chief(text)),
             LaneEvent::Chat(text) => self.emit(RoomEvent::LaneChat { avatar: avatar.into(), text }),
             LaneEvent::Finished { report } => {
@@ -388,6 +391,16 @@ impl RoomActor {
             }
             _ => {}
         }
+    }
+
+    /// Forward one structured part of a lane's turn. The clerk's audit passes
+    /// are internal and never shown.
+    fn emit_part(&self, avatar: &str, kind: LaneKind, part: LanePart) {
+        if avatar == "clerk" {
+            return;
+        }
+        let lane = if kind == LaneKind::Chat { "chat" } else { "work" };
+        self.emit(RoomEvent::Part { author: avatar.into(), lane: lane.into(), part });
     }
 
     fn lane_ended(&mut self, avatar: &str, kind: LaneKind, run: LaneRunState, report: Option<String>) {

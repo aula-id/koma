@@ -280,6 +280,17 @@ mod attach {
             RoomServer::Hello { .. } => {}
             RoomServer::Chief { text } => { let _ = writeln!(out, "chief: {text}"); }
             RoomServer::LaneChat { avatar, text } => { let _ = writeln!(out, "{avatar}: {text}"); }
+            RoomServer::Part { author, part, .. } => {
+                use crate::room::actor::LanePart;
+                match part {
+                    LanePart::Reasoning { .. } => {}
+                    LanePart::ToolCall { name, args, .. } => { let _ = writeln!(out, "{author} ▸ {name} {args}"); }
+                    LanePart::ToolResult { ok, result, .. } => {
+                        let first = result.lines().next().unwrap_or("");
+                        let _ = writeln!(out, "{author} {} {first}", if *ok { "✓" } else { "✕" });
+                    }
+                }
+            }
             RoomServer::Visible { author, text } => { let _ = writeln!(out, "{author}: {text}"); }
             RoomServer::Status { digest, .. } => {
                 if digest != last_digest && !digest.is_empty() {

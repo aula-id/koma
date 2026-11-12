@@ -116,7 +116,7 @@ impl Digest {
                     lane.published.push(key.clone());
                 }
             }
-            LaneEvent::Chat(_) => {}
+            LaneEvent::Chat(_) | LaneEvent::Reasoning(_) | LaneEvent::ToolCall { .. } | LaneEvent::ToolResult { .. } => {}
             LaneEvent::Submitted => {
                 lane.phase = Phase::Submitted;
             }

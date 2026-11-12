@@ -279,3 +279,17 @@ async fn next_matching(read_half: &mut crate::ipc::IpcReadHalf, reader: &mut Fra
         }
     }
 }
+
+#[test]
+fn a_part_frame_round_trips_and_is_kept_as_history() {
+    use crate::room::actor::LanePart;
+    let frame = RoomServer::Part {
+        author: "chief".into(),
+        lane: "chat".into(),
+        part: LanePart::ToolCall { id: "c1".into(), name: "bash".into(), args: "{\"command\":\"pwd\"}".into() },
+    };
+    let json = serde_json::to_string(&frame).expect("encode");
+    assert!(json.contains("\"part\"") && json.contains("\"kind\":\"tool_call\""), "{json}");
+    assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), frame);
+    assert!(frame.is_history(), "a late client replays the tool calls it missed");
+}

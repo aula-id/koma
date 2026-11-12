@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::room::actor::{RoomEvent, StatusSnapshot};
+use crate::room::actor::{LanePart, RoomEvent, StatusSnapshot};
 use crate::room::lane::ControlCommand;
 
 /// What an attach client sends.
@@ -59,6 +59,8 @@ pub enum RoomServer {
     Chief { text: String },
     LaneChat { avatar: String, text: String },
     Visible { author: String, text: String },
+    /// Thinking, a tool call or a tool result from one lane. `lane` is `chat` or `work`.
+    Part { author: String, lane: String, part: LanePart },
     Status {
         digest: String,
         timeline: String,
@@ -109,7 +111,7 @@ impl RoomServer {
     /// lanes said. Status is replaced by the next snapshot and Closed ends the
     /// connection, so neither is kept as history.
     pub fn is_history(&self) -> bool {
-        matches!(self, RoomServer::Chief { .. } | RoomServer::LaneChat { .. } | RoomServer::Visible { .. })
+        matches!(self, RoomServer::Chief { .. } | RoomServer::LaneChat { .. } | RoomServer::Visible { .. } | RoomServer::Part { .. })
     }
 
     pub fn from_event(event: RoomEvent) -> Self {
@@ -117,6 +119,7 @@ impl RoomServer {
             RoomEvent::Chief(text) => RoomServer::Chief { text },
             RoomEvent::LaneChat { avatar, text } => RoomServer::LaneChat { avatar, text },
             RoomEvent::Visible { author, text } => RoomServer::Visible { author, text },
+            RoomEvent::Part { author, lane, part } => RoomServer::Part { author, lane, part },
             RoomEvent::Status(status) => Self::from_status(status),
             RoomEvent::Closed => RoomServer::Closed,
         }
