@@ -11,7 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
-use super::model::{Avatar, KNOWN_HANDLERS, LaneModel, Registry, Role, SHELF_TOOLS, SINGLE_ROLES, Skill, ToolDef};
+use super::model::{
+    is_host_handler, Avatar, LaneModel, Registry, Role, Skill, ToolDef, KNOWN_HANDLERS,
+    SHELF_TOOLS, SINGLE_ROLES,
+};
 use super::source::Tree;
 use super::template;
 
@@ -118,7 +121,8 @@ pub fn parse(tree: &Tree, warnings: &mut Vec<String>) -> Parsed {
                 if text.trim().is_empty() {
                     warnings.push(format!("{path}: empty prompt"));
                 } else {
-                    out.roles.entry((*id).to_string()).or_default().prompt = Some(text.trim().to_string());
+                    out.roles.entry((*id).to_string()).or_default().prompt =
+                        Some(text.trim().to_string());
                 }
             }
             ["avatars.toml"] => match parse_avatars(text) {
@@ -132,15 +136,18 @@ pub fn parse(tree: &Tree, warnings: &mut Vec<String>) -> Parsed {
                 } else if let Err(e) = template::validate(text) {
                     warnings.push(format!("{path}: {e}"));
                 } else {
-                    out.prompts.insert(name.to_string(), text.trim().to_string());
+                    out.prompts
+                        .insert(name.to_string(), text.trim().to_string());
                 }
             }
-            ["skills", name, "SKILL.md"] if valid_ident(name, true) => match parse_skill(name, text) {
-                Ok(skill) => {
-                    out.skills.insert((*name).to_string(), skill);
+            ["skills", name, "SKILL.md"] if valid_ident(name, true) => {
+                match parse_skill(name, text) {
+                    Ok(skill) => {
+                        out.skills.insert((*name).to_string(), skill);
+                    }
+                    Err(e) => warnings.push(format!("{path}: {e}")),
                 }
-                Err(e) => warnings.push(format!("{path}: {e}")),
-            },
+            }
             // Other files inside a skill directory are companions; nothing to load.
             ["skills", _, ..] => {}
             _ => warnings.push(format!("{path}: not a registry file; ignored")),
@@ -164,15 +171,24 @@ fn parse_avatars(text: &str) -> Result<Vec<Avatar>, String> {
             return Err(format!("avatar '{}' defined twice", a.id));
         }
         if SINGLE_ROLES.contains(&a.role.as_str()) && a.id != a.role {
-            return Err(format!("the {} role has exactly one avatar, named '{}'", a.role, a.role));
+            return Err(format!(
+                "the {} role has exactly one avatar, named '{}'",
+                a.role, a.role
+            ));
         }
         if SINGLE_ROLES.contains(&a.id.as_str()) && a.role != a.id {
-            return Err(format!("avatar id '{}' is reserved for the {} role", a.id, a.id));
+            return Err(format!(
+                "avatar id '{}' is reserved for the {} role",
+                a.id, a.id
+            ));
         }
         out.push(Avatar {
             id: a.id,
             role: a.role,
-            display: a.display.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()),
+            display: a
+                .display
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty()),
             chat: a.chat,
             work: a.work,
         });
@@ -183,7 +199,10 @@ fn parse_avatars(text: &str) -> Result<Vec<Avatar>, String> {
 fn parse_role(dir_id: &str, text: &str) -> Result<RoleToml, String> {
     let role: RoleToml = toml::from_str(text).map_err(|e| e.to_string())?;
     if role.id != dir_id {
-        return Err(format!("id '{}' does not match directory '{dir_id}'", role.id));
+        return Err(format!(
+            "id '{}' does not match directory '{dir_id}'",
+            role.id
+        ));
     }
     if role.display.trim().is_empty() {
         return Err("display is empty".to_string());
@@ -211,16 +230,37 @@ fn parse_tools(text: &str) -> Result<Vec<ToolDef>, String> {
         if !names.insert(tool.name.clone()) {
             return Err(format!("tool '{}' defined twice", tool.name));
         }
+        if tool.name.starts_with("sec_") || tool.handler.starts_with("sec_") {
+            return Err(format!(
+                "tool '{}': sec_ tools are not part of the room",
+                tool.name
+            ));
+        }
         if !KNOWN_HANDLERS.contains(&tool.handler.as_str()) {
-            return Err(format!("tool '{}': unknown handler '{}'", tool.name, tool.handler));
+            return Err(format!(
+                "tool '{}': unknown handler '{}'",
+                tool.name, tool.handler
+            ));
+        }
+        if is_host_handler(&tool.handler) && tool.name != tool.handler {
+            return Err(format!(
+                "tool '{}': a host tool's name is its handler '{}'",
+                tool.name, tool.handler
+            ));
         }
         let description = tool.description.trim();
         if description.is_empty() || description.len() > MAX_DESCRIPTION {
-            return Err(format!("tool '{}': description must be 1..{MAX_DESCRIPTION} bytes", tool.name));
+            return Err(format!(
+                "tool '{}': description must be 1..{MAX_DESCRIPTION} bytes",
+                tool.name
+            ));
         }
         let schema = serde_json::to_value(&tool.schema).map_err(|e| e.to_string())?;
         if schema.get("type").and_then(|t| t.as_str()) != Some("object") {
-            return Err(format!("tool '{}': schema must be an object schema", tool.name));
+            return Err(format!(
+                "tool '{}': schema must be an object schema",
+                tool.name
+            ));
         }
         out.push(ToolDef {
             name: tool.name,
@@ -234,7 +274,10 @@ fn parse_tools(text: &str) -> Result<Vec<ToolDef>, String> {
 
 /// Split `---\n<yaml>\n---\n<body>`. Text without a leading fence is all body.
 fn split_frontmatter(text: &str) -> Result<(Option<&str>, &str), String> {
-    let Some(rest) = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n")) else {
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
         return Ok((None, text));
     };
     let mut offset = 0usize;
@@ -252,7 +295,10 @@ fn parse_skill(dir_name: &str, text: &str) -> Result<Skill, String> {
     let front = front.ok_or_else(|| "missing frontmatter (name, description)".to_string())?;
     let front: SkillFront = serde_yaml_ng::from_str(front).map_err(|e| e.to_string())?;
     if front.name != dir_name {
-        return Err(format!("name '{}' does not match directory '{dir_name}'", front.name));
+        return Err(format!(
+            "name '{}' does not match directory '{dir_name}'",
+            front.name
+        ));
     }
     if front.description.trim().is_empty() {
         return Err("description is empty".to_string());
@@ -275,7 +321,10 @@ pub fn build_base(tree: &Tree) -> Result<Registry, String> {
     let mut warnings = Vec::new();
     let parsed = parse(tree, &mut warnings);
     if !warnings.is_empty() {
-        return Err(format!("embedded room files are invalid: {}", warnings.join("; ")));
+        return Err(format!(
+            "embedded room files are invalid: {}",
+            warnings.join("; ")
+        ));
     }
     let mut registry = Registry {
         version: 1,
@@ -284,8 +333,11 @@ pub fn build_base(tree: &Tree) -> Result<Registry, String> {
         ..Registry::default()
     };
     for (id, parts) in parsed.roles {
-        let (Some(role), Some(tools), Some(prompt)) = (parts.role, parts.tools, parts.prompt) else {
-            return Err(format!("embedded role '{id}' needs role.toml, tools.toml and prompt.md"));
+        let (Some(role), Some(tools), Some(prompt)) = (parts.role, parts.tools, parts.prompt)
+        else {
+            return Err(format!(
+                "embedded role '{id}' needs role.toml, tools.toml and prompt.md"
+            ));
         };
         registry.roles.insert(
             id.clone(),
@@ -305,12 +357,21 @@ pub fn build_base(tree: &Tree) -> Result<Registry, String> {
         registry
             .roles
             .keys()
-            .map(|id| Avatar { id: id.clone(), role: id.clone(), display: None, chat: LaneModel::default(), work: LaneModel::default() })
+            .map(|id| Avatar {
+                id: id.clone(),
+                role: id.clone(),
+                display: None,
+                chat: LaneModel::default(),
+                work: LaneModel::default(),
+            })
             .collect()
     });
     for a in avatars {
         if !registry.roles.contains_key(&a.role) {
-            return Err(format!("embedded avatar '{}' uses unknown role '{}'", a.id, a.role));
+            return Err(format!(
+                "embedded avatar '{}' uses unknown role '{}'",
+                a.id, a.role
+            ));
         }
         registry.avatars.insert(a.id.clone(), a);
     }
@@ -331,7 +392,11 @@ pub fn apply_overlay(registry: &mut Registry, overlay: Parsed, warnings: &mut Ve
         };
         if let Some(role) = parts.role {
             let allowed: BTreeSet<&str> = base.shelf_allow.iter().map(String::as_str).collect();
-            match role.shelf_allow.iter().find(|t| !allowed.contains(t.as_str())) {
+            match role
+                .shelf_allow
+                .iter()
+                .find(|t| !allowed.contains(t.as_str()))
+            {
                 Some(extra) => warnings.push(format!(
                     "roles/{id}/role.toml: shelf tool '{extra}' would widen the role; file ignored"
                 )),
@@ -362,7 +427,10 @@ pub fn apply_overlay(registry: &mut Registry, overlay: Parsed, warnings: &mut Ve
     // role that exists. Permissions come from the role, so this widens nothing.
     for a in overlay.avatars.into_iter().flatten() {
         if !registry.roles.contains_key(&a.role) {
-            warnings.push(format!("avatars.toml: avatar '{}' uses unknown role '{}'; ignored", a.id, a.role));
+            warnings.push(format!(
+                "avatars.toml: avatar '{}' uses unknown role '{}'; ignored",
+                a.id, a.role
+            ));
             continue;
         }
         match registry.avatars.get(&a.id) {

@@ -13,7 +13,8 @@ impl Tmp {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("koma-room-{tag}-{}-{nanos}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("koma-room-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         Self(dir)
     }
@@ -58,8 +59,14 @@ fn embedded_registry_is_clean_and_complete() {
         let role = reg.role(id).unwrap_or_else(|| panic!("missing role {id}"));
         assert!(!role.prompt.is_empty(), "{id} prompt");
         assert!(!role.tools.is_empty(), "{id} tools");
-        assert!(role.shelf_allow.iter().all(|t| SHELF_TOOLS.contains(&t.as_str())));
-        assert!(role.tools.iter().all(|t| KNOWN_HANDLERS.contains(&t.handler.as_str())));
+        assert!(role
+            .shelf_allow
+            .iter()
+            .all(|t| SHELF_TOOLS.contains(&t.as_str())));
+        assert!(role
+            .tools
+            .iter()
+            .all(|t| KNOWN_HANDLERS.contains(&t.handler.as_str())));
     }
     assert_eq!(reg.version, 1);
     assert_eq!(handle.report(), LoadReport::default());
@@ -71,22 +78,34 @@ fn clerk_can_only_reach_the_chief() {
     let clerk = reg.role("clerk").expect("clerk");
     assert_eq!(clerk.tools.len(), 1);
     assert_eq!(clerk.tools[0].handler, "clerk_flag");
-    assert!(!clerk.shelf_allow.iter().any(|t| t == "put_claim" || t == "put_verdict"));
+    assert!(!clerk
+        .shelf_allow
+        .iter()
+        .any(|t| t == "put_claim" || t == "put_verdict"));
 }
 
 #[test]
 fn prompts_render_and_report_missing_variables() {
     let reg = RegistryHandle::embedded().expect("load").current();
     let text = reg
-        .render("wake", &[("goal_key", "g1"), ("goal", "scan"), ("open_goals", "none")])
+        .render(
+            "wake",
+            &[("goal_key", "g1"), ("goal", "scan"), ("open_goals", "none")],
+        )
         .expect("render");
     assert!(text.contains("g1") && text.contains("scan") && !text.contains("{{"));
     let err = reg.render("wake", &[("goal_key", "g1")]).unwrap_err();
     assert_eq!(
         err,
-        RenderError::MissingVar { prompt: "wake".into(), var: "goal".into() }
+        RenderError::MissingVar {
+            prompt: "wake".into(),
+            var: "goal".into()
+        }
     );
-    assert!(matches!(reg.render("nope", &[]), Err(RenderError::UnknownPrompt(_))));
+    assert!(matches!(
+        reg.render("nope", &[]),
+        Err(RenderError::UnknownPrompt(_))
+    ));
 }
 
 #[test]
@@ -141,8 +160,15 @@ fn overlay_cannot_bind_a_tool_to_another_roles_handler() {
         "[[tool]]\nname = \"finish\"\nhandler = \"group_finish\"\ndescription = \"x\"\n[tool.schema]\ntype = \"object\"\n",
     );
     let handle = overlaid(&tmp);
-    assert_eq!(handle.current().role("clerk").expect("clerk").tools[0].handler, "clerk_flag");
-    assert!(handle.report().warnings.iter().any(|w| w.contains("not one of this role")));
+    assert_eq!(
+        handle.current().role("clerk").expect("clerk").tools[0].handler,
+        "clerk_flag"
+    );
+    assert!(handle
+        .report()
+        .warnings
+        .iter()
+        .any(|w| w.contains("not one of this role")));
 }
 
 #[test]
@@ -156,10 +182,87 @@ fn overlay_cannot_use_unknown_handlers_or_add_roles() {
     let handle = overlaid(&tmp);
     let reg = handle.current();
     assert!(reg.role("ghost").is_none());
-    assert_eq!(reg.role("red").expect("red").tools[0].handler, "group_task_complete");
+    assert_eq!(
+        reg.role("red").expect("red").tools[0].handler,
+        "group_task_complete"
+    );
     let warnings = handle.report().warnings;
     assert!(warnings.iter().any(|w| w.contains("unknown handler")));
     assert!(warnings.iter().any(|w| w.contains("cannot add roles")));
+}
+
+#[test]
+fn specialists_run_host_tools_and_the_chief_does_not() {
+    let reg = RegistryHandle::embedded().expect("load").current();
+    let red = reg.role("red").expect("red");
+    assert!(red.tools.iter().any(|t| t.handler == "bash"));
+    assert!(red.tools.iter().any(|t| t.handler == "web_search"));
+    assert!(red.tools.iter().any(|t| t.handler == "browser_tabs"));
+    let reviewer = reg.role("reviewer").expect("reviewer");
+    assert!(reviewer.tools.iter().any(|t| t.handler == "bash"));
+    assert!(reviewer
+        .tools
+        .iter()
+        .all(|t| t.handler != "web_search" && t.handler != "browser_tabs"));
+    let reporter = reg.role("reporter").expect("reporter");
+    assert!(reporter.tools.iter().any(|t| t.handler == "read"));
+    assert!(reporter.tools.iter().all(|t| t.handler != "web_fetch"));
+    for id in ["chief", "clerk"] {
+        let role = reg.role(id).expect(id);
+        assert!(
+            role.tools
+                .iter()
+                .all(|t| !HOST_HANDLERS.contains(&t.handler.as_str())),
+            "{id} has a host tool"
+        );
+    }
+}
+
+#[test]
+fn overlay_can_narrow_host_tools_but_not_add_sec_or_another_roles_surface() {
+    let narrowed = Tmp::new("narrow-host");
+    narrowed.write(
+        "roles/red/tools.toml",
+        "[[tool]]\nname = \"group_task_complete\"\nhandler = \"group_task_complete\"\ndescription = \"done\"\n[tool.schema]\ntype = \"object\"\n\n[[tool]]\nname = \"bash\"\nhandler = \"bash\"\ndescription = \"shell\"\n[tool.schema]\ntype = \"object\"\n",
+    );
+    let red = overlaid(&narrowed).current();
+    let tools = &red.role("red").expect("red").tools;
+    assert!(tools.iter().any(|t| t.handler == "bash"));
+    assert!(tools.iter().all(|t| t.handler != "web_search"));
+
+    let widened = Tmp::new("widen-host");
+    widened.write(
+        "roles/reviewer/tools.toml",
+        "[[tool]]\nname = \"web_search\"\nhandler = \"web_search\"\ndescription = \"web\"\n[tool.schema]\ntype = \"object\"\n",
+    );
+    let handle = overlaid(&widened);
+    assert!(handle
+        .current()
+        .role("reviewer")
+        .expect("reviewer")
+        .tools
+        .iter()
+        .all(|t| t.handler != "web_search"));
+    assert!(handle
+        .report()
+        .warnings
+        .iter()
+        .any(|w| w.contains("not one of this role")));
+
+    let sec = Tmp::new("sec-host");
+    sec.write(
+        "roles/red/tools.toml",
+        "[[tool]]\nname = \"sec_http\"\nhandler = \"sec_http\"\ndescription = \"no\"\n[tool.schema]\ntype = \"object\"\n",
+    );
+    let handle = overlaid(&sec);
+    assert!(handle
+        .current()
+        .role("red")
+        .expect("red")
+        .tools
+        .iter()
+        .any(|t| t.handler == "bash"));
+    assert!(handle.report().warnings.iter().any(|w| w.contains("sec_")));
 }
 
 #[test]
@@ -170,7 +273,10 @@ fn broken_overlay_file_keeps_the_embedded_version() {
     let handle = overlaid(&tmp);
     let embedded = RegistryHandle::embedded().expect("load").current();
     assert_eq!(handle.current().role("red"), embedded.role("red"));
-    assert_eq!(handle.current().prompts.get("wake"), embedded.prompts.get("wake"));
+    assert_eq!(
+        handle.current().prompts.get("wake"),
+        embedded.prompts.get("wake")
+    );
     assert_eq!(handle.report().warnings.len(), 2);
 }
 
@@ -186,7 +292,10 @@ fn overlay_adds_prompts_and_skills() {
     tmp.write("skills/bad/SKILL.md", "no frontmatter here");
     let handle = overlaid(&tmp);
     let reg = handle.current();
-    assert_eq!(reg.render("custom", &[("who", "red")]).expect("render"), "Custom for red.");
+    assert_eq!(
+        reg.render("custom", &[("who", "red")]).expect("render"),
+        "Custom for red."
+    );
     let skill = reg.skills.get("recon").expect("skill");
     assert_eq!(skill.description, "Map the surface");
     assert_eq!(skill.body, "Start with passive sources.");
@@ -232,7 +341,10 @@ fn a_running_turn_keeps_its_snapshot_across_a_reload() {
     tmp.write("roles/red/prompt.md", "Changed mid-turn.");
     assert!(handle.reload());
     assert_eq!(turn.role("red").expect("red").prompt, before);
-    assert_eq!(handle.current().role("red").expect("red").prompt, "Changed mid-turn.");
+    assert_eq!(
+        handle.current().role("red").expect("red").prompt,
+        "Changed mid-turn."
+    );
 }
 
 #[test]
@@ -243,7 +355,11 @@ fn oversized_and_foreign_files_are_ignored() {
     let handle = overlaid(&tmp);
     let embedded = RegistryHandle::embedded().expect("load").current();
     assert_eq!(handle.current().role("red"), embedded.role("red"));
-    assert!(handle.report().warnings.iter().any(|w| w.contains("larger than")));
+    assert!(handle
+        .report()
+        .warnings
+        .iter()
+        .any(|w| w.contains("larger than")));
 }
 
 #[cfg(unix)]
@@ -259,8 +375,15 @@ fn symlinks_in_the_overlay_are_not_followed() {
     )
     .expect("symlink");
     let handle = overlaid(&tmp);
-    assert_ne!(handle.current().role("red").expect("red").prompt, "Smuggled prompt.");
-    assert!(handle.report().warnings.iter().any(|w| w.contains("symlink")));
+    assert_ne!(
+        handle.current().role("red").expect("red").prompt,
+        "Smuggled prompt."
+    );
+    assert!(handle
+        .report()
+        .warnings
+        .iter()
+        .any(|w| w.contains("symlink")));
 }
 
 #[test]
@@ -285,13 +408,22 @@ fn watcher_reloads_after_an_edit() {
         }
     }
     let outcome = seen.expect("watcher should report the edit");
-    assert_eq!(outcome.registry.role("red").expect("red").prompt, "Hot reloaded.");
-    assert_eq!(handle.current().role("red").expect("red").prompt, "Hot reloaded.");
+    assert_eq!(
+        outcome.registry.role("red").expect("red").prompt,
+        "Hot reloaded."
+    );
+    assert_eq!(
+        handle.current().role("red").expect("red").prompt,
+        "Hot reloaded."
+    );
 }
 
 #[test]
 fn the_session_overlay_lives_under_the_session_dir() {
-    assert_eq!(overlay_dir_for(Path::new("/s/abc")), Path::new("/s/abc/room"));
+    assert_eq!(
+        overlay_dir_for(Path::new("/s/abc")),
+        Path::new("/s/abc/room")
+    );
 }
 
 // ---- avatars ----
@@ -324,8 +456,16 @@ fn an_overlay_can_add_a_second_avatar_for_a_specialist_role() {
     tmp.write("avatars.toml", RED_API);
     let handle = overlaid(&tmp);
     let reg = handle.current();
-    assert!(handle.report().warnings.is_empty(), "{:?}", handle.report().warnings);
-    let ids: Vec<&str> = reg.avatars_of("red").iter().map(|a| a.id.as_str()).collect();
+    assert!(
+        handle.report().warnings.is_empty(),
+        "{:?}",
+        handle.report().warnings
+    );
+    let ids: Vec<&str> = reg
+        .avatars_of("red")
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
     assert_eq!(ids, ["red", "red-api"]);
     assert_eq!(reg.display_of("red-api"), "Lab Red (API)");
     // a new avatar gets the role's prompt, tools and shelf permissions, nothing more
@@ -342,13 +482,31 @@ fn avatar_models_override_the_role_field_by_field_per_lane() {
     );
     let reg = overlaid(&tmp).current();
     let work = reg.lane_model("red-api", LaneKind::Work);
-    assert_eq!(work.provider.as_deref(), Some("other"), "inherited from the role");
-    assert_eq!(work.model.as_deref(), Some("override-model"), "the avatar wins");
+    assert_eq!(
+        work.provider.as_deref(),
+        Some("other"),
+        "inherited from the role"
+    );
+    assert_eq!(
+        work.model.as_deref(),
+        Some("override-model"),
+        "the avatar wins"
+    );
     assert_eq!(work.effort.as_deref(), Some("high"));
     let chat = reg.lane_model("red-api", LaneKind::Chat);
-    assert_eq!(chat.model.as_deref(), Some("fast-model"), "the chat lane keeps the role's model");
-    assert_eq!(reg.lane_model("red", LaneKind::Chat).model.as_deref(), Some("fast-model"));
-    assert_eq!(reg.lane_model("ghost", LaneKind::Work), LaneModel::default());
+    assert_eq!(
+        chat.model.as_deref(),
+        Some("fast-model"),
+        "the chat lane keeps the role's model"
+    );
+    assert_eq!(
+        reg.lane_model("red", LaneKind::Chat).model.as_deref(),
+        Some("fast-model")
+    );
+    assert_eq!(
+        reg.lane_model("ghost", LaneKind::Work),
+        LaneModel::default()
+    );
 }
 
 #[test]
@@ -361,25 +519,56 @@ fn an_overlay_cannot_add_avatars_for_missing_roles_or_change_a_roles_owner() {
     let handle = overlaid(&tmp);
     let reg = handle.current();
     assert!(reg.avatar("ghost").is_none());
-    assert_eq!(reg.avatar("red").map(|a| a.role.as_str()), Some("red"), "an existing avatar keeps its role");
-    assert!(reg.avatar("red-2").is_some(), "valid entries in the same file still load");
+    assert_eq!(
+        reg.avatar("red").map(|a| a.role.as_str()),
+        Some("red"),
+        "an existing avatar keeps its role"
+    );
+    assert!(
+        reg.avatar("red-2").is_some(),
+        "valid entries in the same file still load"
+    );
     let warnings = handle.report().warnings.join("\n");
-    assert!(warnings.contains("unknown role 'phantom'") && warnings.contains("cannot change its role"), "{warnings}");
+    assert!(
+        warnings.contains("unknown role 'phantom'") && warnings.contains("cannot change its role"),
+        "{warnings}"
+    );
 }
 
 #[test]
 fn chief_and_clerk_stay_single() {
     for (name, body) in [
-        ("second-chief", "[[avatar]]\nid = \"chief-2\"\nrole = \"chief\"\n"),
-        ("second-clerk", "[[avatar]]\nid = \"clerk-2\"\nrole = \"clerk\"\n"),
-        ("reserved-id", "[[avatar]]\nid = \"clerk\"\nrole = \"red\"\n"),
-        ("duplicate", "[[avatar]]\nid = \"a\"\nrole = \"red\"\n[[avatar]]\nid = \"a\"\nrole = \"red\"\n"),
+        (
+            "second-chief",
+            "[[avatar]]\nid = \"chief-2\"\nrole = \"chief\"\n",
+        ),
+        (
+            "second-clerk",
+            "[[avatar]]\nid = \"clerk-2\"\nrole = \"clerk\"\n",
+        ),
+        (
+            "reserved-id",
+            "[[avatar]]\nid = \"clerk\"\nrole = \"red\"\n",
+        ),
+        (
+            "duplicate",
+            "[[avatar]]\nid = \"a\"\nrole = \"red\"\n[[avatar]]\nid = \"a\"\nrole = \"red\"\n",
+        ),
     ] {
         let tmp = Tmp::new(name);
         tmp.write("avatars.toml", body);
         let handle = overlaid(&tmp);
         let embedded = RegistryHandle::embedded().expect("load").current();
-        assert_eq!(handle.current().avatars, embedded.avatars, "{name}: the whole file is rejected");
-        assert_eq!(handle.report().warnings.len(), 1, "{name}: {:?}", handle.report().warnings);
+        assert_eq!(
+            handle.current().avatars,
+            embedded.avatars,
+            "{name}: the whole file is rejected"
+        );
+        assert_eq!(
+            handle.report().warnings.len(),
+            1,
+            "{name}: {:?}",
+            handle.report().warnings
+        );
     }
 }

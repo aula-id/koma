@@ -263,6 +263,9 @@ pub struct Opts {
     /// When `true`, write the Linux desktop entry or the macOS app bundle and
     /// exit (`koma launcher-install`). Hidden plumbing for `install.sh`.
     pub launcher_install: bool,
+    /// Daemon kind (`--kind <name>`). `Some("secure")` runs the room daemon
+    /// instead of the coding daemon. Absent on every coding launch.
+    pub kind: Option<String>,
     /// The session UUID this invocation is bound to (`--session <id>`).
     ///
     /// Daemon-per-session: a fresh `koma` MINTS this on the CLIENT side, then spawns its
@@ -488,6 +491,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         if pair[0] == "--cwd" {
             opts.cwd = Some(pair[1].clone());
         }
+        if pair[0] == "--kind" {
+            opts.kind = Some(pair[1].clone());
+        }
     }
 
     // Positional verb/subcommand scan: skip argv[0] and look at the FIRST positional
@@ -509,6 +515,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     // positionals, so they cannot collide with the `daemon <verb>` parsing.
     const VALUE_FLAGS: &[&str] = &[
         "--session",
+        "--kind",
         "--cwd",
         "--key",
         "--port",

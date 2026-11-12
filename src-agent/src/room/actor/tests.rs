@@ -63,7 +63,10 @@ impl ModelClient for ScriptedModel {
             .replies
             .get(&(avatar, turn))
             .cloned()
-            .unwrap_or_else(|| ModelReply { text: self.fallback.clone(), ..Default::default() });
+            .unwrap_or_else(|| ModelReply {
+                text: self.fallback.clone(),
+                ..Default::default()
+            });
         Box::pin(async move { reply })
     }
 }
@@ -72,16 +75,26 @@ fn call(name: &str, args: Value) -> ToolCall {
     ToolCall {
         id: format!("c-{name}-{}", args.to_string().len()),
         kind: "function".into(),
-        function: FunctionCall { name: name.into(), arguments: args.to_string() },
+        function: FunctionCall {
+            name: name.into(),
+            arguments: args.to_string(),
+        },
     }
 }
 
 fn tools(text: &str, calls: Vec<ToolCall>) -> ModelReply {
-    ModelReply { text: text.into(), tool_calls: calls, ..Default::default() }
+    ModelReply {
+        text: text.into(),
+        tool_calls: calls,
+        ..Default::default()
+    }
 }
 
 fn text(t: &str) -> ModelReply {
-    ModelReply { text: t.into(), ..Default::default() }
+    ModelReply {
+        text: t.into(),
+        ..Default::default()
+    }
 }
 
 /// A built-in host that answers any non-room tool with a canned line.
@@ -92,7 +105,7 @@ impl BuiltinHost for StubBuiltins {
         format!("ran {}", call.function.name)
     }
     fn specs(&self, _kind: crate::room::lane::LaneKind) -> Vec<ToolSpec> {
-        vec![ToolSpec { name: "sec_run".into(), description: "probe a target".into(), parameters: json!({ "type": "object" }) }]
+        Vec::new()
     }
 }
 
@@ -105,12 +118,22 @@ struct Harness {
 fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
     let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
     let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
-    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let coordinator = Arc::new(Coordinator::new(
+        WorkStore::open_in_memory().expect("store"),
+        Arc::clone(&shelf),
+        Arc::clone(&registry),
+    ));
     let script = Script {
-        replies: replies.into_iter().map(|((a, n), r)| ((a.to_string(), n), r)).collect(),
+        replies: replies
+            .into_iter()
+            .map(|((a, n), r)| ((a.to_string(), n), r))
+            .collect(),
         seen: Mutex::new(HashMap::new()),
     };
-    let model = Arc::new(ScriptedModel { script, fallback: "done".into() });
+    let model = Arc::new(ScriptedModel {
+        script,
+        fallback: "done".into(),
+    });
     let handle = spawn_room(
         Arc::clone(&coordinator),
         Arc::clone(&shelf),
@@ -119,7 +142,11 @@ fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
         Arc::new(StubBuiltins),
         RoomConfig::default(),
     );
-    Harness { handle, shelf, coordinator }
+    Harness {
+        handle,
+        shelf,
+        coordinator,
+    }
 }
 
 impl Harness {
@@ -134,7 +161,11 @@ impl Harness {
     }
 
     /// Collect room events until `want` returns true or the time runs out.
-    async fn wait_for(&mut self, label: &str, mut want: impl FnMut(&RoomEvent) -> bool) -> Vec<RoomEvent> {
+    async fn wait_for(
+        &mut self,
+        label: &str,
+        mut want: impl FnMut(&RoomEvent) -> bool,
+    ) -> Vec<RoomEvent> {
         let mut seen = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -163,14 +194,25 @@ impl Harness {
 }
 
 fn chief_said(events: &[RoomEvent]) -> Vec<String> {
-    events.iter().filter_map(|e| if let RoomEvent::Chief(t) = e { Some(t.clone()) } else { None }).collect()
+    events
+        .iter()
+        .filter_map(|e| {
+            if let RoomEvent::Chief(t) = e {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[tokio::test]
 async fn the_chief_answers_a_user_message_immediately() {
     let mut h = harness(vec![(("chief", 0), text("On it — I'll scope the work."))]);
     h.user("scan the login page");
-    let events = h.wait_for("chief answer", |e| matches!(e, RoomEvent::Chief(_))).await;
+    let events = h
+        .wait_for("chief answer", |e| matches!(e, RoomEvent::Chief(_)))
+        .await;
     assert_eq!(chief_said(&events), ["On it — I'll scope the work."]);
 }
 
@@ -178,14 +220,22 @@ async fn the_chief_answers_a_user_message_immediately() {
 async fn a_user_message_while_the_chief_is_busy_is_injected_not_dropped() {
     // the chief's first turn calls a slow builtin, so it is busy when the second message arrives
     let mut h = harness(vec![
-        (("chief", 0), tools("thinking", vec![call("group_status", json!({}))])),
+        (
+            ("chief", 0),
+            tools("thinking", vec![call("group_status", json!({}))]),
+        ),
         (("chief", 1), text("I have both of your messages.")),
     ]);
     h.user("first");
     // give the chief turn a moment to be running, then send another
     tokio::time::sleep(Duration::from_millis(30)).await;
     h.user("second");
-    let events = h.wait_for("chief second-turn answer", |e| matches!(e, RoomEvent::Chief(t) if t.contains("both"))).await;
+    let events = h
+        .wait_for(
+            "chief second-turn answer",
+            |e| matches!(e, RoomEvent::Chief(t) if t.contains("both")),
+        )
+        .await;
     assert!(chief_said(&events).iter().any(|t| t.contains("both")));
 }
 
@@ -197,9 +247,15 @@ async fn the_chief_delegates_a_probe_and_the_work_lane_runs_and_publishes() {
                 "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe the login" }] }),
     );
     let red_publishes = vec![
-        call("put_asset", json!({ "key": "assets/app", "host": "app.example", "asset_type": "host", "title": "app" })),
-        call("put_claim", json!({ "key": "claims/cors", "vulnclass": "cors", "name": "CORS", "severity": "high",
-            "summary": "reflects origin", "host": "app.example", "poc": "curl", "expected_revision": 0 })),
+        call(
+            "put_asset",
+            json!({ "key": "assets/app", "host": "app.example", "asset_type": "host", "title": "app" }),
+        ),
+        call(
+            "put_claim",
+            json!({ "key": "claims/cors", "vulnclass": "cors", "name": "CORS", "severity": "high",
+            "summary": "reflects origin", "host": "app.example", "poc": "curl", "expected_revision": 0 }),
+        ),
     ];
     let mut h = harness(vec![
         (("chief", 0), tools("Dispatching Red.", vec![delegate])),
@@ -208,14 +264,21 @@ async fn the_chief_delegates_a_probe_and_the_work_lane_runs_and_publishes() {
     ]);
     h.user("scan the login");
     // the Visible dispatch line marks the probe as started
-    h.wait_for("dispatch", |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe the login"))).await;
+    h.wait_for(
+        "dispatch",
+        |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe the login")),
+    )
+    .await;
     // the red lane publishes to the shelf
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if self_shelf_has(&h.shelf, "claims/cors") {
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline, "red never published");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "red never published"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(self_shelf_has(&h.shelf, "assets/app"));
@@ -235,14 +298,26 @@ async fn a_finished_probe_is_synced_to_completed_and_wakes_the_chief() {
         json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
                 "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe" }] }),
     );
-    let complete = call("group_task_complete", json!({ "result": "found", "outcome": "passed",
-        "references": [{ "key": "assets/app", "revision": 1 }] }));
+    let complete = call(
+        "group_task_complete",
+        json!({ "result": "found", "outcome": "passed",
+        "references": [{ "key": "assets/app", "revision": 1 }] }),
+    );
     let mut h = harness(vec![
         (("chief", 0), tools("Dispatching.", vec![delegate])),
-        (("red", 0), tools("working", vec![
-            call("put_asset", json!({ "key": "assets/app", "host": "app.example", "asset_type": "host", "title": "app" })),
-            complete,
-        ])),
+        (
+            ("red", 0),
+            tools(
+                "working",
+                vec![
+                    call(
+                        "put_asset",
+                        json!({ "key": "assets/app", "host": "app.example", "asset_type": "host", "title": "app" }),
+                    ),
+                    complete,
+                ],
+            ),
+        ),
     ]);
     h.user("scan");
     // wait until the red lane submitted and finished (its asset is on the shelf)
@@ -259,7 +334,11 @@ async fn a_finished_probe_is_synced_to_completed_and_wakes_the_chief() {
         h.tick();
         tokio::time::sleep(Duration::from_millis(30)).await;
         if let Some(work) = h.coordinator.active_work() {
-            if work.assignments.iter().any(|a| a.avatar == "red" && a.status == AssignmentStatus::Completed) {
+            if work
+                .assignments
+                .iter()
+                .any(|a| a.avatar == "red" && a.status == AssignmentStatus::Completed)
+            {
                 done = true;
                 break;
             }
@@ -268,7 +347,10 @@ async fn a_finished_probe_is_synced_to_completed_and_wakes_the_chief() {
     assert!(done, "the reconciler never synced the probe to Completed");
     // and the Chief was woken (a fresh chief turn ran after the probe settled)
     let status = h.drain();
-    assert!(status.iter().any(|e| matches!(e, RoomEvent::Status(_))), "a tick emits status");
+    assert!(
+        status.iter().any(|e| matches!(e, RoomEvent::Status(_))),
+        "a tick emits status"
+    );
 }
 
 #[tokio::test]
@@ -276,26 +358,45 @@ async fn a_tick_emits_a_status_snapshot() {
     let mut h = harness(vec![]);
     // seed an active goal so the clerk/reconciler have something, via a direct delegate through the chief
     h.user("hi");
-    h.wait_for("chief idle", |e| matches!(e, RoomEvent::Chief(_))).await;
+    h.wait_for("chief idle", |e| matches!(e, RoomEvent::Chief(_)))
+        .await;
     h.tick();
-    let events = h.wait_for("status", |e| matches!(e, RoomEvent::Status(_))).await;
-    assert!(events.iter().any(|e| matches!(e, RoomEvent::Status(s) if s.counts.open == 0)));
+    let events = h
+        .wait_for("status", |e| matches!(e, RoomEvent::Status(_)))
+        .await;
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, RoomEvent::Status(s) if s.counts.open == 0)));
 }
 
 #[tokio::test]
 async fn message_user_from_the_chief_reaches_the_user() {
     let mut h = harness(vec![
-        (("chief", 0), tools("", vec![call("message_user", json!({ "text": "Quick note: starting now." }))])),
+        (
+            ("chief", 0),
+            tools(
+                "",
+                vec![call(
+                    "message_user",
+                    json!({ "text": "Quick note: starting now." }),
+                )],
+            ),
+        ),
         (("chief", 1), text("done")),
     ]);
     h.user("go");
-    let events = h.wait_for("message_user", |e| matches!(e, RoomEvent::Chief(t) if t.contains("Quick note"))).await;
+    let events = h
+        .wait_for(
+            "message_user",
+            |e| matches!(e, RoomEvent::Chief(t) if t.contains("Quick note")),
+        )
+        .await;
     assert!(chief_said(&events).iter().any(|t| t.contains("Quick note")));
 }
 
 #[tokio::test]
 async fn an_unknown_tool_is_refused_without_reaching_the_builtins() {
-    // red is offered sec_run (the stub) + its room tools; a forged name is refused
+    // a name this lane was not offered is refused before the builtin host runs
     let delegate = call(
         "group_delegate",
         json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
@@ -303,11 +404,18 @@ async fn an_unknown_tool_is_refused_without_reaching_the_builtins() {
     );
     let mut h = harness(vec![
         (("chief", 0), tools("Dispatching.", vec![delegate])),
-        (("red", 0), tools("try", vec![call("rm_rf", json!({ "path": "/" }))])),
+        (
+            ("red", 0),
+            tools("try", vec![call("rm_rf", json!({ "path": "/" }))]),
+        ),
         (("red", 1), text("could not")),
     ]);
     h.user("scan");
-    h.wait_for("dispatch", |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe"))).await;
+    h.wait_for(
+        "dispatch",
+        |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe")),
+    )
+    .await;
     // the red lane runs and ends; nothing was published and no panic — the forged tool was refused in-router.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let _ = h.drain();
@@ -318,6 +426,8 @@ async fn an_unknown_tool_is_refused_without_reaching_the_builtins() {
 async fn shutdown_closes_the_room() {
     let mut h = harness(vec![]);
     h.send(ActorMsg::Shutdown);
-    let events = h.wait_for("closed", |e| matches!(e, RoomEvent::Closed)).await;
+    let events = h
+        .wait_for("closed", |e| matches!(e, RoomEvent::Closed))
+        .await;
     assert_eq!(events.last(), Some(&RoomEvent::Closed));
 }

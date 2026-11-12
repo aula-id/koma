@@ -6,18 +6,19 @@
 //! [`BuiltinHost`]. Anything the actor must act on (start a lane, steer one,
 //! show a message) is sent to the actor, because a lane cannot do those itself.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::message::ActorMsg;
+use crate::dto::chat::ToolCall;
 use crate::room::clerk::Clerk;
 use crate::room::lane::{LaneEvent, LaneKind, ToolRouter, ToolRun, ToolSpec};
-use crate::room::registry::Registry;
+use crate::room::registry::{is_host_handler, Registry};
 use crate::room::shelf::Shelf;
 use crate::room::work::{Caller, Coordinator};
-use crate::dto::chat::ToolCall;
 
 /// The seam to koma's built-in tools (`execute_tool`). The room runs its own
 /// tools; everything else goes here. The real implementation wraps a
@@ -36,7 +37,10 @@ pub struct NoBuiltins;
 
 impl BuiltinHost for NoBuiltins {
     fn run(&self, _avatar: &str, _kind: LaneKind, call: &ToolCall) -> String {
-        format!("error: no tool '{}' is available in this room", call.function.name)
+        format!(
+            "error: no tool '{}' is available in this room",
+            call.function.name
+        )
     }
     fn specs(&self, _kind: LaneKind) -> Vec<ToolSpec> {
         Vec::new()
@@ -57,14 +61,22 @@ pub struct LaneRef {
 impl LaneRef {
     fn caller(&self) -> Caller {
         match &self.assignment_id {
-            Some(id) if !self.is_chief => Caller::Lane { avatar: self.avatar.clone(), assignment_id: id.clone() },
+            Some(id) if !self.is_chief => Caller::Lane {
+                avatar: self.avatar.clone(),
+                assignment_id: id.clone(),
+            },
             _ => Caller::Chief,
         }
     }
 }
 
-const COORDINATOR_TOOLS: &[&str] =
-    &["group_delegate", "group_status", "group_nudge", "group_finish", "group_task_complete"];
+const COORDINATOR_TOOLS: &[&str] = &[
+    "group_delegate",
+    "group_status",
+    "group_nudge",
+    "group_finish",
+    "group_task_complete",
+];
 
 fn is_shelf_tool(name: &str) -> bool {
     name == "get" || name == "list" || name == "put" || name.starts_with("put_")
@@ -96,19 +108,49 @@ impl RoomToolRouter {
     ) -> Self {
         let role = registry.role_of(&lane.avatar);
         let shelf_allow = role.map(|r| r.shelf_allow.clone()).unwrap_or_default();
-        let mut tools: Vec<ToolSpec> = role
-            .map(|r| {
-                r.tools
-                    .iter()
-                    .map(|t| ToolSpec { name: t.name.clone(), description: t.description.clone(), parameters: t.schema.clone() })
-                    .collect()
+        let role_tools = role.map(|r| r.tools.clone()).unwrap_or_default();
+        // Host tools are work-lane only. Chat, the Chief, and the clerk keep
+        // the room tools. The compiled spec (real schema) wins over the toml
+        // stub, and only names this role's allowlist granted.
+        let host_allowed: BTreeSet<String> = role_tools
+            .iter()
+            .filter(|t| is_host_handler(&t.handler))
+            .map(|t| t.name.clone())
+            .collect();
+        let mut tools: Vec<ToolSpec> = role_tools
+            .iter()
+            .filter(|t| !is_host_handler(&t.handler))
+            .map(|t| ToolSpec {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.schema.clone(),
             })
-            .unwrap_or_default();
+            .collect();
         for name in &shelf_allow {
             tools.push(shelf_spec(name));
         }
-        tools.extend(builtins.specs(lane.kind));
-        Self { lane, coordinator, shelf, clerk, registry, builtins, shelf_allow, tools, to_actor }
+        if lane.kind == LaneKind::Work {
+            for spec in builtins.specs(lane.kind) {
+                if spec.name.starts_with("sec_") || !host_allowed.contains(&spec.name) {
+                    continue;
+                }
+                if tools.iter().any(|t| t.name == spec.name) {
+                    continue;
+                }
+                tools.push(spec);
+            }
+        }
+        Self {
+            lane,
+            coordinator,
+            shelf,
+            clerk,
+            registry,
+            builtins,
+            shelf_allow,
+            tools,
+            to_actor,
+        }
     }
 
     fn tell_actor(&self, msg: ActorMsg) {
@@ -134,7 +176,10 @@ impl RoomToolRouter {
                 }
             }
         }
-        ToolRun { result: outcome.value.to_string(), events }
+        ToolRun {
+            result: outcome.value.to_string(),
+            events,
+        }
     }
 
     fn run_shelf(&self, name: &str, args: &Value) -> ToolRun {
@@ -144,17 +189,27 @@ impl RoomToolRouter {
                 if name.starts_with("put_") || name == "put" {
                     if let Some(rev) = value.get("revision").and_then(Value::as_i64) {
                         if let Some(key) = value.get("key").and_then(Value::as_str) {
-                            events.push(LaneEvent::Published { key: key.to_string(), revision: rev });
+                            events.push(LaneEvent::Published {
+                                key: key.to_string(),
+                                revision: rev,
+                            });
                         }
                     }
                     // A probe's claim/evidence is offered to the review queue at once.
                     if let Some(id) = &self.lane.assignment_id {
-                        self.coordinator.on_publish(&self.lane.avatar, id, name, args);
+                        self.coordinator
+                            .on_publish(&self.lane.avatar, id, name, args);
                     }
                 }
-                ToolRun { result: value.to_string(), events }
+                ToolRun {
+                    result: value.to_string(),
+                    events,
+                }
             }
-            Err(e) => ToolRun { result: format!("error: {}", e.0), events: Vec::new() },
+            Err(e) => ToolRun {
+                result: format!("error: {}", e.0),
+                events: Vec::new(),
+            },
         }
     }
 
@@ -166,22 +221,43 @@ impl RoomToolRouter {
                 drop(clerk);
                 self.tell_actor(ActorMsg::Flag(item));
                 let (severity, note) = (
-                    args.get("severity").and_then(Value::as_str).unwrap_or("info").to_string(),
-                    args.get("note").and_then(Value::as_str).unwrap_or("").to_string(),
+                    args.get("severity")
+                        .and_then(Value::as_str)
+                        .unwrap_or("info")
+                        .to_string(),
+                    args.get("note")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 );
-                ToolRun { result: value.to_string(), events: vec![LaneEvent::Flag { severity, note }] }
+                ToolRun {
+                    result: value.to_string(),
+                    events: vec![LaneEvent::Flag { severity, note }],
+                }
             }
-            Err(e) => ToolRun { result: format!("error: {e}"), events: Vec::new() },
+            Err(e) => ToolRun {
+                result: format!("error: {e}"),
+                events: Vec::new(),
+            },
         }
     }
 
     fn run_message_user(&self, args: &Value) -> ToolRun {
         match args.get("text").and_then(Value::as_str) {
             Some(text) if !text.trim().is_empty() => {
-                self.tell_actor(ActorMsg::MessageUser { from: self.lane.avatar.clone(), text: text.to_string() });
-                ToolRun { result: json!({ "ok": true }).to_string(), events: Vec::new() }
+                self.tell_actor(ActorMsg::MessageUser {
+                    from: self.lane.avatar.clone(),
+                    text: text.to_string(),
+                });
+                ToolRun {
+                    result: json!({ "ok": true }).to_string(),
+                    events: Vec::new(),
+                }
             }
-            _ => ToolRun { result: "error: message_user needs non-empty text".to_string(), events: Vec::new() },
+            _ => ToolRun {
+                result: "error: message_user needs non-empty text".to_string(),
+                events: Vec::new(),
+            },
         }
     }
 }
@@ -195,7 +271,10 @@ impl ToolRouter for RoomToolRouter {
         let name = call.function.name.as_str();
         // Only tools this lane was offered may run; a forged name is refused.
         if !self.tools.iter().any(|t| t.name == name) {
-            return ToolRun { result: format!("error: tool '{name}' is not available to this lane"), events: Vec::new() };
+            return ToolRun {
+                result: format!("error: tool '{name}' is not available to this lane"),
+                events: Vec::new(),
+            };
         }
         let args = Self::args_of(call);
         if COORDINATOR_TOOLS.contains(&name) {
@@ -207,13 +286,19 @@ impl ToolRouter for RoomToolRouter {
         } else if is_shelf_tool(name) {
             self.run_shelf(name, &args)
         } else {
-            ToolRun { result: self.builtins.run(&self.lane.avatar, self.lane.kind, call), events: Vec::new() }
+            ToolRun {
+                result: self.builtins.run(&self.lane.avatar, self.lane.kind, call),
+                events: Vec::new(),
+            }
         }
     }
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn str_param(description: &str) -> Value {
@@ -226,7 +311,10 @@ fn shelf_spec(name: &str) -> ToolSpec {
     let (description, required): (&str, &[&str]) = match name {
         "get" => ("Read a shelf item by key.", &["key"]),
         "list" => ("List shelf keys under an optional prefix.", &[]),
-        "put" => ("Write a free-form shelf item under results/, skills/ or notes/.", &["key", "content", "expected_revision"]),
+        "put" => (
+            "Write a free-form shelf item under results/, skills/ or notes/.",
+            &["key", "content", "expected_revision"],
+        ),
         _ => ("Publish a typed gate record to the shelf.", &["key"]),
     };
     let mut properties = serde_json::Map::new();

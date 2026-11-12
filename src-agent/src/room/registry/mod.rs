@@ -25,7 +25,8 @@ use std::sync::{Arc, Mutex, RwLock};
 // Public surface for the lane runners and the daemon, which land in later steps.
 #[allow(unused_imports)]
 pub use model::{
-    Avatar, KNOWN_HANDLERS, LaneKind, LaneModel, Registry, RenderError, Role, SHELF_TOOLS, SINGLE_ROLES, Skill, ToolDef,
+    is_host_handler, Avatar, LaneKind, LaneModel, Registry, RenderError, Role, Skill, ToolDef,
+    HOST_HANDLERS, KNOWN_HANDLERS, SHELF_TOOLS, SINGLE_ROLES,
 };
 #[allow(unused_imports)]
 pub use watch::{spawn_watcher, ReloadOutcome, WatchGuard};
@@ -82,7 +83,10 @@ impl RegistryHandle {
 
     /// Warnings from the latest load.
     pub fn report(&self) -> LoadReport {
-        self.report.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Re-read the overlay and swap in the result. Returns whether the content

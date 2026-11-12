@@ -392,6 +392,26 @@ fn session_flag_value_is_not_unknown_command() {
 }
 
 #[test]
+fn kind_secure_is_not_a_positional_verb() {
+    let opts = parse(
+        [
+            "koma",
+            "--daemon",
+            "--kind",
+            "secure",
+            "--session",
+            "abc-123",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    assert!(opts.daemon);
+    assert_eq!(opts.kind.as_deref(), Some("secure"));
+    assert_eq!(opts.session.as_deref(), Some("abc-123"));
+    assert!(opts.unknown_command.is_none());
+}
+
+#[test]
 fn daemon_session_only_flags_no_positional_verb() {
     let opts = parse(
         ["koma", "--session", "abc-123", "--daemon"]

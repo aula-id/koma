@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
                 // Detach must not wait for the parent to write another line.
                 runtime.shutdown_timeout(std::time::Duration::from_millis(250));
                 result
-            },
+            }
             cli_sdk::SdkCli::Help => std::process::exit(cli_sdk::print_help()),
             cli_sdk::SdkCli::Usage(error) => {
                 std::process::exit(cli_sdk::print_usage(&error));
@@ -384,7 +384,17 @@ fn main() -> anyhow::Result<()> {
     // Drives the full stage-5 stack (bind + accept loop + per-client tasks + the
     // real daemon_loop hub) over a real socket: a client attaches, submits, sees
     // the resulting delta, then quits the daemon. Never returns (OK/FAIL exit).
+    if let Some(kind) = opts.kind.as_deref() {
+        if kind != "secure" {
+            eprintln!("error: unknown daemon kind '{kind}'");
+            std::process::exit(1);
+        }
+    }
+
     if opts.daemon_selftest {
+        if opts.kind.as_deref() == Some("secure") {
+            return room::daemon::run_secure_daemon(opts);
+        }
         app::run_daemon_selftest();
     }
 
@@ -462,7 +472,14 @@ fn main() -> anyhow::Result<()> {
     // Owns the agent runtime with no terminal; a TUI attaches as a thin client via
     // `--attach`. Stays in this branch (loops forever) until QuitDaemon / Ctrl-C.
     if opts.daemon {
+        if opts.kind.as_deref() == Some("secure") {
+            return room::daemon::run_secure_daemon(opts);
+        }
         return app::run_daemon(opts);
+    }
+    if opts.kind.as_deref() == Some("secure") {
+        eprintln!("error: --kind secure requires --daemon");
+        std::process::exit(1);
     }
 
     // --- explicit thin-client path: attach to an ALREADY-running daemon ---

@@ -227,7 +227,12 @@ pub(crate) fn build_startup(
     // Auto-start is gated on BOTH install and the runtime enable flag. The flag
     // starts `false` so the daemon stays off by default; the `/security` panel's
     // toggle key (`t`) sets it and calls `.start()` explicitly.
-    if crate::security::is_installed() && state.rest.security_enabled {
+    // The secure room does not run the Python security child. A coding daemon
+    // still starts it only when the user has turned security on.
+    if opts.kind.as_deref() != Some("secure")
+        && crate::security::is_installed()
+        && state.rest.security_enabled
+    {
         sec.start(sec_token.clone());
     }
     state.rest.sec_token = sec_token;

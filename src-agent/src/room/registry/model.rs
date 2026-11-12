@@ -22,6 +22,30 @@ pub const SHELF_TOOLS: &[&str] = &[
     "put_result",
 ];
 
+/// Host tools a specialist work lane may be granted. The handler name is the
+/// builtin name. Chat lanes, the Chief, and the clerk are not granted these.
+/// `sec_*` is never a host handler.
+pub const HOST_HANDLERS: &[&str] = &[
+    "read",
+    "write",
+    "edit",
+    "delete",
+    "dir_list",
+    "grep",
+    "glob",
+    "bash",
+    "remember",
+    "recall",
+    "forget",
+    "skill",
+    "web_search",
+    "web_fetch",
+    "browser_tabs",
+    "browser_inspect",
+    "browser_interact",
+    "browser_evaluate",
+];
+
 /// Handlers compiled into the binary. A tool definition may only bind to one of
 /// these, so a hot-reloaded file can never introduce new behaviour.
 pub const KNOWN_HANDLERS: &[&str] = &[
@@ -32,7 +56,31 @@ pub const KNOWN_HANDLERS: &[&str] = &[
     "group_task_complete",
     "message_user",
     "clerk_flag",
+    "read",
+    "write",
+    "edit",
+    "delete",
+    "dir_list",
+    "grep",
+    "glob",
+    "bash",
+    "remember",
+    "recall",
+    "forget",
+    "skill",
+    "web_search",
+    "web_fetch",
+    "browser_tabs",
+    "browser_inspect",
+    "browser_interact",
+    "browser_evaluate",
 ];
+
+/// Room handlers (coordination, shelf is separate, clerk). Everything else in
+/// [`KNOWN_HANDLERS`] is a host builtin.
+pub fn is_host_handler(handler: &str) -> bool {
+    HOST_HANDLERS.contains(&handler)
+}
 
 /// Model selection for one lane. Unset fields inherit the session default.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -175,7 +223,9 @@ impl Registry {
             (LaneKind::Chat, role) => (&a.chat, role.map(|r| &r.chat)),
             (LaneKind::Work, role) => (&a.work, role.map(|r| &r.work)),
         };
-        let pick = |own: &Option<String>, base: Option<&Option<String>>| own.clone().or_else(|| base.and_then(Clone::clone));
+        let pick = |own: &Option<String>, base: Option<&Option<String>>| {
+            own.clone().or_else(|| base.and_then(Clone::clone))
+        };
         LaneModel {
             provider: pick(&own.provider, base.map(|b| &b.provider)),
             model: pick(&own.model, base.map(|b| &b.model)),

@@ -1,31 +1,23 @@
-//! A [`BuiltinHost`](crate::room::actor::BuiltinHost) over koma's real tools.
+//! A [`BuiltinHost`](crate::room::actor::BuiltinHost) over koma's host tools.
 //!
-//! Each lane runs its built-in tools through `execute_tool` against a
-//! per-avatar [`ToolCtx`], so a red lane's cyber lane and scope differ from a
-//! reviewer's. The daemon builds the contexts (from its `AppState`) and the
-//! tool specs the model is shown, and hands them here.
+//! The work lane runs `bash`, files, web, and (for Red) the browser on this
+//! machine through `execute_tool`. There is no private computer and no `sec_*`
+//! catalog. Chat lanes get no host tools. The room `ToolCtx` carries no
+//! security daemon and no cyber lane, so the coding confirmation gate (which
+//! lives in the stream loop, not in `execute_tool`) is not consulted.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::app::sec::lane::Lane;
 use crate::dto::chat::ToolCall;
 use crate::room::actor::BuiltinHost;
 use crate::room::lane::{LaneKind, ToolSpec};
-use crate::tool::{execute_tool, ToolCtx};
-
-/// The koma cyber lane a room avatar's work runs under. Red probes, Reviewer
-/// stays defensive, everyone else reads.
-pub fn cyber_lane_for(avatar: &str) -> Lane {
-    match avatar {
-        a if a == "red" || a.starts_with("red-") => Lane::Red,
-        a if a == "reviewer" || a.starts_with("reviewer-") => Lane::Blue,
-        _ => Lane::Research,
-    }
-}
+use crate::room::registry::HOST_HANDLERS;
+use crate::tool::{all_tools, execute_tool, ToolCtx};
 
 pub struct CtxBuiltins {
-    /// One tool context per avatar; the fallback runs read-only work.
+    /// One tool context per avatar. Empty means every avatar uses `fallback`.
     by_avatar: BTreeMap<String, Arc<ToolCtx>>,
     fallback: Arc<ToolCtx>,
     chat_specs: Vec<ToolSpec>,
@@ -39,7 +31,29 @@ impl CtxBuiltins {
         chat_specs: Vec<ToolSpec>,
         work_specs: Vec<ToolSpec>,
     ) -> Self {
-        Self { by_avatar, fallback, chat_specs, work_specs }
+        Self {
+            by_avatar,
+            fallback,
+            chat_specs,
+            work_specs,
+        }
+    }
+
+    /// One session context for every avatar. Host specs are the compiled tool
+    /// list. Chat specs stay empty. Security-daemon fields are cleared so a
+    /// `sec_*` name cannot dispatch even if the caller copied a coding context.
+    pub fn from_ctx(mut ctx: ToolCtx) -> Self {
+        ctx.sec_manager = None;
+        ctx.cyber_lane = None;
+        ctx.sec_block = None;
+        ctx.sec_inactive.clear();
+        ctx.plan_read_only.store(false, Ordering::Release);
+        Self {
+            by_avatar: BTreeMap::new(),
+            fallback: Arc::new(ctx),
+            chat_specs: Vec::new(),
+            work_specs: host_tool_specs(),
+        }
     }
 
     fn ctx(&self, avatar: &str) -> &ToolCtx {
@@ -47,8 +61,29 @@ impl CtxBuiltins {
     }
 }
 
+/// Compiled schemas for [`HOST_HANDLERS`], in that order. A name the binary
+/// does not implement is omitted, so the allowlist cannot advertise a ghost.
+pub fn host_tool_specs() -> Vec<ToolSpec> {
+    let tools = all_tools();
+    HOST_HANDLERS
+        .iter()
+        .filter_map(|name| {
+            let tool = tools.iter().find(|t| t.name() == *name)?;
+            Some(ToolSpec {
+                name: (*name).to_string(),
+                description: tool.description().to_string(),
+                parameters: tool.parameters(),
+            })
+        })
+        .collect()
+}
+
 impl BuiltinHost for CtxBuiltins {
-    fn run(&self, avatar: &str, _kind: LaneKind, call: &ToolCall) -> String {
+    fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String {
+        let name = call.function.name.as_str();
+        if kind != LaneKind::Work || name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
+            return format!("error: tool '{name}' is not available to this lane");
+        }
         execute_tool(self.ctx(avatar), call)
     }
 

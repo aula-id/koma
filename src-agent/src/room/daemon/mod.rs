@@ -1,13 +1,20 @@
 //! Bridging the room to the live daemon: the real model and tool seams, and
-//! (next) the secure daemon kind and the `/security` handoff.
+//! the secure daemon kind (`koma --daemon --kind secure`).
 
 pub mod assemble;
 pub mod builtins;
 pub mod model_client;
+mod run;
+mod selftest;
+
+#[cfg(test)]
+#[path = "host_test.rs"]
+mod host_test;
 
 #[allow(unused_imports)]
 pub use assemble::{RoomSession, TICK_MS};
 #[allow(unused_imports)]
-pub use builtins::{cyber_lane_for, CtxBuiltins};
+pub use builtins::CtxBuiltins;
 #[allow(unused_imports)]
 pub use model_client::ProviderModelClient;
+pub use run::run_secure_daemon;
