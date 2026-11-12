@@ -6,15 +6,17 @@
 //! clerk's model pass, which judges them, adds what only judgement can see, and
 //! decides what is worth raising with the Chief.
 //!
-//! Not covered here, and left to the model pass: contradictory claims and
-//! unusual tool use.
+//! Unusual tool use is left to the model pass. A claim with no evidence, and
+//! two claims for the same host and class that disagree on severity, are
+//! checked here. The shelf already refuses a citation of a key that is not
+//! there.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
-use super::scope::{in_scope, parse_scopes};
+use super::scope::{in_scope, normalize_host, parse_scopes};
 use crate::room::lane::{Digest, Phase};
 use crate::room::shelf::Shelf;
 use crate::room::types::{AssignmentKind, AssignmentStatus};
@@ -54,6 +56,10 @@ pub enum FindingKind {
     Stalled,
     Unpublished,
     RepeatedWork,
+    /// A claim names no evidence.
+    MissingEvidence,
+    /// Two claims for the same host and class disagree on severity.
+    Contradiction,
 }
 
 /// One thing the audit noticed.
@@ -111,20 +117,21 @@ fn short_hash(text: &str) -> String {
 /// Run every deterministic check. The result is ordered, most severe first.
 pub fn audit(input: &AuditInput<'_>) -> Result<Vec<Finding>, String> {
     let mut findings = Vec::new();
-    check_scope(input, &mut findings)?;
+    let scopes_present = check_scope(input, &mut findings)?;
+    check_claims(input, scopes_present, &mut findings)?;
     check_lanes(input, &mut findings);
     check_repeats(input, &mut findings);
     findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.key.cmp(&b.key)));
     Ok(findings)
 }
 
-fn check_scope(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<(), String> {
+fn check_scope(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<bool, String> {
     let shelf_err = |e: crate::room::shelf::ShelfError| e.0;
     let scopes = parse_scopes(&input.shelf.scan("scope/").map_err(shelf_err)?);
     let mut targets = input.shelf.scan("claims/").map_err(shelf_err)?;
     targets.extend(input.shelf.scan("assets/").map_err(shelf_err)?);
     if targets.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if scopes.is_empty() {
         out.push(Finding {
@@ -135,7 +142,7 @@ fn check_scope(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<(), Str
             note: "Claims or assets are being published but no scope record exists, so nothing can be checked against the authorised targets.".to_string(),
             refs: Vec::new(),
         });
-        return Ok(());
+        return Ok(false);
     }
     for entry in targets {
         let Some(host) = host_of(entry.content.as_deref().unwrap_or("")) else {
@@ -152,7 +159,59 @@ fn check_scope(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<(), Str
             });
         }
     }
+    Ok(true)
+}
+
+fn check_claims(input: &AuditInput<'_>, scopes_present: bool, out: &mut Vec<Finding>) -> Result<(), String> {
+    let shelf_err = |e: crate::room::shelf::ShelfError| e.0;
+    let claims = input.shelf.scan("claims/").map_err(shelf_err)?;
+    if claims.is_empty() {
+        return Ok(());
+    }
+    let mut by_subject: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for entry in &claims {
+        let Some(body) = entry.content.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok()) else {
+            continue;
+        };
+        if scopes_present && string_list(&body, "evidence_keys").is_empty() {
+            out.push(Finding {
+                key: format!("no-evidence:{}", entry.key),
+                kind: FindingKind::MissingEvidence,
+                avatar: input.digest.publisher_of(&entry.key).map(str::to_string),
+                severity: Severity::Warn,
+                note: format!("{} names no evidence.", entry.key),
+                refs: vec![entry.key.clone()],
+            });
+        }
+        let host = body.get("host").and_then(Value::as_str).map(normalize_host).unwrap_or_default();
+        let class = body.get("vulnclass").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        let severity = body.get("severity").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        if !host.is_empty() && !class.is_empty() && !severity.is_empty() {
+            by_subject.entry((host, class)).or_default().insert(severity);
+        }
+    }
+    for ((host, class), severities) in by_subject {
+        if severities.len() < 2 {
+            continue;
+        }
+        let list = severities.into_iter().collect::<Vec<_>>().join(", ");
+        out.push(Finding {
+            key: format!("contradict:{host}:{class}"),
+            kind: FindingKind::Contradiction,
+            avatar: None,
+            severity: Severity::Warn,
+            note: format!("Claims for {host} ({class}) disagree on severity: {list}."),
+            refs: Vec::new(),
+        });
+    }
     Ok(())
+}
+
+fn string_list(body: &Value, field: &str) -> Vec<String> {
+    body.get(field)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 fn check_lanes(input: &AuditInput<'_>, out: &mut Vec<Finding>) {

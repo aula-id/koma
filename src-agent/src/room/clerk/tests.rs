@@ -151,9 +151,9 @@ fn an_out_of_scope_claim_or_asset_is_a_stop_finding_that_names_the_lane_that_pub
     put(&env.shelf, "put_asset", json!({ "key": "assets/h", "host": "10.9.9.9", "asset_type": "host", "title": "t" }));
     env.digest.observe("red", &LaneEvent::Published { key: "claims/bad".into(), revision: 1 });
 
-    let found = env.findings();
+    let found: Vec<_> = env.findings().into_iter().filter(|f| f.kind == FindingKind::OutOfScope).collect();
     assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found.iter().all(|f| f.kind == FindingKind::OutOfScope && f.severity == Severity::Stop));
+    assert!(found.iter().all(|f| f.severity == Severity::Stop));
     let bad = found.iter().find(|f| f.key == "out-of-scope:claims/bad").expect("claim finding");
     assert_eq!(bad.avatar.as_deref(), Some("red"));
     assert!(bad.note.contains("other.net") && bad.note.contains("claims/bad"), "{}", bad.note);
@@ -232,7 +232,32 @@ fn findings_come_most_severe_first_in_a_stable_order() {
         env.digest.observe("red", &LaneEvent::Step(step));
     }
     let order: Vec<Severity> = env.findings().iter().map(|f| f.severity).collect();
-    assert_eq!(order, [Severity::Stop, Severity::Warn]);
+    assert_eq!(order.first(), Some(&Severity::Stop));
+    assert!(order.iter().skip(1).all(|severity| *severity == Severity::Warn), "{order:?}");
+}
+
+#[test]
+fn a_claim_with_no_evidence_is_flagged_until_evidence_is_attached() {
+    let env = Env::new();
+    env.scope_record("app.example.com");
+    claim(&env.shelf, "claims/a", "app.example.com");
+    assert!(env.findings().iter().any(|f| f.kind == FindingKind::MissingEvidence && f.key == "no-evidence:claims/a"));
+
+    put(&env.shelf, "put_evidence", json!({ "key": "evidence/real", "claim_key": "claims/a", "evidence_kind": "http", "body": "the response", "expected_revision": 0 }));
+    assert!(env.findings().iter().all(|f| f.kind != FindingKind::MissingEvidence));
+}
+
+#[test]
+fn two_claims_for_the_same_host_and_class_that_disagree_are_a_contradiction() {
+    let env = Env::new();
+    env.scope_record("app.example.com");
+    put(&env.shelf, "put_claim", json!({ "key": "claims/a", "vulnclass": "cors", "name": "n", "severity": "low",
+        "summary": "s", "host": "app.example.com", "poc": "curl", "expected_revision": 0 }));
+    put(&env.shelf, "put_claim", json!({ "key": "claims/b", "vulnclass": "cors", "name": "n", "severity": "high",
+        "summary": "s", "host": "https://App.Example.com/x", "poc": "curl", "expected_revision": 0 }));
+    let found = env.findings();
+    let hit = found.iter().find(|f| f.kind == FindingKind::Contradiction).expect("contradiction");
+    assert!(hit.note.contains("low") && hit.note.contains("high"), "{}", hit.note);
 }
 
 // ---- trigger ----
@@ -259,7 +284,8 @@ fn a_pass_runs_once_per_new_finding_and_a_quiet_room_costs_nothing() {
     let mut clerk = Clerk::new();
 
     let pass = run(clerk.tick(&env.input()).expect("tick"));
-    assert_eq!(pass.new_findings.len(), 1);
+    assert!(pass.new_findings.iter().any(|f| f.kind == FindingKind::OutOfScope));
+    assert!(pass.new_findings.iter().any(|f| f.kind == FindingKind::MissingEvidence));
     assert!(clerk.is_busy());
     assert_eq!(clerk.tick(&env.input()).expect("tick"), Tick::Busy, "never two passes at once");
 
@@ -277,12 +303,12 @@ fn a_shelf_change_starts_a_pass_but_not_faster_than_the_minimum_gap() {
     run(clerk.tick(&env.input()).expect("first fingerprint"));
     clerk.finish_pass();
 
-    claim(&env.shelf, "claims/a", "app.example.com");
+    put(&env.shelf, "put_asset", json!({ "key": "assets/h", "host": "app.example.com", "asset_type": "host", "title": "app" }));
     env.now_ms += 5_000;
     assert_eq!(clerk.tick(&env.input()).expect("tick"), Tick::Quiet, "changed, but too soon");
     env.now_ms += MIN_PASS_GAP_MS;
     let pass = run(clerk.tick(&env.input()).expect("tick"));
-    assert!(pass.new_findings.is_empty(), "a pass for the change itself, with nothing flagged by the audit");
+    assert!(pass.new_findings.is_empty(), "an in-scope asset is a shelf change, not a finding");
 }
 
 #[test]
@@ -318,7 +344,7 @@ fn a_finding_that_appears_while_a_pass_runs_is_not_lost() {
     assert_eq!(clerk.tick(&env.input()).expect("tick"), Tick::Busy);
     clerk.finish_pass();
     let pass = run(clerk.tick(&env.input()).expect("tick"));
-    assert_eq!(pass.new_findings.len(), 1);
+    assert!(pass.new_findings.iter().any(|f| f.kind == FindingKind::OutOfScope));
 }
 
 #[test]
