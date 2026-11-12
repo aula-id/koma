@@ -17,10 +17,12 @@ export function RoomScreen({
   id,
   theme,
   onLeave,
+  ctrlC,
 }: {
   id: string
   theme: Theme
   onLeave: () => void
+  ctrlC?: { current: () => void }
 }) {
   const [lines, setLines] = useState<Line[]>([])
   const [lanes, setLanes] = useState("")
@@ -30,6 +32,7 @@ export function RoomScreen({
   const [counts, setCounts] = useState<Counts>({ open: 0, verified: 0, returned: 0, reports: 0 })
   const [models, setModels] = useState<ModelList>({ choices: [], lanes: [] })
   const [notice, setNotice] = useState("")
+  const [asking, setAsking] = useState(false)
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
   const link = useRef<RoomLink | null>(null)
@@ -51,17 +54,35 @@ export function RoomScreen({
     }
   }, [id])
 
+  const leave = () => {
+    leaving.current = true
+    setAsking(false)
+    link.current?.close()
+    void switchDaemon(id, "coding").then(onLeave).catch((error: unknown) => {
+      leaving.current = false
+      setPhase(error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  // Ctrl+C asks first; a second Ctrl+C while asking confirms. The session screen's own
+  // handler comes back when the room closes.
+  const askingRef = useRef(false)
+  askingRef.current = asking
+  const leaveRef = useRef(leave)
+  leaveRef.current = leave
+  useEffect(() => {
+    if (!ctrlC) return
+    const before = ctrlC.current
+    ctrlC.current = () => { if (askingRef.current) leaveRef.current(); else setAsking(true) }
+    return () => { ctrlC.current = before }
+  }, [ctrlC])
+
   const send = () => {
     const text = draft.trim()
     setDraft("")
     if (!text) return
     if (text === "/security" || text === "/leave") {
-      leaving.current = true
-      link.current?.close()
-      void switchDaemon(id, "coding").then(onLeave).catch((error: unknown) => {
-        leaving.current = false
-        setPhase(error instanceof Error ? error.message : String(error))
-      })
+      leave()
       return
     }
     setLines((current) => [...current, { id: crypto.randomUUID(), author: "you", text }])
@@ -80,6 +101,8 @@ export function RoomScreen({
       onSend={send}
       models={models}
       notice={notice}
+      asking={asking}
+      onAnswer={(yes) => { if (yes) leave(); else setAsking(false) }}
       onOpenModels={() => link.current?.requestModels()}
       onSetModel={(avatar, lane, model) => { setNotice(""); link.current?.setModel(avatar, lane, model) }}
     />
@@ -89,7 +112,7 @@ export function RoomScreen({
 export type Panes = { lanes: string; swim: string; shelf: string; map: string }
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   lines: Line[]
   panes: Panes
@@ -100,6 +123,9 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
   onSend: () => void
   models?: ModelList
   notice?: string
+  /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
+  asking?: boolean
+  onAnswer?: (yes: boolean) => void
   onOpenModels?: () => void
   onSetModel?: (avatar: string, lane: string, model: string) => void
 }) {
@@ -117,6 +143,11 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
+    if (asking) {
+      if (key.name === "return" || key.name === "enter" || key.name === "y") onAnswer(true)
+      else if (key.name === "escape" || key.name === "n") onAnswer(false)
+      return
+    }
     if (full) {
       if (full !== "model" && (key.name === "escape" || key.name === "q")) setFull(null)
       return
@@ -138,11 +169,12 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
     onSend()
   }
 
-  if (full === "model") {
+  const view = asking ? null : full
+  if (view === "model") {
     return <ModelPicker theme={theme} choices={models.choices} lanes={models.lanes} notice={notice} onSet={onSetModel} onBack={() => setFull(null)} />
   }
-  if (full) {
-    return <FullScreenView view={full} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
+  if (view) {
+    return <FullScreenView view={view} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
   }
 
   const ready = phase === "connected"
@@ -168,7 +200,16 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
           </box>
         )}
       </scrollbox>
-      {open ? (
+      {asking ? (
+        <box flexShrink={0} border borderStyle="rounded" borderColor={theme.warn} flexDirection="column" paddingLeft={1} paddingRight={1} title=" Quit to chat? " titleColor={theme.warn}>
+          <text fg={theme.dim}>Leaves the secure room and returns to the coding chat. The shelf and lanes stay on disk.</text>
+          <box flexDirection="row" columnGap={1}>
+            <Action label="Quit to chat (enter)" theme={theme} plain primary onPress={() => onAnswer(true)} />
+            <Action label="Stay (esc)" theme={theme} plain onPress={() => onAnswer(false)} />
+          </box>
+        </box>
+      ) : null}
+      {open && !asking ? (
         <box height={options.rows.length + 2} flexShrink={0} border borderStyle="rounded" borderColor={theme.dim} flexDirection="column" title={options.title} titleColor={theme.dim}>
           {options.rows.map((row, index) => (
             <Choice key={row.label} label={row.label} detail={row.detail} theme={theme} selected={index === picked} onPress={() => onDraft(row.insert)} />
@@ -181,7 +222,7 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
           <input
             flexGrow={1}
             value={draft}
-            focused
+            focused={!asking}
             placeholder="Message the Chief, @red for a specialist, /status for the lanes"
             placeholderColor={theme.dim}
             textColor={theme.fg}

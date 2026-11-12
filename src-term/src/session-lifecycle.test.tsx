@@ -226,6 +226,10 @@ test.skipIf(process.platform === "win32")("entering the secure room keeps the ho
     expect(view.captureCharFrame()).toContain("secure room")
     await act(async () => { await view.mockInput.typeText("hi") })
     expect(view.captureCharFrame()).toContain("secure room")
+    // Ctrl+C asks before leaving; a second one is the confirmation, so only one is sent here.
+    await act(async () => { ctrlC.current() })
+    await settle(view)
+    expect(view.captureCharFrame()).toContain("Quit to chat?")
   } finally {
     await act(async () => { await view.dispose() })
     if (saved.bin === undefined) delete process.env.KOMA_BIN; else process.env.KOMA_BIN = saved.bin
