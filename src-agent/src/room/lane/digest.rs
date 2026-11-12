@@ -38,11 +38,13 @@ pub struct LaneStatus {
     /// Shelf keys this lane wrote, in first-seen order, deduplicated.
     pub published: Vec<String>,
     pub error: Option<String>,
+    /// When the lane last did anything, if the caller supplied clock times.
+    pub last_event_ms: Option<u64>,
 }
 
 impl Default for LaneStatus {
     fn default() -> Self {
-        Self { phase: Phase::Running, steps: 0, last_tool: None, published: Vec::new(), error: None }
+        Self { phase: Phase::Running, steps: 0, last_tool: None, published: Vec::new(), error: None, last_event_ms: None }
     }
 }
 
@@ -69,6 +71,28 @@ impl Digest {
     /// Drop a lane once it has been retired (e.g. superseded or reaped).
     pub fn forget(&mut self, avatar: &str) {
         self.lanes.remove(avatar);
+    }
+
+    /// Which lane published this shelf key, if any did.
+    pub fn publisher_of(&self, key: &str) -> Option<&str> {
+        self.lanes
+            .iter()
+            .find(|(_, lane)| lane.published.iter().any(|k| k == key))
+            .map(|(avatar, _)| avatar.as_str())
+    }
+
+    /// Avatars with a lane in the picture, in key order.
+    pub fn avatars(&self) -> impl Iterator<Item = &str> {
+        self.lanes.keys().map(String::as_str)
+    }
+
+    /// Like [`Digest::observe`], also recording when it happened so stalls can
+    /// be told apart from slow work.
+    pub fn observe_at(&mut self, avatar: &str, event: &LaneEvent, now_ms: u64) {
+        self.observe(avatar, event);
+        if let Some(lane) = self.lanes.get_mut(avatar) {
+            lane.last_event_ms = Some(now_ms);
+        }
     }
 
     /// Fold one event from `avatar`'s lane into the picture.

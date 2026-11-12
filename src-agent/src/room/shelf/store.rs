@@ -301,6 +301,24 @@ impl Shelf {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// A short digest of every key and revision on the shelf. It changes
+    /// whenever anything is written, so a watcher can tell "nothing new" from
+    /// "something changed" without reading any content.
+    pub fn fingerprint(&self) -> Result<String, ShelfError> {
+        use sha2::{Digest, Sha256};
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT key, revision FROM shelf_items ORDER BY key")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut hasher = Sha256::new();
+        for row in rows {
+            let (key, revision) = row?;
+            hasher.update(key.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(revision.to_le_bytes());
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
     /// One item if it exists. Unlike `read_item`, a missing key is `None`.
     pub fn peek(&self, key: &str) -> Result<Option<ShelfEntry>, ShelfError> {
         let conn = self.lock();
