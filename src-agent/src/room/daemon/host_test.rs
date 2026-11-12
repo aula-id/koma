@@ -160,3 +160,61 @@ fn bash_runs_on_the_host_and_a_sec_tool_is_refused() {
 fn the_secure_selftest_answers_one_line() {
     run_secure_selftest().expect("selftest");
 }
+
+#[test]
+fn message_find_reads_the_lanes_own_archive() {
+    use crate::dto::chat::{ChatMessage, Role};
+    use crate::room::lane::{lane_dir, Transcript};
+
+    let root = std::env::temp_dir().join(format!("koma-room-find-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut ctx = context(&root);
+    ctx.session_dir = Some(root.clone());
+    let lanes = root.join("lanes");
+
+    let mut chief = Transcript::open_dir(lane_dir(&lanes, "chief", LaneKind::Chat));
+    chief.push(ChatMessage::new(Role::User, "the staging host is zebra-17"));
+    let mut red = Transcript::open_dir(lane_dir(&lanes, "red", LaneKind::Work));
+    red.push(ChatMessage::new(Role::User, "port scan finished on quokka-9"));
+
+    let builtins = CtxBuiltins::from_ctx(ctx);
+    let find = |avatar: &str, kind: LaneKind, query: &str| {
+        builtins.run(avatar, kind, &call("message_find", json!({ "query": query })))
+    };
+    let own = find("chief", LaneKind::Chat, "zebra-17");
+    assert!(own.contains("zebra-17"), "{own}");
+    let other = find("chief", LaneKind::Chat, "quokka-9");
+    assert!(!other.contains("port scan finished"), "a lane must not read another lane's archive: {other}");
+    assert!(find("red", LaneKind::Work, "quokka-9").contains("quokka-9"));
+}
+
+#[test]
+fn drss_shapes_a_long_lane_from_its_archive_and_keeps_the_live_turn() {
+    use crate::app::runtime::shortsend::{shape, GoalWire};
+    use crate::dto::chat::{ChatMessage, Role};
+    use crate::room::lane::Transcript;
+    use crate::service::context_limits::ContextLimits;
+
+    let dir = std::env::temp_dir().join(format!("koma-room-drss-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut lane = Transcript::open_dir(dir.clone());
+    for n in 0..60 {
+        lane.push(ChatMessage::new(Role::User, format!("question {n}: {}", "alpha beta gamma ".repeat(120))));
+        lane.push(ChatMessage::new(Role::Assistant, format!("answer {n}: {}", "delta epsilon ".repeat(120))));
+    }
+    lane.push(ChatMessage::new(Role::User, "what is the staging host?"));
+
+    let mut history = vec![ChatMessage::new(Role::System, "you are the chief")];
+    history.extend(lane.messages().iter().cloned());
+    let before = history.len();
+
+    let limits = ContextLimits { requested_model: "m".into(), matched_model: None, match_method: "test".into(), catalogue_source: "test".into(), catalog_window: None, route_window: None, effective_window: 24_000, auto_output_tokens: 2_000, max_completion_tokens: None };
+    let goal = GoalWire { source: "room".into(), objective: "find the staging host".into(), charter: String::new() };
+    let shaped = shape(history, &dir, &crate::model::settings::Settings::default(), "what is the staging host?", &goal, &limits, 500).expect("shape");
+
+    assert!(shaped.drss_active, "a lane over its window is condensed");
+    assert!(shaped.history.len() < before, "older turns left the outgoing request");
+    assert_eq!(shaped.history.first().map(|m| m.role), Some(Role::System));
+    assert_eq!(shaped.history.last().map(|m| m.content.as_str()), Some("what is the staging host?"), "the live user turn is protected");
+    assert_eq!(lane.messages().len(), before - 1, "the lane's own record is untouched (all turns, no system message)");
+}

@@ -43,6 +43,11 @@ pub struct ModelRequest {
     pub history: Vec<ChatMessage>,
     pub tools: Vec<ToolSpec>,
     pub model: LaneModel,
+    /// The lane's archive directory. When set, the client shapes the request
+    /// with DRSS from it, so a long lane stays inside the context window.
+    pub archive_dir: Option<std::path::PathBuf>,
+    /// What the lane is working toward, for DRSS's objective block.
+    pub objective: String,
 }
 
 /// One model reply.
@@ -50,6 +55,10 @@ pub struct ModelRequest {
 pub struct ModelReply {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
+    /// The model's thinking for this step, kept in the transcript for display.
+    pub reasoning: Option<String>,
+    /// DRSS shaped this request, so the status can show it.
+    pub drss_active: bool,
     pub usage: Option<Usage>,
     /// A fatal error ends the lane.
     pub error: Option<String>,
@@ -106,6 +115,8 @@ pub struct LaneConfig {
     /// The lane's durable conversation. Each run continues it: the task is
     /// appended as a new user turn and every message after it is recorded.
     pub transcript: Transcript,
+    /// The assignment or goal the lane works toward ("" for a plain chat).
+    pub objective: String,
 }
 
 /// The model's view of the conversation plus the durable record behind it.
@@ -158,7 +169,13 @@ pub async fn run_lane(
         history: vec![ChatMessage::new(Role::System, config.system.clone())],
         transcript: config.transcript,
     };
-    convo.history.extend(convo.transcript.window(DEFAULT_WINDOW_CHARS));
+    // An archived lane sends its whole conversation and lets DRSS shape it
+    // from the archive. Without an archive, a recent window stands in.
+    if convo.transcript.archive_dir().is_some() {
+        convo.history.extend(convo.transcript.messages().iter().cloned());
+    } else {
+        convo.history.extend(convo.transcript.window(DEFAULT_WINDOW_CHARS));
+    }
     convo.push(ChatMessage::new(Role::User, config.task.clone()));
     let advertised = router.advertised();
     let mut paused = false;
@@ -185,7 +202,13 @@ pub async fn run_lane(
 
         emit(&events, LaneEvent::Step(step));
         let reply = model
-            .stream(ModelRequest { history: convo.history.clone(), tools: advertised.clone(), model: config.model.clone() })
+            .stream(ModelRequest {
+                history: convo.history.clone(),
+                tools: advertised.clone(),
+                model: config.model.clone(),
+                archive_dir: convo.transcript.archive_dir().map(std::path::Path::to_path_buf),
+                objective: config.objective.clone(),
+            })
             .await;
 
         if let Some(error) = reply.error {
@@ -201,7 +224,9 @@ pub async fn run_lane(
 
         if reply.tool_calls.is_empty() {
             if !reply.text.trim().is_empty() {
-                convo.push(ChatMessage::new(Role::Assistant, reply.text.clone()));
+                let mut message = ChatMessage::new(Role::Assistant, reply.text.clone());
+                message.reasoning = reply.reasoning.clone();
+                convo.push(message);
             }
             // No tools: the lane has said its piece. A chat lane has answered; a
             // work lane that reaches here without submitting is left for the
@@ -210,7 +235,9 @@ pub async fn run_lane(
             return;
         }
 
-        convo.push(ChatMessage::assistant_with_tools(reply.text.clone(), reply.tool_calls.clone()));
+        let mut assistant = ChatMessage::assistant_with_tools(reply.text.clone(), reply.tool_calls.clone());
+        assistant.reasoning = reply.reasoning.clone();
+        convo.push(assistant);
         for call in &reply.tool_calls {
             emit(&events, LaneEvent::ToolStarted { name: call.function.name.clone() });
             let run = router.run(call);
@@ -325,6 +352,7 @@ mod tests {
             model: LaneModel::default(),
             max_steps: 8,
             transcript: Transcript::memory(),
+            objective: String::new(),
         }
     }
 
@@ -338,15 +366,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_run_remembers_the_first() {
-        let path = std::env::temp_dir().join(format!("koma-runner-memory-{}", std::process::id())).join("chief.chat.jsonl");
-        let _ = std::fs::remove_file(&path);
+        let path = std::env::temp_dir().join(format!("koma-runner-memory-{}", std::process::id())).join("chief.chat");
+        let _ = std::fs::remove_dir_all(&path);
 
         let first = ScriptedModel::new(vec![reply_text("The repo root is /work.")]);
         let (_in_tx, in_rx) = unbounded_channel();
         let (ev_tx, _ev_rx) = unbounded_channel();
         let mut cfg = config(LaneKind::Chat);
         cfg.task = "where are we?".into();
-        cfg.transcript = Transcript::open(path.clone());
+        cfg.transcript = Transcript::open_dir(path.clone());
         run_lane(cfg, first, FakeRouter::new(), in_rx, ev_tx).await;
 
         // A later turn, as after a restart: a fresh run on the same file.
@@ -355,7 +383,7 @@ mod tests {
         let (ev_tx, _ev_rx) = unbounded_channel();
         let mut cfg = config(LaneKind::Chat);
         cfg.task = "say that again".into();
-        cfg.transcript = Transcript::open(path.clone());
+        cfg.transcript = Transcript::open_dir(path.clone());
         run_lane(cfg, second.clone(), FakeRouter::new(), in_rx, ev_tx).await;
 
         let seen = second.last_history();
@@ -363,7 +391,7 @@ mod tests {
         assert!(seen.iter().any(|m| m.content.contains("The repo root is /work.")), "the earlier reply is in history");
         assert_eq!(seen.first().map(|m| m.role), Some(Role::System));
         assert_eq!(seen.iter().filter(|m| m.role == Role::System).count(), 1);
-        assert_eq!(Transcript::open(path).messages().len(), 4, "two turns recorded");
+        assert_eq!(Transcript::open_dir(path).messages().len(), 4, "two turns recorded");
     }
 
     #[tokio::test]

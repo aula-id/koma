@@ -6,6 +6,11 @@
 //! room left off. The system prompt is never stored: it is rebuilt from the
 //! registry on every run, so a prompt edit applies to the next turn.
 //!
+//! Each lane has its own directory holding `messages.jsonl` (this record) and
+//! `messages.sqlite`, the same archive a coding session keeps. The archive is
+//! what DRSS shapes requests from and what `message_find` and `message_load`
+//! read, so a lane recalls its own history exactly.
+//!
 //! The file is the full record. What a run sends to the model is a window over
 //! the end of it ([`Transcript::window`]) until request shaping takes over.
 
@@ -25,7 +30,19 @@ pub const DEFAULT_WINDOW_CHARS: usize = 100_000 * CHARS_PER_TOKEN;
 #[derive(Debug, Default)]
 pub struct Transcript {
     path: Option<PathBuf>,
+    /// The lane directory, when archiving (`messages.sqlite` lives here).
+    dir: Option<PathBuf>,
     messages: Vec<ChatMessage>,
+}
+
+/// The directory of one lane under the room's `lanes/` root.
+pub fn lane_dir(root: &std::path::Path, avatar: &str, kind: crate::room::registry::LaneKind) -> PathBuf {
+    use crate::room::registry::LaneKind;
+    let kind = match kind {
+        LaneKind::Chat => "chat",
+        LaneKind::Work => "work",
+    };
+    root.join(format!("{avatar}.{kind}"))
 }
 
 impl Transcript {
@@ -38,7 +55,13 @@ impl Transcript {
     /// empty transcript. Unreadable lines are skipped, and an unfinished tool
     /// round (a crash between a model's tool calls and their results) is cut off
     /// so the next request never carries a call without its answer.
-    pub fn open(path: PathBuf) -> Self {
+    pub fn open_dir(dir: PathBuf) -> Self {
+        let mut transcript = Self::open(dir.join("messages.jsonl"));
+        transcript.dir = Some(dir);
+        transcript
+    }
+
+    fn open(path: PathBuf) -> Self {
         let mut messages: Vec<ChatMessage> = std::fs::read_to_string(&path)
             .map(|text| {
                 text.lines()
@@ -51,7 +74,7 @@ impl Transcript {
         let kept = complete_prefix_len(&messages);
         let repaired = kept < messages.len();
         messages.truncate(kept);
-        let mut transcript = Self { path: Some(path), messages };
+        let mut transcript = Self { path: Some(path), dir: None, messages };
         if repaired {
             transcript.rewrite();
         }
@@ -60,6 +83,11 @@ impl Transcript {
 
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
+    }
+
+    /// The lane directory holding the archive, when this transcript archives.
+    pub fn archive_dir(&self) -> Option<&std::path::Path> {
+        self.dir.as_deref()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -77,6 +105,11 @@ impl Transcript {
                 if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
                     let _ = writeln!(file, "{line}");
                 }
+            }
+        }
+        if let Some(dir) = &self.dir {
+            if message.role != Role::System {
+                let _ = crate::model::msglog::append(dir, message.role, &message.content, message.reasoning.as_deref(), None);
             }
         }
         self.messages.push(message);

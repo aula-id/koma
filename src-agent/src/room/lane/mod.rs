@@ -37,7 +37,7 @@ pub use inbox::{Inbox, Item as InboxItem, Priority};
 #[allow(unused_imports)]
 pub use timeline::{Milestone, Timeline};
 #[allow(unused_imports)]
-pub use transcript::Transcript;
+pub use transcript::{lane_dir, Transcript};
 #[allow(unused_imports)]
 pub use runner::{
     run_lane, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,

@@ -322,6 +322,7 @@ impl RoomActor {
             model,
             max_steps: self.config.chat_max_steps,
             transcript: self.transcript_for(avatar, LaneKind::Chat),
+            objective: String::new(),
         };
         self.timeline.open(avatar, "chat", now_ms());
         self.start_lane(config, LaneRef {
@@ -429,6 +430,7 @@ impl RoomActor {
                         model,
                         max_steps: self.config.work_max_steps,
                         transcript: self.transcript_for(&assignment.avatar, LaneKind::Work),
+                        objective: goal.clone(),
                     };
                     self.timeline.open(&assignment.avatar, assignment.kind.as_str(), now_ms());
                     self.assignment_lane.insert(assignment.id.clone(), assignment.avatar.clone());
@@ -466,7 +468,7 @@ impl RoomActor {
         let task = self.build_chief_turn(items);
         let prompt = registry.role("chief").map(|r| r.prompt.clone()).unwrap_or_default();
         let model = registry.lane_model("chief", LaneKind::Chat);
-        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat) };
+        let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat), objective: self.coordinator.active_brief().map(|(_, goal, _)| goal).unwrap_or_default() };
         self.chief_busy = true;
         self.timeline.open("chief", "chief", now_ms());
         self.start_lane(config, LaneRef { avatar: "chief".into(), kind: LaneKind::Chat, assignment_id: None, is_chief: true, is_clerk: false });
@@ -587,6 +589,7 @@ impl RoomActor {
             max_steps: self.config.work_max_steps,
             // Each audit pass is independent; the clerk keeps no history.
             transcript: crate::room::lane::Transcript::memory(),
+            objective: String::new(),
         };
         self.timeline.open("clerk", "clerk", now_ms());
         self.start_lane(config, LaneRef { avatar: "clerk".into(), kind: LaneKind::Work, assignment_id: None, is_chief: false, is_clerk: true });
@@ -615,13 +618,11 @@ impl RoomActor {
     // ---- spawning a lane ----
 
     fn transcript_for(&self, avatar: &str, kind: LaneKind) -> crate::room::lane::Transcript {
-        use crate::room::lane::Transcript;
-        let Some(dir) = &self.lanes_dir else { return Transcript::memory() };
-        let kind = match kind {
-            LaneKind::Chat => "chat",
-            LaneKind::Work => "work",
-        };
-        Transcript::open(dir.join(format!("{avatar}.{kind}.jsonl")))
+        use crate::room::lane::{lane_dir, Transcript};
+        match &self.lanes_dir {
+            Some(root) => Transcript::open_dir(lane_dir(root, avatar, kind)),
+            None => Transcript::memory(),
+        }
     }
 
     fn start_lane(&mut self, config: LaneConfig, lane: LaneRef) {

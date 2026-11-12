@@ -92,13 +92,42 @@ impl ModelClient for ProviderModelClient {
         let defs: Vec<ToolDef> = request.tools.iter().map(to_tool_def).collect();
         let advertise: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
         let history = request.history;
-        let prompt_est = crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
-        let max_tokens = crate::service::openrouter::effective_max_output_tokens(
-            self.settings_cap,
-            self.context_window,
-            prompt_est,
-        );
+        let archive_dir = request.archive_dir;
+        let objective = request.objective;
+        let settings = self.settings.clone();
+        let settings_cap = self.settings_cap;
+        let context_window = self.context_window;
         Box::pin(async move {
+            // DRSS: the same request shaping a coding session uses, from this
+            // lane's own archive, so a long lane stays inside the window.
+            let mut drss_active = false;
+            let history = match archive_dir {
+                Some(dir) if settings.short_send_enabled => {
+                    let limits = crate::service::context_limits::discover(
+                        &route.model_id,
+                        &route.endpoint,
+                        &settings.context_model_alias,
+                        settings.context_window_limit,
+                        &[],
+                    )
+                    .await;
+                    let user = history.iter().rev().find(|m| m.role == crate::dto::chat::Role::User).map(|m| m.content.clone()).unwrap_or_default();
+                    let goal = crate::app::runtime::shortsend::GoalWire { source: "room".into(), objective, charter: String::new() };
+                    let schemas = crate::app::runtime::shortsend::budget::schema_tokens(&advertise, &defs);
+                    match crate::app::runtime::shortsend::shape(history, &dir, &settings, &user, &goal, &limits, schemas) {
+                        Ok(shaped) => {
+                            drss_active = shaped.drss_active;
+                            shaped.history
+                        }
+                        Err(error) => {
+                            return ModelReply { error: Some(error.to_string()), ..Default::default() };
+                        }
+                    }
+                }
+                _ => history,
+            };
+            let prompt_est = crate::app::runtime::shortsend::estimate_prompt_tokens_for_max_clamp(&history);
+            let max_tokens = crate::service::openrouter::effective_max_output_tokens(settings_cap, context_window, prompt_est);
             let (tx, mut rx) = mpsc::unbounded_channel();
             let model_id = route.model_id.clone();
             let provider = route.provider().to_string();
@@ -117,6 +146,7 @@ impl ModelClient for ProviderModelClient {
             while let Some(event) = rx.recv().await {
                 match event {
                     StreamEvent::Token(t) => reply.text.push_str(&t),
+                    StreamEvent::Reasoning(r) => reply.reasoning.get_or_insert_with(String::new).push_str(&r),
                     StreamEvent::ToolCalls(calls) => reply.tool_calls = calls,
                     StreamEvent::Error(e) => reply.error = Some(e),
                     StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
@@ -126,6 +156,7 @@ impl ModelClient for ProviderModelClient {
                 }
             }
             let _ = send.await;
+            reply.drss_active = drss_active;
             reply
         })
     }

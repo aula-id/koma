@@ -92,6 +92,20 @@ description = "Delete a saved memory."
 type = "object"
 
 [[tool]]
+name = "message_find"
+handler = "message_find"
+description = "Search this lane's own earlier messages, or read one by reference."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "message_load"
+handler = "message_load"
+description = "Read an exact earlier message from this lane's history."
+[tool.schema]
+type = "object"
+
+[[tool]]
 name = "skill"
 handler = "skill"
 description = "List or load a skill."

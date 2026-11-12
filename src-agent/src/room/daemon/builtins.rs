@@ -22,6 +22,8 @@ pub struct CtxBuiltins {
     fallback: Arc<ToolCtx>,
     chat_specs: Vec<ToolSpec>,
     work_specs: Vec<ToolSpec>,
+    /// `<session>/lanes`, where each lane keeps its archive.
+    lanes_dir: Option<std::path::PathBuf>,
 }
 
 impl CtxBuiltins {
@@ -32,6 +34,7 @@ impl CtxBuiltins {
         work_specs: Vec<ToolSpec>,
     ) -> Self {
         Self {
+            lanes_dir: fallback.session_dir.as_ref().map(|dir| dir.join("lanes")),
             by_avatar,
             fallback,
             chat_specs,
@@ -44,6 +47,7 @@ impl CtxBuiltins {
     pub fn from_ctx(ctx: ToolCtx) -> Self {
         ctx.plan_read_only.store(false, Ordering::Release);
         Self {
+            lanes_dir: ctx.session_dir.as_ref().map(|dir| dir.join("lanes")),
             by_avatar: BTreeMap::new(),
             fallback: Arc::new(ctx),
             chat_specs: host_tool_specs(),
@@ -74,10 +78,19 @@ pub fn host_tool_specs() -> Vec<ToolSpec> {
 }
 
 impl BuiltinHost for CtxBuiltins {
-    fn run(&self, avatar: &str, _kind: LaneKind, call: &ToolCall) -> String {
+    fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String {
         let name = call.function.name.as_str();
         if name.starts_with("sec_") || !HOST_HANDLERS.contains(&name) {
             return format!("error: tool '{name}' is not available to this lane");
+        }
+        // A lane recalls its own history: message_find and message_load read
+        // the lane's archive, not the daemon session's.
+        if matches!(name, "message_find" | "message_load") {
+            if let Some(root) = &self.lanes_dir {
+                let mut ctx = self.ctx(avatar).clone();
+                ctx.session_dir = Some(crate::room::lane::lane_dir(root, avatar, kind));
+                return execute_tool(&ctx, call);
+            }
         }
         execute_tool(self.ctx(avatar), call)
     }

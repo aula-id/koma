@@ -497,6 +497,7 @@ fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool
 }
 
 /// Shared context handed to every tool invocation.
+#[derive(Clone)]
 pub struct ToolCtx {
     /// Live parent-session Plan restriction, shared with deferred calls and
     /// delegates. Checked immediately before dispatch; it cannot undo I/O that
