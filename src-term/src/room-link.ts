@@ -62,7 +62,7 @@ export class RoomLink {
       socket.once("error", reject)
     })
     if (this.closed) { socket.destroy(); return }
-    socket.on("data", (data) => this.onData(data))
+    socket.on("data", (data: Buffer) => this.onData(data))
     socket.on("close", () => { if (!this.closed) this.onError("the secure daemon closed the connection") })
     socket.on("error", (error) => { if (!this.closed) this.onError(error.message) })
     this.send("hello")
