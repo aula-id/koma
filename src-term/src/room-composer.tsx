@@ -175,6 +175,7 @@ export function RoomComposer({
           />
         </box>
       </box>
+      <box height={1} flexShrink={0} />
     </box>
   )
 }

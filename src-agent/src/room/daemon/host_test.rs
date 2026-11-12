@@ -54,7 +54,7 @@ fn call(name: &str, args: serde_json::Value) -> ToolCall {
     }
 }
 
-fn names_for(avatar: &str, kind: LaneKind) -> Vec<String> {
+fn specs_for(avatar: &str, kind: LaneKind) -> Vec<crate::room::lane::ToolSpec> {
     let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
     let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
     let coordinator = Arc::new(Coordinator::new(
@@ -79,7 +79,48 @@ fn names_for(avatar: &str, kind: LaneKind) -> Vec<String> {
         Arc::new(CtxBuiltins::from_ctx(context(std::path::Path::new(".")))),
         tx,
     );
-    router.advertised().into_iter().map(|s| s.name).collect()
+    router.advertised()
+}
+
+fn names_for(avatar: &str, kind: LaneKind) -> Vec<String> {
+    specs_for(avatar, kind).into_iter().map(|s| s.name).collect()
+}
+
+#[test]
+fn a_request_never_carries_two_definitions_of_one_function() {
+    // The provider layer adds a built-in for every name in `advertise`, then the definitions.
+    for avatar in ["chief", "red", "reviewer", "reporter"] {
+        for kind in [LaneKind::Chat, LaneKind::Work] {
+            let (advertise, defs) = super::model_client::wire_tools(&specs_for(avatar, kind));
+            let mut names: Vec<String> = crate::tool::all_tools()
+                .iter()
+                .filter(|t| advertise.iter().any(|n| n == t.name()))
+                .map(|t| t.name().to_string())
+                .collect();
+            names.extend(defs.iter().map(|d| d.function.name.clone()));
+            let mut seen = std::collections::BTreeSet::new();
+            for name in &names {
+                assert!(seen.insert(name.clone()), "{avatar}/{kind:?}: {name} is defined twice");
+            }
+            assert!(names.iter().any(|n| n == "read") || avatar == "clerk", "{avatar}/{kind:?} still has its tools");
+        }
+    }
+}
+
+#[test]
+fn every_advertised_tool_has_a_valid_unique_schema() {
+    for avatar in ["chief", "red", "reviewer", "reporter", "clerk"] {
+        for kind in [LaneKind::Chat, LaneKind::Work] {
+            let specs = specs_for(avatar, kind);
+            let mut seen = std::collections::BTreeSet::new();
+            for spec in &specs {
+                assert!(seen.insert(spec.name.clone()), "{avatar}/{kind:?}: duplicate tool {}", spec.name);
+                assert!(!spec.description.trim().is_empty(), "{avatar}/{kind:?}: {} has no description", spec.name);
+                assert_eq!(spec.parameters.get("type").and_then(|t| t.as_str()), Some("object"), "{avatar}/{kind:?}: {} schema is not an object: {}", spec.name, spec.parameters);
+                assert!(spec.parameters.get("properties").is_some_and(|p| p.is_object()), "{avatar}/{kind:?}: {} has no properties object: {}", spec.name, spec.parameters);
+            }
+        }
+    }
 }
 
 #[test]

@@ -85,12 +85,19 @@ fn to_tool_def(spec: &ToolSpec) -> ToolDef {
     }
 }
 
+/// The tool list a request carries: the built-in names to add (none) and the definitions.
+/// Every room tool, host tools included, goes out as an explicit definition. A names list
+/// would make the provider layer add the built-in version of the same tool again, and a
+/// provider rejects two definitions of one function.
+pub(super) fn wire_tools(tools: &[ToolSpec]) -> (Vec<String>, Vec<ToolDef>) {
+    (Vec::new(), tools.iter().map(to_tool_def).collect())
+}
+
 impl ModelClient for ProviderModelClient {
     fn stream<'a>(&'a self, request: ModelRequest) -> BoxFuture<'a, ModelReply> {
         let route = self.route_for(&request.model);
         let client = Arc::clone(&self.client);
-        let defs: Vec<ToolDef> = request.tools.iter().map(to_tool_def).collect();
-        let advertise: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
+        let (advertise, defs) = wire_tools(&request.tools);
         let history = request.history;
         let sink = request.deltas;
         let archive_dir = request.archive_dir;
