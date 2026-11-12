@@ -180,6 +180,7 @@ export function RoomComposer({
         </box>
       </box>
       <box height={1} flexShrink={0} paddingLeft={2}>{footer}</box>
+      <box height={1} flexShrink={0} />
     </box>
   )
 }
