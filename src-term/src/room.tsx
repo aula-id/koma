@@ -78,6 +78,44 @@ export function RoomScreen({
   )
 }
 
+export type FullView = "status" | "shelf" | "trajectory"
+const FULL_COMMANDS: Record<string, FullView> = { "/status": "status", "/shelf": "shelf", "/trajectory": "trajectory" }
+
+function FullScreenView({ view, theme, panes, counts, phase, onBack }: { view: FullView; theme: Theme; panes: Panes; counts: Counts; phase: string; onBack: () => void }) {
+  const sections: { title: string; text: string; empty: string }[] =
+    view === "status"
+      ? [
+          { title: "Who is working", text: panes.lanes, empty: "No lane is running." },
+          { title: "Activity", text: panes.swim, empty: "No lane activity yet." },
+        ]
+      : view === "shelf"
+        ? [{ title: "Findings", text: panes.shelf, empty: "The shelf is empty." }]
+        : [{ title: "Trajectory goals", text: panes.map, empty: "No trajectory yet." }]
+  return (
+    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
+      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
+        <text flexShrink={0}>
+          <span fg={theme.fg}>Koma</span>
+          <span fg={theme.dim}> | </span>
+          <span fg={theme.accent}>{`secure room · ${view}`}</span>
+        </text>
+        <Action label="Back (esc)" theme={theme} plain onPress={onBack} />
+      </box>
+      <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1} rowGap={0}>
+        {sections.map((section) => (
+          <Panel key={section.title} title={section.title} hot={false} theme={theme} status={view === "status" && section === sections[0] ? phase === "connected" ? tally(counts, true) : phase : undefined}>
+            <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
+              {section.text.trim()
+                ? section.text.split("\n").map((row, index) => <text key={index} fg={theme.fg} wrapMode="none" paddingLeft={1}>{row || " "}</text>)
+                : <text fg={theme.dim} paddingLeft={1}>{section.empty}</text>}
+            </scrollbox>
+          </Panel>
+        ))}
+      </box>
+    </box>
+  )
+}
+
 export type Panes = { lanes: string; swim: string; shelf: string; map: string }
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
@@ -100,6 +138,7 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
   // Wide screens keep the chat beside one side pane; narrow ones show one pane at a time.
   const active: Tab = wide ? (tab && tab !== "chat" ? tab : "lanes") : tab ?? "chat"
 
+  const [full, setFull] = useState<FullView | null>(null)
   const options = suggest(draft)
   const [pickedAt, setPickedAt] = useState(0)
   const picked = Math.min(pickedAt, Math.max(0, options.rows.length - 1))
@@ -113,6 +152,10 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
+    if (full) {
+      if (key.name === "escape" || key.name === "q") setFull(null)
+      return
+    }
     if (open && (key.name === "up" || key.name === "down")) {
       const step = key.name === "up" ? -1 : 1
       setPickedAt((picked + step + options.rows.length) % options.rows.length)
@@ -175,7 +218,12 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
           focusedBackgroundColor={theme.bg}
           cursorColor={theme.accent}
           onInput={setDraft}
-          onSubmit={() => { if (!accept()) send() }}
+          onSubmit={() => {
+            if (accept()) return
+            const view = FULL_COMMANDS[draft.trim()]
+            if (view) { setFull(view); setDraft(""); return }
+            send()
+          }}
         />
       </box>
     </box>
@@ -184,6 +232,10 @@ export function RoomView({ theme, lines, panes, counts, phase, draft, onDraft, o
   const tabs = (wide ? TABS.filter((t) => t !== "chat") : TABS).map((t) => (
     <Action key={t} label={TAB_LABEL[t]} theme={theme} plain primary={t === active} onPress={() => pick(t)} />
   ))
+
+  if (full) {
+    return <FullScreenView view={full} theme={theme} panes={panes} counts={counts} phase={phase} onBack={() => setFull(null)} />
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>

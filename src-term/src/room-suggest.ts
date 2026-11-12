@@ -9,6 +9,9 @@ const PEOPLE: Suggestion[] = [
 ]
 
 const COMMANDS: Suggestion[] = [
+  { label: "/status", detail: "every lane at a glance", insert: "/status" },
+  { label: "/shelf", detail: "findings on the shelf, full screen", insert: "/shelf" },
+  { label: "/trajectory", detail: "the goal map, full screen", insert: "/trajectory" },
   { label: "/security", detail: "back to the coding chat", insert: "/security" },
   { label: "/leave", detail: "back to the coding chat", insert: "/leave" },
 ]

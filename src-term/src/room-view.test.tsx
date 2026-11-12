@@ -61,3 +61,18 @@ test("typing @r offers the specialists above the composer", async () => {
   expect(text).toContain("@reviewer")
   expect(text).not.toContain("@chief")
 })
+
+test("/status opens every lane full screen and esc comes back", async () => {
+  let view!: Awaited<ReturnType<typeof testRender>>
+  await act(async () => {
+    view = await testRender(<RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft="/status" onDraft={() => {}} onSend={() => {}} />, { width: 100, height: 24 })
+  })
+  await act(async () => { await view.mockInput.pressEnter() })
+  await act(async () => { await view.renderOnce() })
+  const text = view.captureCharFrame()
+  await act(async () => { await view.dispose() })
+  expect(text).toContain("secure room · status")
+  expect(text).toContain("Who is working")
+  expect(text).toContain("Activity")
+  expect(text).not.toContain("[$]")
+})
