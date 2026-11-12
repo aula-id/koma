@@ -147,6 +147,10 @@ fn now_ms() -> u64 {
 
 impl RoomActor {
     async fn run(mut self, mut rx: UnboundedReceiver<ActorMsg>) {
+        if let Ok(fired) = self.coordinator.store().fired_nonces() {
+            self.reconciler.preload(fired.clone());
+            self.seen_nonces = fired;
+        }
         while let Some(msg) = rx.recv().await {
             match msg {
                 ActorMsg::User(text) => self.on_user(text),
@@ -285,8 +289,14 @@ impl RoomActor {
                 }
                 Effect::Steer { avatar, text } => self.inject(&avatar, LaneInput::Steer(text)),
                 Effect::Visible { author, text, nonce } => {
-                    if self.seen_nonces.insert(nonce) {
-                        self.emit(RoomEvent::Visible { author, text });
+                    if self.seen_nonces.insert(nonce.clone()) {
+                        // `Ok(false)` means a previous process already posted it.
+                        // A storage error still posts: losing the line is worse
+                        // than a repeat after a crash.
+                        let fresh = self.coordinator.store().remember_nonce(&nonce).unwrap_or(true);
+                        if fresh {
+                            self.emit(RoomEvent::Visible { author, text });
+                        }
                     }
                 }
             }

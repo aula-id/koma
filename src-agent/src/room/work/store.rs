@@ -3,6 +3,7 @@
 //! The coordinator runs each tool call inside one transaction (`with_tx`), so
 //! a call either applies completely or not at all.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -122,6 +123,9 @@ impl WorkStore {
                  refs TEXT NOT NULL, status TEXT NOT NULL, review_assignment_id TEXT,
                  verdict_key TEXT, feedback_sent INTEGER NOT NULL DEFAULT 0,
                  UNIQUE (work_id, claim_key, snapshot_hash)
+             );
+             CREATE TABLE IF NOT EXISTS fired_nonces (
+                 nonce TEXT PRIMARY KEY
              );",
         ))?;
         Ok(Self { conn: Mutex::new(conn) })
@@ -129,6 +133,17 @@ impl WorkStore {
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Nonces already fired in this database (wake, check-in, visible).
+    pub fn fired_nonces(&self) -> R<HashSet<String>> {
+        let conn = self.lock();
+        load_fired_nonces(&conn)
+    }
+
+    /// Record `nonce` if it is new. `Ok(true)` means this call stored it.
+    pub fn remember_nonce(&self, nonce: &str) -> R<bool> {
+        self.with_tx(|conn| insert_fired_nonce(conn, nonce))
     }
 
     /// Run `f` in one transaction: commit on `Ok`, roll back on `Err`.
@@ -142,6 +157,22 @@ impl WorkStore {
 }
 
 // ---- queries (all take the transaction's connection) ----
+
+pub fn load_fired_nonces(conn: &Connection) -> R<HashSet<String>> {
+    let mut stmt = db(conn.prepare("SELECT nonce FROM fired_nonces"))?;
+    let rows = db(stmt.query_map([], |r| r.get(0)))?;
+    let mut out = HashSet::new();
+    for row in rows {
+        out.insert(db(row)?);
+    }
+    Ok(out)
+}
+
+/// `Ok(true)` when `nonce` was not stored yet.
+pub fn insert_fired_nonce(conn: &Connection, nonce: &str) -> R<bool> {
+    let n = db(conn.execute("INSERT OR IGNORE INTO fired_nonces (nonce) VALUES (?1)", params![nonce]))?;
+    Ok(n > 0)
+}
 
 pub fn assignments_of(conn: &Connection, work_id: &str) -> R<Vec<Assignment>> {
     let mut stmt = db(conn.prepare(&format!(

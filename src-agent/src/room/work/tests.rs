@@ -748,6 +748,38 @@ mod reconcile_tests {
     }
 
     #[test]
+    fn a_wake_nonce_does_not_fire_again_after_the_store_reopens() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("koma-room-nonce-{nanos}.sqlite"));
+        let _ = std::fs::remove_file(&path);
+        let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+        let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+        let co = Coordinator::new(WorkStore::open(&path).expect("store"), shelf, registry);
+        co.call(
+            &Caller::Chief,
+            "group_delegate",
+            &json!({ "goal_key": "g1", "goal": "Scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "Map the login" }] }),
+        );
+        let work = co.store().with_tx(|c| Ok(store::latest_work(c)?.expect("work"))).expect("work");
+        let id = work.assignments[0].id.clone();
+        let wid = work.id.clone();
+        co.store()
+            .with_tx(|c| store::submit_assignment(c, &id, "done", Outcome::Passed, &[r("results/x", 1)]))
+            .expect("submit");
+        let mut seen = HashMap::new();
+        seen.insert(id.clone(), obs(Some(LaneRunState::Completed), false));
+        let first = Reconciler::new().tick(co.store(), observer(&seen), 0).expect("tick");
+        assert_eq!(first.wakes, [wid]);
+        drop(co);
+
+        let store = WorkStore::open(&path).expect("reopen");
+        let second = Reconciler::new().tick(&store, observer(&seen), 10_000).expect("tick");
+        assert!(second.wakes.is_empty(), "a reopened room woke the Chief again");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn a_lane_that_cannot_be_proven_stopped_becomes_uncertain_and_wakes() {
         let f = fx();
         ok(&f.delegate_probe("Scan", "r1"));

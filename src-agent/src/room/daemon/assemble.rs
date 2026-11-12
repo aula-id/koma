@@ -137,4 +137,49 @@ mod tests {
         assert!(result.is_err(), "opening under a file should fail");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    async fn close(mut session: RoomSession) {
+        session.ticker.abort();
+        let _ = session.room.to_actor.send(ActorMsg::Shutdown);
+        let task = std::mem::replace(&mut session.room.task, tokio::spawn(async {}));
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn a_visible_nonce_is_not_posted_again_after_reopen() {
+        let dir = temp_session("nonce");
+        let model = Arc::new(OneShot(Mutex::new(HashMap::new()), "idle".into()));
+        let mut session = RoomSession::open(&dir, model, Arc::new(NoBuiltins), RoomConfig::default()).expect("open");
+        let effect = crate::room::work::Effect::Visible {
+            author: "chief".into(),
+            text: "Assignment for Red: probe".into(),
+            nonce: "group-dispatch:w1:r1:red".into(),
+        };
+        session.room.to_actor.send(ActorMsg::Effects(vec![effect.clone()])).expect("send");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let posted = loop {
+            match tokio::time::timeout_at(deadline, session.room.events.recv()).await {
+                Ok(Some(RoomEvent::Visible { text, .. })) if text.contains("probe") => break true,
+                Ok(Some(_)) => continue,
+                _ => break false,
+            }
+        };
+        assert!(posted, "the first room never posted the dispatch");
+        close(session).await;
+
+        let model = Arc::new(OneShot(Mutex::new(HashMap::new()), "idle".into()));
+        let mut session = RoomSession::open(&dir, model, Arc::new(NoBuiltins), RoomConfig::default()).expect("reopen");
+        session.room.to_actor.send(ActorMsg::Effects(vec![effect])).expect("send");
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(400);
+        let repeated = loop {
+            match tokio::time::timeout_at(deadline, session.room.events.recv()).await {
+                Ok(Some(RoomEvent::Visible { text, .. })) if text.contains("probe") => break true,
+                Ok(Some(_)) => continue,
+                _ => break false,
+            }
+        };
+        assert!(!repeated, "reopening posted the same dispatch again");
+        close(session).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -65,6 +65,11 @@ impl Reconciler {
         Self { fired: HashSet::new(), window_ms }
     }
 
+    /// Nonces already stored, loaded when a room opens again.
+    pub fn preload(&mut self, fired: HashSet<String>) {
+        self.fired.extend(fired);
+    }
+
     /// Run one pass. `observe` reports the lane state behind each pending
     /// assignment id; `now_ms` is the wall clock for check-in bucketing.
     pub fn tick(
@@ -87,7 +92,10 @@ impl Reconciler {
         now_ms: u64,
         dispatch: impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
     ) -> R<ReconcileOutcome> {
-        store.with_tx(|conn| self.run(conn, &observe, now_ms, &dispatch))
+        let mut claimed = Vec::new();
+        let out = store.with_tx(|conn| self.run(conn, &observe, now_ms, &dispatch, &mut claimed))?;
+        self.fired.extend(claimed);
+        Ok(out)
     }
 
     fn run(
@@ -96,6 +104,7 @@ impl Reconciler {
         observe: &impl Fn(&str) -> Observation,
         now_ms: u64,
         dispatch: &impl Fn(&Connection, &Work) -> R<Vec<Effect>>,
+        claimed: &mut Vec<String>,
     ) -> R<ReconcileOutcome> {
         let mut out = ReconcileOutcome::default();
         for work_id in store::all_active_work_ids(conn)? {
@@ -129,19 +138,31 @@ impl Reconciler {
                 BatchState::Empty => {}
                 BatchState::Healthy => {
                     let nonce = checkin_nonce(&work_id, now_ms, self.window_ms);
-                    if self.fired.insert(nonce) {
+                    if self.claim(conn, claimed, nonce)? {
                         out.checkins.push(work_id.clone());
                     }
                 }
                 BatchState::NeedsChief => {
                     let pairs: Vec<(&str, AssignmentStatus)> =
                         assignments.iter().map(|a| (a.id.as_str(), a.status)).collect();
-                    if self.fired.insert(wake_nonce(&work_id, &pairs)) {
+                    if self.claim(conn, claimed, wake_nonce(&work_id, &pairs))? {
                         out.wakes.push(work_id.clone());
                     }
                 }
             }
         }
         Ok(out)
+    }
+
+    /// `Ok(true)` the first time `nonce` is stored. A nonce already in memory
+    /// or in this database does not fire again. Memory is updated by the
+    /// caller after the transaction commits, so a rolled-back tick forgets it.
+    fn claim(&self, conn: &Connection, claimed: &mut Vec<String>, nonce: String) -> R<bool> {
+        if self.fired.contains(&nonce) || claimed.iter().any(|n| n == &nonce) {
+            return Ok(false);
+        }
+        let fresh = store::insert_fired_nonce(conn, &nonce)?;
+        claimed.push(nonce);
+        Ok(fresh)
     }
 }
