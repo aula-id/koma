@@ -78,6 +78,8 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
     let model = Arc::new(ProviderModelClient::new(
         client,
         route,
+        state.rest.config.clone(),
+        settings.clone(),
         settings.max_output_tokens,
         context_window,
     ));

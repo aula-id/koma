@@ -4,10 +4,10 @@
 //! events into a [`ModelReply`], the same way the sub-agent engine does. Every
 //! room tool is presented to the model as a function definition.
 //!
-//! The lane's per-avatar [`LaneModel`] overrides the model, provider and effort
-//! on a base route; the credentials (endpoint, key, OAuth) stay the base
-//! session's. Two avatars on different providers with different credentials
-//! would need a route resolved per provider, which this does not yet do.
+//! The lane's per-avatar [`LaneModel`] selects the model, provider and effort.
+//! A provider that names a configured connection is resolved with that
+//! connection's endpoint and key. Anything else overrides the session's Main
+//! route in place.
 
 use std::sync::Arc;
 
@@ -16,6 +16,8 @@ use tokio::sync::mpsc;
 
 use crate::app::resolve::Resolved;
 use crate::dto::openrouter::{ToolDef, ToolFunctionDef};
+use crate::model::app_config::AppConfig;
+use crate::model::settings::Settings;
 use crate::room::lane::{ModelClient, ModelReply, ModelRequest, ToolSpec, Usage};
 use crate::room::registry::LaneModel;
 use crate::service::openrouter::OpenRouterClient;
@@ -24,17 +26,40 @@ use crate::service::StreamEvent;
 pub struct ProviderModelClient {
     client: Arc<OpenRouterClient>,
     base: Resolved,
+    config: AppConfig,
+    settings: Settings,
     settings_cap: u32,
     context_window: Option<u64>,
 }
 
 impl ProviderModelClient {
-    pub fn new(client: Arc<OpenRouterClient>, base: Resolved, settings_cap: u32, context_window: Option<u64>) -> Self {
-        Self { client, base, settings_cap, context_window }
+    pub fn new(
+        client: Arc<OpenRouterClient>,
+        base: Resolved,
+        config: AppConfig,
+        settings: Settings,
+        settings_cap: u32,
+        context_window: Option<u64>,
+    ) -> Self {
+        Self { client, base, config, settings, settings_cap, context_window }
     }
 
-    /// The base route with the lane's model, provider and effort applied.
+    /// The lane's own provider connection when it names one, otherwise the
+    /// session Main route with the lane's model, provider slug and effort applied.
     fn route_for(&self, model: &LaneModel) -> Resolved {
+        if let Some(provider) = model.provider.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+            if let Some(mut resolved) = crate::app::resolve::resolve_lane_route(
+                &self.config,
+                &self.settings,
+                provider,
+                model.model.as_deref(),
+            ) {
+                if let Some(effort) = model.effort.as_deref().filter(|effort| !effort.is_empty()) {
+                    resolved.effort = effort.to_string();
+                }
+                return resolved;
+            }
+        }
         let mut route = self.base.clone();
         if let Some(id) = &model.model {
             route.model_id = id.clone();
