@@ -92,6 +92,7 @@ impl ModelClient for ProviderModelClient {
         let defs: Vec<ToolDef> = request.tools.iter().map(to_tool_def).collect();
         let advertise: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
         let history = request.history;
+        let sink = request.deltas;
         let archive_dir = request.archive_dir;
         let objective = request.objective;
         let settings = self.settings.clone();
@@ -143,10 +144,17 @@ impl ModelClient for ProviderModelClient {
                     .await;
             });
             let mut reply = ModelReply::default();
+            let mut live = Live::new(sink);
             while let Some(event) = rx.recv().await {
                 match event {
-                    StreamEvent::Token(t) => reply.text.push_str(&t),
-                    StreamEvent::Reasoning(r) => reply.reasoning.get_or_insert_with(String::new).push_str(&r),
+                    StreamEvent::Token(t) => {
+                        live.text(&t);
+                        reply.text.push_str(&t);
+                    }
+                    StreamEvent::Reasoning(r) => {
+                        live.reasoning(&r);
+                        reply.reasoning.get_or_insert_with(String::new).push_str(&r);
+                    }
                     StreamEvent::ToolCalls(calls) => reply.tool_calls = calls,
                     StreamEvent::Error(e) => reply.error = Some(e),
                     StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
@@ -155,9 +163,89 @@ impl ModelClient for ProviderModelClient {
                     _ => {}
                 }
             }
+            live.flush();
             let _ = send.await;
             reply.drss_active = drss_active;
             reply
         })
+    }
+}
+
+/// How often live pieces are handed on. A token at a time would flood the socket.
+const LIVE_MS: u128 = 60;
+
+/// Gathers streamed text and thinking and reports them in batches.
+struct Live {
+    sink: Option<crate::room::lane::DeltaSink>,
+    text: String,
+    reasoning: String,
+    last: std::time::Instant,
+}
+
+impl Live {
+    fn new(sink: Option<crate::room::lane::DeltaSink>) -> Self {
+        Self { sink, text: String::new(), reasoning: String::new(), last: std::time::Instant::now() }
+    }
+
+    fn text(&mut self, piece: &str) {
+        self.text.push_str(piece);
+        self.maybe_flush();
+    }
+
+    fn reasoning(&mut self, piece: &str) {
+        self.reasoning.push_str(piece);
+        self.maybe_flush();
+    }
+
+    fn maybe_flush(&mut self) {
+        if self.last.elapsed().as_millis() >= LIVE_MS {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        self.last = std::time::Instant::now();
+        let Some(sink) = &self.sink else { return };
+        // Thinking comes before the reply it led to.
+        if !self.reasoning.is_empty() {
+            sink(crate::room::lane::Delta::Reasoning(std::mem::take(&mut self.reasoning)));
+        }
+        if !self.text.is_empty() {
+            sink(crate::room::lane::Delta::Text(std::mem::take(&mut self.text)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::room::lane::Delta;
+
+    #[test]
+    fn live_batches_pieces_and_puts_thinking_before_text() {
+        let seen: Arc<Mutex<Vec<Delta>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        let mut live = Live::new(Some(Arc::new(move |d| sink_seen.lock().unwrap().push(d))));
+        live.text("Hel");
+        live.reasoning("th");
+        live.text("lo");
+        live.reasoning("ink");
+        assert!(seen.lock().unwrap().is_empty(), "pieces within the interval are held back");
+        live.flush();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![Delta::Reasoning("think".into()), Delta::Text("Hello".into())]
+        );
+        live.flush();
+        assert_eq!(seen.lock().unwrap().len(), 2, "an empty flush sends nothing");
+    }
+
+    #[test]
+    fn live_without_a_sink_is_silent() {
+        let mut live = Live::new(None);
+        live.text("x");
+        live.flush();
     }
 }

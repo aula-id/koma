@@ -117,7 +117,8 @@ impl RoomServer {
     /// lanes said. Status is replaced by the next snapshot and Closed ends the
     /// connection, so neither is kept as history.
     pub fn is_history(&self) -> bool {
-        matches!(self, RoomServer::Chief { .. } | RoomServer::LaneChat { .. } | RoomServer::Visible { .. } | RoomServer::Part { .. })
+        matches!(self, RoomServer::Chief { .. } | RoomServer::LaneChat { .. } | RoomServer::Visible { .. })
+            || matches!(self, RoomServer::Part { part, .. } if !part.is_delta())
     }
 
     pub fn from_event(event: RoomEvent) -> Self {

@@ -283,7 +283,7 @@ mod attach {
             RoomServer::Part { author, part, .. } => {
                 use crate::room::actor::LanePart;
                 match part {
-                    LanePart::Reasoning { .. } => {}
+                    LanePart::Reasoning { .. } | LanePart::TextDelta { .. } | LanePart::ReasoningDelta { .. } => {}
                     LanePart::ToolCall { name, args, .. } => { let _ = writeln!(out, "{author} ▸ {name} {args}"); }
                     LanePart::ToolResult { ok, result, .. } => {
                         let first = result.lines().next().unwrap_or("");

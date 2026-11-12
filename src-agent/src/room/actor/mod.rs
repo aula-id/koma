@@ -389,6 +389,8 @@ impl RoomActor {
         let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
         match event {
             LaneEvent::Reasoning(text) => self.emit_part(avatar, kind, LanePart::Reasoning { text }),
+            LaneEvent::TextDelta(text) => self.emit_part(avatar, kind, LanePart::TextDelta { text }),
+            LaneEvent::ReasoningDelta(text) => self.emit_part(avatar, kind, LanePart::ReasoningDelta { text }),
             LaneEvent::ToolCall { id, name, args } => self.emit_part(avatar, kind, LanePart::ToolCall { id, name, args }),
             LaneEvent::ToolResult { id, ok, result } => self.emit_part(avatar, kind, LanePart::ToolResult { id, ok, result }),
             LaneEvent::Chat(text) if is_chief => self.emit(RoomEvent::Chief(text)),

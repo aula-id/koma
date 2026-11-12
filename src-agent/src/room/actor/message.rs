@@ -61,6 +61,10 @@ pub enum RoomEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LanePart {
     Reasoning { text: String },
+    /// Text arriving live; the whole reply follows as `Chief` or `LaneChat`.
+    TextDelta { text: String },
+    /// Thinking arriving live; the whole of it follows as `Reasoning`.
+    ReasoningDelta { text: String },
     ToolCall { id: String, name: String, args: String },
     ToolResult { id: String, ok: bool, result: String },
 }
@@ -90,6 +94,13 @@ pub struct EventInfo {
     pub avatar: String,
     pub marker: String,
     pub label: String,
+}
+
+impl LanePart {
+    /// A live piece that a late client does not need replayed.
+    pub fn is_delta(&self) -> bool {
+        matches!(self, LanePart::TextDelta { .. } | LanePart::ReasoningDelta { .. })
+    }
 }
 
 /// A point-in-time picture of the room for the status panes.

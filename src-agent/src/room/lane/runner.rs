@@ -38,6 +38,17 @@ pub struct Usage {
     pub cost: f64,
 }
 
+/// A piece of a reply as it streams in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delta {
+    Text(String),
+    Reasoning(String),
+}
+
+/// Where a client reports a reply's pieces as they arrive. The lane turns them
+/// into display events in order with the rest of its events.
+pub type DeltaSink = Arc<dyn Fn(Delta) + Send + Sync>;
+
 /// One model call.
 pub struct ModelRequest {
     pub history: Vec<ChatMessage>,
@@ -48,6 +59,8 @@ pub struct ModelRequest {
     pub archive_dir: Option<std::path::PathBuf>,
     /// What the lane is working toward, for DRSS's objective block.
     pub objective: String,
+    /// Told of text and thinking as they stream, when set.
+    pub deltas: Option<DeltaSink>,
 }
 
 /// One model reply.
@@ -132,6 +145,17 @@ impl Convo {
     }
 }
 
+fn delta_sink(events: &UnboundedSender<LaneEvent>) -> DeltaSink {
+    let events = events.clone();
+    Arc::new(move |delta| {
+        let event = match delta {
+            Delta::Text(text) => LaneEvent::TextDelta(text),
+            Delta::Reasoning(text) => LaneEvent::ReasoningDelta(text),
+        };
+        let _ = events.send(event);
+    })
+}
+
 fn emit(events: &UnboundedSender<LaneEvent>, event: LaneEvent) {
     let _ = events.send(event);
 }
@@ -208,6 +232,7 @@ pub async fn run_lane(
                 model: config.model.clone(),
                 archive_dir: convo.transcript.archive_dir().map(std::path::Path::to_path_buf),
                 objective: config.objective.clone(),
+                deltas: Some(delta_sink(&events)),
             })
             .await;
 
@@ -484,6 +509,43 @@ mod tests {
         assert!(shown.chars().count() < long.chars().count());
         assert!(shown.ends_with("(500 more characters)"));
         assert_eq!(clip("short", DISPLAY_CLIP), "short");
+    }
+
+    /// A model that reports its reply in pieces, then returns it whole.
+    struct StreamingModel;
+
+    impl ModelClient for StreamingModel {
+        fn stream<'a>(&'a self, request: ModelRequest) -> BoxFuture<'a, ModelReply> {
+            Box::pin(async move {
+                let sink = request.deltas.expect("the lane offers a sink");
+                sink(Delta::Reasoning("hm".into()));
+                sink(Delta::Text("Hel".into()));
+                sink(Delta::Text("lo".into()));
+                ModelReply { text: "Hello".into(), reasoning: Some("hm".into()), ..Default::default() }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn live_pieces_reach_the_events_before_the_whole_reply() {
+        let (_in_tx, in_rx) = unbounded_channel();
+        let (ev_tx, ev_rx) = unbounded_channel();
+        run_lane(config(LaneKind::Chat), Arc::new(StreamingModel), FakeRouter::new(), in_rx, ev_tx).await;
+        let events = collect(ev_rx).await;
+        let shown: Vec<&LaneEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LaneEvent::TextDelta(_) | LaneEvent::ReasoningDelta(_) | LaneEvent::Reasoning(_) | LaneEvent::Chat(_)))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                &LaneEvent::ReasoningDelta("hm".into()),
+                &LaneEvent::TextDelta("Hel".into()),
+                &LaneEvent::TextDelta("lo".into()),
+                &LaneEvent::Reasoning("hm".into()),
+                &LaneEvent::Chat("Hello".into()),
+            ]
+        );
     }
 
     #[tokio::test]

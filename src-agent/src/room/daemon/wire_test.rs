@@ -293,3 +293,12 @@ fn a_part_frame_round_trips_and_is_kept_as_history() {
     assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), frame);
     assert!(frame.is_history(), "a late client replays the tool calls it missed");
 }
+
+#[test]
+fn live_pieces_are_not_replayed_to_a_late_client() {
+    use crate::room::actor::LanePart;
+    let live = RoomServer::Part { author: "chief".into(), lane: "chat".into(), part: LanePart::TextDelta { text: "Hel".into() } };
+    assert!(!live.is_history());
+    let json = serde_json::to_string(&live).expect("encode");
+    assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), live);
+}

@@ -15,6 +15,10 @@ pub enum LaneEvent {
     Published { key: String, revision: i64 },
     /// The model's thinking for a step, shown collapsed beside its reply.
     Reasoning(String),
+    /// Text arriving live, before the step's reply is whole.
+    TextDelta(String),
+    /// Thinking arriving live.
+    ReasoningDelta(String),
     /// The model asked for a tool: what it is and the arguments it sent.
     ToolCall { id: String, name: String, args: String },
     /// A tool's result, clipped for display.

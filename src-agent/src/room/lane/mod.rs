@@ -40,6 +40,6 @@ pub use timeline::{Milestone, Timeline};
 pub use transcript::{lane_dir, Transcript};
 #[allow(unused_imports)]
 pub use runner::{
-    run_lane, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,
+    run_lane, Delta, DeltaSink, LaneConfig, LaneInput, ModelClient, ModelReply, ModelRequest, ToolRouter,
     ToolRun, ToolSpec, Usage,
 };
