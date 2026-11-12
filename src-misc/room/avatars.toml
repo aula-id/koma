@@ -1,0 +1,25 @@
+# Who is in the room. Each avatar points at a role, which supplies its prompt,
+# tools and shelf permissions. Models set here override the role's per lane.
+# The chief and the clerk are single: their avatar id is the role id.
+# Specialist roles (red, reviewer, reporter) may have several avatars, for
+# example `red-web` and `red-api`.
+
+[[avatar]]
+id = "chief"
+role = "chief"
+
+[[avatar]]
+id = "red"
+role = "red"
+
+[[avatar]]
+id = "reviewer"
+role = "reviewer"
+
+[[avatar]]
+id = "reporter"
+role = "reporter"
+
+[[avatar]]
+id = "clerk"
+role = "clerk"

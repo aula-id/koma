@@ -1,0 +1,13 @@
+[[tool]]
+name = "group_task_complete"
+handler = "group_task_complete"
+description = "Submit the result of your assignment once, citing the exact shelf keys and revisions you produced."
+[tool.schema]
+type = "object"
+required = ["result", "outcome", "references"]
+additionalProperties = false
+[tool.schema.properties]
+assignment_id = { type = "string" }
+result = { type = "string", minLength = 1, maxLength = 20000 }
+outcome = { type = "string", enum = ["passed", "failed", "uncertain"] }
+references = { type = "array", maxItems = 32, items = { type = "object", required = ["key", "revision"], properties = { key = { type = "string", minLength = 1, maxLength = 128 }, revision = { type = "integer", minimum = 1 } } } }

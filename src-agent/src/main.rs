@@ -58,6 +58,7 @@ mod model;
 mod re_util;
 mod remote;
 mod resources;
+mod room;
 mod security;
 mod service;
 mod tool;

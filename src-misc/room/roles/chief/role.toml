@@ -1,0 +1,8 @@
+id = "chief"
+display = "Chief"
+# Shelf tools this role may call. A session overlay may narrow this list, never widen it.
+shelf_allow = ["get", "list", "put_scope", "put_trajectory"]
+
+# Per-lane model. Omitted fields inherit the session default.
+[chat]
+[work]

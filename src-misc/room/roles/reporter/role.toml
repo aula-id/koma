@@ -1,0 +1,6 @@
+id = "reporter"
+display = "Lab Reporter"
+shelf_allow = ["get", "list", "put_report", "put_result", "put_trajectory"]
+
+[chat]
+[work]

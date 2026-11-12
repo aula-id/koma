@@ -3,6 +3,7 @@ use std::process::Command;
 fn main() {
     embed_git_sha();
     println!("cargo:rerun-if-changed=../src-misc/help");
+    println!("cargo:rerun-if-changed=../src-misc/room");
     prepare_terminal();
     embed_windows_resource();
 

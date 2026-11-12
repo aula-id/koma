@@ -99,6 +99,7 @@ dependencies = [
  "tao",
  "tar",
  "tokio",
+ "toml 0.8.2",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-cpp",

@@ -1,0 +1,6 @@
+id = "reviewer"
+display = "Reviewer"
+shelf_allow = ["get", "list", "put_verdict", "put_finding", "put_evidence", "put_asset", "put_trajectory"]
+
+[chat]
+[work]
