@@ -288,6 +288,27 @@ fn rejects_evidence_without_a_claim_then_links_it_once_the_claim_exists() {
 }
 
 #[test]
+fn a_reviewer_s_evidence_does_not_rewrite_the_claim_it_is_checking() {
+    let s = shelf();
+    s.call("put_claim", &claim("claims/gate/cors")).expect("claim");
+    let before = s.call("get", &json!({ "key": "claims/gate/cors" })).expect("get")["revision"].as_i64();
+    let evidence = json!({
+        "key": "evidence/reviewer/cors", "claim_key": "claims/gate/cors",
+        "evidence_kind": "http", "body": "re-read", "expected_revision": 0
+    });
+    let reviewer: Vec<String> = ["get", "list", "put_evidence", "put_verdict"].iter().map(|s| s.to_string()).collect();
+    s.call_as(&reviewer, "put_evidence", &evidence).expect("reviewer evidence");
+    let after = s.call("get", &json!({ "key": "claims/gate/cors" })).expect("get")["revision"].as_i64();
+    assert_eq!(before, after, "the claim's revision must not move under a review");
+    assert_eq!(content(&s, "claims/gate/cors")["evidence_keys"], json!([]));
+    // A role that owns claims still lists its evidence on the claim.
+    let red: Vec<String> = ["put_claim", "put_evidence"].iter().map(|s| s.to_string()).collect();
+    let own = json!({ "key": "evidence/gate/own", "claim_key": "claims/gate/cors", "evidence_kind": "http", "body": "x", "expected_revision": 0 });
+    s.call_as(&red, "put_evidence", &own).expect("red evidence");
+    assert_eq!(content(&s, "claims/gate/cors")["evidence_keys"], json!(["evidence/gate/own"]));
+}
+
+#[test]
 fn rejects_claim_evidence_keys_that_do_not_exist_yet() {
     let s = shelf();
     let mut args = claim("claims/gate/cors");

@@ -251,11 +251,18 @@ impl Shelf {
         if !allow.iter().any(|a| a == name) {
             return fail(format!("{name} is not available to this role"));
         }
-        self.call(name, args)
+        // Evidence is listed on its claim, and that rewrites the claim. A role that cannot publish claims
+        // (the reviewer) must not rewrite one: it would move the revision the review is judging, supersede
+        // the review, and start it again. Its evidence is cited from its verdict instead.
+        self.call_linking(name, args, allow.iter().any(|a| a == "put_claim"))
     }
 
     /// Run a shelf tool without a role check (daemon-internal callers).
     pub fn call(&self, name: &str, args: &Value) -> Result<Value, ShelfError> {
+        self.call_linking(name, args, true)
+    }
+
+    fn call_linking(&self, name: &str, args: &Value, link: bool) -> Result<Value, ShelfError> {
         let Value::Object(args) = args else {
             return fail("Arguments must be an object");
         };
@@ -266,7 +273,7 @@ impl Shelf {
                 "get" => (get_tool(&conn, args)?, Vec::new()),
                 "put" => put_free(&mut conn, args)?,
                 _ => match name.strip_prefix("put_") {
-                    Some(kind) => put_typed(&mut conn, kind, args)?,
+                    Some(kind) => put_typed(&mut conn, kind, args, link)?,
                     None => return fail("Unknown tool"),
                 },
             }
@@ -445,7 +452,7 @@ fn put_free(conn: &mut Connection, args: &Args) -> Result<(Value, Vec<ShelfEvent
     Ok((Value::Object(written.into_map()), events))
 }
 
-fn put_typed(conn: &mut Connection, kind: &str, args: &Args) -> Result<(Value, Vec<ShelfEvent>), ShelfError> {
+fn put_typed(conn: &mut Connection, kind: &str, args: &Args, link: bool) -> Result<(Value, Vec<ShelfEvent>), ShelfError> {
     let Some(prefix) = typed_prefix(kind) else {
         return fail("Unknown tool");
     };
@@ -486,7 +493,7 @@ fn put_typed(conn: &mut Connection, kind: &str, args: &Args) -> Result<(Value, V
             let content = serde_json::to_string(&Value::Object(record.clone()))?;
             let written = write_item(&tx, &key, &content, expected)?;
             events.push(ShelfEvent::from(&written));
-            if kind == "evidence" {
+            if kind == "evidence" && link {
                 if let Some(claim_key) = record.get("claim_key").and_then(Value::as_str) {
                     if let Some(linked) = link_evidence_onto_claim(&tx, &key, claim_key)? {
                         events.push(ShelfEvent::from(&linked));
