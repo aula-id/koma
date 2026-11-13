@@ -531,7 +531,7 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
-        if call.function.name == "skill" {
+        if matches!(call.function.name.as_str(), "skill_load" | "skill_unload" | "skill_create" | "skill_modify") {
             match intercepts::intercept_skill(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,

@@ -503,17 +503,11 @@ target [0] (primary):",
         };
 
         // Load the skill catalogue from known discovery roots. The registry
-        // snapshot is stored on `self.skills` so the `skill` tool can resolve
+        // snapshot is stored on `self.skills` so the skill tools can resolve
         // names to file paths at load/unload time.
         let skills_reg = SkillRegistry::load(Some(&self.workdir()), &config.extra_skill_roots);
-        let skills_cat = {
-            let t = skills_reg.catalogue_text();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        };
+        // Only the pinned skills go in the prompt; the model finds the rest with `skill_find`.
+        let skills_cat = skills_reg.prompt_text();
         self.skills = skills_reg;
 
         let mut sys = resources::build_system_prompt(
