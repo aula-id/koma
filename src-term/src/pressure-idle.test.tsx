@@ -60,6 +60,8 @@ test("the cleanup label paints before the blocking sweep and clears after it", a
 
 test("a throwing sweep still clears the label", async () => {
   sweepVisibly(() => { throw new Error("boom") }, 1, 1)
-  await new Promise((resolve) => setTimeout(resolve, 30))
+  // A slow runner can take longer than a fixed wait to run the timers, so wait for the label to clear.
+  const until = Date.now() + 2000
+  while (cleaningNow() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
   expect(cleaningNow()).toBe(false)
 })
