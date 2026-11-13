@@ -25,6 +25,8 @@ pub enum LaneEvent {
     ToolResult { id: String, ok: bool, result: String },
     /// A chunk of chat text headed for the user (chat lanes only).
     Chat(String),
+    /// What one model call cost.
+    Spent(crate::room::lane::Usage),
     /// The lane submitted its assignment (`group_task_complete` passed).
     Submitted,
     /// The Clerk raised a flag to the Chief (`clerk_flag`). Only the clerk lane

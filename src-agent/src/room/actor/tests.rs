@@ -121,6 +121,10 @@ struct Harness {
 }
 
 fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
+    harness_with(replies, RoomConfig::default())
+}
+
+fn harness_with(replies: Vec<((&str, usize), ModelReply)>, config: RoomConfig) -> Harness {
     let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
     let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
     let coordinator = Arc::new(Coordinator::new(
@@ -147,7 +151,7 @@ fn harness(replies: Vec<((&str, usize), ModelReply)>) -> Harness {
         registry,
         model,
         Arc::new(StubBuiltins),
-        RoomConfig::default(),
+        config,
     );
     Harness {
         systems,
@@ -827,4 +831,50 @@ async fn a_room_entered_again_continues_the_assignment_it_left() {
     let turns = turns.lock().unwrap();
     let red = turns.iter().find(|(a, _, _)| a == "red").unwrap();
     assert!(red.2.contains("entered again") && red.2.contains("probe the login"), "{}", red.2);
+}
+
+#[tokio::test]
+async fn a_claim_citing_code_that_is_not_there_is_checked_in_the_background_and_the_run_is_booked() {
+    let root = std::env::temp_dir().join(format!("koma-actor-oracle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan login", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe the login" }] }),
+    );
+    let publish = vec![
+        call(
+            "put_claim",
+            json!({ "key": "claims/cors", "vulnclass": "cors", "name": "CORS", "severity": "high",
+            "summary": "reflects origin", "host": "app.example", "poc": "curl", "expected_revision": 0,
+            "proof": [{ "path": "src/login.ts", "needle": "res.setHeader('Access-Control-Allow-Origin', origin)" }] }),
+        ),
+        call(
+            "put_evidence",
+            json!({ "key": "evidence/cors", "claim_key": "claims/cors", "evidence_kind": "http", "body": "ACAO: evil", "expected_revision": 0 }),
+        ),
+    ];
+    let spent = ModelReply { usage: Some(crate::room::lane::Usage { prompt_tokens: 100, completion_tokens: 10, cost: 0.02 }), ..tools("Probing.", publish) };
+    let mut h = harness_with(
+        vec![(("chief", 0), tools("Dispatching Red.", vec![delegate])), (("red", 0), spent), (("red", 1), text("published"))],
+        RoomConfig { oracle_roots: vec![root.clone()], ..RoomConfig::default() },
+    );
+    h.user("scan the login");
+    h.wait_for("dispatch", |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe the login"))).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        h.tick();
+        let checked = crate::room::oracle::stored(&h.shelf, "claims/cors", 2).and_then(|s| s.verdict);
+        let booked = h.shelf.peek("notes/spend/g1").ok().flatten().is_some();
+        if checked.is_some() && booked && h.shelf.peek("notes/run/g1").ok().flatten().is_some() {
+            assert_eq!(checked, Some(crate::room::oracle::Verdict::Refuted));
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "check {checked:?}, spend booked {booked}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let spend: Value = serde_json::from_str(h.shelf.peek("notes/spend/g1").unwrap().unwrap().content.as_deref().unwrap()).unwrap();
+    assert!(spend["cost"].as_f64().unwrap() >= 0.02 && spend["by_avatar"]["red"]["calls"].as_u64().unwrap() >= 1, "{spend}");
+    let _ = std::fs::remove_dir_all(&root);
 }

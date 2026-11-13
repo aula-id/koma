@@ -434,3 +434,19 @@ fn findings_with_no_report_under_way_are_a_handover_due() {
     env.assignments.push(asg("reporter", AssignmentKind::Report, AssignmentStatus::Running, "write"));
     assert!(env.findings().iter().all(|f| f.kind != FindingKind::ReportDue));
 }
+
+#[test]
+fn two_claims_that_say_the_same_thing_are_noted_as_duplicates() {
+    let env = Env::new();
+    for key in ["claims/one", "claims/two"] {
+        put(&env.shelf, "put_claim", json!({ "key": key, "vulnclass": "memory", "host": "src-term", "severity": "high", "poc": "read",
+            "name": "history_rev bump clears slots and remounts the native tree",
+            "summary": "A full snapshot rewrites history_rev and wipes slot state so every turn box remounts and native memory is retained",
+            "expected_revision": 0 }));
+    }
+    put(&env.shelf, "put_claim", json!({ "key": "claims/other", "vulnclass": "memory", "host": "src-term", "severity": "low", "poc": "read",
+        "name": "timers are cleared on teardown", "summary": "Every interval is cleared when its component unmounts so nothing keeps running", "expected_revision": 0 }));
+    let found: Vec<_> = env.findings().into_iter().filter(|f| f.kind == FindingKind::DuplicateClaim).collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].key, "duplicate:claims/one:claims/two");
+}

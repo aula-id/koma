@@ -532,3 +532,36 @@ fn concurrent_compare_and_swap_lets_exactly_one_writer_win() {
     assert_eq!(wins, 1);
     assert_eq!(s.read_item("scope/gate").expect("read").revision, 1);
 }
+
+#[test]
+fn a_claim_keeps_its_proof_and_refuses_a_malformed_one() {
+    let s = shelf();
+    let mut args = claim("claims/gate/proof");
+    args["proof"] = json!([{ "path": "src/a.ts", "needle": "if (x > limit) return" }]);
+    s.call("put_claim", &args).expect("claim with proof");
+    assert_eq!(content(&s, "claims/gate/proof")["proof"][0]["path"], "src/a.ts");
+    let mut bad = claim("claims/gate/bad");
+    bad["proof"] = json!([{ "path": "src/a.ts" }]);
+    assert!(err(s.call("put_claim", &bad)).contains("needle"));
+    // Proof is optional.
+    s.call("put_claim", &claim("claims/gate/none")).expect("claim without proof");
+    assert_eq!(content(&s, "claims/gate/none")["proof"], json!([]));
+}
+
+#[test]
+fn a_second_claim_about_the_same_thing_is_flagged_to_its_publisher() {
+    let s = shelf();
+    let mut a = claim("claims/gate/one");
+    a["name"] = json!("history_rev bump clears slots and remounts the native tree");
+    a["summary"] = json!("A full snapshot rewrites history_rev and wipes slot state, so every turn box remounts and native memory is retained");
+    s.call("put_claim", &a).expect("first");
+    let mut b = claim("claims/gate/two");
+    b["name"] = json!("history_rev bump clears slots and remounts native tree");
+    b["summary"] = json!("A full snapshot rewrites history_rev and wipes the slot state so every turn box remounts and native memory is retained");
+    let out = s.call("put_claim", &b).expect("second");
+    assert_eq!(out["similar_to"], json!(["claims/gate/one"]));
+    let mut other = claim("claims/gate/three");
+    other["name"] = json!("session token logged in debug output");
+    other["summary"] = json!("The bearer token is written to the debug log where any reader of the file can see it");
+    assert!(s.call("put_claim", &other).expect("third").get("similar_to").is_none());
+}

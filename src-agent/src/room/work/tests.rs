@@ -968,6 +968,77 @@ mod dispatch_tests {
         assert_eq!(f.work().assignments.len(), 2);
     }
 
+    fn queue_one_claim(f: &Fx) {
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        publish(f, "claims/a", "evidence/e");
+        f.co.on_publish("red", &probe.id, "put_evidence", &json!({ "claim_key": "claims/a" }));
+    }
+
+    #[test]
+    fn a_claim_waits_for_its_proof_check_and_goes_to_review_with_the_result() {
+        let f = fx();
+        queue_one_claim(&f);
+        let mut rec = Reconciler::new();
+        crate::room::oracle::mark_pending(&f.shelf, "claims/a", 2);
+        assert!(starts(&tick(&f, &mut rec)).is_empty(), "the check has not answered, so the review waits");
+        assert_eq!(items(&f)[0].status, ReviewStatus::Queued);
+        crate::room::oracle::save(&f.shelf, "claims/a", 2, &crate::room::oracle::Report { verdict: crate::room::oracle::Verdict::Grounded, lines: vec!["found".into()] });
+        let out = tick(&f, &mut rec);
+        assert_eq!(starts(&out).len(), 1);
+        assert!(f.assignment(1).prompt.contains("\"code_check\":\"grounded\""), "{}", f.assignment(1).prompt);
+    }
+
+    #[test]
+    fn a_claim_whose_code_is_not_there_goes_back_to_red_unreviewed() {
+        let f = fx();
+        queue_one_claim(&f);
+        crate::room::oracle::save(&f.shelf, "claims/a", 2, &crate::room::oracle::Report {
+            verdict: crate::room::oracle::Verdict::Refuted,
+            lines: vec!["refuted: src/x.ts · \"if (a)\" is not in the file".into()],
+        });
+        let mut rec = Reconciler::new();
+        let out = tick(&f, &mut rec);
+        assert!(!starts(&out).iter().any(|(_, k)| *k == AssignmentKind::Verification), "no review for a refuted claim");
+        let steer = out.effects.iter().find_map(|e| match e {
+            Effect::Steer { avatar, text } => Some((avatar.clone(), text.clone())),
+            _ => None,
+        });
+        let (avatar, text) = steer.expect("red is told");
+        assert_eq!(avatar, "red");
+        assert!(text.contains("A program checked") && text.contains("is not in the file"), "{text}");
+        assert_eq!(items(&f)[0].status, ReviewStatus::Returned);
+    }
+
+    #[test]
+    fn an_unproven_claim_is_reviewed_as_before() {
+        let f = fx();
+        queue_one_claim(&f);
+        crate::room::oracle::save(&f.shelf, "claims/a", 2, &crate::room::oracle::Report { verdict: crate::room::oracle::Verdict::Unproven, lines: vec![] });
+        let mut rec = Reconciler::new();
+        assert_eq!(starts(&tick(&f, &mut rec)).len(), 1);
+        assert!(f.assignment(1).prompt.contains("\"code_check\":\"unproven\""));
+    }
+
+    #[test]
+    fn a_claim_that_keeps_being_superseded_is_not_queued_forever() {
+        let f = fx();
+        ok(&f.delegate_probe("Scan", "r1"));
+        let probe = f.assignment(0);
+        publish(&f, "claims/a", "evidence/e");
+        let work_id = f.work().id;
+        for i in 0..super::super::queue::REVIEW_LOOP_CAP {
+            f.co.store().with_tx(|c| store::insert_item(c, &ReviewItem {
+                id: format!("old{i}"), work_id: work_id.clone(), source_assignment_id: probe.id.clone(), claim_key: "claims/a".into(),
+                claim_revision: 2, snapshot_hash: format!("h{i}"), references: Vec::new(), status: ReviewStatus::Superseded,
+                review_assignment_id: None, verdict_key: None, feedback_sent: false,
+            })).expect("insert");
+        }
+        let why = f.co.store().with_tx(|c| enqueue_claim(c, &f.shelf, &probe, "claims/a")).expect("enqueue");
+        assert!(why.is_some_and(|w| w.contains("superseded") && w.contains("tell the Chief")));
+        assert!(items(&f).iter().all(|i| i.status == ReviewStatus::Superseded), "nothing new was queued");
+    }
+
     #[test]
     fn a_reviewer_that_is_not_idle_leaves_claims_queued() {
         let f = fx();

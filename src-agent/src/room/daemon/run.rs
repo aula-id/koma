@@ -89,8 +89,13 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         .with_usage(session_id.clone(), usage_pwd_hash),
     );
     let idx = state.rest.foreground;
-    let builtins: Arc<dyn BuiltinHost> =
-        Arc::new(CtxBuiltins::from_ctx(build_tool_ctx(&state, idx)));
+    let tool_ctx = build_tool_ctx(&state, idx);
+    // The proof check may read only where the lanes may work.
+    let mut oracle_roots = tool_ctx.workspaces.clone();
+    if !tool_ctx.workspace.as_os_str().is_empty() && !oracle_roots.contains(&tool_ctx.workspace) {
+        oracle_roots.push(tool_ctx.workspace.clone());
+    }
+    let builtins: Arc<dyn BuiltinHost> = Arc::new(CtxBuiltins::from_ctx(tool_ctx));
 
     let shutting_down = install_daemon_signals(&handle);
     let pid_path = crate::model::store::daemon_pid_path(&session_id).ok();
@@ -102,7 +107,7 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
     let sock_path = crate::model::store::daemon_sock_path(&session_id)?;
     let (session, serve) = {
         let _enter = handle.enter();
-        let session = match RoomSession::open(&session_dir, model, builtins, RoomConfig::default()) {
+        let session = match RoomSession::open(&session_dir, model, builtins, RoomConfig { oracle_roots, ..RoomConfig::default() }) {
             Ok(session) => session,
             Err(e) => {
                 drop(_enter);

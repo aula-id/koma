@@ -493,6 +493,18 @@ fn put_typed(conn: &mut Connection, kind: &str, args: &Args, link: bool) -> Resu
             let content = serde_json::to_string(&Value::Object(record.clone()))?;
             let written = write_item(&tx, &key, &content, expected)?;
             events.push(ShelfEvent::from(&written));
+            let mut similar: Vec<String> = Vec::new();
+            if kind == "claim" {
+                let mine = Value::Object(record.clone());
+                let mut stmt = tx.prepare("SELECT key, content FROM shelf_items WHERE substr(key, 1, 7) = 'claims/' AND key != ?1")?;
+                let rows = stmt.query_map(params![key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (other, content) = row?;
+                    if serde_json::from_str::<Value>(&content).is_ok_and(|c| super::similar::near(&mine, &c)) {
+                        similar.push(other);
+                    }
+                }
+            }
             if kind == "evidence" && link {
                 if let Some(claim_key) = record.get("claim_key").and_then(Value::as_str) {
                     if let Some(linked) = link_evidence_onto_claim(&tx, &key, claim_key)? {
@@ -500,7 +512,12 @@ fn put_typed(conn: &mut Connection, kind: &str, args: &Args, link: bool) -> Resu
                     }
                 }
             }
-            written.into_map()
+            let mut out = written.into_map();
+            if !similar.is_empty() {
+                out.insert("similar_to".into(), json!(similar));
+                out.insert("note".into(), json!("This looks like a claim already on the shelf. Add what is new to that claim instead of publishing a second one, unless it really is a different problem."));
+            }
+            out
         }
     };
     tx.commit()?;

@@ -42,6 +42,8 @@ pub enum ActorMsg {
     Browse,
     /// A client opened one shelf item.
     Open { key: String },
+    /// A proof check finished in the background.
+    Oracle { claim_key: String, revision: u64, report: crate::room::oracle::Report },
     /// Stop the room.
     Shutdown,
 }

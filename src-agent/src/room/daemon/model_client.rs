@@ -207,6 +207,10 @@ impl ModelClient for ProviderModelClient {
             // Every lane's call is spend like the coding chat's, so it goes in the ledger.
             if let (Some((uuid, pwd_hash)), Some((prompt, cached, completion, reported))) = (&usage_session, call_usage) {
                 let cost = effective_cost(&route.endpoint, &route.model_id, prompt, cached, completion, reported);
+                // The goal's ledger sees the same figure as the usage ledger.
+                if let Some(usage) = reply.usage.as_mut() {
+                    usage.cost = cost;
+                }
                 crate::model::usage::record_usage(&route.model_id, &usage_role(&avatar), uuid, pwd_hash, prompt, cached, completion, cost);
             }
             reply.drss_active = drss_active;
