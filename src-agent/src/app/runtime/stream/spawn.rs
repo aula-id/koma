@@ -148,7 +148,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         active_skill_names,
         active_skill_dirs,
         skill_scope: None,
-        skill_rank: None,
+        skill_rank: session_ref.map(|s| crate::app::skill_rank::ranker(state.rest.config.clone(), s.settings.clone())),
         mcp_manager,
         bash_saving,
         bash_log_dir,
