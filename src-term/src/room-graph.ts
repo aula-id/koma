@@ -1,9 +1,9 @@
 import type { Goal, GoalNode } from "./room-link.ts"
 import { trajectoryTree } from "./room-tree.ts"
 
-/** A node's box and the space around it, in terminal cells. Two lines of text inside a border. */
-export const BOX_W = 22
-export const BOX_H = 4
+/** A node's box and the space around it, in terminal cells. Three lines of text inside a border. */
+export const BOX_W = 20
+export const BOX_H = 5
 const SLOT = BOX_W + 3
 /** Rows from one layer's top to the next: the box, a bus line, and the arrow into the next box. */
 const RANK = BOX_H + 2
@@ -26,15 +26,15 @@ const U = 1, D = 2, L = 4, R = 8
 const JOIN: Record<number, string> = { 1: "│", 2: "│", 3: "│", 4: "─", 8: "─", 12: "─", 9: "└", 5: "┘", 10: "┌", 6: "┐", 11: "├", 7: "┤", 14: "┬", 13: "┴", 15: "┼" }
 
 /**
- * A layered diagram. Each depth is a layer of boxes going down the screen, and the links run
- * between layers. A layer with more boxes than fit across `maxWidth` wraps onto the next row, so
- * the picture stays about one screen wide and grows downward. A link that skips a layer goes
+ * A layered diagram, top to bottom. Each depth is a layer of boxes going down the screen, and the
+ * links run between layers. A wide layer runs off to the right and the screen scrolls across it;
+ * pass `maxWidth` to wrap a layer onto further rows instead. A link that skips a layer goes
  * through the gutter beside its target, so it never crosses a box. A link back up or across is
  * not drawn; the box says how many there are (`↺2`), and the detail screen lists them.
  */
-export function layoutGraph(goal: Goal, maxWidth = 100): GraphLayout {
+export function layoutGraph(goal: Goal, maxWidth = Infinity): GraphLayout {
   const { byId } = trajectoryTree(goal)
-  const lanes = Math.max(1, Math.floor((maxWidth - 4) / SLOT))
+  const lanes = Number.isFinite(maxWidth) ? Math.max(1, Math.floor((maxWidth - 4) / SLOT)) : Number.MAX_SAFE_INTEGER
   const ranks = [...new Set(goal.nodes.map((n) => n.rank))].sort((a, b) => a - b)
   const layerOf = new Map<string, number>()
   const colOf = new Map<string, number>()
@@ -107,6 +107,16 @@ function toneOf(node: GoalNode): Tone {
 
 const clip = (text: string, width: number) => ([...text].length <= width ? text : `${[...text].slice(0, Math.max(0, width - 1)).join("")}…`)
 
+/** A label over two lines, breaking at a space when there is one; the second line ends in … if it is cut. */
+export function wrap2(text: string, width: number): [string, string] {
+  const chars = [...text]
+  if (chars.length <= width) return [text, ""]
+  let cut = chars.slice(0, width + 1).lastIndexOf(" ")
+  if (cut < width / 2) cut = width
+  const first = chars.slice(0, cut).join("").trimEnd()
+  return [first, clip(chars.slice(cut).join("").trim(), width)]
+}
+
 /** The whole picture as cells. The screen shows a window of it. */
 export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][] {
   const grid: Cell[][] = Array.from({ length: layout.height }, () => Array.from({ length: layout.width }, () => ({ ch: " ", tone: "edge" as Tone })))
@@ -123,10 +133,10 @@ export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][
   for (const box of layout.boxes) {
     const tone = box.id === selected ? "select" : toneOf(box.node)
     const inner = box.w - 2
-    const first = `${box.number ? `(${box.number}) ` : ""}${box.node.label || box.node.id}`
-    const second = [box.node.kind, box.node.severity || box.node.status, box.backLinks ? `↺${box.backLinks}` : ""].filter(Boolean).join(" · ")
+    const [first, second] = wrap2(`${box.number ? `(${box.number}) ` : ""}${box.node.label || box.node.id}`, inner - 2)
+    const third = [box.node.kind, box.node.severity || box.node.status, box.backLinks ? `↺${box.backLinks}` : ""].filter(Boolean).join(" · ")
     const row = (text: string) => `│ ${clip(text, inner - 2).padEnd(inner - 2)} │`
-    const lines = [`╭${"─".repeat(inner)}╮`, row(first), row(second), `╰${"─".repeat(inner)}╯`]
+    const lines = [`╭${"─".repeat(inner)}╮`, row(first), row(second), row(third), `╰${"─".repeat(inner)}╯`]
     lines.forEach((line, r) => [...line].forEach((ch, col) => put(box.x + col, box.y + r, ch, tone)))
     // Where a line joins the box.
     if (layout.bits.has(layout.key(box.x + (BOX_W >> 1), box.y - 1))) put(box.x + (BOX_W >> 1), box.y, "┴", tone)
