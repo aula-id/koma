@@ -869,11 +869,14 @@ export function ToolCard({
   result,
   theme,
   syntaxStyle,
+  digest: given,
 }: {
   call: ToolCall
   result?: ChatMessage
   theme: Theme
   syntaxStyle: SyntaxStyle
+  /** A readable body for the payload; the room sets it for its own tools. */
+  digest?: string | null
 }) {
   const [open, setOpen] = useState(false)
   const [hot, setHot] = useState(false)
@@ -885,7 +888,7 @@ export function ToolCard({
     return () => clearInterval(timer)
   }, [done])
   const mark = done ? "✓" : (SPINNER[tick % SPINNER.length] ?? "⠋")
-  const digest = planDigest(call.function.arguments)
+  const digest = given ?? planDigest(call.function.arguments)
   const image = result ? showImagePath(result.content) : null
   return (
     <box border borderStyle="rounded" borderColor={hot ? theme.accent : theme.dim} flexDirection="column">
