@@ -404,3 +404,33 @@ fn a_flag_names_a_specialist_lane_and_nothing_else() {
     assert!(call(json!("red")).contains("invalid arguments"));
     assert!(s.scan("notes/clerk/").expect("scan").is_empty(), "a rejected flag leaves no note behind");
 }
+
+#[test]
+fn repeated_superseded_verification_is_a_review_loop() {
+    let mut env = Env::new();
+    for i in 0..3 {
+        env.assignments.push(asg("reviewer", AssignmentKind::Verification, AssignmentStatus::Superseded, &format!("round {i}")));
+    }
+    let found = env.findings();
+    assert!(found.iter().any(|f| f.kind == FindingKind::ReviewLoop && f.key == "review-loop:reviewer"));
+    env.assignments.retain(|a| a.kind != AssignmentKind::Verification);
+    assert!(env.findings().iter().all(|f| f.kind != FindingKind::ReviewLoop));
+}
+
+#[test]
+fn findings_with_no_report_under_way_are_a_handover_due() {
+    let mut env = Env::new();
+    claim(&env.shelf, "claims/a", "app.example.com");
+    put(&env.shelf, "put_verdict", json!({ "key": "verdicts/a", "claim_key": "claims/a", "verdict": "confirmed", "expected_revision": 0,
+        "claim_revision": 1, "note": "reproduced" }));
+    put(&env.shelf, "put_finding", json!({ "key": "findings/a", "claim_key": "claims/a", "verdict_key": "verdicts/a",
+        "vulnclass": "cors", "name": "n", "severity": "low", "summary": "s", "host": "app.example.com", "expected_revision": 0 }));
+    env.assignments = vec![asg("reviewer", AssignmentKind::Verification, AssignmentStatus::Completed, "v")];
+    assert!(env.findings().iter().any(|f| f.kind == FindingKind::ReportDue && f.key == "report-due"));
+    // A review still running, or a report being written, is not a stall.
+    env.assignments.push(asg("reviewer", AssignmentKind::Verification, AssignmentStatus::Running, "again"));
+    assert!(env.findings().iter().all(|f| f.kind != FindingKind::ReportDue));
+    env.assignments.pop();
+    env.assignments.push(asg("reporter", AssignmentKind::Report, AssignmentStatus::Running, "write"));
+    assert!(env.findings().iter().all(|f| f.kind != FindingKind::ReportDue));
+}
