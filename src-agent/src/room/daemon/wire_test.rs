@@ -162,7 +162,11 @@ fn bench() -> Bench {
     let (events, events_rx) = unbounded_channel();
     let (to_actor, from_clients) = unbounded_channel();
     let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
-    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(sock.parent().expect("dir")), Arc::new(super::stage::Staging::new(sock.parent().expect("dir")))));
+    // A named pipe has no folder of its own, so the room's files go in a real temp directory.
+    let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("koma-room-bench-{nanos}"));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(&dir), Arc::new(super::stage::Staging::new(&dir))));
     Bench { sock, events, from_clients, serve }
 }
 
