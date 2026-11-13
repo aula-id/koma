@@ -23,6 +23,7 @@ mod def;
 mod parse;
 mod persistence;
 mod registry;
+pub mod search;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
