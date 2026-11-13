@@ -147,6 +147,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         skill_registry,
         active_skill_names,
         active_skill_dirs,
+        skill_scope: None,
+        skill_rank: None,
         mcp_manager,
         bash_saving,
         bash_log_dir,

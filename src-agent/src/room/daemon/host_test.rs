@@ -31,6 +31,8 @@ fn context(root: &std::path::Path) -> ToolCtx {
         skill_registry: None,
         active_skill_names: None,
         active_skill_dirs: Vec::new(),
+        skill_scope: None,
+        skill_rank: None,
         mcp_manager: None,
         bash_saving: false,
         bash_log_dir: None,
@@ -367,6 +369,8 @@ const NOT_IN_THE_ROOM: &[(&str, &str)] = &[
     ("show_image", "image messages"),
     ("search_screenshots", "screenshot library of the coding session"),
     ("describe_screenshot", "screenshot library of the coding session"),
+    ("skill_create", "lanes find, load and unload skills; writing one is for the coding agent"),
+    ("skill_modify", "lanes find, load and unload skills; writing one is for the coding agent"),
     ("secure_shelf", "the coding agent reads the room from outside; lanes already hold the shelf directly"),
 ];
 

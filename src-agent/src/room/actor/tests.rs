@@ -36,15 +36,19 @@ struct ScriptedModel {
 
 fn avatar_of(history: &[ChatMessage]) -> String {
     let system = history.first().map(|m| m.content.as_str()).unwrap_or("");
-    for (needle, avatar) in [
-        ("Chief", "chief"),
-        ("Lab Red", "red"),
-        ("Reviewer", "reviewer"),
-        ("Lab Reporter", "reporter"),
-        ("Clerk", "clerk"),
-    ] {
-        if system.contains(needle) {
-            return avatar.to_string();
+    // A role names itself in its opening line; the rest of a prompt may mention the other roles.
+    let opening = system.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    for text in [opening, system] {
+        for (needle, avatar) in [
+            ("Chief", "chief"),
+            ("Lab Red", "red"),
+            ("Reviewer", "reviewer"),
+            ("Lab Reporter", "reporter"),
+            ("Clerk", "clerk"),
+        ] {
+            if text.contains(needle) {
+                return avatar.to_string();
+            }
         }
     }
     "unknown".to_string()

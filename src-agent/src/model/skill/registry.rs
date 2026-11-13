@@ -9,6 +9,8 @@ use super::parse::load_skill_file;
 
 const SKILL_ENTRY_FILES: &[&str] = &["SKILL.md", "skill.md"];
 const SKIP_NAMES: &[&str] = &["readme.md", "readme"];
+/// Most pinned skills the prompt shows.
+pub const PINNED_MAX: usize = 8;
 pub const MAX_SKILL_TEXT_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,9 +194,30 @@ impl SkillRegistry {
         self.skills.values().filter(|d| scope.allows(&d.name) && search::is_pinned(d)).take(max).collect()
     }
 
+    /// A registry of just `<root>/.agents/skills`, for tests in other modules.
+    #[cfg(test)]
+    pub fn load_for_test(root: &Path) -> Self {
+        Self::load_isolated(Some(root), &[])
+    }
+
     #[cfg(test)]
     pub(super) fn from_defs(defs: Vec<SkillDef>) -> Self {
         Self { skills: defs.into_iter().map(|d| (d.name.clone(), d)).collect() }
+    }
+
+    /// The skills section of the system prompt: `None` when there are no skills at all, otherwise only
+    /// the pinned ones (possibly an empty string). The rest are found with `skill_find`, never listed.
+    pub fn prompt_text(&self) -> Option<String> {
+        if self.skills.is_empty() {
+            return None;
+        }
+        Some(
+            self.pinned(&Scope::default(), PINNED_MAX)
+                .iter()
+                .map(|d| format!("- {}: {}", d.name, d.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 
     pub fn catalogue_text(&self) -> String {

@@ -31,6 +31,8 @@ impl Archive {
             skill_registry: None,
             active_skill_names: None,
             active_skill_dirs: Vec::new(),
+            skill_scope: None,
+            skill_rank: None,
             mcp_manager: None,
             bash_saving: true,
             bash_log_dir: None,
