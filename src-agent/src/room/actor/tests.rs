@@ -500,6 +500,7 @@ fn visible(nonce: &str) -> Effect {
         text: format!("line {nonce}"),
         nonce: nonce.into(),
         work_id: "w1".into(),
+        audience: crate::room::work::Audience::User,
     }
 }
 
@@ -535,7 +536,7 @@ async fn a_bang_line_runs_the_shell_without_the_model() {
         .wait_for("the shell line", |e| matches!(e, RoomEvent::Visible { author, .. } if author == "shell"))
         .await;
     let line = events.iter().find_map(|e| match e {
-        RoomEvent::Visible { author, text } if author == "shell" => Some(text.clone()),
+        RoomEvent::Visible { author, text, .. } if author == "shell" => Some(text.clone()),
         _ => None,
     });
     let line = line.expect("a shell line");
@@ -769,7 +770,7 @@ async fn stop_all_and_a_second_stop_say_what_they_did() {
     let (mut stopped, mut nothing) = (false, false);
     while !(stopped && nothing) {
         match tokio::time::timeout_at(deadline, handle.events.recv()).await {
-            Ok(Some(RoomEvent::Visible { author, text })) => {
+            Ok(Some(RoomEvent::Visible { author, text, .. })) => {
                 stopped |= author == "red" && text.contains("stopped by you");
                 nothing |= text.contains("nothing running");
             }
@@ -912,4 +913,56 @@ async fn a_claim_citing_code_that_is_not_there_is_checked_in_the_background_and_
     let spend: Value = serde_json::from_str(h.shelf.peek("notes/spend/g1").unwrap().unwrap().content.as_deref().unwrap()).unwrap();
     assert!(spend["cost"].as_f64().unwrap() >= 0.02 && spend["by_avatar"]["red"]["calls"].as_u64().unwrap() >= 1, "{spend}");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn the_chiefs_steps_belong_to_whoever_started_its_turn() {
+    use crate::room::work::Audience;
+    let status = call("group_status", json!({}));
+    let mut h = harness(vec![
+        (("chief", 0), tools("Looking.", vec![status.clone()])),
+        (("chief", 2), tools("Looking again.", vec![status])),
+    ]);
+    let step = |e: &RoomEvent| matches!(e, RoomEvent::Part { author, part: LanePart::ToolCall { name, .. }, .. } if author == "chief" && name == "group_status");
+    let audience = |events: &[RoomEvent]| {
+        events.iter().rev().find_map(|e| match e {
+            RoomEvent::Part { author, part: LanePart::ToolCall { .. }, audience, .. } if author == "chief" => Some(*audience),
+            _ => None,
+        })
+    };
+    // The user asked, so the step is part of their conversation.
+    h.user("how is it going");
+    let events = h.wait_for("a step on the user's turn", step).await;
+    assert_eq!(audience(&events), Some(Audience::User));
+    h.wait_for("the turn's reply", |e| matches!(e, RoomEvent::Chief(t) if t == "done")).await;
+
+    // A lane's result woke the Chief, so the step is the team's.
+    h.send(ActorMsg::Flag(InboxItem::LaneResult { avatar: "red".into(), summary: "found".into() }));
+    let events = h.wait_for("a step on a woken turn", step).await;
+    assert_eq!(audience(&events), Some(Audience::Team));
+}
+
+#[tokio::test]
+async fn a_specialists_chat_is_the_users_and_its_work_is_the_teams() {
+    use crate::room::work::Audience;
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan login", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe the login" }] }),
+    );
+    let mut h = harness(vec![
+        (("chief", 0), tools("Dispatching.", vec![delegate])),
+        (("red", 0), tools("Probing.", vec![call("put_asset", json!({ "key": "assets/app", "host": "app.example", "asset_type": "host", "title": "app" }))])),
+    ]);
+    h.user("scan the login");
+    let events = h.wait_for("the dispatch", |e| matches!(e, RoomEvent::Visible { text, .. } if text.contains("probe the login"))).await;
+    // The hand-off is the team's business.
+    assert!(events.iter().any(|e| matches!(e, RoomEvent::Visible { text, audience: Audience::Team, .. } if text.contains("probe the login"))));
+    let events = h.wait_for("red's work step", |e| matches!(e, RoomEvent::Part { author, lane, .. } if author == "red" && lane == "work")).await;
+    assert!(events.iter().any(|e| matches!(e, RoomEvent::Part { author, lane, audience: Audience::Team, .. } if author == "red" && lane == "work")));
+
+    // The user's own line to a specialist, and its answer, are their conversation.
+    h.user("@red how is it going");
+    let events = h.wait_for("red's chat", |e| matches!(e, RoomEvent::LaneChat { avatar, .. } if avatar == "red")).await;
+    assert!(!events.iter().any(|e| matches!(e, RoomEvent::Part { author, lane, audience: Audience::Team, .. } if author == "red" && lane == "chat")));
 }

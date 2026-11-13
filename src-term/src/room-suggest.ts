@@ -20,6 +20,7 @@ const COMMANDS: Suggestion[] = [
   { label: "/shelf", detail: "findings on the shelf, full screen", insert: "/shelf" },
   { label: "/trajectory", detail: "goals and their steps, collapsible", insert: "/trajectory" },
   { label: "/report", detail: "the reports, with their detail", insert: "/report" },
+  { label: "/screen", detail: "what the room shows: combine, split, user or team", insert: "/screen" },
   { label: "/stop", detail: "stop a minion, or everything: /stop red, /stop all", insert: "/stop" },
   { label: "/security", detail: "back to the coding chat", insert: "/security" },
   { label: "/leave", detail: "back to the coding chat: /leave switch keeps the room running, /leave stop ends it", insert: "/leave" },
@@ -31,6 +32,7 @@ export const KNOWN_COMMANDS = COMMANDS.map((c) => c.label)
 export type Typed =
   | { kind: "message" }
   | { kind: "stop"; who: string }
+  | { kind: "screen"; mode: "combine" | "split" | "user" | "team" }
   | { kind: "unknown"; word: string; near: string }
 
 function distance(a: string, b: string): number {
@@ -55,6 +57,11 @@ export function classify(text: string): Typed {
   const lower = word.toLowerCase()
   if (lower.slice(1).includes("/")) return { kind: "message" }
   if (lower === "/leave" && rest[0] && !["switch", "stop"].includes(rest[0].toLowerCase())) return { kind: "unknown", word: `/leave ${rest[0]}`, near: "/leave switch" }
+  if (lower === "/screen") {
+    const mode = (rest[0] ?? "").toLowerCase()
+    if (mode === "combine" || mode === "split" || mode === "user" || mode === "team") return { kind: "screen", mode }
+    return { kind: "unknown", word: rest[0] ? `/screen ${rest[0]}` : "/screen", near: "/screen combine" }
+  }
   if (lower === "/stop") return { kind: "stop", who: (rest[0] ?? "all").replace(/^@/, "").toLowerCase() }
   if (KNOWN_COMMANDS.includes(lower)) return { kind: "message" }
   const near = KNOWN_COMMANDS.find((c) => c.startsWith(lower)) ?? KNOWN_COMMANDS.find((c) => distance(c, lower) <= 2) ?? ""
@@ -68,6 +75,17 @@ export function suggest(draft: string): { title: string; rows: Suggestion[] } {
     const word = (stop[1] ?? "").replace(/^@/, "").toLowerCase()
     const rows = [{ label: "all", detail: "every lane", insert: "/stop all" }, ...PEOPLE.filter((p) => p.label !== "@chief").map((p) => ({ label: p.label.slice(1), detail: p.detail, insert: `/stop ${p.label.slice(1)}` }))]
     return { title: " stop ", rows: rows.filter((row) => row.label.startsWith(word)) }
+  }
+  const screen = /^\/screen\s+(\S*)$/i.exec(draft)
+  if (screen) {
+    const word = (screen[1] ?? "").toLowerCase()
+    const rows = [
+      { label: "combine", detail: "everything in one view (the default)", insert: "/screen combine" },
+      { label: "split", detail: "your conversation and the team side by side, stacked when narrow", insert: "/screen split" },
+      { label: "user", detail: "only your conversation: you, the Chief, specialists you spoke to", insert: "/screen user" },
+      { label: "team", detail: "only the team at work: chief to minions, their steps and results", insert: "/screen team" },
+    ]
+    return { title: " screen ", rows: rows.filter((row) => row.label.startsWith(word)) }
   }
   const leave = /^\/leave\s+(\S*)$/i.exec(draft)
   if (leave) {

@@ -237,7 +237,7 @@ async fn handle_conn(
                     RoomClient::Hello => {}
                     RoomClient::User { text } => {
                         if !text.trim().is_empty() {
-                            let _ = note_tx.send(RoomServer::Visible { author: "you".into(), text: text.clone() });
+                            let _ = note_tx.send(RoomServer::Visible { author: "you".into(), text: text.clone(), audience: Some(crate::room::work::Audience::User) });
                             let (text, images) = stage.take(&text);
                             let _ = to_actor.send(if images.is_empty() {
                                 ActorMsg::User(text)
@@ -372,7 +372,7 @@ mod tests {
     }
 
     fn said(text: &str) -> RoomServer {
-        RoomServer::Visible { author: "you".into(), text: text.into() }
+        RoomServer::Visible { author: "you".into(), text: text.into(), audience: None }
     }
 
     #[test]

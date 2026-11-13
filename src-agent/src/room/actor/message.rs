@@ -6,7 +6,7 @@
 //! output (the room's chat and status) leaves as a [`RoomEvent`].
 
 use crate::room::lane::{ControlCommand, InboxItem, LaneEvent};
-use crate::room::work::Effect;
+use crate::room::work::{Audience, Effect};
 
 /// One thing for the actor to handle.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,10 +56,10 @@ pub enum RoomEvent {
     /// A lane's visible narration (chat lanes only).
     LaneChat { avatar: String, text: String },
     /// A dispatch, result or finish line that every view should show.
-    Visible { author: String, text: String },
+    Visible { author: String, text: String, audience: Audience },
     /// A piece of a lane's turn: thinking, a tool call, a tool result. The text
     /// itself still arrives as `Chief` or `LaneChat`.
-    Part { author: String, lane: String, part: LanePart },
+    Part { author: String, lane: String, part: LanePart, audience: Audience },
     /// A fresh status snapshot (digest, swim lanes, gate counts).
     Status(StatusSnapshot),
     /// The shelf, goals and reports, for the browse screens.

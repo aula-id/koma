@@ -351,6 +351,7 @@ fn a_part_frame_round_trips_and_is_kept_as_history() {
         author: "chief".into(),
         lane: "chat".into(),
         part: LanePart::ToolCall { id: "c1".into(), name: "bash".into(), args: "{\"command\":\"pwd\"}".into() },
+        audience: Some(crate::room::work::Audience::User),
     };
     let json = serde_json::to_string(&frame).expect("encode");
     assert!(json.contains("\"part\"") && json.contains("\"kind\":\"tool_call\""), "{json}");
@@ -361,8 +362,19 @@ fn a_part_frame_round_trips_and_is_kept_as_history() {
 #[test]
 fn live_pieces_are_not_replayed_to_a_late_client() {
     use crate::room::actor::LanePart;
-    let live = RoomServer::Part { author: "chief".into(), lane: "chat".into(), part: LanePart::TextDelta { text: "Hel".into() } };
+    let live = RoomServer::Part { author: "chief".into(), lane: "chat".into(), part: LanePart::TextDelta { text: "Hel".into() }, audience: None };
     assert!(!live.is_history());
     let json = serde_json::to_string(&live).expect("encode");
     assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), live);
+}
+
+#[test]
+fn a_saved_line_with_no_audience_still_loads_and_a_new_one_carries_it() {
+    use crate::room::work::Audience;
+    let old: RoomServer = serde_json::from_str(r#"{"visible":{"author":"chief","text":"Assignment for Lab Red: probe"}}"#).expect("an old line");
+    assert!(matches!(old, RoomServer::Visible { audience: None, .. }));
+    let new = RoomServer::Visible { author: "chief".into(), text: "t".into(), audience: Some(Audience::Team) };
+    let json = serde_json::to_string(&new).expect("encode");
+    assert!(json.contains("\"audience\":\"team\""), "{json}");
+    assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), new);
 }

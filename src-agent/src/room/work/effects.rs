@@ -6,6 +6,17 @@
 
 use super::model::Assignment;
 
+/// Who a line in the room is for. `User` is the conversation with the user: what they said, what the
+/// Chief and the specialists they spoke to said back, and the final report. `Team` is the team
+/// working: dispatches, results, the work lanes, and the Chief's own steps when nobody asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Audience {
+    #[default]
+    User,
+    Team,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Start a work lane for this assignment. `goal` is the registered goal text.
@@ -15,5 +26,5 @@ pub enum Effect {
     Steer { avatar: String, text: String },
     /// A message every chat view should show. `nonce` makes posting idempotent,
     /// and `work_id` ties it to its work so it goes when that work ends.
-    Visible { author: String, text: String, nonce: String, work_id: String },
+    Visible { author: String, text: String, nonce: String, work_id: String, audience: Audience },
 }

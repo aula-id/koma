@@ -7,7 +7,8 @@ import { AssistantCard, MarkdownBody, Reasoning, SuggestPopup, ToolCard } from "
 import { RoomComposer } from "./room-composer.tsx"
 import { CLOSED, chosen, completion, dismissed, moved, popupView, type PopupState } from "./room-popup.ts"
 import { syntaxStyles } from "./syntax.ts"
-import { capLines, mountedFrom, reduceLines, say, type Item, type Line } from "./room-turns.ts"
+import { capLines, forSide, mountedFrom, reduceLines, say, teamCount, userCount, type Item, type Line, type Screen } from "./room-turns.ts"
+import { saveScreen, savedScreen, splitLayout } from "./room-screen.ts"
 import { RoomLink, type EventInfo, type LaneInfo, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
 import { busySummary, eventCells, laneCells, laneHeader, phaseMark, standing } from "./room-status.ts"
 import { classify } from "./room-suggest.ts"
@@ -53,6 +54,8 @@ export function RoomScreen({
   const [browse, setBrowse] = useState<BrowseData | null>(null)
   const [item, setItem] = useState<OpenItem | null>(null)
   const [draft, setDraft] = useState("")
+  const [screen, setScreenNow] = useState<Screen>(savedScreen)
+  const setScreen = (next: Screen) => { setScreenNow(next); saveScreen(next) }
   const [phase, setPhase] = useState("starting the secure daemon")
   // The loading screen covers the wait on both sides: until the room answers, and from the
   // moment `/leave` is typed until the coding daemon is back.
@@ -136,6 +139,8 @@ export function RoomScreen({
       theme={theme}
       syntaxStyle={syntaxStyle}
       lines={lines}
+      screen={screen}
+      onScreen={setScreen}
       panes={{ lanes, swim, shelf, map, ...roster }}
       counts={counts}
       phase={phase}
@@ -168,10 +173,13 @@ export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
 export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, browse = null, item = null, onBrowse = () => {}, onOpenItem = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, screen = "combine", onScreen = () => {}, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, browse = null, item = null, onBrowse = () => {}, onOpenItem = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   syntaxStyle?: SyntaxStyle
   lines: Line[]
+  /** What the room shows: everything, the user's conversation, the team, or both side by side. */
+  screen?: Screen
+  onScreen?: (screen: Screen) => void
   panes: Panes
   counts: Counts
   phase: string
@@ -206,12 +214,13 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   const pressure = usePressureValve("room", () => {}, (run) => run())
   const working = standing(panes.table ?? []).some((item) => item.spinning)
   useIdleCollect(() => !working, IDLE_COLLECT_MS)
-  const shown = mountedFrom(lines, pressure.reduced)
   const [full, setFull] = useState<FullView | null>(null)
   const [popup, setPopup] = useState<PopupState>(CLOSED)
   const options = popupView(draft, popup)
   const lastKey = useRef({ name: "", at: 0 })
   const lastEsc = useRef(0)
+  // How much of each side was on screen last, to tell what arrived while the other side was shown.
+  const seen = useRef({ team: 0, user: 0 })
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
@@ -256,6 +265,12 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
       onDraft("")
       return
     }
+    if (typed.kind === "screen") {
+      onScreen(typed.mode)
+      onDraft("")
+      setHint(`screen: ${typed.mode}`)
+      return
+    }
     if (typed.kind === "unknown") {
       // A typo is kept in the box to fix, and is not sent as a message.
       setHint(typed.near ? `no command ${typed.word} - did you mean ${typed.near}?` : `no command ${typed.word}`)
@@ -294,21 +309,19 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   }
 
   const ready = phase === "connected"
+  const body = (
+    <RoomBody screen={screen} lines={lines} theme={theme} syntaxStyle={ownStyle} reduced={pressure.reduced} />
+  )
+  // The side the user is not watching: how much new there is, so a quiet-looking room is not mistaken for an idle one.
+  const team = teamCount(lines)
+  const yours = userCount(lines)
+  if (screen !== "user") seen.current.team = team
+  if (screen !== "team") seen.current.user = yours
+  const hidden = screen === "user" ? Math.max(0, team - seen.current.team) : screen === "team" ? Math.max(0, yours - seen.current.user) : 0
+  const mark = hidden > 0 ? ` · ${screen === "user" ? "team" : "you"} +${hidden}` : ""
   return (
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2}>
-      <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY stickyScroll stickyStart="bottom" focusable={false} scrollbarOptions={scrollbars(theme)}>
-        {lines.length === 0 ? (
-          <box flexDirection="column" paddingTop={1}>
-            <text fg={theme.dim}>Message the Chief to start. The Chief hands work to the specialists.</text>
-            <text fg={theme.dim}>@red talks to a specialist directly. /status, /shelf, /trajectory and /model open full screen.</text>
-          </box>
-        ) : (
-          <box flexDirection="column" gap={1} paddingTop={1}>
-            {shown > 0 ? <text fg={theme.dim}>{`${shown} earlier message${shown === 1 ? "" : "s"} not shown`}</text> : null}
-            {lines.slice(shown).map((line) => <Message key={line.id} line={line} theme={theme} syntaxStyle={ownStyle} />)}
-          </box>
-        )}
-      </scrollbox>
+      {body}
       <RoomComposer
         theme={theme}
         draft={draft}
@@ -320,7 +333,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
         onPaste={onPaste}
         onPasteImage={onPasteImage}
         footer={<box flexDirection="row" justifyContent="space-between"><Standings rows={panes.table ?? []} theme={theme} /><Ram tone={ramTone(pressure)} theme={theme} /></box>}
-        status={hint ? { text: hint, color: theme.warn } : flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
+        status={hint ? { text: hint, color: theme.warn } : flash ? { text: flash, color: theme.warn } : ready ? { text: `${tally(counts, true)}${mark}`, color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
         popupOpen={options.open}
         popup={options.open ? (
           <SuggestPopup
@@ -458,6 +471,54 @@ function Ram({ tone, theme }: { tone: "dim" | "warn" | "error"; theme: Theme }) 
 }
 
 // A message is replaced, not edited, so an unchanged one keeps its identity and is not drawn again.
+const EMPTY = "Message the Chief to start. The Chief hands work to the specialists."
+
+/** One scrolling transcript. A message is a card; the newest are mounted and the rest wait above. */
+function Transcript({ lines, theme, syntaxStyle, reduced, empty }: { lines: Line[]; theme: Theme; syntaxStyle: SyntaxStyle; reduced: boolean; empty: string[] }) {
+  const shown = mountedFrom(lines, reduced)
+  return (
+    <scrollbox flexGrow={1} flexBasis={0} minHeight={0} minWidth={0} scrollY stickyScroll stickyStart="bottom" focusable={false} scrollbarOptions={scrollbars(theme)}>
+      {lines.length === 0 ? (
+        <box flexDirection="column" paddingTop={1}>
+          {empty.map((text) => <text key={text} fg={theme.dim}>{text}</text>)}
+        </box>
+      ) : (
+        <box flexDirection="column" gap={1} paddingTop={1}>
+          {shown > 0 ? <text fg={theme.dim}>{`${shown} earlier message${shown === 1 ? "" : "s"} not shown`}</text> : null}
+          {lines.slice(shown).map((line) => <Message key={line.id} line={line} theme={theme} syntaxStyle={syntaxStyle} />)}
+        </box>
+      )}
+    </scrollbox>
+  )
+}
+
+/**
+ * What the room shows above the composer. `combine` is everything. `user` is the user's own
+ * conversation, `team` is the team at work, and `split` shows both: side by side when the
+ * terminal is wider than 80 columns, stacked when it is not, and one view when it is too short.
+ */
+function RoomBody({ screen, lines, theme, syntaxStyle, reduced }: { screen: Screen; lines: Line[]; theme: Theme; syntaxStyle: SyntaxStyle; reduced: boolean }) {
+  const { width, height } = useTerminalDimensions()
+  const mine = useMemo(() => forSide(lines, "user"), [lines])
+  const theirs = useMemo(() => forSide(lines, "team"), [lines])
+  const start = [EMPTY, "@red talks to a specialist directly. /status, /shelf, /trajectory and /model open full screen. /screen picks what this view shows."]
+  if (screen === "user") return <Transcript lines={mine} theme={theme} syntaxStyle={syntaxStyle} reduced={reduced} empty={lines.length === 0 ? start : ["Nothing from you or the Chief yet."]} />
+  if (screen === "team") return <Transcript lines={theirs} theme={theme} syntaxStyle={syntaxStyle} reduced={reduced} empty={["The team has not started yet. Their dispatches, steps and results appear here."]} />
+  const layout = screen === "split" ? splitLayout(width, height) : { kind: "single" as const }
+  if (layout.kind === "single") return <Transcript lines={lines} theme={theme} syntaxStyle={syntaxStyle} reduced={reduced} empty={start} />
+  const pane = (title: string, own: Line[], empty: string[]) => (
+    <box flexGrow={1} flexBasis={0} minWidth={0} minHeight={0} border borderStyle="single" borderColor={theme.dim} title={title} titleColor={theme.dim} paddingLeft={1} paddingRight={1}>
+      <Transcript lines={own} theme={theme} syntaxStyle={syntaxStyle} reduced={reduced} empty={empty} />
+    </box>
+  )
+  return (
+    <box flexDirection={layout.kind === "side" ? "row" : "column"} flexGrow={1} flexBasis={0} minHeight={0} minWidth={0}>
+      {pane(" you ", mine, lines.length === 0 ? start : ["Nothing from you or the Chief yet."])}
+      {pane(" team ", theirs, ["The team has not started yet."])}
+    </box>
+  )
+}
+
 const Message = memo(function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; syntaxStyle: SyntaxStyle }) {
   if (line.author === "you") {
     const first = line.items[0]

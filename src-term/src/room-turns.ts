@@ -1,10 +1,10 @@
-import type { LanePart, RoomFrame } from "./room-link.ts"
+import type { Audience, LanePart, RoomFrame } from "./room-link.ts"
 
 /** One piece of a message, in the order the lane produced it. */
 export type Item =
-  | { kind: "text"; text: string; streaming?: boolean }
-  | { kind: "reasoning"; text: string; streaming?: boolean }
-  | { kind: "tool"; id: string; name: string; args: string; result?: { ok: boolean; text: string } }
+  | { kind: "text"; text: string; streaming?: boolean; to?: Audience }
+  | { kind: "reasoning"; text: string; streaming?: boolean; to?: Audience }
+  | { kind: "tool"; id: string; name: string; args: string; result?: { ok: boolean; text: string }; to?: Audience }
 
 /**
  * One message in the room. A lane's consecutive pieces fold into one message, so a turn
@@ -14,8 +14,8 @@ export type Line = { id: string; author: string; lane?: string; items: Item[] }
 
 const MERGE_LIMIT = 200
 
-export function say(author: string, text: string, lane?: string): Line {
-  return { id: crypto.randomUUID(), author, lane, items: [{ kind: "text", text }] }
+export function say(author: string, text: string, lane?: string, to?: Audience): Line {
+  return { id: crypto.randomUUID(), author, lane, items: [{ kind: "text", text, to }] }
 }
 
 /** True for a message the user typed. */
@@ -48,7 +48,7 @@ function currentLine(lines: Line[], author: string, lane: string): number {
 }
 
 /** Add a live piece to the open item of its kind, or start one. */
-function stream(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", piece: string): Line[] {
+function stream(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", piece: string, to?: Audience): Line[] {
   const at = currentLine(lines, author, lane)
   if (at >= 0) {
     const line = lines[at]!
@@ -56,15 +56,15 @@ function stream(lines: Line[], author: string, lane: string, kind: "text" | "rea
     const tail = line.items[index]
     if (tail && tail.kind === kind && tail.streaming) {
       const items = [...line.items]
-      items[index] = { kind, text: tail.text + piece, streaming: true }
+      items[index] = { kind, text: tail.text + piece, streaming: true, to: tail.to ?? to }
       return [...lines.slice(0, at), { ...line, items }, ...lines.slice(at + 1)]
     }
   }
-  return append(lines, author, lane, { kind, text: piece, streaming: true })
+  return append(lines, author, lane, { kind, text: piece, streaming: true, to })
 }
 
 /** The whole reply arrived: it replaces the live item of its kind in place, or is added. */
-function settle(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", whole: string): Line[] {
+function settle(lines: Line[], author: string, lane: string, kind: "text" | "reasoning", whole: string, to?: Audience): Line[] {
   const at = currentLine(lines, author, lane)
   if (at >= 0) {
     const line = lines[at]!
@@ -72,12 +72,12 @@ function settle(lines: Line[], author: string, lane: string, kind: "text" | "rea
       const item = line.items[i]!
       if (item.kind === kind && item.streaming) {
         const items = [...line.items]
-        items[i] = { kind, text: whole }
+        items[i] = { kind, text: whole, to: item.to ?? to }
         return [...lines.slice(0, at), { ...line, items }, ...lines.slice(at + 1)]
       }
     }
   }
-  return append(lines, author, lane, { kind, text: whole })
+  return append(lines, author, lane, { kind, text: whole, to })
 }
 
 /** Nothing more is coming for this author: close any open live item. */
@@ -104,23 +104,81 @@ function setResult(lines: Line[], part: Extract<LanePart, { kind: "tool_result" 
 /** Fold one daemon frame into the message list. Frames that are not messages leave it unchanged. */
 export function reduceLines(lines: Line[], frame: RoomFrame): Line[] {
   switch (frame.type) {
+    // What the Chief or a specialist says in chat is addressed to the user.
     case "chief":
-      return settle(lines, "chief", "chat", "text", frame.text)
+      return settle(lines, "chief", "chat", "text", frame.text, "user")
     case "lane":
-      return settle(lines, frame.avatar, "chat", "text", frame.text)
+      return settle(lines, frame.avatar, "chat", "text", frame.text, "user")
     case "visible":
-      return [...settleAll(lines, frame.author), say(frame.author, frame.text)]
+      return [...settleAll(lines, frame.author), say(frame.author, frame.text, undefined, frame.audience ?? audienceOfVisible(frame.author, frame.text))]
     case "part": {
       const part = frame.part
-      if (part.kind === "text_delta") return stream(lines, frame.author, frame.lane, "text", part.text)
-      if (part.kind === "reasoning_delta") return stream(lines, frame.author, frame.lane, "reasoning", part.text)
-      if (part.kind === "reasoning") return settle(lines, frame.author, frame.lane, "reasoning", part.text)
-      if (part.kind === "tool_call") return append(lines, frame.author, frame.lane, { kind: "tool", id: part.id, name: part.name, args: part.args })
+      const to = frame.audience ?? (frame.lane === "work" ? "team" : "user")
+      if (part.kind === "text_delta") return stream(lines, frame.author, frame.lane, "text", part.text, to)
+      if (part.kind === "reasoning_delta") return stream(lines, frame.author, frame.lane, "reasoning", part.text, to)
+      if (part.kind === "reasoning") return settle(lines, frame.author, frame.lane, "reasoning", part.text, to)
+      if (part.kind === "tool_call") return append(lines, frame.author, frame.lane, { kind: "tool", id: part.id, name: part.name, args: part.args, to })
       return setResult(lines, part)
     }
     default:
       return lines
   }
+}
+
+/**
+ * An older saved line has no audience, so it is worked out from who spoke: the room's own answers
+ * to a command are the user's, the Chief's dispatches and a lane's lines are the team's, and
+ * anything else the Chief says is the final report.
+ */
+export function audienceOfVisible(author: string, text: string): Audience {
+  if (author === "you" || author === "shell" || author === "room") return "user"
+  if (author === "chief") return text.startsWith("Assignment for ") ? "team" : "user"
+  return text.startsWith("stopped by you") ? "user" : "team"
+}
+
+export type Screen = "combine" | "split" | "user" | "team"
+export const SCREENS: Screen[] = ["combine", "split", "user", "team"]
+
+const sides: Record<Audience, WeakMap<Line, Line | null>> = { user: new WeakMap(), team: new WeakMap() }
+
+/**
+ * The part of a message that is for one side, or null when none of it is. A message is replaced, never
+ * changed in place, so the answer is kept per message object and a long room does not rebuild every
+ * message on every frame.
+ */
+function partOf(line: Line, side: Audience): Line | null {
+  const cache = sides[side]
+  const hit = cache.get(line)
+  if (hit !== undefined) return hit
+  // A user's own message has no audience; it is part of their conversation.
+  const items = line.items.filter((item) => (item.to ?? "user") === side)
+  const made = items.length === 0 ? null : items.length === line.items.length ? line : { ...line, items }
+  cache.set(line, made)
+  return made
+}
+
+/** The messages for one side. A message with pieces for both sides appears in both, each with its own pieces. */
+export function forSide(lines: Line[], side: Audience): Line[] {
+  const out: Line[] = []
+  for (const line of lines) {
+    const part = partOf(line, side)
+    if (part) out.push(part)
+  }
+  return out
+}
+
+/** How many messages carry the user's side that is not their own words: replies to them and the final report. */
+export function userCount(lines: Line[]): number {
+  let n = 0
+  for (const line of lines) if (line.author !== "you" && line.items.some((item) => (item.to ?? "user") === "user")) n++
+  return n
+}
+
+/** How many messages carry team activity. The strip shows the new ones while the user watches only their side. */
+export function teamCount(lines: Line[]): number {
+  let n = 0
+  for (const line of lines) if (line.items.some((item) => item.to === "team")) n++
+  return n
 }
 
 /** What the screen keeps. The daemon holds the whole transcript; the screen only needs the recent part. */
