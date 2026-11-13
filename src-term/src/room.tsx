@@ -346,19 +346,32 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   )
 }
 
+const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
 /**
- * Who is on the team, under the composer: each minion's short tag, and nothing else. The colour is the
- * state: sky blue while it is working, quiet when it is ready, amber when paused or stopped, red when
- * it failed. No words, no glyphs and no animation, so the line never moves.
+ * Who is on the team, under the composer: each minion's short tag and a mark for its state, with no
+ * words. A minion that is thinking shows the braille spinner in sky blue, a ready one a quiet circle,
+ * and the rest keep their own shapes and colours (■ stopped, ‖ paused, ✕ failed).
  */
 function Standings({ rows, theme }: { rows: LaneInfo[]; theme: Theme }) {
   const items = standing(rows)
+  const busy = items.some((item) => item.spinning)
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!busy) return
+    const timer = setInterval(() => setTick((n) => n + 1), 80)
+    return () => clearInterval(timer)
+  }, [busy])
   if (!items.length) return <text fg={theme.dim} wrapMode="none">starting the room…</text>
   const ink = { success: theme.success, info: theme.info, warn: theme.warn, error: theme.error, dim: theme.dim }
   return (
     <text wrapMode="none" fg={theme.dim}>
       {items.map((item, i) => (
-        <span key={item.name} fg={item.state === "ready" ? theme.dim : ink[item.tone]}>{`${i ? "  " : ""}${item.alias}`}</span>
+        <span key={item.name}>
+          {i ? "   " : ""}
+          <span fg={item.state === "ready" ? theme.dim : theme.fg}>{`${item.alias} `}</span>
+          <span fg={ink[item.tone]}>{item.spinning ? SPIN[tick % SPIN.length] : item.glyph}</span>
+        </span>
       ))}
     </text>
   )

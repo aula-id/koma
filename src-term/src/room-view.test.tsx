@@ -303,14 +303,15 @@ test("Esc interrupts, /stop names who, and a mistyped command stays in the box",
   await act(async () => { await view.dispose() })
 })
 
-test("under the composer, each minion is only its short tag, with no words or glyphs", async () => {
+test("under the composer, each minion is its tag and a mark, with no state words", async () => {
   const table = [
     { avatar: "chief", display: "Chief", alias: "CF", role: "chief", lane: "chat", phase: "running", task: "", started_ms: 0, last_event_ms: 0, steps: 1, last_tool: "", error: "" },
     { avatar: "red", display: "Red", alias: "LR", role: "red", lane: "", phase: "idle", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
     { avatar: "reviewer", display: "Reviewer", alias: "RV", role: "reviewer", lane: "", phase: "stopped", task: "", started_ms: 0, last_event_ms: 0, steps: 0, last_tool: "", error: "" },
   ]
   const text = await frame(110, 24, { panes: { ...panes, table } })
-  expect(text).toContain("CF  LR  RV")
+  expect(text).toMatch(/CF [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+  expect(text).toContain("LR ○")
+  expect(text).toContain("RV ■")
   for (const word of ["thinking", "ready", "stopped"]) expect(text).not.toContain(word)
-  expect(text).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏■●○]/)
 })
