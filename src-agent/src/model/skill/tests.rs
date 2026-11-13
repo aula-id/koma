@@ -713,3 +713,21 @@ fn a_clear_winner_needs_no_rerank() {
     assert!(decisive(&[h("a", 40), h("b", 10)]));
     assert!(!decisive(&[h("a", 14), h("b", 12)]));
 }
+
+#[test]
+fn the_prompt_does_not_grow_with_the_number_of_skills() {
+    use super::search::Scope;
+    let few = SkillRegistry::from_defs((0..3).map(|i| def(&format!("s{i}"), "A skill.", "")).collect());
+    let many = big_registry();
+    assert_eq!(few.pinned(&Scope::default(), 8).len(), 0);
+    let prompt = |reg: &SkillRegistry| crate::resources::build_system_prompt(None, None, None, reg.prompt_text().as_deref());
+    let (a, b) = (prompt(&few), prompt(&many));
+    assert_eq!(a, b, "a thousand skills must read the same as three");
+    assert!(b.contains("skill_find") && !b.contains("filler-5"));
+    // No skills at all: no skills section.
+    assert!(!prompt(&SkillRegistry::from_defs(vec![])).contains("\n\n# Skills\n"));
+    // Pinned ones are shown, and only those.
+    let pinned = SkillRegistry::from_defs(vec![def("daily", "Daily routine.", "pinned: true\n"), def("rare", "Rare.", "")]);
+    let p = prompt(&pinned);
+    assert!(p.contains("- daily: Daily routine.") && !p.contains("- rare:"));
+}

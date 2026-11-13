@@ -29,8 +29,15 @@ impl ModelClient for Scripted {
     }
 }
 
-fn sock_path() -> PathBuf {
+/// A name no other test in this process has, even when two start in the same clock tick.
+fn unique() -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{nanos}-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
+fn sock_path() -> PathBuf {
+    let nanos = unique();
     #[cfg(unix)]
     {
         let dir = std::env::temp_dir().join(format!("koma-room-wire-{nanos}"));
@@ -163,8 +170,7 @@ fn bench() -> Bench {
     let (to_actor, from_clients) = unbounded_channel();
     let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
     // A named pipe has no folder of its own, so the room's files go in a real temp directory.
-    let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("koma-room-bench-{nanos}"));
+    let dir = std::env::temp_dir().join(format!("koma-room-bench-{}", unique()));
     std::fs::create_dir_all(&dir).expect("mkdir");
     let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(&dir), Arc::new(super::stage::Staging::new(&dir))));
     Bench { sock, events, from_clients, serve }
