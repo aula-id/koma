@@ -60,6 +60,10 @@ pub enum FindingKind {
     MissingEvidence,
     /// Two claims for the same host and class disagree on severity.
     Contradiction,
+    /// Verification keeps being superseded and never lands a verdict.
+    ReviewLoop,
+    /// Findings are confirmed and nobody is writing the report.
+    ReportDue,
 }
 
 /// One thing the audit noticed.
@@ -121,6 +125,8 @@ pub fn audit(input: &AuditInput<'_>) -> Result<Vec<Finding>, String> {
     check_claims(input, scopes_present, &mut findings)?;
     check_lanes(input, &mut findings);
     check_repeats(input, &mut findings);
+    check_review_loop(input, &mut findings);
+    check_report_due(input, &mut findings)?;
     findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.key.cmp(&b.key)));
     Ok(findings)
 }
@@ -274,4 +280,48 @@ fn check_repeats(input: &AuditInput<'_>, out: &mut Vec<Finding>) {
             });
         }
     }
+}
+
+/// A review that is superseded again and again is not progress: the evidence under it keeps moving.
+fn check_review_loop(input: &AuditInput<'_>, out: &mut Vec<Finding>) {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for a in input.assignments.iter().filter(|a| a.kind == AssignmentKind::Verification && a.status == AssignmentStatus::Superseded) {
+        *counts.entry(a.avatar.as_str()).or_default() += 1;
+    }
+    for (avatar, n) in counts {
+        if n >= input.config.repeat_limit {
+            out.push(Finding {
+                key: format!("review-loop:{avatar}"),
+                kind: FindingKind::ReviewLoop,
+                avatar: Some(avatar.to_string()),
+                severity: Severity::Warn,
+                note: format!("{avatar}'s verification has been superseded {n} times without a settled verdict: something it reviews keeps changing (a claim or its evidence is being rewritten). Stop re-queuing the same review; find what moves, or settle the verdicts that are final."),
+                refs: Vec::new(),
+            });
+        }
+    }
+}
+
+/// Confirmed findings with no report under way. The goal cannot finish without `reports/`, and the
+/// Reviewer is done once its verdicts and findings are in: the hand-over is to the Reporter.
+fn check_report_due(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<(), String> {
+    let shelf_err = |e: crate::room::shelf::ShelfError| e.0;
+    let findings = input.shelf.scan("findings/").map_err(shelf_err)?;
+    if findings.is_empty() || !input.shelf.scan("reports/").map_err(shelf_err)?.is_empty() {
+        return Ok(());
+    }
+    let reviewing = input.assignments.iter().any(|a| a.kind == AssignmentKind::Verification && a.status.is_pending());
+    let reporting = input.assignments.iter().any(|a| a.kind == AssignmentKind::Report && (a.status.is_pending() || a.status == AssignmentStatus::Completed));
+    if reviewing || reporting {
+        return Ok(());
+    }
+    out.push(Finding {
+        key: "report-due".into(),
+        kind: FindingKind::ReportDue,
+        avatar: Some("reporter".into()),
+        severity: Severity::Warn,
+        note: format!("{} confirmed finding(s) are on the shelf, no review is running and no report is being written. Hand them to the reporter (a report assignment that follows the verification); the goal cannot finish without reports/.", findings.len()),
+        refs: findings.iter().take(8).map(|e| e.key.clone()).collect(),
+    });
+    Ok(())
 }
