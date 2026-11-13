@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { SyntaxStyle } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { scrollbars, type Theme } from "./theme.ts"
@@ -7,13 +7,16 @@ import { AssistantCard, MarkdownBody, Reasoning, SuggestPopup, ToolCard } from "
 import { RoomComposer } from "./room-composer.tsx"
 import { CLOSED, chosen, completion, dismissed, moved, popupView, type PopupState } from "./room-popup.ts"
 import { syntaxStyles } from "./syntax.ts"
-import { reduceLines, say, type Item, type Line } from "./room-turns.ts"
+import { capLines, mountedFrom, reduceLines, say, type Item, type Line } from "./room-turns.ts"
 import { RoomLink, type EventInfo, type LaneInfo, type LaneRow, type ModelChoice, type RoomFrame } from "./room-link.ts"
 import { busySummary, eventCells, laneCells, laneHeader, phaseMark, standing } from "./room-status.ts"
 import { classify } from "./room-suggest.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { BrowseScreen, type BrowseData, type OpenItem } from "./room-browse.tsx"
 import { switchDaemon } from "./paths.ts"
+import { OpeningSplash } from "./loading.tsx"
+import { IDLE_COLLECT_MS, ramTone, useIdleCollect, usePressureValve } from "./pressure.ts"
+import { memoryFootprint } from "./footprint.ts"
 
 export type { Line } from "./room-turns.ts"
 export type ModelList = { choices: ModelChoice[]; lanes: LaneRow[] }
@@ -49,6 +52,11 @@ export function RoomScreen({
   const [asking, setAsking] = useState(false)
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
+  // The loading screen covers the wait on both sides: until the room answers, and from the
+  // moment `/leave` is typed until the coding daemon is back.
+  const [ready, setReady] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [going, setGoing] = useState(false)
   useEffect(() => {
     if (!flash) return
     const timer = setTimeout(() => setFlash(""), 5000)
@@ -66,7 +74,8 @@ export function RoomScreen({
     link.current = room
     void switchDaemon(id, "secure")
       .then(() => room.start(id))
-      .catch((error: unknown) => { if (!dead) setPhase(error instanceof Error ? error.message : String(error)) })
+      .then(() => { if (!dead) setReady(true) })
+      .catch((error: unknown) => { if (!dead) { setFailed(true); setPhase(error instanceof Error ? error.message : String(error)) } })
     return () => {
       dead = true
       room.close()
@@ -76,9 +85,12 @@ export function RoomScreen({
   const leave = () => {
     leaving.current = true
     setAsking(false)
+    setGoing(true)
     link.current?.close()
     void switchDaemon(id, "coding").then(onLeave).catch((error: unknown) => {
       leaving.current = false
+      setGoing(false)
+      setFailed(true)
       setPhase(error instanceof Error ? error.message : String(error))
     })
   }
@@ -89,10 +101,14 @@ export function RoomScreen({
   askingRef.current = asking
   const leaveRef = useRef(leave)
   leaveRef.current = leave
+  // On the loading screen there is no prompt to answer: Ctrl+C or Esc leaves at once.
+  const waitingRef = useRef(false)
+  waitingRef.current = !ready && !failed && !going
+  useKeyboard((key) => { if (waitingRef.current && key.name === "escape") leaveRef.current() })
   useEffect(() => {
     if (!ctrlC) return
     const before = ctrlC.current
-    ctrlC.current = () => { if (askingRef.current) leaveRef.current(); else setAsking(true) }
+    ctrlC.current = () => { if (askingRef.current || waitingRef.current) leaveRef.current(); else setAsking(true) }
     return () => { ctrlC.current = before }
   }, [ctrlC])
 
@@ -104,9 +120,11 @@ export function RoomScreen({
       leave()
       return
     }
-    setLines((current) => [...current, say("you", text)])
+    setLines((current) => capLines([...current, say("you", text)]))
     link.current?.sendUser(text)
   }
+
+  if (going || (!ready && !failed)) return <OpeningSplash theme={theme} />
 
   return (
     <RoomView
@@ -183,6 +201,12 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   const renderer = useRenderer()
   const ownStyle = useMemo(() => syntaxStyle ?? SyntaxStyle.fromStyles(syntaxStyles(theme), renderer.nativeScene), [syntaxStyle, theme, renderer])
   useEffect(() => () => { if (!syntaxStyle) ownStyle.destroy() }, [syntaxStyle, ownStyle])
+  // Same upkeep as the coding chat: a shorter mounted window when RSS runs high, and a sweep
+  // once the room is quiet. Every mounted message holds native renderables.
+  const pressure = usePressureValve("room", () => {}, (run) => run())
+  const working = standing(panes.table ?? []).some((item) => item.spinning)
+  useIdleCollect(() => !working, IDLE_COLLECT_MS)
+  const shown = mountedFrom(lines, pressure.reduced)
   const [full, setFull] = useState<FullView | null>(null)
   const [popup, setPopup] = useState<PopupState>(CLOSED)
   const options = popupView(draft, popup)
@@ -279,7 +303,8 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
           </box>
         ) : (
           <box flexDirection="column" gap={1} paddingTop={1}>
-            {lines.map((line) => <Message key={line.id} line={line} theme={theme} syntaxStyle={ownStyle} />)}
+            {shown > 0 ? <text fg={theme.dim}>{`${shown} earlier message${shown === 1 ? "" : "s"} not shown`}</text> : null}
+            {lines.slice(shown).map((line) => <Message key={line.id} line={line} theme={theme} syntaxStyle={ownStyle} />)}
           </box>
         )}
       </scrollbox>
@@ -302,7 +327,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
         inserted={inserted}
         onPaste={onPaste}
         onPasteImage={onPasteImage}
-        footer={<Standings rows={panes.table ?? []} theme={theme} />}
+        footer={<box flexDirection="row" justifyContent="space-between"><Standings rows={panes.table ?? []} theme={theme} /><Ram tone={ramTone(pressure)} theme={theme} /></box>}
         status={hint ? { text: hint, color: theme.warn } : flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
         popupOpen={options.open && !asking}
         popup={options.open && !asking ? (
@@ -430,7 +455,18 @@ function LaneRowView({ row, nowMs, width, theme }: { row: LaneInfo; nowMs: numbe
   )
 }
 
-function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; syntaxStyle: SyntaxStyle }) {
+function Ram({ tone, theme }: { tone: "dim" | "warn" | "error"; theme: Theme }) {
+  const [rss, setRss] = useState(() => memoryFootprint())
+  useEffect(() => {
+    const timer = setInterval(() => setRss(memoryFootprint()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const ink = tone === "error" ? theme.error : tone === "warn" ? theme.warn : theme.dim
+  return <text fg={ink} wrapMode="none">{`RAM[${Math.round(rss / (1024 * 1024))}mb]`}</text>
+}
+
+// A message is replaced, not edited, so an unchanged one keeps its identity and is not drawn again.
+const Message = memo(function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; syntaxStyle: SyntaxStyle }) {
   if (line.author === "you") {
     const first = line.items[0]
     return (
@@ -449,7 +485,7 @@ function Message({ line, theme, syntaxStyle }: { line: Line; theme: Theme; synta
       {line.items.map((item, index) => <Piece key={index} item={item} theme={theme} syntaxStyle={syntaxStyle} />)}
     </AssistantCard>
   )
-}
+})
 
 function Piece({ item, theme, syntaxStyle }: { item: Item; theme: Theme; syntaxStyle: SyntaxStyle }) {
   if (item.kind === "reasoning") return <Reasoning text={item.text} theme={theme} syntaxStyle={syntaxStyle} defaultOpen={Boolean(item.streaming)} streaming={item.streaming} />
@@ -502,7 +538,7 @@ function applyFrame(
     case "lane":
     case "visible":
     case "part":
-      setLines((current) => reduceLines(current, frame))
+      setLines((current) => capLines(reduceLines(current, frame)))
       break
     case "status":
       setLanes(frame.digest)

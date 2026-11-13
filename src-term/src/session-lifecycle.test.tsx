@@ -222,14 +222,15 @@ test.skipIf(process.platform === "win32")("entering the secure room keeps the ho
     // handler reads this when the frame arrives.
     Object.assign(transport, { remote: false })
     await act(async () => { transport.emit("EnterSecure") })
-    await settle(view)
-    expect(view.captureCharFrame()).toContain("secure room")
-    await act(async () => { await view.mockInput.typeText("hi") })
-    expect(view.captureCharFrame()).toContain("secure room")
-    // Ctrl+C asks before leaving; a second one is the confirmation, so only one is sent here.
+    // The loading screen is up at once; the room replaces it when the daemon answers or fails.
+    await view.renderOnce()
+    expect(view.captureCharFrame()).toContain("opening session")
+    // Nothing answers (`true` is the daemon). Ctrl+C on the loading screen leaves without a prompt,
+    // and the loading screen stays up while the coding daemon comes back.
     await act(async () => { ctrlC.current() })
-    await settle(view)
-    expect(view.captureCharFrame()).toContain("Quit to chat?")
+    await view.renderOnce()
+    expect(view.captureCharFrame()).toContain("opening session")
+    expect(view.captureCharFrame()).not.toContain("Quit to chat?")
   } finally {
     await act(async () => { await view.dispose() })
     if (saved.bin === undefined) delete process.env.KOMA_BIN; else process.env.KOMA_BIN = saved.bin
