@@ -264,13 +264,14 @@ async fn a_client_lists_models_and_sets_one() {
     assert_eq!(choices.len(), 2);
     assert!(lanes.iter().any(|l| l.avatar == "red" && l.lane == "work"));
     write(&mut write_half, &RoomClient::SetModel { avatar: "red".into(), lane: "work".into(), model: "m2".into() }).await;
-    // An older list may still be on its way; wait for the one that carries the change.
-    let RoomServer::Models { lanes, .. } = next_matching(&mut read_half, &mut reader, |f| {
-        matches!(f, RoomServer::Models { lanes, .. } if lanes.iter().any(|l| l.avatar == "red" && l.lane == "work" && l.model == "Strong"))
-    })
-    .await
-    else {
-        unreachable!()
+    // An older list may still be on its way; wait for the one that carries the change. A refusal
+    // arrives as a notice, and says why.
+    let lanes = loop {
+        match next(&mut read_half, &mut reader).await {
+            RoomServer::Models { lanes, .. } if lanes.iter().any(|l| l.avatar == "red" && l.lane == "work" && l.model == "Strong") => break lanes,
+            RoomServer::Notice { text } => panic!("the model was refused: {text}"),
+            _ => {}
+        }
     };
     assert_eq!(lanes.iter().find(|l| l.avatar == "red" && l.lane == "work").expect("row").model, "Strong");
     write(&mut write_half, &RoomClient::SetModel { avatar: "red".into(), lane: "work".into(), model: "nope".into() }).await;
