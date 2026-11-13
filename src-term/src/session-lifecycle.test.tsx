@@ -225,12 +225,13 @@ test.skipIf(process.platform === "win32")("entering the secure room keeps the ho
     // The loading screen is up at once; the room replaces it when the daemon answers or fails.
     await view.renderOnce()
     expect(view.captureCharFrame()).toContain("opening session")
-    // Nothing answers (`true` is the daemon). Ctrl+C on the loading screen leaves without a prompt,
-    // and the loading screen stays up while the coding daemon comes back.
+    // Nothing answers (`true` is the daemon). Ctrl+C on the loading screen leaves without a prompt.
+    // Leaving only detaches, so the session screen is back at once.
     await act(async () => { ctrlC.current() })
+    await act(async () => { await Bun.sleep(50) })
     await view.renderOnce()
-    expect(view.captureCharFrame()).toContain("opening session")
     expect(view.captureCharFrame()).not.toContain("Quit to chat?")
+    expect(view.captureCharFrame()).toContain("Welcome to Koma")
   } finally {
     await act(async () => { await view.dispose() })
     if (saved.bin === undefined) delete process.env.KOMA_BIN; else process.env.KOMA_BIN = saved.bin

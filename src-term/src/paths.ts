@@ -155,13 +155,14 @@ export function sessionLockPath(cwd: string, sessionId: string): string {
 }
 
 /** Start a session daemon. `secure` runs the room instead of the coding daemon. */
-export function spawnDaemon(sessionId: string, kind?: "secure"): void {
+export function spawnDaemon(sessionId: string, kind?: "secure", env?: Record<string, string>): void {
   const args = ["--daemon", "--session", sessionId]
   if (kind === "secure") args.push("--kind", "secure")
   const child = spawn(komaBin(), args, {
     detached: true,
     stdio: "ignore",
     cwd: process.cwd(),
+    env: env ? { ...process.env, ...env } : process.env,
   })
   child.unref()
 }
@@ -229,4 +230,36 @@ async function probeSocket(path: string): Promise<boolean> {
     socket.once("error", () => finish(false))
     socket.setTimeout(500, () => finish(false))
   })
+}
+
+/**
+ * The secure room is its own daemon with its own session, named after the chat it came from.
+ * The chat daemon keeps running beside it, so leaving the room does not stop the hunt.
+ */
+export function roomSessionId(chatId: string): string {
+  return uuidV5Simple(NAMESPACE_OID, `secure-room:${chatId}`)
+}
+
+/** True while this chat's room daemon is accepting connections. */
+export function roomRunning(chatId: string): Promise<boolean> {
+  return probeSocket(socketPath(roomSessionId(chatId)))
+}
+
+/** Start the room daemon unless it is already up, and wait for it. Returns the room's session id. */
+export async function openRoom(chatId: string): Promise<string> {
+  const id = roomSessionId(chatId)
+  const path = socketPath(id)
+  if (await probeSocket(path)) return id
+  spawnDaemon(id, "secure", { KOMA_ROOM_PARENT: chatId })
+  const deadline = Date.now() + 12000
+  while (!(await probeSocket(path))) {
+    if (Date.now() > deadline) throw new Error(`the secure room did not accept on ${path}`)
+    await Bun.sleep(100)
+  }
+  return id
+}
+
+/** Stop this chat's room daemon. */
+export async function stopRoom(chatId: string): Promise<void> {
+  await killSession(roomSessionId(chatId))
 }

@@ -86,6 +86,7 @@ export function Chat({
   sendTracked,
   onFlushError,
   onRecycle: _onRecycle,
+  roomOn = false,
 }: {
   snap: Snapshot
   theme: Theme
@@ -101,6 +102,8 @@ export function Chat({
   onFlushError: (text: string) => void
   /** Kept for launcher API compatibility. View recycle is disabled. */
   onRecycle?: (id: string) => void
+  /** A secure room is running beside this chat. */
+  roomOn?: boolean
 }) {
   void _onRecycle
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
@@ -141,6 +144,7 @@ export function Chat({
         session={session}
         theme={theme}
         pressure={pressure}
+        roomOn={roomOn}
         cleaning={cleaning}
         focused={focused}
         compact={Boolean(modalOverlay)}
@@ -1158,6 +1162,7 @@ function Composer({
   sendTracked,
   flushRef,
   onFlushError,
+  roomOn = false,
 }: {
   snap: Snapshot
   session: SessionSnap
@@ -1171,6 +1176,7 @@ function Composer({
   sendTracked: (request: unknown) => Promise<string>
   flushRef: { current: () => Promise<boolean> }
   onFlushError: (text: string) => void
+  roomOn?: boolean
 }) {
   const { height, width } = useTerminalSize()
   const renderer = useRenderer()
@@ -1463,7 +1469,7 @@ function Composer({
         <Status snap={snap} session={session} theme={theme} cleaning={cleaning} />
       </box>
       </box>
-      <RamLine pressure={pressure} session={session} theme={theme} />
+      <RamLine pressure={pressure} session={session} theme={theme} roomOn={roomOn} />
     </box>
   )
 }
@@ -1584,7 +1590,7 @@ function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; se
   )
 }
 
-function RamLine({ pressure, session, theme }: { pressure: Pressure; session: SessionSnap; theme: Theme }) {
+function RamLine({ pressure, session, theme, roomOn = false }: { pressure: Pressure; session: SessionSnap; theme: Theme; roomOn?: boolean }) {
   const [rss, setRss] = useState(() => memoryFootprint())
   useEffect(() => {
     const timer = setInterval(() => setRss(memoryFootprint()), 1000)
@@ -1596,9 +1602,22 @@ function RamLine({ pressure, session, theme }: { pressure: Pressure; session: Se
   return (
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
       <text fg={color}>{`RAM[${mb}mb]`}</text>
-      <DrssMark active={session.context_usage?.drss_active === true} theme={theme} />
+      <box flexDirection="row" columnGap={2}>
+        {roomOn ? <RoomMark theme={theme} /> : null}
+        <DrssMark active={session.context_usage?.drss_active === true} theme={theme} />
+      </box>
     </box>
   )
+}
+
+/** The secure room is still working in the background. `/security` goes back to it. */
+export function RoomMark({ theme }: { theme: Theme }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setTick((value) => value + 1), 500)
+    return () => clearInterval(timer)
+  }, [])
+  return <text fg={tick % 2 === 0 ? theme.accent : theme.dim}>{"◉ secure room"}</text>
 }
 
 const DRSS_LABEL = "[DRSS]"

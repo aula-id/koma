@@ -63,6 +63,16 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         bail!("secure daemon: session did not open ({status})");
     };
 
+    // The room is its own session beside the chat it was opened from. It uses that chat's settings,
+    // so the model picked there is the one the room starts with.
+    let usage_pwd_hash = state.rest.fg().session.as_ref().map(|s| s.pwd_hash.clone()).unwrap_or_default();
+    let settings = inherited_settings(&usage_pwd_hash, &session_id).unwrap_or(settings);
+    if let Ok(Some(row)) = crate::model::session_registry::get(&session_id) {
+        if row.name.trim().is_empty() {
+            let _ = crate::model::session_registry::set_name(&session_id, "secure room");
+        }
+    }
+
     let route =
         resolve_role(&state.rest.config, &settings, ModelRole::Main).filter(|r| r.is_usable());
     let Some(route) = route else {
@@ -76,7 +86,6 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
 
     let context_window =
         (settings.context_window_limit > 0).then_some(settings.context_window_limit);
-    let usage_pwd_hash = state.rest.fg().session.as_ref().map(|s| s.pwd_hash.clone()).unwrap_or_default();
     let model = Arc::new(
         ProviderModelClient::new(
             client,
@@ -165,6 +174,13 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         let _ = std::fs::remove_file(path);
     }
     Ok(())
+}
+
+/// The settings of the chat session this room was opened from (`KOMA_ROOM_PARENT`), when it exists.
+fn inherited_settings(pwd_hash: &str, own_id: &str) -> Option<crate::model::settings::Settings> {
+    let parent = std::env::var("KOMA_ROOM_PARENT").ok().filter(|p| !p.is_empty() && p != own_id)?;
+    let dir = crate::model::store::session_dir(pwd_hash, &parent).ok()?;
+    crate::model::session::Session::load(&dir).ok().map(|s| s.settings)
 }
 
 fn session_status(state: &crate::app::state::AppState, session_id: &str) -> SessionStatus {
