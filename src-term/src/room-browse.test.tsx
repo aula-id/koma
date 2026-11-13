@@ -178,7 +178,8 @@ test("g draws the graph in boxes with arrows, and t comes back to the tree", asy
   expect(graph).toContain("trajectory · graph")
   expect(graph).toContain("╭")
   expect(graph).toContain("▼")
-  expect(graph).toContain("(1.1.1) SSRF claim")
+  expect(graph).toContain("(1.1.1) SSRF")
+  expect(graph).toContain("claim")
   expect(graph).toMatch(/x 0\/\d+/)
   await t.press(() => t.screen.mockInput.pressArrow("right"))
   // The tree is narrow, so there is nothing to scroll across until it gets deep.

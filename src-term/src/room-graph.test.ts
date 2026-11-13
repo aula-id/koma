@@ -77,8 +77,8 @@ test("panning stays inside the picture, and revealing a box brings it into the w
 
 test("a window is the picture cut to size, in runs of one tone", () => {
   const layout = layoutGraph(goal)
-  const lines = windowLines(drawGraph(layout, "a"), { x: 0, y: 0 }, { width: 30, height: 8 })
-  expect(lines.length).toBe(8)
+  const lines = windowLines(drawGraph(layout, "a"), { x: 0, y: 0 }, { width: 30, height: 14 })
+  expect(lines.length).toBe(14)
   expect(lines.every((runs) => runs.reduce((n, r) => n + [...r.text].length, 0) <= 30)).toBe(true)
   expect(lines.flat().some((r) => r.tone === "select")).toBe(true)
 })

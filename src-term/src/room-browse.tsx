@@ -57,7 +57,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const canvas = useRef<import("@opentui/core").BoxRenderable | null>(null)
   const graphOn = view === "trajectory" && mode === "graph"
   const goal = data?.goals[Math.min(goalAt, Math.max(0, (data?.goals.length ?? 1) - 1))] ?? null
-  const layout = useMemo(() => (goal ? layoutGraph(goal, width - 6) : null), [goal, width])
+  const layout = useMemo(() => (goal ? layoutGraph(goal) : null), [goal])
   const grid = useMemo(() => (layout ? drawGraph(layout, boxId) : []), [layout, boxId])
 
   // Fresh data while the screen is open: findings arrive as the lanes work.
@@ -183,7 +183,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const hint = detail
     ? (links.length ? "↑↓ choose a link · enter follows it · pgup/pgdn scroll · esc goes back" : "pgup/pgdn scroll · esc goes back")
     : graphOn
-      ? "←→↑↓ scroll · pgup/pgdn · tab next node · enter opens · [ ] goal · t tree · esc closes"
+      ? "←→↑↓ or wheel scroll (shift+wheel across) · tab next node · enter opens · [ ] goal · t tree · esc"
       : view === "trajectory"
         ? "↑↓ pgup/pgdn wheel move · enter opens · space or ←→ folds · g graph · click the arrow to fold, the line to open · esc closes"
         : "↑↓ pgup/pgdn wheel move · → or enter opens · ← closes · click folds or opens · esc closes"
@@ -205,9 +205,13 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
                   flexBasis={0}
                   minHeight={0}
                   paddingLeft={1}
-                  onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+                  onMouseScroll={(event: { scroll?: { direction?: string }; modifiers?: { shift?: boolean } }) => {
+                    // The wheel goes down and up; with shift it goes across.
                     const d = event.scroll?.direction
-                    setOffset((o) => pan(o, d === "left" ? -6 : d === "right" ? 6 : 0, d === "up" ? -2 : d === "down" ? 2 : 0, layout, viewSize))
+                    const across = event.modifiers?.shift === true
+                    const dx = d === "left" ? -6 : d === "right" ? 6 : across ? (d === "up" ? -6 : d === "down" ? 6 : 0) : 0
+                    const dy = across ? 0 : d === "up" ? -3 : d === "down" ? 3 : 0
+                    setOffset((o) => pan(o, dx, dy, layout, viewSize))
                   }}
                   onMouseDown={(event: { x: number; y: number }) => {
                     const c = canvas.current
