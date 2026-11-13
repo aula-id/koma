@@ -211,8 +211,12 @@ fn specialists_and_the_chief_run_host_tools_and_the_clerk_does_not() {
     assert!(reporter.tools.iter().any(|t| t.handler == "read"));
     assert!(reporter.tools.iter().any(|t| t.handler == "web_fetch"));
     let chief = reg.role("chief").expect("chief");
-    for tool in ["bash", "read", "write", "edit", "grep", "web_search", "browser_tabs"] {
+    for tool in ["read", "web_search", "message_find"] {
         assert!(chief.tools.iter().any(|t| t.handler == tool), "chief lacks {tool}");
+    }
+    // The Chief manages. Hands-on work is the specialists'.
+    for tool in ["bash", "write", "edit", "delete", "grep", "glob", "cd", "browser_tabs", "browser_interact"] {
+        assert!(chief.tools.iter().all(|t| t.handler != tool), "chief must not have {tool}");
     }
     let clerk = reg.role("clerk").expect("clerk");
     assert!(

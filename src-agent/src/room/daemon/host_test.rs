@@ -152,8 +152,11 @@ fn every_lane_of_a_role_is_offered_the_hosts_tools_its_role_grants() {
 
     let chief = names_for("chief", LaneKind::Chat);
     assert!(chief.iter().any(|n| n == "group_delegate"));
-    for tool in ["bash", "read", "write", "edit", "grep", "web_search"] {
+    for tool in ["read", "web_search"] {
         assert!(chief.iter().any(|n| n == tool), "the chief lacks {tool}");
+    }
+    for tool in ["bash", "write", "edit", "delete", "grep", "glob", "browser_tabs"] {
+        assert!(chief.iter().all(|n| n != tool), "the chief must not have {tool}");
     }
     assert!(chief.iter().all(|n| !n.starts_with("sec_")));
 

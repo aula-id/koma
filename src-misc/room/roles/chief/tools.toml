@@ -66,8 +66,8 @@ additionalProperties = false
 [tool.schema.properties]
 text = { type = "string", minLength = 1, maxLength = 4000 }
 
-# Host computer. Every lane of this role runs these on this machine, chat and
-# work alike. Schemas advertised to the model come from the compiled tools.
+# The Chief only manages: it reads, remembers, looks things up and delegates. Changing files,
+# running commands and driving the browser belong to the specialists. Schemas advertised to the model come from the compiled tools.
 # Every specialist gets the same host set, web and browser included.
 [[tool]]
 name = "read"
@@ -77,51 +77,9 @@ description = "Read a file on this host."
 type = "object"
 
 [[tool]]
-name = "write"
-handler = "write"
-description = "Create or overwrite a file on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "edit"
-handler = "edit"
-description = "Edit a file on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "delete"
-handler = "delete"
-description = "Delete a file on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
 name = "dir_list"
 handler = "dir_list"
 description = "List a directory on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "grep"
-handler = "grep"
-description = "Search file contents on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "glob"
-handler = "glob"
-description = "Find files by name on this host."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "bash"
-handler = "bash"
-description = "Run a foreground shell command on this host."
 [tool.schema]
 type = "object"
 
@@ -182,79 +140,9 @@ description = "Fetch one URL."
 type = "object"
 
 [[tool]]
-name = "browser_tabs"
-handler = "browser_tabs"
-description = "List or open browser tabs."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "browser_inspect"
-handler = "browser_inspect"
-description = "Inspect a browser tab."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "browser_interact"
-handler = "browser_interact"
-description = "Click, type, or scroll in a browser tab."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "browser_evaluate"
-handler = "browser_evaluate"
-description = "Run JavaScript in a browser tab."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "bash_output"
-handler = "bash_output"
-description = "Poll a background bash job."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "bash_kill"
-handler = "bash_kill"
-description = "Stop a background bash job."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "cd"
-handler = "cd"
-description = "Change this lane's working directory."
-[tool.schema]
-type = "object"
-
-[[tool]]
 name = "checklist"
 handler = "checklist"
 description = "Keep a task checklist for this lane."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "web_page"
-handler = "web_page"
-description = "Read a web page in full."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "web_search_full"
-handler = "web_search_full"
-description = "Search the web with full results."
-[tool.schema]
-type = "object"
-
-[[tool]]
-name = "graph_query"
-handler = "graph_query"
-description = "Query the code graph."
 [tool.schema]
 type = "object"
 
