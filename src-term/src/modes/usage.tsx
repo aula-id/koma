@@ -251,18 +251,21 @@ function Calendar({ points, selected, width, offset, metric, theme, onSelect }: 
     <text fg={theme.dim}>Less {theme.heat.map((color, i) => <span key={i} bg={color}>  </span>)} More{visible < weeks ? `  weeks ${from + 1}–${from + visible}/${weeks} ↔` : ""}</text>
   </box>
 }
-function ModelTable({ models, width, metric, total, theme }: { models: Rec[]; width: number; metric: "cost" | "tokens"; total: number; theme: Theme }) {
+export function ModelTable({ models, width, metric, total, theme }: { models: Rec[]; width: number; metric: "cost" | "tokens"; total: number; theme: Theme }) {
   const [selected, setSelected] = useState<string | null>(null), narrow = width < 85, nameWidth = Math.max(8, width - 69)
   return <box flexDirection="column" flexShrink={0} minWidth={0}>
     <text fg={theme.dim} wrapMode="none">{narrow ? "Model / Cost / Calls / Share · in / cached / out" : `${pad("Model", nameWidth)} ${pad("Cost", 11)} ${pad("Calls", 7)} ${pad("Input", 12)} ${pad("Cached", 12)} ${pad("Output", 12)} Share`}</text>
     {!models.length ? <text fg={theme.dim}>No model usage recorded.</text> : models.map((row, i) => {
       const name = str(row.model_id) || "unknown", value = metric === "cost" ? num(row.total_cost) : num(row.tokens_in) + num(row.tokens_out)
       const amount = money(num(row.total_cost)), calls = groupInt(num(row.call_count)), share = pct(value, total)
-      const narrowName = pad(name, Math.max(4, width - amount.length - calls.length - share.length - 3))
+      const narrowRoom = Math.max(4, width - amount.length - calls.length - share.length - 3)
+      const narrowName = pad(name, narrowRoom)
+      // The whole name is shown under a selected row only when the row had to cut it short; otherwise selecting moves nothing.
+      const clipped = Bun.stringWidth(name) > (narrow ? narrowRoom : nameWidth)
       return <box key={`${name}/${i}`} flexDirection="column" flexShrink={0} backgroundColor={name === selected ? theme.selBg : undefined} onMouseDown={() => setSelected(name)}>
         <text fg={name === selected ? theme.selFg : theme.fg} wrapMode="none" selectable>{narrow ? `${narrowName} ${amount} ${calls} ${share}` : `${pad(name, nameWidth)} ${pad(money(num(row.total_cost)), 11)} ${pad(groupInt(num(row.call_count)), 7)} ${pad(groupInt(num(row.tokens_in)), 12)} ${pad(groupInt(num(row.tokens_cached)), 12)} ${pad(groupInt(num(row.tokens_out)), 12)} ${pct(value, total)}`}</text>
         {narrow ? <text fg={theme.dim} wrapMode="none">{`in ${groupInt(num(row.tokens_in))}  cache ${groupInt(num(row.tokens_cached))}  out ${groupInt(num(row.tokens_out))}`}</text> : null}
-        {name === selected ? <text fg={theme.selFg} wrapMode="word" selectable>{name}</text> : null}
+        {name === selected && clipped ? <text fg={theme.selFg} wrapMode="word" selectable>{name}</text> : null}
       </box>
     })}
   </box>
