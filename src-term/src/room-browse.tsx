@@ -169,6 +169,21 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
     step(name === "space" ? "space" : name)
   })
 
+  // One wheel for the whole screen: it scrolls whatever is showing, wherever the pointer is.
+  const wheel = (event: { scroll?: { direction?: string }; modifiers?: { shift?: boolean } }) => {
+    const d = event.scroll?.direction
+    if (!d) return
+    const dir = d === "up" || d === "left" ? -1 : d === "down" || d === "right" ? 1 : 0
+    if (!dir) return
+    if (detail) { bodyRef.current?.scrollBy(dir * 3); return }
+    if (graphOn && layout) {
+      const across = d === "left" || d === "right" || event.modifiers?.shift === true
+      setOffset((o) => pan(o, across ? dir * 6 : 0, across ? 0 : dir * 3, layout, viewSize))
+      return
+    }
+    jump(dir * 3)
+  }
+
   const header = (
     <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
       <text flexShrink={0}>
@@ -189,7 +204,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
         : "↑↓ pgup/pgdn wheel move · → or enter opens · ← closes · click folds or opens · esc closes"
 
   return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} onMouseScroll={wheel}>
       {header}
       <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
         {detail ? (
@@ -205,14 +220,6 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
                   flexBasis={0}
                   minHeight={0}
                   paddingLeft={1}
-                  onMouseScroll={(event: { scroll?: { direction?: string }; modifiers?: { shift?: boolean } }) => {
-                    // The wheel goes down and up; with shift it goes across.
-                    const d = event.scroll?.direction
-                    const across = event.modifiers?.shift === true
-                    const dx = d === "left" ? -6 : d === "right" ? 6 : across ? (d === "up" ? -6 : d === "down" ? 6 : 0) : 0
-                    const dy = across ? 0 : d === "up" ? -3 : d === "down" ? 3 : 0
-                    setOffset((o) => pan(o, dx, dy, layout, viewSize))
-                  }}
                   onMouseDown={(event: { x: number; y: number }) => {
                     const c = canvas.current
                     if (!c) return
@@ -234,12 +241,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
           <Panel title={TITLES[view]} hot={false} theme={theme} status={data ? `${summary(view, data)}${rows.length > listHeight ? ` · ${shown.from + 1}-${shown.from + shown.rows.length} of ${rows.length}` : ""}` : "loading…"}>
             {rows.length === 0
               ? <text fg={theme.dim} paddingLeft={1}>{data ? EMPTY[view] : "Loading…"}</text>
-              : <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}
-                  onMouseScroll={(event: { scroll?: { direction?: string } }) => {
-                    const d = event.scroll?.direction
-                    if (d === "up") jump(-3)
-                    else if (d === "down") jump(3)
-                  }}>
+              : <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
                   {shown.rows.map((row) => (
                     <Line key={row.id} row={row} on={row.id === selected} theme={theme} width={width - 8}
                       onFold={() => {

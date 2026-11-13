@@ -15,9 +15,11 @@ test("every node gets a box at its depth and lane, and none overlap", () => {
   const layout = layoutGraph(goal)
   expect(layout.boxes.length).toBe(5)
   const spot = (id: string) => layout.boxes.find((b) => b.id === id)!
-  expect(spot("a").y).toBeGreaterThan(spot("s").y)
-  expect(spot("b").x).toBeGreaterThan(spot("a").x)
-  expect(spot("c").y).toBeGreaterThan(spot("a").y)
+  // Depth runs across; the boxes of one depth stack down their column.
+  expect(spot("a").x).toBeGreaterThan(spot("s").x)
+  expect(spot("b").x).toBe(spot("a").x)
+  expect(spot("b").y).toBeGreaterThan(spot("a").y)
+  expect(spot("c").x).toBeGreaterThan(spot("a").x)
   for (const a of layout.boxes) for (const b of layout.boxes) {
     if (a !== b) expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false)
   }
@@ -29,7 +31,7 @@ test("boxes carry their number and label, lines join them, and arrows point into
   expect(picture).toContain("(1.1) asset")
   expect(picture).toContain("(1.1.1) claim")
   expect(picture).toContain("╭")
-  expect(picture).toContain("▼")
+  expect(picture).toContain("►")
   expect(picture).toMatch(/[┌┐├┬]/)
   expect(picture).toContain("┬")
 })
@@ -83,21 +85,19 @@ test("a window is the picture cut to size, in runs of one tone", () => {
   expect(lines.flat().some((r) => r.tone === "select")).toBe(true)
 })
 
-test("a layer wider than the screen wraps onto another row, so the picture stays narrow", () => {
+test("depth runs across and one depth stacks down its column", () => {
   const wide: Goal = {
     goal_key: "w", open: 0, verified: 0, returned: 0,
-    nodes: [n("s", "start", 0, 0, "start"), ...Array.from({ length: 8 }, (_, i) => n(`a${i}`, `asset ${i}`, 1, i))],
-    edges: Array.from({ length: 8 }, (_, i) => ({ from: "s", to: `a${i}`, rel: "" })),
+    nodes: [n("s", "start", 0, 0, "start"), ...Array.from({ length: 6 }, (_, i) => n(`a${i}`, `asset ${i}`, 1, i))],
+    edges: Array.from({ length: 6 }, (_, i) => ({ from: "s", to: `a${i}`, rel: "" })),
   }
-  const roomy = layoutGraph(wide, 240), tight = layoutGraph(wide, 80)
-  expect(roomy.width).toBeGreaterThan(160)
-  expect(tight.width).toBeLessThanOrEqual(80)
-  expect(tight.height).toBeGreaterThan(roomy.height)
-  const tops = new Set(tight.boxes.map((b) => b.y))
-  expect(tops.size).toBeGreaterThan(2)
-  for (const a of tight.boxes) for (const b of tight.boxes) {
-    if (a !== b) expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false)
-  }
+  const layout = layoutGraph(wide)
+  const s = layout.boxes.find((b) => b.id === "s")!
+  const column = layout.boxes.filter((b) => b.id !== "s")
+  expect(new Set(column.map((b) => b.x)).size).toBe(1)
+  expect(column[0]!.x).toBeGreaterThan(s.x)
+  expect(new Set(column.map((b) => b.y)).size).toBe(6)
+  expect(layout.height).toBeGreaterThan(layout.width / 2)
 })
 
 test("two goals with the same name get distinct names, so a row is selected and opened alone", async () => {
