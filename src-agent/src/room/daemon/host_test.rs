@@ -367,6 +367,7 @@ const NOT_IN_THE_ROOM: &[(&str, &str)] = &[
     ("show_image", "image messages"),
     ("search_screenshots", "screenshot library of the coding session"),
     ("describe_screenshot", "screenshot library of the coding session"),
+    ("secure_shelf", "the coding agent reads the room from outside; lanes already hold the shelf directly"),
 ];
 
 #[test]
