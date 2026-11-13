@@ -93,6 +93,12 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
     setPick(0)
     setTrail((t) => [...t, to])
   }
+  // Page keys and the wheel move the selection, and the window follows it.
+  const jump = (by: number) => {
+    const at = Math.max(0, rows.findIndex((r) => r.id === selected))
+    const next = rows[Math.max(0, Math.min(rows.length - 1, at + by))]
+    if (next) setSelected(next.id)
+  }
   const step = (key: string) => {
     const next = press(rows, selected, collapsed, key)
     setSelected(next.selected)
@@ -158,6 +164,8 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
       else if ((name === "return" || name === "enter") && boxId && goal) follow({ type: "node", goal: goal.goal_key, node: boxId })
       return
     }
+    if (name === "pageup") { jump(-Math.max(1, listHeight - 1)); return }
+    if (name === "pagedown") { jump(Math.max(1, listHeight - 1)); return }
     step(name === "space" ? "space" : name)
   })
 
@@ -177,8 +185,8 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
     : graphOn
       ? "←→↑↓ scroll · pgup/pgdn · tab next node · enter opens · [ ] goal · t tree · esc closes"
       : view === "trajectory"
-        ? "↑↓ move · enter opens · space or ←→ folds · g graph · click the arrow to fold, the line to open · esc closes"
-        : "↑↓ move · → or enter opens · ← closes · click a folder to fold it, a line to open it · esc closes"
+        ? "↑↓ pgup/pgdn wheel move · enter opens · space or ←→ folds · g graph · click the arrow to fold, the line to open · esc closes"
+        : "↑↓ pgup/pgdn wheel move · → or enter opens · ← closes · click folds or opens · esc closes"
 
   return (
     <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
@@ -219,10 +227,15 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
               )}
             </Panel>
           ) : (
-          <Panel title={TITLES[view]} hot={false} theme={theme} status={data ? summary(view, data) : "loading…"}>
+          <Panel title={TITLES[view]} hot={false} theme={theme} status={data ? `${summary(view, data)}${rows.length > listHeight ? ` · ${shown.from + 1}-${shown.from + shown.rows.length} of ${rows.length}` : ""}` : "loading…"}>
             {rows.length === 0
               ? <text fg={theme.dim} paddingLeft={1}>{data ? EMPTY[view] : "Loading…"}</text>
-              : <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
+              : <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}
+                  onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+                    const d = event.scroll?.direction
+                    if (d === "up") jump(-3)
+                    else if (d === "down") jump(3)
+                  }}>
                   {shown.rows.map((row) => (
                     <Line key={row.id} row={row} on={row.id === selected} theme={theme} width={width - 8}
                       onFold={() => {

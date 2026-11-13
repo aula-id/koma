@@ -18,6 +18,7 @@ import { foregroundSession, modeName, type RemoteHandoff, type Snapshot } from "
 import { QuitScreen, quitState } from "./quit.tsx"
 import { rewindOf } from "./screens.tsx"
 import { RoomScreen } from "./room.tsx"
+import { roomRunning } from "./paths.ts"
 import { DaemonLink } from "./socket.ts"
 import { SuspendedScreen } from "./suspended.tsx"
 import { themeFor, type Theme } from "./theme.ts"
@@ -58,6 +59,16 @@ export function SessionScreen({
 }) {
   const [attempt, setAttempt] = useState(0)
   const [room, setRoom] = useState(false)
+  // The room keeps running after /leave, so the chat shows whether it is still up.
+  const [roomOn, setRoomOn] = useState(false)
+  useEffect(() => {
+    if (transport?.remote) return
+    let dead = false
+    const check = () => { void roomRunning(id).then((up) => { if (!dead) setRoomOn(up) }).catch(() => {}) }
+    check()
+    const timer = setInterval(check, 4000)
+    return () => { dead = true; clearInterval(timer) }
+  }, [id, room, transport?.remote])
   const usageReaderRef = useRef<UsageReader | null>(null)
   const [usageReader, setUsageReader] = useState<UsageReader | null>(null)
   useEffect(() => {
@@ -467,6 +478,7 @@ export function SessionScreen({
         send={send}
         sendTracked={sendTracked}
         onFlushError={report}
+        roomOn={roomOn}
         onRecycle={onRecycle && !transport?.remote ? (sessionId) => { linkRef.current?.detach(); onRecycle(sessionId) } : undefined}
       />
     </box>

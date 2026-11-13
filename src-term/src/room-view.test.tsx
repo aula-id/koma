@@ -123,22 +123,6 @@ test("/model walks minion, lane, then a searchable model and reports the choice"
   await act(async () => { await view.dispose() })
 })
 
-test("ctrl+c asks to quit to chat; enter confirms and esc stays", async () => {
-  const answers: boolean[] = []
-  let view!: Awaited<ReturnType<typeof testRender>>
-  await act(async () => {
-    view = await testRender(<RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft="" onDraft={() => {}} onSend={() => {}} asking onAnswer={(yes) => { answers.push(yes) }} />, { width: 100, height: 24 })
-  })
-  await act(async () => { await view.renderOnce() })
-  const text = view.captureCharFrame()
-  expect(text).toContain("Quit to chat?")
-  expect(text).toContain("Stay (esc)")
-  await act(async () => { await view.mockInput.pressEnter() })
-  await act(async () => { view.mockInput.pressEscape(); await Bun.sleep(80) })
-  expect(answers).toEqual([true, false])
-  await act(async () => { await view.dispose() })
-})
-
 test("a turn shows collapsed thinking, a tool card and markdown, and long lines wrap", async () => {
   const long = "The working directory is /Users/someone/Projects/retas/koma and nothing else is attached to this room right now, so I ran pwd myself."
   const turn: Line = {

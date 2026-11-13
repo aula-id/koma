@@ -218,3 +218,29 @@ test("a long detail scrolls with page down and wheel keys and starts at the top"
   expect(t.text()).toContain("line 0")
   await act(async () => { await t.screen.dispose() })
 })
+
+test("a long shelf scrolls with page keys and the wheel, and says where the window is", async () => {
+  const many: BrowseData = { ...data, shelf: Array.from({ length: 90 }, (_, i) => ({ key: `notes/n${String(i).padStart(2, "0")}`, revision: 1, updated: 0, kind: "", title: `note ${i}`, status: "" })) }
+  let screen!: View
+  await act(async () => {
+    screen = await testRender(<Host view="shelf" theme={theme} data={many} item={null} onOpenItem={() => {}} onRefresh={() => {}} onBack={() => {}} />, { width: 100, height: 30 })
+  })
+  const settle = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 40)); await screen.renderOnce() }) }
+  await settle()
+  expect(screen.captureCharFrame()).toContain("n00")
+  expect(screen.captureCharFrame()).toMatch(/1-\d+ of 91/)
+  await act(async () => { screen.mockInput.pressKey("\x1b[6~") })
+  await act(async () => { screen.mockInput.pressKey("\x1b[6~") })
+  await settle()
+  expect(screen.captureCharFrame()).not.toContain("n00")
+  const from = () => Number(/(\d+)-\d+ of/.exec(screen.captureCharFrame())?.[1])
+  const before = from()
+  for (let i = 0; i < 12; i++) await act(async () => { await screen.mockMouse.scroll(20, 10, "down") })
+  await settle()
+  expect(from()).toBeGreaterThan(before)
+  const mid = from()
+  for (let i = 0; i < 30; i++) await act(async () => { await screen.mockMouse.scroll(20, 10, "up") })
+  await settle()
+  expect(from()).toBeLessThan(mid)
+  await act(async () => { await screen.dispose() })
+})

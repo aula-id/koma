@@ -13,7 +13,7 @@ import { busySummary, eventCells, laneCells, laneHeader, phaseMark, standing } f
 import { classify } from "./room-suggest.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { BrowseScreen, type BrowseData, type OpenItem } from "./room-browse.tsx"
-import { switchDaemon } from "./paths.ts"
+import { openRoom, stopRoom } from "./paths.ts"
 import { prettyText, toolDigest } from "./room-pretty.ts"
 import { OpeningSplash } from "./loading.tsx"
 import { IDLE_COLLECT_MS, ramTone, useIdleCollect, usePressureValve } from "./pressure.ts"
@@ -23,7 +23,7 @@ export type { Line } from "./room-turns.ts"
 export type ModelList = { choices: ModelChoice[]; lanes: LaneRow[] }
 export type Counts = { open: number; verified: number; returned: number; reports: number }
 
-/** The secure room. `/security` again returns to the coding daemon. */
+/** The secure room: its own daemon, which keeps hunting after `/leave`. `/leave stop` ends it. */
 const DOUBLE_ESC_MS = 600
 
 export function RoomScreen({
@@ -52,7 +52,6 @@ export function RoomScreen({
   const [inserted, setInserted] = useState<Inserted | null>(null)
   const [browse, setBrowse] = useState<BrowseData | null>(null)
   const [item, setItem] = useState<OpenItem | null>(null)
-  const [asking, setAsking] = useState(false)
   const [draft, setDraft] = useState("")
   const [phase, setPhase] = useState("starting the secure daemon")
   // The loading screen covers the wait on both sides: until the room answers, and from the
@@ -75,8 +74,8 @@ export function RoomScreen({
       (text) => { if (!dead && !leaving.current) setPhase(text) },
     )
     link.current = room
-    void switchDaemon(id, "secure")
-      .then(() => room.start(id))
+    void openRoom(id)
+      .then((roomId) => room.start(roomId))
       .then(() => { if (!dead) setReady(true) })
       .catch((error: unknown) => { if (!dead) { setFailed(true); setPhase(error instanceof Error ? error.message : String(error)) } })
     return () => {
@@ -85,12 +84,12 @@ export function RoomScreen({
     }
   }, [id])
 
-  const leave = () => {
+  // Leaving only detaches: the room daemon keeps working. `stop` ends it too.
+  const leave = (stop = false) => {
     leaving.current = true
-    setAsking(false)
     setGoing(true)
     link.current?.close()
-    void switchDaemon(id, "coding").then(onLeave).catch((error: unknown) => {
+    void (stop ? stopRoom(id) : Promise.resolve()).then(onLeave).catch((error: unknown) => {
       leaving.current = false
       setGoing(false)
       setFailed(true)
@@ -98,20 +97,19 @@ export function RoomScreen({
     })
   }
 
-  // Ctrl+C asks first; a second Ctrl+C while asking confirms. The session screen's own
-  // handler comes back when the room closes.
-  const askingRef = useRef(false)
-  askingRef.current = asking
   const leaveRef = useRef(leave)
   leaveRef.current = leave
   // On the loading screen there is no prompt to answer: Ctrl+C or Esc leaves at once.
   const waitingRef = useRef(false)
   waitingRef.current = !ready && !failed && !going
+  const interruptRef = useRef<() => void>(() => {})
+  interruptRef.current = () => link.current?.interrupt()
   useKeyboard((key) => { if (waitingRef.current && key.name === "escape") leaveRef.current() })
+  // Ctrl+C never asks. While loading it leaves; otherwise it stops what is being said, like Esc.
   useEffect(() => {
     if (!ctrlC) return
     const before = ctrlC.current
-    ctrlC.current = () => { if (askingRef.current || waitingRef.current) leaveRef.current(); else setAsking(true) }
+    ctrlC.current = () => { if (waitingRef.current) leaveRef.current(); else interruptRef.current() }
     return () => { ctrlC.current = before }
   }, [ctrlC])
 
@@ -119,6 +117,10 @@ export function RoomScreen({
     const text = (override ?? draft).trim()
     setDraft("")
     if (!text) return
+    if (/^\/(security|leave)\s+stop$/.test(text)) {
+      leave(true)
+      return
+    }
     if (text === "/security" || text === "/leave") {
       leave()
       return
@@ -152,8 +154,6 @@ export function RoomScreen({
       onBrowse={() => link.current?.browse()}
       onOpenItem={(key) => link.current?.open(key)}
       onStop={(who) => link.current?.stop(who)}
-      asking={asking}
-      onAnswer={(yes) => { if (yes) leave(); else setAsking(false) }}
       onOpenModels={() => link.current?.requestModels()}
       onSetModel={(avatar, lane, model) => { setNotice(""); link.current?.setModel(avatar, lane, model) }}
     />
@@ -168,7 +168,7 @@ export type Roster = { table: LaneInfo[]; events: EventInfo[]; nowMs: number }
 export type Panes = { lanes: string; swim: string; shelf: string; map: string } & Partial<Roster>
 
 /** The room, drawn from plain data. The screen above owns the link; this owns the layout. */
-export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, browse = null, item = null, onBrowse = () => {}, onOpenItem = () => {}, asking = false, onAnswer = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
+export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draft, onDraft, onSend, models = { choices: [], lanes: [] }, notice = "", flash = "", inserted = null, onPaste = () => {}, onPasteImage = () => {}, onInterrupt = () => {}, onStop = () => {}, browse = null, item = null, onBrowse = () => {}, onOpenItem = () => {}, onOpenModels = () => {}, onSetModel = () => {} }: {
   theme: Theme
   syntaxStyle?: SyntaxStyle
   lines: Line[]
@@ -195,9 +195,6 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   item?: OpenItem | null
   onBrowse?: () => void
   onOpenItem?: (key: string) => void
-  /** Ctrl+C was pressed: ask whether to go back to the coding chat. */
-  asking?: boolean
-  onAnswer?: (yes: boolean) => void
   onOpenModels?: () => void
   onSetModel?: (avatar: string, lane: string, model: string) => void
 }) {
@@ -218,11 +215,6 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
-    if (asking) {
-      if (key.name === "return" || key.name === "enter" || key.name === "y") onAnswer(true)
-      else if (key.name === "escape" || key.name === "n") onAnswer(false)
-      return
-    }
     if (full) {
       if (full === "status" && (key.name === "escape" || key.name === "q")) setFull(null)
       return
@@ -290,7 +282,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
     run(draft)
   }
 
-  const view = asking ? null : full
+  const view = full
   if (view === "model") {
     return <ModelPicker theme={theme} choices={models.choices} lanes={models.lanes} notice={notice} onSet={onSetModel} onBack={() => setFull(null)} />
   }
@@ -317,29 +309,20 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
           </box>
         )}
       </scrollbox>
-      {asking ? (
-        <box flexShrink={0} border borderStyle="rounded" borderColor={theme.warn} flexDirection="column" paddingLeft={1} paddingRight={1} title=" Quit to chat? " titleColor={theme.warn}>
-          <text fg={theme.dim}>Leaves the secure room and returns to the coding chat. The shelf and lanes stay on disk.</text>
-          <box flexDirection="row" columnGap={1}>
-            <Action label="Quit to chat (enter)" theme={theme} plain primary onPress={() => onAnswer(true)} />
-            <Action label="Stay (esc)" theme={theme} plain onPress={() => onAnswer(false)} />
-          </box>
-        </box>
-      ) : null}
       <RoomComposer
         theme={theme}
         draft={draft}
         onDraft={onDraft}
         onSubmit={submit}
-        focused={!asking}
+        focused
         ready={ready}
         inserted={inserted}
         onPaste={onPaste}
         onPasteImage={onPasteImage}
         footer={<box flexDirection="row" justifyContent="space-between"><Standings rows={panes.table ?? []} theme={theme} /><Ram tone={ramTone(pressure)} theme={theme} /></box>}
         status={hint ? { text: hint, color: theme.warn } : flash ? { text: flash, color: theme.warn } : ready ? { text: tally(counts, true), color: theme.success } : { text: phase, color: phase === "the room closed" ? theme.warn : theme.dim }}
-        popupOpen={options.open && !asking}
-        popup={options.open && !asking ? (
+        popupOpen={options.open}
+        popup={options.open ? (
           <SuggestPopup
             rows={options.rows.map((row) => ({ label: row.label, detail: row.detail }))}
             selected={options.selected}
