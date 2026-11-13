@@ -27,6 +27,9 @@ struct RoleToml {
     id: String,
     display: String,
     shelf_allow: Vec<String>,
+    /// Skill names (or `prefix-*`) this role may find and load. Empty means every skill.
+    #[serde(default)]
+    skills_allow: Vec<String>,
     #[serde(default)]
     chat: LaneModel,
     #[serde(default)]
@@ -347,6 +350,7 @@ pub fn build_base(tree: &Tree) -> Result<Registry, String> {
                 id,
                 display: role.display,
                 shelf_allow: role.shelf_allow,
+                skills_allow: role.skills_allow,
                 chat: role.chat,
                 work: role.work,
                 tools,
@@ -395,17 +399,21 @@ pub fn apply_overlay(registry: &mut Registry, overlay: Parsed, warnings: &mut Ve
         };
         if let Some(role) = parts.role {
             let allowed: BTreeSet<&str> = base.shelf_allow.iter().map(String::as_str).collect();
-            match role
-                .shelf_allow
-                .iter()
-                .find(|t| !allowed.contains(t.as_str()))
-            {
+            // An empty skills list means every skill, so an overlay may narrow it to a list, but a
+            // list may only shrink: every entry must already be in the base, and it may not be emptied.
+            let skills_widen = !base.skills_allow.is_empty()
+                && (role.skills_allow.is_empty() || role.skills_allow.iter().any(|p| !base.skills_allow.contains(p)));
+            match role.shelf_allow.iter().find(|t| !allowed.contains(t.as_str())) {
                 Some(extra) => warnings.push(format!(
                     "roles/{id}/role.toml: shelf tool '{extra}' would widen the role; file ignored"
+                )),
+                None if skills_widen => warnings.push(format!(
+                    "roles/{id}/role.toml: skills_allow would widen the role; file ignored"
                 )),
                 None => {
                     base.display = role.display;
                     base.shelf_allow = role.shelf_allow;
+                    base.skills_allow = role.skills_allow;
                     base.chat = role.chat;
                     base.work = role.work;
                 }

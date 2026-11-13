@@ -119,9 +119,23 @@ description = "Read an exact earlier message from this lane's history."
 type = "object"
 
 [[tool]]
-name = "skill"
-handler = "skill"
-description = "List or load a skill."
+name = "skill_find"
+handler = "skill_find"
+description = "Find a skill by what you need it for."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_load"
+handler = "skill_load"
+description = "Load a skill by name."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_unload"
+handler = "skill_unload"
+description = "Unload a skill that is done."
 [tool.schema]
 type = "object"
 

@@ -431,7 +431,7 @@ trait Tool: Send + Sync {
 
 Built-in tools (see `tool/mod.rs` `all_tools()` for the full list): filesystem
 (read/write/edit/delete/list), search (grep/glob), shell (bash/output/kill as
-jobs), memory, skill, history, internet/browser, git, planning + SDLC, task
+jobs), memory, skills (skill_find/load/unload/create/modify), history, internet/browser, git, planning + SDLC, task
 delegation, graph_query, cd, seqthink, and misc (pong/todo).
 
 ### Tool execution lanes

@@ -26,6 +26,10 @@ pub struct CtxBuiltins {
     lanes_dir: Option<std::path::PathBuf>,
     /// Background jobs and the working directory, per lane.
     state: super::lane_state::LaneState,
+    /// The skills each lane has loaded.
+    skills: super::skill_book::SkillBook,
+    /// Read for a role's `skills_allow`; bound when the room starts.
+    registry: std::sync::OnceLock<Arc<crate::room::registry::RegistryHandle>>,
 }
 
 impl CtxBuiltins {
@@ -38,6 +42,8 @@ impl CtxBuiltins {
         Self {
             lanes_dir: fallback.session_dir.as_ref().map(|dir| dir.join("lanes")),
             state: Default::default(),
+            skills: Default::default(),
+            registry: Default::default(),
             by_avatar,
             fallback,
             chat_specs,
@@ -52,10 +58,65 @@ impl CtxBuiltins {
         Self {
             lanes_dir: ctx.session_dir.as_ref().map(|dir| dir.join("lanes")),
             state: Default::default(),
+            skills: Default::default(),
+            registry: Default::default(),
             by_avatar: BTreeMap::new(),
             fallback: Arc::new(ctx),
             chat_specs: host_tool_specs(),
             work_specs: host_tool_specs(),
+        }
+    }
+
+    /// The skills this avatar's role may see. Everything when the role names none.
+    fn skill_scope(&self, avatar: &str) -> crate::model::skill::search::Scope {
+        let allow = self
+            .registry
+            .get()
+            .and_then(|r| r.current().role_of(avatar).map(|role| role.skills_allow.clone()))
+            .unwrap_or_default();
+        crate::model::skill::search::Scope::new(&allow)
+    }
+
+    fn lane_skill_dir(&self, avatar: &str, kind: LaneKind) -> Option<std::path::PathBuf> {
+        self.lanes_dir.as_ref().map(|root| crate::room::lane::lane_dir(root, avatar, kind))
+    }
+
+    /// `skill_find`, `skill_load` and `skill_unload` for one lane. A coding session keeps a loaded body
+    /// in its session tail; a lane keeps the loaded names in its directory and the body comes back in
+    /// this result and again in the lane's system prompt on every later run.
+    fn skill_call(&self, avatar: &str, kind: LaneKind, lane: &str, mut ctx: ToolCtx, call: &ToolCall) -> String {
+        use crate::tool::skill::SKILL_LOAD_PREFIX;
+        let dir = self.lane_skill_dir(avatar, kind);
+        let active = self.skills.active(lane, dir.as_deref());
+        ctx.skill_scope = Some(self.skill_scope(avatar));
+        ctx.active_skill_names = Some(active);
+        let name = call.function.name.as_str();
+        let args: serde_json::Value = serde_json::from_str(&crate::dto::chat::sanitize_tool_arguments(&call.function.arguments))
+            .unwrap_or_else(|_| serde_json::json!({}));
+        let wanted = args.get("name").and_then(serde_json::Value::as_str).unwrap_or("").trim().to_lowercase();
+        match name {
+            "skill_unload" => {
+                if self.skills.unload(lane, dir.as_deref(), &wanted) {
+                    format!("unloaded skill '{wanted}'.")
+                } else {
+                    format!("skill '{wanted}' was not loaded.")
+                }
+            }
+            "skill_load" => {
+                let result = execute_tool(&ctx, call);
+                let Some(rest) = result.strip_prefix(SKILL_LOAD_PREFIX) else { return result };
+                let (loaded, body) = rest.split_once('\n').unwrap_or((rest, ""));
+                self.skills.load(lane, dir.as_deref(), loaded);
+                let where_from = ctx
+                    .skill_registry
+                    .as_ref()
+                    .and_then(|r| r.get(loaded))
+                    .and_then(|s| s.skill_dir.clone())
+                    .map(|d| format!("\nskill_dir: {} (read companion files with `read`)", d.display()))
+                    .unwrap_or_default();
+                format!("loaded skill '{loaded}'.{where_from}\n\n# Skill: {loaded}\n{body}")
+            }
+            _ => execute_tool(&ctx, call),
         }
     }
 
@@ -166,6 +227,7 @@ impl BuiltinHost for CtxBuiltins {
         }
         let lane_dir = self.lanes_dir.as_ref().map(|root| crate::room::lane::lane_dir(root, avatar, kind));
         match name {
+            "skill_find" | "skill_load" | "skill_unload" => return self.skill_call(avatar, kind, &lane, ctx, call),
             "message_find" | "message_load" => {
                 if let Some(dir) = lane_dir {
                     ctx.session_dir = Some(dir);
@@ -203,6 +265,34 @@ impl BuiltinHost for CtxBuiltins {
             return NO_GIT.into();
         }
         result
+    }
+
+    fn bind_registry(&self, registry: Arc<crate::room::registry::RegistryHandle>) {
+        let _ = self.registry.set(registry);
+    }
+
+    fn skills_note(&self, avatar: &str, kind: LaneKind) -> String {
+        let Some(reg) = self.fallback.skill_registry.as_ref().filter(|r| !r.is_empty()) else { return String::new() };
+        let scope = self.skill_scope(avatar);
+        let lane = format!("{avatar}.{}", if kind == LaneKind::Chat { "chat" } else { "work" });
+        let dir = self.lane_skill_dir(avatar, kind);
+        let mut out = String::from(
+            "# Skills\nSkills are saved step-by-step playbooks. They are not listed here. Before specialised work, call skill_find with what you need, then skill_load the one that fits (skip it if its body is already below). skill_unload when done.",
+        );
+        let pinned = reg.pinned(&scope, crate::model::skill::PINNED_MAX);
+        if !pinned.is_empty() {
+            out.push_str("\nPinned skills (load directly):");
+            for d in pinned {
+                out.push_str(&format!("\n- {}: {}", d.name, d.description));
+            }
+        }
+        for name in self.skills.active(&lane, dir.as_deref()) {
+            // A skill that is gone, or no longer in this role's scope, drops out here.
+            let Some(def) = reg.get(&name).filter(|d| scope.allows(&d.name)) else { continue };
+            let body = std::fs::read_to_string(&def.file_path).ok().and_then(|raw| crate::model::agent_def::split_frontmatter(&raw).ok().map(|(_, b)| b.trim().to_string())).unwrap_or_else(|| def.body.clone());
+            out.push_str(&format!("\n\n# Skill: {name}\n{body}"));
+        }
+        out
     }
 
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec> {

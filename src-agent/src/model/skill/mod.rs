@@ -23,6 +23,7 @@ mod def;
 mod parse;
 mod persistence;
 mod registry;
+pub mod search;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -37,4 +38,4 @@ pub use persistence::{
     create_owned_skill, delete_owned_skill, duplicate_to_owned, export_owned_skill_zip,
     install_owned_skill_zip, update_owned_skill, OwnedSkillTarget, SkillEdit,
 };
-pub use registry::{valid_extra_skill_roots, SkillRegistry};
+pub use registry::{valid_extra_skill_roots, SkillRegistry, PINNED_MAX};

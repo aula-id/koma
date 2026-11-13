@@ -103,7 +103,11 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "message_find"
             | "message_load"
             | "secure_shelf"
-            | "skill"
+            | "skill_find"
+            | "skill_load"
+            | "skill_unload"
+            | "skill_create"
+            | "skill_modify"
             | "web_search"
             | "web_fetch"
             | "web_page"
@@ -498,6 +502,9 @@ fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool
     dest == mission_branch
 }
 
+/// See [`ToolCtx::skill_rank`].
+pub type SkillRank = Arc<dyn Fn(&str, &[(String, String)]) -> Option<Vec<String>> + Send + Sync>;
+
 /// Shared context handed to every tool invocation.
 #[derive(Clone)]
 pub struct ToolCtx {
@@ -538,6 +545,12 @@ pub struct ToolCtx {
     pub session_dir: Option<PathBuf>,
     /// Absolute paths of currently loaded dir-form skill directories.
     pub active_skill_dirs: Vec<PathBuf>,
+    /// Which skills this caller may find and load. `None` means all (the chat); a secure-room role
+    /// narrows it to its own.
+    pub skill_scope: Option<crate::model::skill::search::Scope>,
+    /// Re-orders `skill_find` candidates by intent with one model call: (request, [(name, description)])
+    /// returns names best first. `None`, or an answer of `None`, leaves the word-match order.
+    pub skill_rank: Option<SkillRank>,
     /// When `false`, mutating path resolution (`resolve` / write/edit/delete)
     /// must NOT accept absolute paths merely because they lie under the
     /// process-global scratch root. SDLC execute/integrate sets this false so
@@ -638,7 +651,11 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Remember),
         Box::new(memory::Forget),
         Box::new(memory::Recall),
-        Box::new(skill::Skill),
+        Box::new(skill::SkillFind),
+        Box::new(skill::SkillLoad),
+        Box::new(skill::SkillUnload),
+        Box::new(skill::SkillCreate),
+        Box::new(skill::SkillModify),
         Box::new(history::MessageFind),
         Box::new(history::MessageLoad),
         Box::new(secure_shelf::SecureShelf),
@@ -692,7 +709,11 @@ const AGENT_PICKER_EXCLUDED: &[&str] = &[
     "task_send",
     "pong",
     "dir_cache_update",
-    "skill",
+    "skill_find",
+    "skill_load",
+    "skill_unload",
+    "skill_create",
+    "skill_modify",
     // Sub-agent continuation currently cannot inject synthetic image messages.
     "load_image",
 ];
@@ -745,6 +766,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "recall",
     "message_find",
     "message_load",
+    "skill_find",
     "secure_shelf",
     "web_fetch",
     "web_search",

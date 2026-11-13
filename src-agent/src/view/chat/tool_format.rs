@@ -27,6 +27,7 @@ pub(crate) fn tool_box_label(name: &str) -> Option<&'static str> {
         "git_operator" | "git_cred" | "git_worktree" => "git",
         "web_fetch" | "web_search" => "web",
         "recall" => "memory",
+        "skill_find" => "skill",
         _ => return None, // None → not boxed, keep the single-line rendering
     })
 }
@@ -79,7 +80,8 @@ fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
         "dir_list" => s("path").or_else(|| arr("paths")),
         "grep" | "glob" => s("pattern"),
         "web_fetch" | "web_download" => s("url"),
-        "web_search" => s("query"),
+        "web_search" | "skill_find" => s("query"),
+        "skill_load" | "skill_unload" | "skill_create" | "skill_modify" => s("name"),
         "remember" => s("slug").or_else(|| s("description")),
         "forget" | "recall" => s("slug"),
         "task" => {
@@ -141,3 +143,18 @@ fn generic_inner(v: &serde_json::Value, raw: &str) -> String {
         _ => raw.to_string(),
     }
 }
+
+#[cfg(test)]
+mod skill_tool_tests {
+    use super::*;
+
+    #[test]
+    fn skill_tools_show_what_was_asked_for_and_find_is_boxed() {
+        assert_eq!(format_tool_signature("skill_find", r#"{"query":"check JWT tokens"}"#), "skill_find(check JWT tokens)");
+        assert_eq!(format_tool_signature("skill_load", r#"{"name":"jwt-review"}"#), "skill_load(jwt-review)");
+        assert_eq!(format_tool_signature("skill_unload", r#"{"name":"jwt-review"}"#), "skill_unload(jwt-review)");
+        assert_eq!(tool_box_label("skill_find"), Some("skill"));
+        assert_eq!(tool_box_label("skill_load"), None);
+    }
+}
+
