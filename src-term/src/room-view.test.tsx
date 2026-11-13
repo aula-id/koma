@@ -303,6 +303,28 @@ test("Esc interrupts, /stop names who, and a mistyped command stays in the box",
   await act(async () => { await view.dispose() })
 })
 
+test("one Esc interrupts, a quick second Esc clears the composer", async () => {
+  const log: string[] = []
+  let latest = ""
+  function Box() {
+    const [draft, setDraft] = useState("")
+    latest = draft
+    return <RoomView theme={theme} lines={lines} panes={panes} counts={counts} phase="connected" draft={draft} onDraft={setDraft}
+      onSend={() => {}} onInterrupt={() => log.push("interrupt")} onStop={() => {}} />
+  }
+  let view!: View
+  await act(async () => { view = await testRender(<Box />, { width: 100, height: 24 }) })
+  const step = (run: (v: View) => Promise<void> | void) => act(async () => { await run(view); await new Promise((r) => setTimeout(r, 40)) })
+  await step((v) => v.mockInput.typeText("half a thought"))
+  await step((v) => v.mockInput.pressEscape())
+  expect(log).toEqual(["interrupt"])
+  expect(latest).toBe("half a thought")
+  await step((v) => v.mockInput.pressEscape())
+  expect(log).toEqual(["interrupt"])
+  expect(latest).toBe("")
+  await act(async () => { await view.dispose() })
+})
+
 test("under the composer, each minion is its tag and a mark, with no state words", async () => {
   const table = [
     { avatar: "chief", display: "Chief", alias: "CF", role: "chief", lane: "chat", phase: "running", task: "", started_ms: 0, last_event_ms: 0, steps: 1, last_tool: "", error: "" },

@@ -24,6 +24,8 @@ export type ModelList = { choices: ModelChoice[]; lanes: LaneRow[] }
 export type Counts = { open: number; verified: number; returned: number; reports: number }
 
 /** The secure room. `/security` again returns to the coding daemon. */
+const DOUBLE_ESC_MS = 600
+
 export function RoomScreen({
   id,
   theme,
@@ -212,6 +214,7 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
   const [popup, setPopup] = useState<PopupState>(CLOSED)
   const options = popupView(draft, popup)
   const lastKey = useRef({ name: "", at: 0 })
+  const lastEsc = useRef(0)
 
   useKeyboard((key) => {
     if (key.eventType === "release") return
@@ -225,7 +228,12 @@ export function RoomView({ theme, syntaxStyle, lines, panes, counts, phase, draf
       return
     }
     if (key.name === "escape" && !options.open) {
-      onInterrupt()
+      // One Esc interrupts. A second one right after clears the composer.
+      const now = Date.now()
+      const twice = now - lastEsc.current < DOUBLE_ESC_MS
+      lastEsc.current = twice ? 0 : now
+      if (twice) onDraft("")
+      else onInterrupt()
       return
     }
     if (!options.open) return
