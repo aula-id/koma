@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use super::def::{SkillCatalogueEntry, SkillDef, SkillSource};
+use super::search::{self, Hit, Scope};
 use super::parse::load_skill_file;
 
 const SKILL_ENTRY_FILES: &[&str] = &["SKILL.md", "skill.md"];
@@ -165,6 +166,35 @@ impl SkillRegistry {
             .values()
             .map(SkillCatalogueEntry::from_def)
             .collect()
+    }
+
+    /// The best matches for a request, most relevant first, and how many matched in all. Only skills
+    /// inside `scope` are considered. An empty query matches nothing: skills are asked for, not listed.
+    pub fn search(&self, query: &str, scope: &Scope, offset: usize, limit: usize) -> (Vec<Hit>, usize) {
+        let words = search::words(query);
+        let whole = query.trim().to_lowercase();
+        let mut hits: Vec<Hit> = self
+            .skills
+            .values()
+            .filter(|d| scope.allows(&d.name))
+            .filter_map(|d| {
+                let score = search::score(d, &words, &whole);
+                (score > 0).then(|| Hit { name: d.name.clone(), score })
+            })
+            .collect();
+        hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+        let total = hits.len();
+        (hits.into_iter().skip(offset).take(limit).collect(), total)
+    }
+
+    /// Skills the user marked `pinned: true`, at most `max`, inside `scope`.
+    pub fn pinned(&self, scope: &Scope, max: usize) -> Vec<&SkillDef> {
+        self.skills.values().filter(|d| scope.allows(&d.name) && search::is_pinned(d)).take(max).collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_defs(defs: Vec<SkillDef>) -> Self {
+        Self { skills: defs.into_iter().map(|d| (d.name.clone(), d)).collect() }
     }
 
     pub fn catalogue_text(&self) -> String {
