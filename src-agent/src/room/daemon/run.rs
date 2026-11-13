@@ -98,7 +98,13 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
         .with_usage(session_id.clone(), usage_pwd_hash),
     );
     let idx = state.rest.foreground;
-    let tool_ctx = build_tool_ctx(&state, idx);
+    let mut tool_ctx = build_tool_ctx(&state, idx);
+    // The room reads the same skill folders the chat does; each role sees its own `skills_allow` of them.
+    tool_ctx.skill_registry = Some(crate::model::skill::SkillRegistry::load(
+        Some(&tool_ctx.workspace),
+        &state.rest.config.extra_skill_roots,
+    ));
+    tool_ctx.active_skill_names = None;
     // The proof check may read only where the lanes may work.
     let mut oracle_roots = tool_ctx.workspaces.clone();
     if !tool_ctx.workspace.as_os_str().is_empty() && !oracle_roots.contains(&tool_ctx.workspace) {
