@@ -14,6 +14,7 @@ const STOP: &[&str] = &["the", "and", "for", "with", "that", "this", "from", "in
 pub struct Scope(Vec<String>);
 
 impl Scope {
+    #[allow(dead_code)] // used by the secure room's per-role scope
     pub fn new(patterns: &[String]) -> Self {
         Self(patterns.iter().map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect())
     }

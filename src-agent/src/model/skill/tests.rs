@@ -189,7 +189,7 @@ fn setup_skill_root(
 fn empty_roots_gives_empty_registry() {
     let reg = SkillRegistry::load_isolated(None, &[]);
     assert!(reg.is_empty());
-    assert!(reg.catalogue_text().is_empty());
+    assert!(reg.prompt_text().is_none());
 }
 
 #[test]

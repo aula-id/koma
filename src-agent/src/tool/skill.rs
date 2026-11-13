@@ -42,14 +42,14 @@ fn name_arg(args: &Value, what: &str) -> Result<String> {
 /// What the model gets back from `skill_find`. The catalogue is never listed: a request goes in, a few
 /// matches come out.
 fn find_skills(ctx: &ToolCtx, args: &Value) -> Result<String> {
-    use crate::model::skill::search::{decisive, Scope};
+    use crate::model::skill::search::decisive;
     let query = optional_text(args, "query").ok_or_else(|| anyhow::anyhow!("missing required 'query' for skill_find: say what you need the skill for"))?;
     let Some(reg) = ctx.skill_registry.as_ref().filter(|r| !r.is_empty()) else {
         return Ok("No skills are installed.".to_string());
     };
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = (args.get("limit").and_then(Value::as_u64).unwrap_or(FIND_DEFAULT as u64) as usize).clamp(1, FIND_MAX);
-    let scope = ctx.skill_scope.clone().unwrap_or_else(Scope::default);
+    let scope = ctx.skill_scope.clone().unwrap_or_default();
     // A wider pool when a model re-rank may reorder it; plain paging otherwise.
     let pool = if offset == 0 && ctx.skill_rank.is_some() { 20 } else { limit };
     let (mut hits, total) = reg.search(query, &scope, offset, pool);
@@ -217,6 +217,7 @@ skill_tool!(
 );
 
 /// The names of the skill tools the model is shown.
+#[cfg(test)]
 pub const SKILL_TOOLS: [&str; 5] = ["skill_find", "skill_load", "skill_unload", "skill_create", "skill_modify"];
 
 fn create_skill(ctx: &ToolCtx, args: &Value) -> Result<String> {
