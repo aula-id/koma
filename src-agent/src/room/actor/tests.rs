@@ -602,10 +602,12 @@ impl ModelClient for SeenModel {
     }
 }
 
+type ImageLog = Arc<Mutex<Vec<(String, usize, String)>>>;
+
 fn room_with_images(
     name: &str,
     replies: Vec<((&str, usize), ModelReply)>,
-) -> (RoomHandle, Arc<Mutex<Vec<(String, usize, String)>>>, std::path::PathBuf) {
+) -> (RoomHandle, ImageLog, std::path::PathBuf) {
     let root = std::env::temp_dir().join(format!("koma-room-images-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("shared")).unwrap();

@@ -36,7 +36,7 @@ fn whitespace_does_not_matter_and_a_needle_may_span_lines() {
 #[test]
 fn a_missing_needle_or_file_refutes() {
     let (dir, _) = tree();
-    let r = check(&claim(json!([{ "path": "src/pressure.ts", "needle": "Bun.gc(true) never called" }])), &[dir.clone()]);
+    let r = check(&claim(json!([{ "path": "src/pressure.ts", "needle": "Bun.gc(true) never called" }])), std::slice::from_ref(&dir));
     assert_eq!(r.verdict, Verdict::Refuted);
     assert!(feedback(&r.lines).contains("is not in the file"));
     let r = check(&claim(json!([{ "path": "src/nothing.ts", "needle": "does not matter at all" }])), &[dir]);
@@ -54,12 +54,12 @@ fn one_refuted_proof_refutes_the_claim_even_when_another_is_found() {
 #[test]
 fn nothing_to_check_is_unproven_never_refuted() {
     let (dir, outside) = tree();
-    assert_eq!(check(&claim(json!([])), &[dir.clone()]).verdict, Verdict::Unproven);
-    assert_eq!(check(&json!({ "kind": "claim" }), &[dir.clone()]).verdict, Verdict::Unproven);
-    assert_eq!(check(&claim(json!([{ "path": "src/pressure.ts", "needle": "short" }])), &[dir.clone()]).verdict, Verdict::Unproven);
+    assert_eq!(check(&claim(json!([])), std::slice::from_ref(&dir)).verdict, Verdict::Unproven);
+    assert_eq!(check(&json!({ "kind": "claim" }), std::slice::from_ref(&dir)).verdict, Verdict::Unproven);
+    assert_eq!(check(&claim(json!([{ "path": "src/pressure.ts", "needle": "short" }])), std::slice::from_ref(&dir)).verdict, Verdict::Unproven);
     assert_eq!(check(&claim(json!([{ "path": "src/pressure.ts", "needle": "return reduce(state)" }])), &[]).verdict, Verdict::Unproven);
     // A file outside the workspace, by absolute path or by climbing out, cannot be judged here.
-    let abs = check(&claim(json!([{ "path": outside.to_string_lossy(), "needle": "secret outside the workspace" }])), &[dir.clone()]);
+    let abs = check(&claim(json!([{ "path": outside.to_string_lossy(), "needle": "secret outside the workspace" }])), std::slice::from_ref(&dir));
     assert_eq!(abs.verdict, Verdict::Unproven);
     let name = outside.file_name().unwrap().to_string_lossy().to_string();
     let up = check(&claim(json!([{ "path": format!("../{name}"), "needle": "secret outside the workspace" }])), &[dir]);
