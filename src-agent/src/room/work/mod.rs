@@ -20,7 +20,7 @@ mod tests;
 #[allow(unused_imports)]
 pub use coordinator::{Caller, Coordinator, ToolOutcome};
 #[allow(unused_imports)]
-pub use effects::Effect;
+pub use effects::{Audience, Effect};
 #[allow(unused_imports)]
 pub use finish::assert_finishable;
 #[allow(unused_imports)]

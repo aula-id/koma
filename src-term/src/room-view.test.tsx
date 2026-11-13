@@ -321,3 +321,57 @@ test("under the composer, each minion is its tag and a mark, with no state words
   expect(text).toContain("RV ■")
   for (const word of ["thinking", "ready", "stopped"]) expect(text).not.toContain(word)
 })
+
+const both: Line[] = [
+  say("you", "scan the staging api"),
+  say("chief", "Scope check first.", "chat", "user"),
+  say("chief", "Assignment for Lab Red: probe the auth", undefined, "team"),
+  { id: "w", author: "red", lane: "work", items: [{ kind: "text", text: "Probing the login form.", to: "team" }] },
+]
+
+test("screen user shows only the conversation, team only the team's work, combine both", async () => {
+  const user = await frame(110, 28, { lines: both, screen: "user" })
+  expect(user).toContain("scan the staging api")
+  expect(user).toContain("Scope check first.")
+  expect(user).not.toContain("Probing the login form")
+  expect(user).not.toContain("Assignment for Lab Red")
+  const team = await frame(110, 28, { lines: both, screen: "team" })
+  expect(team).toContain("Assignment for Lab Red")
+  expect(team).toContain("Probing the login form")
+  expect(team).not.toContain("scan the staging api")
+  const all = await frame(110, 28, { lines: both })
+  for (const text of ["scan the staging api", "Scope check first.", "Assignment for Lab Red", "Probing the login form"]) expect(all).toContain(text)
+})
+
+test("split puts the two sides beside each other over 80 columns and stacks them at 80 or less", async () => {
+  const wide = await frame(110, 28, { lines: both, screen: "split" })
+  const rows = wide.split("\n")
+  const mine = rows.find((r) => r.includes("Scope check first.")) ?? ""
+  expect(wide).toContain(" you ")
+  expect(wide).toContain(" team ")
+  // Side by side: the two sides share a row of the screen.
+  expect(rows.some((r) => r.includes("Scope check first.") && r.includes("Probing the login form."))).toBe(true)
+  expect(mine.indexOf("Scope check first.")).toBeLessThan(mine.indexOf("Probing the login form."))
+  const narrow = await frame(80, 30, { lines: both, screen: "split" })
+  const nrows = narrow.split("\n")
+  expect(narrow).toContain(" you ")
+  expect(narrow).toContain(" team ")
+  // Stacked: no row holds both sides, and the user's pane is above the team's.
+  expect(nrows.some((r) => r.includes("Scope check first.") && r.includes("Probing the login form."))).toBe(false)
+  expect(nrows.findIndex((r) => r.includes("Scope check first."))).toBeLessThan(nrows.findIndex((r) => r.includes("Assignment for Lab Red")))
+})
+
+test("a split on a short narrow terminal falls back to one view instead of two slivers", async () => {
+  const text = await frame(70, 12, { lines: both, screen: "split" })
+  expect(text).not.toContain(" team ")
+  expect(text).not.toContain(" you ")
+  // One list, newest at the bottom, as in combine.
+  expect(text).toContain("Probing the login form.")
+})
+
+test("watching only your side shows how much the team has done meanwhile", async () => {
+  const text = await frame(110, 28, { lines: both, screen: "user" })
+  expect(text).toContain("team +2")
+  expect(await frame(110, 28, { lines: both, screen: "team" })).toContain("you +1")
+  expect(await frame(110, 28, { lines: both })).not.toContain("team +")
+})

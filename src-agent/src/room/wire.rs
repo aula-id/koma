@@ -74,9 +74,21 @@ pub enum RoomServer {
     Item { key: String, revision: i64, updated: i64, content: String },
     Chief { text: String },
     LaneChat { avatar: String, text: String },
-    Visible { author: String, text: String },
+    Visible {
+        author: String,
+        text: String,
+        /// Older saved lines have none; the screen then works it out from the author.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<crate::room::work::Audience>,
+    },
     /// Thinking, a tool call or a tool result from one lane. `lane` is `chat` or `work`.
-    Part { author: String, lane: String, part: LanePart },
+    Part {
+        author: String,
+        lane: String,
+        part: LanePart,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<crate::room::work::Audience>,
+    },
     Status {
         digest: String,
         timeline: String,
@@ -141,8 +153,8 @@ impl RoomServer {
         match event {
             RoomEvent::Chief(text) => RoomServer::Chief { text },
             RoomEvent::LaneChat { avatar, text } => RoomServer::LaneChat { avatar, text },
-            RoomEvent::Visible { author, text } => RoomServer::Visible { author, text },
-            RoomEvent::Part { author, lane, part } => RoomServer::Part { author, lane, part },
+            RoomEvent::Visible { author, text, audience } => RoomServer::Visible { author, text, audience: Some(audience) },
+            RoomEvent::Part { author, lane, part, audience } => RoomServer::Part { author, lane, part, audience: Some(audience) },
             RoomEvent::Status(status) => Self::from_status(status),
             RoomEvent::Browse(b) => RoomServer::Browse { shelf: b.shelf, goals: b.goals, reports: b.reports },
             RoomEvent::Item(i) => RoomServer::Item { key: i.key, revision: i.revision, updated: i.updated, content: i.content },

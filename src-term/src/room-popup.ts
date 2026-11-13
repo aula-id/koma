@@ -28,7 +28,7 @@ export function dismissed(draft: string, view: PopupView): PopupState {
 
 /** Tab completes the highlighted row and adds a space, which closes the popup. */
 export function completion(row: Suggestion): string {
-  return row.insert.startsWith("/stop ") || row.insert.startsWith("/leave ") ? row.insert : `${row.label} `
+  return row.insert.startsWith("/stop ") || row.insert.startsWith("/leave ") || row.insert.startsWith("/screen ") ? row.insert : `${row.label} `
 }
 
 export type Chosen = { run: string } | { insert: string }
@@ -41,5 +41,8 @@ export function chosen(row: Suggestion): Chosen {
   // /leave has two ways out: switch back to the chat, or stop the room as well.
   if (row.label === "/leave") return { insert: "/leave " }
   if (row.insert.startsWith("/leave ")) return { run: row.insert }
+  // /screen asks which view; choosing one under it runs it.
+  if (row.label === "/screen") return { insert: "/screen " }
+  if (row.insert.startsWith("/screen ")) return { run: row.insert }
   return row.label.startsWith("/") ? { run: row.label } : { insert: completion(row) }
 }

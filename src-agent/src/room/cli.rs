@@ -291,7 +291,7 @@ mod attach {
                     }
                 }
             }
-            RoomServer::Visible { author, text } => { let _ = writeln!(out, "{author}: {text}"); }
+            RoomServer::Visible { author, text, .. } => { let _ = writeln!(out, "{author}: {text}"); }
             RoomServer::Status { digest, .. } => {
                 if digest != last_digest && !digest.is_empty() {
                     let _ = writeln!(out, "status: {digest}");

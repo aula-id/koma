@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::effects::Effect;
+use super::effects::{Audience, Effect};
 use super::finish::{assert_finishable, required_review_references};
 use super::goals::{append_goal, open_trajectory_goals};
 use super::model::{Assignment, ReviewItem, ReviewStatus, Work};
@@ -615,6 +615,7 @@ impl Coordinator {
                 text: format!("Assignment for {display}: {}", item.prompt),
                 nonce: format!("group-dispatch:{}:{}:{}", work.id, input.dispatch_key, item.avatar),
                 work_id: work.id.clone(),
+                audience: Audience::Team,
             });
             effects.push(Effect::StartLane { assignment: assignment.clone(), goal: work.prompt.clone() });
             created.push(assignment);
@@ -725,6 +726,7 @@ impl Coordinator {
                 text: input.result,
                 nonce: format!("group-result:{}", own.id),
                 work_id: own.work_id.clone(),
+                audience: Audience::Team,
             }],
         ))
     }
@@ -767,6 +769,7 @@ impl Coordinator {
                 text: input.report,
                 nonce: format!("group-finish:{}", active.id),
                 work_id: active.id.clone(),
+                audience: Audience::User,
             }],
         ))
     }

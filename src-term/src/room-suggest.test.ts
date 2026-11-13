@@ -8,7 +8,7 @@ test("matching is by prefix and fills a trailing space", () => {
   expect(suggest("@rev").rows).toEqual([{ label: "@reviewer", detail: "verifies findings independently", insert: "@reviewer " }])
 })
 test("slash offers the way back to coding", () => {
-  expect(suggest("/").rows.map((r) => r.label)).toEqual(["/model", "/status", "/shelf", "/trajectory", "/report", "/stop", "/security", "/leave"])
+  expect(suggest("/").rows.map((r) => r.label)).toEqual(["/model", "/status", "/shelf", "/trajectory", "/report", "/screen", "/stop", "/security", "/leave"])
 })
 test("nothing is offered once the word is finished or plain text", () => {
   expect(suggest("@red probe").rows).toEqual([])
@@ -47,4 +47,15 @@ test("/leave has two ways out, switch and stop, chosen like /stop's names", () =
   expect(suggestFor("/leave st").rows.map((r) => r.label)).toEqual(["stop"])
   expect(classify("/leave stop")).toEqual({ kind: "message" })
   expect(classify("/leave later")).toEqual({ kind: "unknown", word: "/leave later", near: "/leave switch" })
+})
+
+test("/screen offers its four views and a choice under it runs", () => {
+  expect(chosen(suggestFor("/scr").rows[0]!)).toEqual({ insert: "/screen " })
+  const rows = suggestFor("/screen ").rows
+  expect(rows.map((r) => r.label)).toEqual(["combine", "split", "user", "team"])
+  expect(chosen(rows[2]!)).toEqual({ run: "/screen user" })
+  expect(suggestFor("/screen t").rows.map((r) => r.label)).toEqual(["team"])
+  expect(classify("/screen split")).toEqual({ kind: "screen", mode: "split" })
+  expect(classify("/screen TEAM")).toEqual({ kind: "screen", mode: "team" })
+  expect(classify("/screen wide")).toEqual({ kind: "unknown", word: "/screen wide", near: "/screen combine" })
 })

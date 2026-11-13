@@ -2,12 +2,16 @@ import { createConnection, type Socket } from "node:net"
 import { encodeFrame, FrameReader } from "./protocol.ts"
 import { socketPath } from "./paths.ts"
 
+/** Who a line is for: the user's own conversation, or the team at work. Older saved lines carry none. */
+export type Audience = "user" | "team"
+const audienceOf = (value: unknown): Audience | undefined => value === "user" || value === "team" ? value : undefined
+
 export type RoomFrame =
   | { type: "hello"; kind: string }
   | { type: "chief"; text: string }
   | { type: "lane"; avatar: string; text: string }
-  | { type: "visible"; author: string; text: string }
-  | { type: "part"; author: string; lane: string; part: LanePart }
+  | { type: "visible"; author: string; text: string; audience?: Audience }
+  | { type: "part"; author: string; lane: string; part: LanePart; audience?: Audience }
   | { type: "status"; digest: string; timeline: string; shelf: string; trajectory: string; open: number; verified: number; returned: number; reports: number; lanes: LaneInfo[]; events: EventInfo[]; now_ms: number }
   | { type: "models"; choices: ModelChoice[]; lanes: LaneRow[] }
   | { type: "notice"; text: string }
@@ -86,17 +90,18 @@ export function parseRoomFrame(value: unknown): RoomFrame | null {
   const lane = body("lane_chat")
   if (lane) return { type: "lane", avatar: String(lane.avatar ?? ""), text: String(lane.text ?? "") }
   const visible = body("visible")
-  if (visible) return { type: "visible", author: String(visible.author ?? ""), text: String(visible.text ?? "") }
+  if (visible) return { type: "visible", author: String(visible.author ?? ""), text: String(visible.text ?? ""), audience: audienceOf(visible.audience) }
   const part = body("part")
   if (part) {
     const inner = part.part && typeof part.part === "object" ? part.part as Record<string, unknown> : undefined
     const kind = String(inner?.kind ?? "")
     const author = String(part.author ?? "")
     const lane = String(part.lane ?? "chat")
-    if (kind === "text_delta" || kind === "reasoning_delta") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") } }
-    if (kind === "reasoning") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") } }
-    if (kind === "tool_call") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), name: String(inner?.name ?? ""), args: String(inner?.args ?? "") } }
-    if (kind === "tool_result") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), ok: Boolean(inner?.ok), result: String(inner?.result ?? "") } }
+    const audience = audienceOf(part.audience)
+    if (kind === "text_delta" || kind === "reasoning_delta") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") }, audience }
+    if (kind === "reasoning") return { type: "part", author, lane, part: { kind, text: String(inner?.text ?? "") }, audience }
+    if (kind === "tool_call") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), name: String(inner?.name ?? ""), args: String(inner?.args ?? "") }, audience }
+    if (kind === "tool_result") return { type: "part", author, lane, part: { kind, id: String(inner?.id ?? ""), ok: Boolean(inner?.ok), result: String(inner?.result ?? "") }, audience }
     return null
   }
   const status = body("status")

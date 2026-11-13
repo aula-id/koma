@@ -47,7 +47,7 @@ use crate::room::registry::{Registry, RegistryHandle};
 use crate::room::shelf::Shelf;
 use crate::room::transition::{LaneRunState, Observation};
 use crate::room::trajectory::gate;
-use crate::room::work::{Coordinator, Effect, Reconciler};
+use crate::room::work::{Audience, Coordinator, Effect, Reconciler};
 
 /// Limits and cadences for a room.
 #[derive(Debug, Clone)]
@@ -185,6 +185,7 @@ pub fn spawn_room_in(
         lanes: BTreeMap::new(),
         assignment_lane: BTreeMap::new(),
         chief_busy: false,
+        chief_user_turn: false,
         resuming: false,
         turn_images: Vec::new(),
         chief_images: Vec::new(),
@@ -222,6 +223,8 @@ struct RoomActor {
     lanes: BTreeMap<Slot, LaneHandle>,
     assignment_lane: BTreeMap<String, String>,
     chief_busy: bool,
+    /// The Chief's current turn began from something the user said, so its steps belong to the user.
+    chief_user_turn: bool,
     /// Lanes are being started again after the room was entered anew.
     resuming: bool,
     /// Images from the user's latest message, handed to the lanes the Chief starts this turn.
@@ -309,7 +312,7 @@ impl RoomActor {
         };
         tokio::task::spawn_blocking(move || {
             let result = builtins.run("chief", LaneKind::Chat, &call);
-            let _ = out.send(RoomEvent::Visible { author: "shell".into(), text: format!("$ {command}\n{result}") });
+            let _ = out.send(RoomEvent::Visible { author: "shell".into(), text: format!("$ {command}\n{result}"), audience: Audience::User });
         });
     }
 
@@ -324,6 +327,7 @@ impl RoomActor {
             Addressed::Clerk => self.emit(RoomEvent::Visible {
                 author: "room".into(),
                 text: "the clerk only speaks to the chief".into(),
+                audience: Audience::User,
             }),
             Addressed::Avatar { id, body } => self.speak_to(&id, body, images),
             Addressed::Chief(text) => self.tell_chief(text, images),
@@ -407,7 +411,7 @@ impl RoomActor {
             ControlAction::Resume(avatar) => self.inject_work(&avatar, LaneInput::Resume),
             ControlAction::Stop(avatar) => self.stop_slot(&Slot::new(&avatar, LaneKind::Work)),
             ControlAction::Inject { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
-            ControlAction::Noop(reason) => self.emit(RoomEvent::Visible { author: "room".into(), text: reason }),
+            ControlAction::Noop(reason) => self.emit(RoomEvent::Visible { author: "room".into(), text: reason, audience: Audience::User }),
         }
     }
 
@@ -438,7 +442,7 @@ impl RoomActor {
             .map(|(slot, _)| slot.clone())
             .collect();
         if slots.is_empty() {
-            self.emit(RoomEvent::Visible { author: "room".into(), text: format!("{who} has nothing running to stop") });
+            self.emit(RoomEvent::Visible { author: "room".into(), text: format!("{who} has nothing running to stop"), audience: Audience::User });
             return;
         }
         for slot in slots {
@@ -486,7 +490,7 @@ impl RoomActor {
             }
         }
         let which = if slot.kind == LaneKind::Chat { "chat" } else { "work" };
-        self.emit(RoomEvent::Visible { author: slot.avatar.clone(), text: format!("stopped by you ({which})") });
+        self.emit(RoomEvent::Visible { author: slot.avatar.clone(), text: format!("stopped by you ({which})"), audience: Audience::User });
     }
 
     // ---- lane events ----
@@ -526,10 +530,25 @@ impl RoomActor {
                 self.lane_ended(avatar, kind, LaneRunState::Completed, Some(report));
             }
             LaneEvent::Failed { error } => {
-                self.emit(RoomEvent::Visible { author: avatar.into(), text: format!("lane failed: {error}") });
+                self.emit(RoomEvent::Visible { author: avatar.into(), text: format!("lane failed: {error}"), audience: Audience::Team });
                 self.lane_ended(avatar, kind, LaneRunState::Failed, None);
             }
             _ => {}
+        }
+    }
+
+    /// Who a lane's step is for. A work lane is the team working. A specialist's chat lane only runs
+    /// because the user spoke to it. The Chief's steps are the user's when the turn began from the
+    /// user's message, and the team's when it began from a flag, a result or a wake-up.
+    fn audience_of(&self, avatar: &str, kind: LaneKind) -> Audience {
+        if kind == LaneKind::Work {
+            return Audience::Team;
+        }
+        let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
+        if is_chief && !self.chief_user_turn {
+            Audience::Team
+        } else {
+            Audience::User
         }
     }
 
@@ -540,7 +559,7 @@ impl RoomActor {
             return;
         }
         let lane = if kind == LaneKind::Chat { "chat" } else { "work" };
-        self.emit(RoomEvent::Part { author: avatar.into(), lane: lane.into(), part });
+        self.emit(RoomEvent::Part { author: avatar.into(), lane: lane.into(), part, audience: self.audience_of(avatar, kind) });
     }
 
     fn lane_ended(&mut self, avatar: &str, kind: LaneKind, run: LaneRunState, report: Option<String>) {
@@ -623,14 +642,14 @@ impl RoomActor {
                     });
                 }
                 Effect::Steer { avatar, text } => self.inject_work(&avatar, LaneInput::Steer(text)),
-                Effect::Visible { author, text, nonce, work_id } => {
+                Effect::Visible { author, text, nonce, work_id, audience } => {
                     // The store's unique key decides, so a line posts once even
                     // across a restart. `Ok(false)` means it was already posted. A
                     // storage error still posts: losing the line is worse than a
                     // repeat after a crash.
                     let fresh = self.coordinator.store().remember_nonce(&work_id, &nonce).unwrap_or(true);
                     if fresh {
-                        self.emit(RoomEvent::Visible { author, text });
+                        self.emit(RoomEvent::Visible { author, text, audience });
                     }
                 }
             }
@@ -658,6 +677,7 @@ impl RoomActor {
         }
         let registry = self.registry.current();
         let items = self.inbox.drain();
+        self.chief_user_turn = items.iter().any(|item| matches!(item, InboxItem::User(_)));
         let task = self.build_chief_turn(items);
         let prompt = registry.role("chief").map(|r| r.prompt.clone()).unwrap_or_default();
         let prompt = self.with_skills(&registry, "chief", LaneKind::Chat, prompt);

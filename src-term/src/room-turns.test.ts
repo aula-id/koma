@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { reduceLines, say, plain, type Line } from "./room-turns.ts"
+import { forSide, reduceLines, say, plain, teamCount, userCount, type Line } from "./room-turns.ts"
 import type { RoomFrame } from "./room-link.ts"
 
 const run = (frames: RoomFrame[], start: Line[] = []) => frames.reduce(reduceLines, start)
@@ -52,8 +52,8 @@ test("live pieces build one item that the whole reply then replaces in place", (
   ])
   expect(lines).toHaveLength(1)
   expect(lines[0]!.items).toEqual([
-    { kind: "reasoning", text: "let me think", streaming: true },
-    { kind: "text", text: "Hello", streaming: true },
+    { kind: "reasoning", text: "let me think", streaming: true, to: "user" },
+    { kind: "text", text: "Hello", streaming: true, to: "user" },
   ])
   const done = run([
     { type: "part", author: "chief", lane: "chat", part: { kind: "reasoning", text: "let me think." } },
@@ -61,8 +61,8 @@ test("live pieces build one item that the whole reply then replaces in place", (
   ], lines)
   expect(done).toHaveLength(1)
   expect(done[0]!.items).toEqual([
-    { kind: "reasoning", text: "let me think." },
-    { kind: "text", text: "Hello there." },
+    { kind: "reasoning", text: "let me think.", to: "user" },
+    { kind: "text", text: "Hello there.", to: "user" },
   ])
 })
 
@@ -77,9 +77,9 @@ test("a second step streams after the first without merging into it", () => {
   ])
   expect(lines).toHaveLength(1)
   expect(lines[0]!.items.map((i) => i.kind)).toEqual(["text", "tool", "text"])
-  expect(lines[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: true })
+  expect(lines[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: true, to: "user" })
   const closed = run([{ type: "visible", author: "chief", text: "lane failed: x" }], lines)
-  expect(closed[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: false })
+  expect(closed[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: false, to: "user" })
 })
 
 import { capLines, KEEP_LINES, mountedFrom, RESULT_CHARS } from "./room-turns.ts"
@@ -100,4 +100,38 @@ it("mountedFrom draws fewer lines under pressure", () => {
   const lines = Array.from({ length: 200 }, (_, i) => say("chief", `m${i}`))
   want(mountedFrom(lines, true)).toBeGreaterThan(mountedFrom(lines, false))
   want(mountedFrom(lines.slice(0, 5), false)).toBe(0)
+})
+
+test("a line is for the user or the team by what the daemon said, and old lines are worked out from who spoke", () => {
+  const lines = run([
+    { type: "part", author: "chief", lane: "chat", part: { kind: "tool_call", id: "c1", name: "group_status", args: "{}" }, audience: "team" },
+    { type: "chief", text: "Red is on it." },
+    { type: "visible", author: "chief", text: "Assignment for Lab Red: probe", audience: "team" },
+    { type: "part", author: "red", lane: "work", part: { kind: "tool_call", id: "c2", name: "bash", args: "{}" } },
+    { type: "visible", author: "chief", text: "Assignment for Lab Red: older line" },
+    { type: "visible", author: "chief", text: "All verified." },
+    { type: "visible", author: "red", text: "stopped by you (work)" },
+    { type: "visible", author: "red", text: "lane failed: x" },
+    { type: "lane", avatar: "red", text: "I found it" },
+  ])
+  const says = (side: "user" | "team") => forSide(lines, side).map((l) => `${l.author}:${l.items.map((i) => i.kind === "tool" ? i.name : i.text).join("|")}`)
+  expect(says("user")).toEqual(["chief:Red is on it.", "chief:All verified.", "red:stopped by you (work)", "red:I found it"])
+  expect(says("team")).toEqual(["chief:group_status", "chief:Assignment for Lab Red: probe", "red:bash", "chief:Assignment for Lab Red: older line", "red:lane failed: x"])
+})
+
+test("one message with steps for the team and a reply for the user shows each side only its own", () => {
+  const lines = run([
+    { type: "part", author: "chief", lane: "chat", part: { kind: "tool_call", id: "c1", name: "group_status", args: "{}" }, audience: "team" },
+    { type: "chief", text: "Red found two." },
+  ])
+  expect(lines).toHaveLength(1)
+  const user = forSide(lines, "user")
+  const team = forSide(lines, "team")
+  expect(user[0]!.items.map((i) => i.kind)).toEqual(["text"])
+  expect(team[0]!.items.map((i) => i.kind)).toEqual(["tool"])
+  // The same objects come back while nothing changes, so a quiet room does not redraw.
+  expect(forSide(lines, "user")[0]).toBe(user[0])
+  expect(teamCount(lines)).toBe(1)
+  expect(userCount(lines)).toBe(1)
+  expect(userCount([say("you", "hi")])).toBe(0)
 })
