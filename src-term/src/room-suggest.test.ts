@@ -36,3 +36,15 @@ test("/stop names who to stop, and defaults to everything", () => {
   expect(chosen(rows[1]!)).toEqual({ run: "/stop red" })
   expect(chosen(suggestFor("/sto").rows[0]!)).toEqual({ insert: "/stop " })
 })
+
+test("/leave has two ways out, switch and stop, chosen like /stop's names", () => {
+  expect(chosen(suggestFor("/lea").rows[0]!)).toEqual({ insert: "/leave " })
+  const rows = suggestFor("/leave ").rows
+  expect(rows.map((r) => r.label)).toEqual(["switch", "stop"])
+  expect(chosen(rows[0]!)).toEqual({ run: "/leave switch" })
+  expect(chosen(rows[1]!)).toEqual({ run: "/leave stop" })
+  expect(suggestFor("/leave s").rows.map((r) => r.label)).toEqual(["switch", "stop"])
+  expect(suggestFor("/leave st").rows.map((r) => r.label)).toEqual(["stop"])
+  expect(classify("/leave stop")).toEqual({ kind: "message" })
+  expect(classify("/leave later")).toEqual({ kind: "unknown", word: "/leave later", near: "/leave switch" })
+})
