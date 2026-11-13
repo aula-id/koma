@@ -122,3 +122,43 @@ export function reduceLines(lines: Line[], frame: RoomFrame): Line[] {
       return lines
   }
 }
+
+/** What the screen keeps. The daemon holds the whole transcript; the screen only needs the recent part. */
+export const KEEP_LINES = 400
+export const KEEP_CHARS = 1_500_000
+/** A tool result shown in a card. The lane's own transcript has the rest. */
+export const RESULT_CHARS = 12_000
+/** The newest lines drawn at once, and the smaller count used under memory pressure. */
+export const MOUNT_LINES = 80
+export const MOUNT_LINES_REDUCED = 30
+
+function weigh(line: Line): number {
+  let n = 0
+  for (const item of line.items) n += item.kind === "tool" ? item.args.length + (item.result?.text.length ?? 0) : item.text.length
+  return n
+}
+
+/** Drop the oldest lines past the limits and clip huge tool results. Returns the same array when nothing changes. */
+export function capLines(lines: Line[]): Line[] {
+  let out = lines
+  const last = out[out.length - 1]
+  if (last && last.items.some((item) => item.kind === "tool" && (item.result?.text.length ?? 0) > RESULT_CHARS)) {
+    const items = last.items.map((item) => item.kind === "tool" && item.result && item.result.text.length > RESULT_CHARS
+      ? { ...item, result: { ...item.result, text: `${item.result.text.slice(0, RESULT_CHARS)}\n… clipped` } }
+      : item)
+    out = [...out.slice(0, -1), { ...last, items }]
+  }
+  let chars = 0
+  let keep = 0
+  for (let i = out.length - 1; i >= 0 && keep < KEEP_LINES; i--) {
+    chars += weigh(out[i]!)
+    if (chars > KEEP_CHARS && keep > 0) break
+    keep++
+  }
+  return keep < out.length ? out.slice(out.length - keep) : out
+}
+
+/** How many of the oldest lines stay unmounted. */
+export function mountedFrom(lines: Line[], reduced: boolean): number {
+  return Math.max(0, lines.length - (reduced ? MOUNT_LINES_REDUCED : MOUNT_LINES))
+}

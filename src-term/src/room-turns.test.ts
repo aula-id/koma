@@ -81,3 +81,23 @@ test("a second step streams after the first without merging into it", () => {
   const closed = run([{ type: "visible", author: "chief", text: "lane failed: x" }], lines)
   expect(closed[0]!.items[2]).toEqual({ kind: "text", text: "second", streaming: false })
 })
+
+import { capLines, KEEP_LINES, mountedFrom, RESULT_CHARS } from "./room-turns.ts"
+import { expect as want, test as it } from "bun:test"
+
+it("capLines keeps the newest lines and clips a huge tool result", () => {
+  const many = Array.from({ length: KEEP_LINES + 50 }, (_, i) => say("chief", `m${i}`))
+  const kept = capLines(many)
+  want(kept.length).toBe(KEEP_LINES)
+  want(kept[kept.length - 1]).toBe(many[many.length - 1]!)
+  const big: Line = { id: "t", author: "red", lane: "work", items: [{ kind: "tool", id: "1", name: "bash", args: "{}", result: { ok: true, text: "x".repeat(RESULT_CHARS * 3) } }] }
+  const clipped = capLines([big])[0]!.items[0]!
+  want(clipped.kind === "tool" && clipped.result!.text.length < RESULT_CHARS + 20).toBe(true)
+  want(capLines(many.slice(0, 3))).toEqual(many.slice(0, 3))
+})
+
+it("mountedFrom draws fewer lines under pressure", () => {
+  const lines = Array.from({ length: 200 }, (_, i) => say("chief", `m${i}`))
+  want(mountedFrom(lines, true)).toBeGreaterThan(mountedFrom(lines, false))
+  want(mountedFrom(lines.slice(0, 5), false)).toBe(0)
+})
