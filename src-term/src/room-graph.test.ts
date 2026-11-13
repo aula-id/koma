@@ -99,3 +99,13 @@ test("a layer wider than the screen wraps onto another row, so the picture stays
     if (a !== b) expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false)
   }
 })
+
+test("two goals with the same name get distinct names, so a row is selected and opened alone", async () => {
+  const { uniqueGoals } = await import("./room-link.ts")
+  const { goalRows } = await import("./room-tree.ts")
+  const one = { ...goal, goal_key: "audit" }
+  const goals = uniqueGoals([one, { ...one }, { ...one }, { ...goal, goal_key: "other" }])
+  expect(goals.map((g) => g.goal_key)).toEqual(["audit", "audit (2)", "audit (3)", "other"])
+  const ids = goalRows(goals, new Set()).map((r) => r.id)
+  expect(new Set(ids).size).toBe(ids.length)
+})
