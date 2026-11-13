@@ -524,4 +524,13 @@ mod tests {
         assert!(SkillLoad.run(&c, &json!({"name": "jwt-review"})).is_err());
         assert!(SkillLoad.run(&c, &json!({"name": "filler-1"})).unwrap().starts_with(SKILL_LOAD_PREFIX));
     }
+
+    #[test]
+    fn a_rerank_that_fails_leaves_the_word_match_order() {
+        let mut c = ctx(None);
+        c.skill_registry = Some(registry_of(5));
+        let plain = SkillFind.run(&c, &json!({"query": "helper chores", "limit": 3})).unwrap();
+        c.skill_rank = Some(std::sync::Arc::new(|_q, _c| None));
+        assert_eq!(SkillFind.run(&c, &json!({"query": "helper chores", "limit": 3})).unwrap(), plain);
+    }
 }
