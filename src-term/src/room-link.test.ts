@@ -39,7 +39,8 @@ import { FrameReader } from "./protocol.ts"
 import { RoomLink } from "./room-link.ts"
 
 test("a message sent before the daemon answers is delivered once it connects", async () => {
-  const sock = `${mkdtempSync("/tmp/koma-link-")}/s.sock`
+  // A named pipe on Windows, a socket file elsewhere.
+  const sock = process.platform === "win32" ? String.raw`\\.\pipe\koma-link-${process.pid}-${Date.now()}` : `${mkdtempSync("/tmp/koma-link-")}/s.sock`
   const got: unknown[] = []
   const server = createServer((c) => {
     const reader = new FrameReader()

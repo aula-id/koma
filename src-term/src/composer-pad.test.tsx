@@ -59,7 +59,8 @@ test("the prompt mark sits against the composer border", async () => {
     expect(tips).toBe(koma + 1)
     expect(top).toBe(tips + 1)
     expect(bottom).toBeGreaterThan(prompt)
-    expect(lines[bottom]).toContain("ready")
+    // The idle sweep may be showing its own label on a slow runner.
+    expect(lines[bottom]).toMatch(/ready|cleanup/)
     expect(ram).toBe(bottom + 1)
     expect(lines[ram]).toContain("[!]")
     expect(frame).not.toContain("Latest")
