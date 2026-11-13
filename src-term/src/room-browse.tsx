@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import type { SyntaxStyle } from "@opentui/core"
+import type { ScrollBoxRenderable, SyntaxStyle } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/react"
 import { scrollbars, type Theme } from "./theme.ts"
 import { Action, Panel } from "./modes/bits.tsx"
@@ -101,11 +101,20 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   }
 
   const links = detail ? linksOf(detail, data, item) : []
+  const bodyRef = useRef<ScrollBoxRenderable | null>(null)
+  // A new detail starts at its top.
+  useEffect(() => { bodyRef.current?.scrollTo(0) }, [trail.length, item?.key])
   useKeyboard((key) => {
     if (key.eventType === "release") return
     const name = key.name
     if (detail) {
       if (name === "escape" || name === "left" || name === "backspace" || name === "q") { setTrail((t) => t.slice(0, -1)); setPick(0); return }
+      const box = bodyRef.current
+      const page = Math.max(1, (box?.viewport.height ?? 10) - 1)
+      if (box && (name === "pagedown" || name === "space")) { box.scrollBy(page); return }
+      if (box && name === "pageup") { box.scrollBy(-page); return }
+      if (box && name === "home") { box.scrollTo(0); return }
+      if (box && name === "end") { box.scrollTo(box.scrollHeight); return }
       if (name === "up" || name === "k") setPick((p) => Math.max(0, p - 1))
       else if (name === "down" || name === "j") setPick((p) => Math.min(Math.max(0, links.length - 1), p + 1))
       else if ((name === "return" || name === "enter" || name === "right") && links[pick]) follow(links[pick]!.to)
@@ -164,7 +173,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
     </box>
   )
   const hint = detail
-    ? (links.length ? "↑↓ choose a link · enter follows it · esc goes back" : "esc goes back")
+    ? (links.length ? "↑↓ choose a link · enter follows it · pgup/pgdn scroll · esc goes back" : "pgup/pgdn scroll · esc goes back")
     : graphOn
       ? "←→↑↓ scroll · pgup/pgdn · tab next node · enter opens · [ ] goal · t tree · esc closes"
       : view === "trajectory"
@@ -176,7 +185,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
       {header}
       <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0} paddingTop={1}>
         {detail ? (
-          <DetailView detail={detail} data={data} item={item} links={links} pick={pick} onPick={setPick} onFollow={follow} theme={theme} syntaxStyle={syntaxStyle} width={width} />
+          <DetailView bodyRef={bodyRef} detail={detail} data={data} item={item} links={links} pick={pick} onPick={setPick} onFollow={follow} theme={theme} syntaxStyle={syntaxStyle} width={width} />
         ) : (
           graphOn ? (
             <Panel title="trajectory · graph" hot={false} theme={theme} status={layout && goal ? `${goal.goal_key} ${goalAt + 1}/${data?.goals.length ?? 1} · x ${offset.x}/${Math.max(0, layout.width - viewSize.width)} · y ${offset.y}/${Math.max(0, layout.height - viewSize.height)}` : ""}>
@@ -317,7 +326,8 @@ function linksOf(detail: Detail, data: BrowseData | null, item: OpenItem | null)
   return [...keys].map((k) => ({ label: k, hint: "linked", to: { type: "item", key: k } as Detail }))
 }
 
-function DetailView({ detail, data, item, links, pick, onPick, onFollow, theme, syntaxStyle, width }: {
+function DetailView({ bodyRef, detail, data, item, links, pick, onPick, onFollow, theme, syntaxStyle, width }: {
+  bodyRef: { current: ScrollBoxRenderable | null }
   detail: Detail; data: BrowseData | null; item: OpenItem | null; links: Link[]; pick: number
   onPick: (i: number) => void; onFollow: (to: Detail) => void; theme: Theme; syntaxStyle: SyntaxStyle; width: number
 }) {
@@ -341,7 +351,7 @@ function DetailView({ detail, data, item, links, pick, onPick, onFollow, theme, 
   return (
     <box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
       <Panel title={title.length > width - 20 ? `${title.slice(0, width - 21)}…` : title} hot={false} theme={theme}>
-        <scrollbox flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
+        <scrollbox ref={bodyRef} flexGrow={1} flexBasis={0} minHeight={0} scrollY focusable={false} scrollbarOptions={scrollbars(theme)}>
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>{body}</box>
         </scrollbox>
       </Panel>

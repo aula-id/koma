@@ -203,3 +203,18 @@ test("in the graph tab walks the nodes and enter opens the one that is chosen", 
   expect(t.text()).toContain("trajectory · graph")
   await act(async () => { await t.screen.dispose() })
 })
+
+test("a long detail scrolls with page down and wheel keys and starts at the top", async () => {
+  const long: OpenItem = { key: "claims/web/ssrf", revision: 1, updated: 0, content: JSON.stringify({ kind: "claim", name: "SSRF", summary: Array.from({ length: 80 }, (_, i) => `line ${i}`).join("\n") }) }
+  const t = await open("shelf", { item: long })
+  for (let i = 0; i < 4; i++) { await act(async () => { t.screen.mockInput.pressArrow("down") }); await t.settle() }
+  await act(async () => { await t.screen.mockInput.pressEnter() }); await t.settle()
+  // The item's detail is open at its first line.
+  expect(t.text()).toContain("line 0")
+  expect(t.text()).not.toContain("line 70")
+  await act(async () => { t.screen.mockInput.pressKey("END") }); await t.settle()
+  expect(t.text()).toContain("line 79")
+  await act(async () => { t.screen.mockInput.pressKey("HOME") }); await t.settle()
+  expect(t.text()).toContain("line 0")
+  await act(async () => { await t.screen.dispose() })
+})
