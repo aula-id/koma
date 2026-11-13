@@ -1,12 +1,14 @@
 import type { Goal, GoalNode } from "./room-link.ts"
 import { trajectoryTree } from "./room-tree.ts"
 
-/** A node's box and the space around it, in terminal cells. Three lines of text inside a border. */
-export const BOX_W = 20
+/** A node's box, in terminal cells: three lines of text inside a border. */
+export const BOX_W = 22
 export const BOX_H = 5
-const SLOT = BOX_W + 3
-/** Rows from one layer's top to the next: the box, a bus line, and the arrow into the next box. */
-const RANK = BOX_H + 2
+/** Cells between one column's right edge and the next column's left edge, for the lines and the arrow. */
+const GAP = 5
+const STEP = BOX_W + GAP
+/** Rows from one box's top to the next in a column: the box and one spare row for lines that pass. */
+const PITCH = BOX_H + 1
 
 export type Box = { id: string; x: number; y: number; w: number; h: number; node: GoalNode; number: string; backLinks: number }
 export type Tone = "edge" | "box" | "select" | "success" | "warn" | "error" | "info" | "dim"
@@ -26,28 +28,23 @@ const U = 1, D = 2, L = 4, R = 8
 const JOIN: Record<number, string> = { 1: "│", 2: "│", 3: "│", 4: "─", 8: "─", 12: "─", 9: "└", 5: "┘", 10: "┌", 6: "┐", 11: "├", 7: "┤", 14: "┬", 13: "┴", 15: "┼" }
 
 /**
- * A layered diagram, top to bottom. Each depth is a layer of boxes going down the screen, and the
- * links run between layers. A wide layer runs off to the right and the screen scrolls across it;
- * pass `maxWidth` to wrap a layer onto further rows instead. A link that skips a layer goes
- * through the gutter beside its target, so it never crosses a box. A link back up or across is
- * not drawn; the box says how many there are (`↺2`), and the detail screen lists them.
+ * A left-to-right diagram. Depth runs across the screen, one column per depth, and the boxes of
+ * one depth stack down their column. Links leave a box on its right and arrive on the left of the
+ * next column. A link that skips a column runs along the spare row above its target, so it never
+ * crosses a box. A link back or sideways is not drawn; the box says how many there are (`↺2`), and
+ * the detail screen lists them. A long column runs off the bottom and a long chain off the right;
+ * the screen scrolls both ways.
  */
-export function layoutGraph(goal: Goal, maxWidth = Infinity): GraphLayout {
+export function layoutGraph(goal: Goal): GraphLayout {
   const { byId } = trajectoryTree(goal)
-  const lanes = Number.isFinite(maxWidth) ? Math.max(1, Math.floor((maxWidth - 4) / SLOT)) : Number.MAX_SAFE_INTEGER
   const ranks = [...new Set(goal.nodes.map((n) => n.rank))].sort((a, b) => a - b)
-  const layerOf = new Map<string, number>()
-  const colOf = new Map<string, number>()
-  let layer = 0
+  const columnOf = new Map(ranks.map((r, i) => [r, i]))
+  const laneOf = new Map<string, number>()
   for (const rank of ranks) {
-    const here = goal.nodes.filter((n) => n.rank === rank).sort((a, b) => a.row - b.row || a.id.localeCompare(b.id))
-    for (let i = 0; i < here.length; i += lanes) {
-      here.slice(i, i + lanes).forEach((n, col) => { layerOf.set(n.id, layer); colOf.set(n.id, col) })
-      layer += 1
-    }
+    goal.nodes.filter((n) => n.rank === rank).sort((a, b) => a.row - b.row || a.id.localeCompare(b.id)).forEach((n, lane) => laneOf.set(n.id, lane))
   }
   const boxes: Box[] = goal.nodes.map((n) => ({
-    id: n.id, x: 2 + colOf.get(n.id)! * SLOT, y: 1 + layerOf.get(n.id)! * RANK, w: BOX_W, h: BOX_H, node: n, number: byId.get(n.id)?.number ?? "", backLinks: 0,
+    id: n.id, x: 2 + columnOf.get(n.rank)! * STEP, y: 1 + laneOf.get(n.id)! * PITCH, w: BOX_W, h: BOX_H, node: n, number: byId.get(n.id)?.number ?? "", backLinks: 0,
   }))
   const at = new Map(boxes.map((b) => [b.id, b]))
   const width = Math.max(...boxes.map((b) => b.x + b.w), 0) + 4
@@ -56,12 +53,6 @@ export function layoutGraph(goal: Goal, maxWidth = Infinity): GraphLayout {
   const bits = new Map<number, number>()
   const marks = new Map<number, string>()
   const add = (x: number, y: number, bit: number) => { if (x >= 0 && y >= 0) bits.set(key(x, y), (bits.get(key(x, y)) ?? 0) | bit) }
-  const vertical = (x: number, y1: number, y2: number) => {
-    for (let y = y1; y <= y2; y++) {
-      if (y < y2) add(x, y, D)
-      if (y > y1) add(x, y, U)
-    }
-  }
   const horizontal = (y: number, x1: number, x2: number) => {
     const [a, b] = x1 <= x2 ? [x1, x2] : [x2, x1]
     for (let x = a; x <= b; x++) {
@@ -69,29 +60,38 @@ export function layoutGraph(goal: Goal, maxWidth = Infinity): GraphLayout {
       if (x > a) add(x, y, L)
     }
   }
+  const vertical = (x: number, y1: number, y2: number) => {
+    const [a, b] = y1 <= y2 ? [y1, y2] : [y2, y1]
+    for (let y = a; y <= b; y++) {
+      if (y < b) add(x, y, D)
+      if (y > a) add(x, y, U)
+    }
+  }
+  const mid = (b: Box) => b.y + (BOX_H >> 1)
   const seen = new Set<string>()
   for (const e of goal.edges) {
     const from = at.get(e.from), to = at.get(e.to)
     const id = `${e.from}>${e.to}`
     if (!from || !to || from === to || seen.has(id)) continue
     seen.add(id)
-    const fl = layerOf.get(from.id)!, tl = layerOf.get(to.id)!
-    if (tl <= fl) { to.backLinks += 1; continue }
-    const ax = from.x + (BOX_W >> 1), bx = to.x + (BOX_W >> 1)
-    const busA = from.y + BOX_H
-    vertical(ax, from.y + BOX_H - 1, busA)
-    if (tl === fl + 1) {
-      horizontal(busA, ax, bx)
-      vertical(bx, busA, to.y - 1)
+    const fc = columnOf.get(from.node.rank)!, tc = columnOf.get(to.node.rank)!
+    if (tc <= fc) { to.backLinks += 1; continue }
+    const ay = mid(from), by = mid(to)
+    const bus = from.x + BOX_W + 1
+    // Out of the right side of the box, to a bus just beyond it.
+    horizontal(ay, from.x + BOX_W, bus)
+    if (tc === fc + 1) {
+      vertical(bus, ay, by)
+      horizontal(by, bus, to.x - 2)
     } else {
-      const busB = to.y - 2
-      const gx = to.x - 2
-      horizontal(busA, ax, gx)
-      vertical(gx, busA, busB)
-      horizontal(busB, gx, bx)
-      vertical(bx, busB, to.y - 1)
+      const row = to.y - 1
+      const gx = to.x - 3
+      vertical(bus, ay, row)
+      horizontal(row, bus, gx)
+      vertical(gx, row, by)
+      horizontal(by, gx, to.x - 2)
     }
-    marks.set(key(bx, to.y - 1), "▼")
+    marks.set(key(to.x - 1, by), "►")
   }
   return { boxes, width, height, bits, marks, key }
 }
@@ -138,9 +138,10 @@ export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][
     const row = (text: string) => `│ ${clip(text, inner - 2).padEnd(inner - 2)} │`
     const lines = [`╭${"─".repeat(inner)}╮`, row(first), row(second), row(third), `╰${"─".repeat(inner)}╯`]
     lines.forEach((line, r) => [...line].forEach((ch, col) => put(box.x + col, box.y + r, ch, tone)))
-    // Where a line joins the box.
-    if (layout.bits.has(layout.key(box.x + (BOX_W >> 1), box.y - 1))) put(box.x + (BOX_W >> 1), box.y, "┴", tone)
-    if (layout.bits.has(layout.key(box.x + (BOX_W >> 1), box.y + BOX_H))) put(box.x + (BOX_W >> 1), box.y + BOX_H - 1, "┬", tone)
+    // Where a line joins the box: in on the left, out on the right.
+    const my = box.y + (BOX_H >> 1)
+    if (layout.bits.has(layout.key(box.x - 1, my))) put(box.x, my, "┤", tone)
+    if (layout.bits.has(layout.key(box.x + BOX_W, my))) put(box.x + BOX_W - 1, my, "├", tone)
   }
   return grid
 }
@@ -169,7 +170,7 @@ export function reveal(offset: { x: number; y: number }, box: Box, layout: Graph
 
 /** The boxes in reading order, for Tab. */
 export function readingOrder(layout: GraphLayout): Box[] {
-  return [...layout.boxes].sort((a, b) => a.y - b.y || a.x - b.x)
+  return [...layout.boxes].sort((a, b) => a.x - b.x || a.y - b.y)
 }
 
 /** One window of the picture as lines of same-coloured runs. */

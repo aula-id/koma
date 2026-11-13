@@ -80,15 +80,25 @@ export function ModelPicker({ theme, choices, lanes, notice, onSet, onBack }: {
     if (key.name === "escape") return back()
     if (key.name === "up") return setAt((selected - 1 + Math.max(1, rows.length)) % Math.max(1, rows.length))
     if (key.name === "down") return setAt((selected + 1) % Math.max(1, rows.length))
+    if (key.name === "pageup") return setAt(Math.max(0, selected - visible + 1))
+    if (key.name === "pagedown") return setAt(Math.min(Math.max(0, rows.length - 1), selected + visible - 1))
     // In the model step the search input owns Enter.
     if (step !== "model" && (key.name === "return" || key.name === "enter")) choose(selected)
   })
 
   const title = step === "minion" ? "Which minion" : step === "lane" ? `${minion?.display || who} · which lane` : `${minion?.display || who} · ${lane} model`
-  const status = step === "model" ? `now: ${current}` : done || notice || undefined
+  const place = rows.length > visible ? ` · ${start + 1}-${start + shown.length} of ${rows.length}` : ""
+  const status = step === "model" ? `now: ${current}${place}` : (done || notice || place.slice(3)) || undefined
 
   return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}>
+    <box
+      flexDirection="column" flexGrow={1} backgroundColor={theme.bg} paddingLeft={2} paddingRight={2} paddingTop={1}
+      onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+        const d = event.scroll?.direction
+        if (d === "up") setAt(Math.max(0, selected - 3))
+        else if (d === "down") setAt(Math.min(Math.max(0, rows.length - 1), selected + 3))
+      }}
+    >
       <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
         <text flexShrink={0}>
           <span fg={theme.fg}>Koma</span>
