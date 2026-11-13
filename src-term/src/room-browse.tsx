@@ -369,25 +369,32 @@ function DetailView({ bodyRef, detail, data, item, links, pick, onPick, onFollow
   )
 }
 
-const LONG = new Set(["summary", "poc", "note", "detail", "body", "notes", "markdown"])
+
+/** One row of the detail table: the name takes a fifth, the value the rest and wraps. */
+function Row({ name, children, theme }: { name: string; children: ReactNode; theme: Theme }) {
+  return (
+    <box flexDirection="row">
+      <box width="20%" flexShrink={0} paddingRight={1}><text fg={theme.dim} wrapMode="word">{name}</text></box>
+      <box width="80%" flexShrink={1} flexGrow={1} minWidth={0}>{children}</box>
+    </box>
+  )
+}
 
 function Field({ name, value, theme, syntaxStyle }: { name: string; value: string; theme: Theme; syntaxStyle: SyntaxStyle }) {
   if (name === "markdown" || (name === "body" && value.includes("\n"))) {
-    return <box flexDirection="column" paddingTop={1}><text fg={theme.dim}>{name}</text><MarkdownBody content={value} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></box>
+    return <Row name={name} theme={theme}><MarkdownBody content={value} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></Row>
   }
-  if (LONG.has(name) || value.includes("\n") || value.length > 80) {
-    return <box flexDirection="column" paddingTop={1}><text fg={theme.dim}>{name}</text><text fg={theme.fg} wrapMode="word">{value}</text></box>
-  }
-  return <text wrapMode="word"><span fg={theme.dim}>{`${name}  `}</span><span fg={MARKS[value.toLowerCase()] ? theme[MARKS[value.toLowerCase()]!] : theme.fg}>{value}</span></text>
+  const mark = MARKS[value.toLowerCase()]
+  return <Row name={name} theme={theme}><text fg={mark ? theme[mark] : theme.fg} wrapMode="word">{value}</text></Row>
 }
 
 function ItemBody({ item, theme, syntaxStyle }: { item: OpenItem; theme: Theme; syntaxStyle: SyntaxStyle }) {
   const list = fields(item.content)
   return (
     <>
-      <text fg={theme.dim}>{`revision ${item.revision}`}</text>
+      <Row name="revision" theme={theme}><text fg={theme.fg}>{`${item.revision}`}</text></Row>
       {list ? list.map((f) => <Field key={f.name} name={f.name} value={f.value} theme={theme} syntaxStyle={syntaxStyle} />)
-        : <box paddingTop={1}><MarkdownBody content={item.content} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></box>}
+        : <Row name="content" theme={theme}><MarkdownBody content={item.content} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></Row>}
     </>
   )
 }
@@ -414,7 +421,7 @@ function ReportBody({ report, theme, syntaxStyle }: { report: Report; theme: The
   return (
     <>
       {rows.filter(([, v]) => v).map(([name, value]) => <Field key={name} name={name} value={value} theme={theme} syntaxStyle={syntaxStyle} />)}
-      <box paddingTop={1} flexDirection="column"><MarkdownBody content={report.markdown || "_The report has no body yet._"} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></box>
+      <Row name="report" theme={theme}><MarkdownBody content={report.markdown || "_The report has no body yet._"} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} /></Row>
     </>
   )
 }
