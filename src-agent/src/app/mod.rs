@@ -23,6 +23,7 @@
 //! [`run_daemon`] is likewise re-exported for the headless `koma --daemon` path.
 
 pub mod awareness;
+pub mod skill_rank;
 pub mod bgbash;
 pub mod cascade;
 pub mod ext;

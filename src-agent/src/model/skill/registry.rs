@@ -4,10 +4,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use super::def::{SkillCatalogueEntry, SkillDef, SkillSource};
+use super::search::{self, Hit, Scope};
 use super::parse::load_skill_file;
 
 const SKILL_ENTRY_FILES: &[&str] = &["SKILL.md", "skill.md"];
 const SKIP_NAMES: &[&str] = &["readme.md", "readme"];
+/// Most pinned skills the prompt shows.
+pub const PINNED_MAX: usize = 8;
 pub const MAX_SKILL_TEXT_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,12 +170,54 @@ impl SkillRegistry {
             .collect()
     }
 
-    pub fn catalogue_text(&self) -> String {
-        self.skills
+    /// The best matches for a request, most relevant first, and how many matched in all. Only skills
+    /// inside `scope` are considered. An empty query matches nothing: skills are asked for, not listed.
+    pub fn search(&self, query: &str, scope: &Scope, offset: usize, limit: usize) -> (Vec<Hit>, usize) {
+        let words = search::words(query);
+        let whole = query.trim().to_lowercase();
+        let mut hits: Vec<Hit> = self
+            .skills
             .values()
-            .map(|skill| format!("- {}: {}", skill.name, skill.description))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .filter(|d| scope.allows(&d.name))
+            .filter_map(|d| {
+                let score = search::score(d, &words, &whole);
+                (score > 0).then(|| Hit { name: d.name.clone(), score })
+            })
+            .collect();
+        hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+        let total = hits.len();
+        (hits.into_iter().skip(offset).take(limit).collect(), total)
+    }
+
+    /// Skills the user marked `pinned: true`, at most `max`, inside `scope`.
+    pub fn pinned(&self, scope: &Scope, max: usize) -> Vec<&SkillDef> {
+        self.skills.values().filter(|d| scope.allows(&d.name) && search::is_pinned(d)).take(max).collect()
+    }
+
+    /// A registry of just `<root>/.agents/skills`, for tests in other modules.
+    #[cfg(test)]
+    pub fn load_for_test(root: &Path) -> Self {
+        Self::load_isolated(Some(root), &[])
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_defs(defs: Vec<SkillDef>) -> Self {
+        Self { skills: defs.into_iter().map(|d| (d.name.clone(), d)).collect() }
+    }
+
+    /// The skills section of the system prompt: `None` when there are no skills at all, otherwise only
+    /// the pinned ones (possibly an empty string). The rest are found with `skill_find`, never listed.
+    pub fn prompt_text(&self) -> Option<String> {
+        if self.skills.is_empty() {
+            return None;
+        }
+        Some(
+            self.pinned(&Scope::default(), PINNED_MAX)
+                .iter()
+                .map(|d| format!("- {}: {}", d.name, d.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 }
 

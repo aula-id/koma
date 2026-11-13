@@ -29,6 +29,8 @@ fn ctx(
         bash_log_dir: None,
         session_dir,
         active_skill_dirs: vec![],
+        skill_scope: None,
+        skill_rank: None,
         allow_scratch: true,
         sdlc_assess: false,
         sdlc_active_node_id: None,
