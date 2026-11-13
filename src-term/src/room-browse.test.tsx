@@ -171,13 +171,13 @@ test("a node's detail lists what it is referenced from, what it references and i
   await act(async () => { await t.screen.dispose() })
 })
 
-test("g draws the graph as a tree growing down, with arrows, and scrolls sideways, and t comes back to the tree", async () => {
+test("g draws the graph in boxes with arrows, and t comes back to the tree", async () => {
   const t = await openRich()
   await t.press(() => t.screen.mockInput.pressKey("g"))
   const graph = t.text()
   expect(graph).toContain("trajectory · graph")
   expect(graph).toContain("╭")
-  expect(graph).toContain("►")
+  expect(graph).toContain("▼")
   expect(graph).toContain("(1.1.1) SSRF claim")
   expect(graph).toMatch(/x 0\/\d+/)
   await t.press(() => t.screen.mockInput.pressArrow("right"))
@@ -194,7 +194,7 @@ test("g draws the graph as a tree growing down, with arrows, and scrolls sideway
 test("in the graph tab walks the nodes and enter opens the one that is chosen", async () => {
   const t = await openRich()
   await t.press(() => t.screen.mockInput.pressKey("g"))
-  for (let i = 0; i < 2; i++) await t.press(() => t.screen.mockInput.pressTab())
+  for (let i = 0; i < 3; i++) await t.press(() => t.screen.mockInput.pressTab())
   await t.press(() => t.screen.mockInput.pressEnter())
   const text = t.text()
   expect(text).toContain("SSRF claim")

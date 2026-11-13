@@ -1,12 +1,12 @@
 import type { Goal, GoalNode } from "./room-link.ts"
 import { trajectoryTree } from "./room-tree.ts"
 
-/** A box is three cells tall. Its width follows its label, up to this many cells. */
-export const BOX_W = 46
-export const BOX_H = 3
-const MIN_W = 14
-/** How far a child sits to the right of its parent. */
-const INDENT = 5
+/** A node's box and the space around it, in terminal cells. Two lines of text inside a border. */
+export const BOX_W = 22
+export const BOX_H = 4
+const SLOT = BOX_W + 3
+/** Rows from one layer's top to the next: the box, a bus line, and the arrow into the next box. */
+const RANK = BOX_H + 2
 
 export type Box = { id: string; x: number; y: number; w: number; h: number; node: GoalNode; number: string; backLinks: number }
 export type Tone = "edge" | "box" | "select" | "success" | "warn" | "error" | "info" | "dim"
@@ -25,23 +25,30 @@ export type GraphLayout = {
 const U = 1, D = 2, L = 4, R = 8
 const JOIN: Record<number, string> = { 1: "│", 2: "│", 3: "│", 4: "─", 8: "─", 12: "─", 9: "└", 5: "┘", 10: "┌", 6: "┐", 11: "├", 7: "┤", 14: "┬", 13: "┴", 15: "┼" }
 
-const labelOf = (node: GoalNode, number: string, extra: number) =>
-  `${number ? `(${number}) ` : ""}${node.label || node.id}${extra ? ` ↺${extra}` : ""}`
-
 /**
- * The goal as a tree that grows down the screen, one box under the other, each child a step to
- * the right of its parent: the compact way to see a long chain. A trunk runs down beside a
- * parent's boxes and a short arrow leads into each child. A node sits once, under the first
- * node that reaches it; any other link into it is not drawn, and its box says how many there are
- * (`↺2`). The detail screen lists them.
+ * A layered diagram. Each depth is a layer of boxes going down the screen, and the links run
+ * between layers. A layer with more boxes than fit across `maxWidth` wraps onto the next row, so
+ * the picture stays about one screen wide and grows downward. A link that skips a layer goes
+ * through the gutter beside its target, so it never crosses a box. A link back up or across is
+ * not drawn; the box says how many there are (`↺2`), and the detail screen lists them.
  */
-export function layoutGraph(goal: Goal): GraphLayout {
-  const { order } = trajectoryTree(goal)
-  const boxes: Box[] = order.map((t, i) => {
-    const label = labelOf(t.node, t.number, t.alsoFrom.length)
-    const w = Math.min(BOX_W, Math.max(MIN_W, [...label].length + 4))
-    return { id: t.node.id, x: 2 + t.depth * INDENT, y: 1 + i * BOX_H, w, h: BOX_H, node: t.node, number: t.number, backLinks: t.alsoFrom.length }
-  })
+export function layoutGraph(goal: Goal, maxWidth = 100): GraphLayout {
+  const { byId } = trajectoryTree(goal)
+  const lanes = Math.max(1, Math.floor((maxWidth - 4) / SLOT))
+  const ranks = [...new Set(goal.nodes.map((n) => n.rank))].sort((a, b) => a - b)
+  const layerOf = new Map<string, number>()
+  const colOf = new Map<string, number>()
+  let layer = 0
+  for (const rank of ranks) {
+    const here = goal.nodes.filter((n) => n.rank === rank).sort((a, b) => a.row - b.row || a.id.localeCompare(b.id))
+    for (let i = 0; i < here.length; i += lanes) {
+      here.slice(i, i + lanes).forEach((n, col) => { layerOf.set(n.id, layer); colOf.set(n.id, col) })
+      layer += 1
+    }
+  }
+  const boxes: Box[] = goal.nodes.map((n) => ({
+    id: n.id, x: 2 + colOf.get(n.id)! * SLOT, y: 1 + layerOf.get(n.id)! * RANK, w: BOX_W, h: BOX_H, node: n, number: byId.get(n.id)?.number ?? "", backLinks: 0,
+  }))
   const at = new Map(boxes.map((b) => [b.id, b]))
   const width = Math.max(...boxes.map((b) => b.x + b.w), 0) + 4
   const height = Math.max(...boxes.map((b) => b.y + b.h), 0) + 2
@@ -49,26 +56,42 @@ export function layoutGraph(goal: Goal): GraphLayout {
   const bits = new Map<number, number>()
   const marks = new Map<number, string>()
   const add = (x: number, y: number, bit: number) => { if (x >= 0 && y >= 0) bits.set(key(x, y), (bits.get(key(x, y)) ?? 0) | bit) }
-  // The trunk of each parent starts under it and ends level with its last child; a branch leads into every child.
-  for (const t of order) {
-    const me = at.get(t.node.id)!
-    if (!t.children.length) continue
-    const trunk = me.x + 2
-    const mids = t.children.map((c) => at.get(c)!.y + 1)
-    const end = Math.max(...mids)
-    for (let y = me.y + BOX_H; y <= end; y++) {
-      if (y < end) add(trunk, y, D)
-      if (y > me.y + BOX_H) add(trunk, y, U)
+  const vertical = (x: number, y1: number, y2: number) => {
+    for (let y = y1; y <= y2; y++) {
+      if (y < y2) add(x, y, D)
+      if (y > y1) add(x, y, U)
     }
-    for (const c of t.children) {
-      const child = at.get(c)!
-      const mid = child.y + 1
-      for (let x = trunk; x <= child.x - 2; x++) {
-        if (x < child.x - 2) add(x, mid, R)
-        if (x > trunk) add(x, mid, L)
-      }
-      marks.set(key(child.x - 1, mid), "►")
+  }
+  const horizontal = (y: number, x1: number, x2: number) => {
+    const [a, b] = x1 <= x2 ? [x1, x2] : [x2, x1]
+    for (let x = a; x <= b; x++) {
+      if (x < b) add(x, y, R)
+      if (x > a) add(x, y, L)
     }
+  }
+  const seen = new Set<string>()
+  for (const e of goal.edges) {
+    const from = at.get(e.from), to = at.get(e.to)
+    const id = `${e.from}>${e.to}`
+    if (!from || !to || from === to || seen.has(id)) continue
+    seen.add(id)
+    const fl = layerOf.get(from.id)!, tl = layerOf.get(to.id)!
+    if (tl <= fl) { to.backLinks += 1; continue }
+    const ax = from.x + (BOX_W >> 1), bx = to.x + (BOX_W >> 1)
+    const busA = from.y + BOX_H
+    vertical(ax, from.y + BOX_H - 1, busA)
+    if (tl === fl + 1) {
+      horizontal(busA, ax, bx)
+      vertical(bx, busA, to.y - 1)
+    } else {
+      const busB = to.y - 2
+      const gx = to.x - 2
+      horizontal(busA, ax, gx)
+      vertical(gx, busA, busB)
+      horizontal(busB, gx, bx)
+      vertical(bx, busB, to.y - 1)
+    }
+    marks.set(key(bx, to.y - 1), "▼")
   }
   return { boxes, width, height, bits, marks, key }
 }
@@ -100,11 +123,14 @@ export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][
   for (const box of layout.boxes) {
     const tone = box.id === selected ? "select" : toneOf(box.node)
     const inner = box.w - 2
-    const label = labelOf(box.node, box.number, box.backLinks)
-    const lines = [`╭${"─".repeat(inner)}╮`, `│ ${clip(label, inner - 2).padEnd(inner - 2)} │`, `╰${"─".repeat(inner)}╯`]
-    lines.forEach((line, row) => [...line].forEach((ch, col) => put(box.x + col, box.y + row, ch, tone)))
-    // Where the trunk leaves the box.
-    if (layout.bits.has(layout.key(box.x + 2, box.y + BOX_H))) put(box.x + 2, box.y + BOX_H - 1, "┬", tone)
+    const first = `${box.number ? `(${box.number}) ` : ""}${box.node.label || box.node.id}`
+    const second = [box.node.kind, box.node.severity || box.node.status, box.backLinks ? `↺${box.backLinks}` : ""].filter(Boolean).join(" · ")
+    const row = (text: string) => `│ ${clip(text, inner - 2).padEnd(inner - 2)} │`
+    const lines = [`╭${"─".repeat(inner)}╮`, row(first), row(second), `╰${"─".repeat(inner)}╯`]
+    lines.forEach((line, r) => [...line].forEach((ch, col) => put(box.x + col, box.y + r, ch, tone)))
+    // Where a line joins the box.
+    if (layout.bits.has(layout.key(box.x + (BOX_W >> 1), box.y - 1))) put(box.x + (BOX_W >> 1), box.y, "┴", tone)
+    if (layout.bits.has(layout.key(box.x + (BOX_W >> 1), box.y + BOX_H))) put(box.x + (BOX_W >> 1), box.y + BOX_H - 1, "┬", tone)
   }
   return grid
 }
