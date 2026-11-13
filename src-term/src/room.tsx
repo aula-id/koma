@@ -14,6 +14,7 @@ import { classify } from "./room-suggest.ts"
 import { ModelPicker } from "./room-model.tsx"
 import { BrowseScreen, type BrowseData, type OpenItem } from "./room-browse.tsx"
 import { switchDaemon } from "./paths.ts"
+import { prettyText, toolDigest } from "./room-pretty.ts"
 import { OpeningSplash } from "./loading.tsx"
 import { IDLE_COLLECT_MS, ramTone, useIdleCollect, usePressureValve } from "./pressure.ts"
 import { memoryFootprint } from "./footprint.ts"
@@ -492,9 +493,9 @@ function Piece({ item, theme, syntaxStyle }: { item: Item; theme: Theme; syntaxS
   if (item.kind === "tool") {
     const call = { id: item.id, type: "function", function: { name: item.name, arguments: item.args } }
     const result = item.result ? { role: "tool", content: item.result.text, tool_call_id: item.id } : undefined
-    return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} />
+    return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} digest={toolDigest(item.name, item.args)} />
   }
-  return <MarkdownBody content={item.text} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} streaming={item.streaming} />
+  return <MarkdownBody content={item.streaming ? item.text : prettyText(item.text)} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} streaming={item.streaming} />
 }
 
 /** Counts of the shelf by gate state; the narrow form keeps what decides the next step. */
