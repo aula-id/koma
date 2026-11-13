@@ -49,7 +49,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const [trail, setTrail] = useState<Detail[]>([])
   const [pick, setPick] = useState(0)
   const detail = trail.at(-1) ?? null
-  // The trajectory has a second way to look: the graph, a tree of boxes that grows down the screen.
+  // The trajectory has a second way to look: the graph, a layered diagram that wraps to the screen width.
   const [mode, setMode] = useState<"tree" | "graph">("tree")
   const [goalAt, setGoalAt] = useState(0)
   const [boxId, setBoxId] = useState<string | null>(null)
@@ -57,7 +57,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const canvas = useRef<import("@opentui/core").BoxRenderable | null>(null)
   const graphOn = view === "trajectory" && mode === "graph"
   const goal = data?.goals[Math.min(goalAt, Math.max(0, (data?.goals.length ?? 1) - 1))] ?? null
-  const layout = useMemo(() => (goal ? layoutGraph(goal) : null), [goal])
+  const layout = useMemo(() => (goal ? layoutGraph(goal, width - 6) : null), [goal, width])
   const grid = useMemo(() => (layout ? drawGraph(layout, boxId) : []), [layout, boxId])
 
   // Fresh data while the screen is open: findings arrive as the lanes work.
@@ -196,7 +196,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
           <DetailView bodyRef={bodyRef} detail={detail} data={data} item={item} links={links} pick={pick} onPick={setPick} onFollow={follow} theme={theme} syntaxStyle={syntaxStyle} width={width} />
         ) : (
           graphOn ? (
-            <Panel title="trajectory · graph" hot={false} theme={theme} status={layout && goal ? `${goal.goal_key} ${goalAt + 1}/${data?.goals.length ?? 1} · x ${offset.x}/${Math.max(0, layout.width - viewSize.width)} · y ${offset.y}/${Math.max(0, layout.height - viewSize.height)}` : ""}>
+            <Panel title="trajectory · graph" hot={false} theme={theme} status={layout && goal ? `${goal.goal_key} ${goalAt + 1}/${data?.goals.length ?? 1}${boxId ? ` · ${layout.boxes.find((b) => b.id === boxId)?.number ?? ""} ${layout.boxes.find((b) => b.id === boxId)?.node.label ?? ""}` : ""} · x ${offset.x}/${Math.max(0, layout.width - viewSize.width)} · y ${offset.y}/${Math.max(0, layout.height - viewSize.height)}` : ""}>
               {!layout || layout.boxes.length === 0 ? <text fg={theme.dim} paddingLeft={1}>{goal ? "This goal has no steps yet." : EMPTY.trajectory}</text> : (
                 <box
                   ref={canvas}

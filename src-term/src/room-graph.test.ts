@@ -11,30 +11,26 @@ const goal: Goal = {
 
 const text = (grid: ReturnType<typeof drawGraph>) => grid.map((row) => row.map((c) => c.ch).join("")).join("\n")
 
-test("every node gets a box in a tree that grows down, and none overlap", () => {
+test("every node gets a box at its depth and lane, and none overlap", () => {
   const layout = layoutGraph(goal)
   expect(layout.boxes.length).toBe(5)
   const spot = (id: string) => layout.boxes.find((b) => b.id === id)!
-  // It grows down the screen, a child one step right of its parent, and a sibling under the first's branch.
   expect(spot("a").y).toBeGreaterThan(spot("s").y)
-  expect(spot("a").x).toBeGreaterThan(spot("s").x)
-  expect(spot("b").x).toBe(spot("a").x)
-  expect(spot("c").x).toBeGreaterThan(spot("a").x)
-  expect(spot("b").y).toBeGreaterThan(spot("c").y)
-  expect(layout.width).toBeLessThan(70)
+  expect(spot("b").x).toBeGreaterThan(spot("a").x)
+  expect(spot("c").y).toBeGreaterThan(spot("a").y)
   for (const a of layout.boxes) for (const b of layout.boxes) {
     if (a !== b) expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false)
   }
 })
 
-test("boxes carry their number and label, lines join them, and an arrow points into each child", () => {
+test("boxes carry their number and label, lines join them, and arrows point into the child", () => {
   const picture = text(drawGraph(layoutGraph(goal), null))
   expect(picture).toContain("(1) start")
   expect(picture).toContain("(1.1) asset")
   expect(picture).toContain("(1.1.1) claim")
   expect(picture).toContain("╭")
-  expect(picture).toContain("►")
-  expect(picture).toMatch(/[├└┬]/)
+  expect(picture).toContain("▼")
+  expect(picture).toMatch(/[┌┐├┬]/)
   expect(picture).toContain("┬")
 })
 
@@ -44,13 +40,13 @@ test("a link back up is not drawn but the box says it has one", () => {
   expect(text(drawGraph(layout, null))).toContain("↺1")
 })
 
-test("lines never run through a box", () => {
+test("a link that skips a depth runs down the gutter and never through a box", () => {
   const skip: Goal = { ...goal, nodes: [...goal.nodes, n("z", "far", 3, 0)], edges: [...goal.edges, { from: "s", to: "z", rel: "long" }] }
   const layout = layoutGraph(skip)
   const grid = drawGraph(layout, null)
   for (const box of layout.boxes) {
     for (let y = box.y + 1; y < box.y + BOX_H - 1; y++) {
-      for (let x = box.x + 1; x < box.x + box.w - 1; x++) expect("─┌┐└┘├┤┬┴┼►".includes(grid[y]![x]!.ch)).toBe(false)
+      for (let x = box.x + 1; x < box.x + BOX_W - 1; x++) expect("│─┌┐└┘├┤┬┴┼▼".includes(grid[y]![x]!.ch) && grid[y]![x]!.ch !== "│").toBe(false)
     }
   }
 })
@@ -76,7 +72,7 @@ test("panning stays inside the picture, and revealing a box brings it into the w
   const shown = reveal({ x: 0, y: 0 }, box, layout, view)
   expect(box.y >= shown.y && box.y + box.h <= shown.y + view.height).toBe(true)
   expect(box.x >= shown.x && box.x + box.w <= shown.x + view.width).toBe(true)
-  expect(readingOrder(layout).map((b) => b.id)).toEqual(["s", "a", "c", "f", "b"])
+  expect(readingOrder(layout).map((b) => b.id)).toEqual(["s", "a", "b", "c", "f"])
 })
 
 test("a window is the picture cut to size, in runs of one tone", () => {
@@ -85,4 +81,21 @@ test("a window is the picture cut to size, in runs of one tone", () => {
   expect(lines.length).toBe(8)
   expect(lines.every((runs) => runs.reduce((n, r) => n + [...r.text].length, 0) <= 30)).toBe(true)
   expect(lines.flat().some((r) => r.tone === "select")).toBe(true)
+})
+
+test("a layer wider than the screen wraps onto another row, so the picture stays narrow", () => {
+  const wide: Goal = {
+    goal_key: "w", open: 0, verified: 0, returned: 0,
+    nodes: [n("s", "start", 0, 0, "start"), ...Array.from({ length: 8 }, (_, i) => n(`a${i}`, `asset ${i}`, 1, i))],
+    edges: Array.from({ length: 8 }, (_, i) => ({ from: "s", to: `a${i}`, rel: "" })),
+  }
+  const roomy = layoutGraph(wide, 240), tight = layoutGraph(wide, 80)
+  expect(roomy.width).toBeGreaterThan(160)
+  expect(tight.width).toBeLessThanOrEqual(80)
+  expect(tight.height).toBeGreaterThan(roomy.height)
+  const tops = new Set(tight.boxes.map((b) => b.y))
+  expect(tops.size).toBeGreaterThan(2)
+  for (const a of tight.boxes) for (const b of tight.boxes) {
+    if (a !== b) expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h).toBe(false)
+  }
 })
