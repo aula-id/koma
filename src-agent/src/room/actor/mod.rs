@@ -417,6 +417,18 @@ impl RoomActor {
 
     /// `/stop red` stops that avatar's lanes, chat and work; `/stop all` stops every lane.
     fn stop_avatar(&mut self, who: &str) {
+        // A lane stopped earlier whose run still reads as running (or a task that died without
+        // saying so) is closed too, so no assignment stays stuck on it.
+        for (slot, lane) in self.lanes.iter_mut() {
+            let theirs = who == "all" || slot.avatar == who;
+            let over = matches!(lane.run, LaneRunState::Completed | LaneRunState::Failed | LaneRunState::Cancelled);
+            if theirs && slot.kind == LaneKind::Work && (lane.ended || lane.abort.is_finished()) && !over {
+                lane.abort.abort();
+                lane.run = LaneRunState::Cancelled;
+                lane.unsettled = true;
+                lane.ended = true;
+            }
+        }
         let slots: Vec<Slot> = self
             .lanes
             .iter()
@@ -455,6 +467,9 @@ impl RoomActor {
         let is_chief = lane.is_chief;
         match slot.kind {
             LaneKind::Work => {
+                // Aborted before it could say so itself: the reconciler reads this run as over,
+                // not as still running, and the assignment settles as uncertain.
+                lane.run = LaneRunState::Cancelled;
                 lane.unsettled = true;
                 lane.ended = true;
                 self.digest.stopped(&slot.avatar, now);

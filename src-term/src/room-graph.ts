@@ -19,6 +19,8 @@ export type GraphLayout = {
   height: number
   /** Lines between boxes: for each cell, which sides a line leaves through. */
   bits: Map<number, number>
+  /** Lines of links that cross another link: drawn dotted, so each can be followed. */
+  dots: Map<number, number>
   /** Arrow heads, drawn over the lines. */
   marks: Map<number, string>
   key: (x: number, y: number) => number
@@ -50,9 +52,12 @@ export function layoutGraph(goal: Goal): GraphLayout {
   const width = Math.max(...boxes.map((b) => b.x + b.w), 0) + 4
   const height = Math.max(...boxes.map((b) => b.y + b.h), 0) + 2
   const key = (x: number, y: number) => y * (width + 8) + x
-  const bits = new Map<number, number>()
   const marks = new Map<number, string>()
-  const add = (x: number, y: number, bit: number) => { if (x >= 0 && y >= 0) bits.set(key(x, y), (bits.get(key(x, y)) ?? 0) | bit) }
+  // Each link is routed on its own first, so crossings between links can be found afterwards.
+  type Route = { from: string; to: string; cells: Map<number, number> }
+  const routes: Route[] = []
+  let route: Route
+  const add = (x: number, y: number, bit: number) => { if (x >= 0 && y >= 0) route.cells.set(key(x, y), (route.cells.get(key(x, y)) ?? 0) | bit) }
   const horizontal = (y: number, x1: number, x2: number) => {
     const [a, b] = x1 <= x2 ? [x1, x2] : [x2, x1]
     for (let x = a; x <= b; x++) {
@@ -76,6 +81,8 @@ export function layoutGraph(goal: Goal): GraphLayout {
     seen.add(id)
     const fc = columnOf.get(from.node.rank)!, tc = columnOf.get(to.node.rank)!
     if (tc <= fc) { to.backLinks += 1; continue }
+    route = { from: from.id, to: to.id, cells: new Map() }
+    routes.push(route)
     const ay = mid(from), by = mid(to)
     const bus = from.x + BOX_W + 1
     // Out of the right side of the box, to a bus just beyond it.
@@ -93,7 +100,27 @@ export function layoutGraph(goal: Goal): GraphLayout {
     }
     marks.set(key(to.x - 1, by), "►")
   }
-  return { boxes, width, height, bits, marks, key }
+  // Links that share a start or an end merge cleanly. Two that share cells but neither end cross,
+  // and a reader cannot tell who goes where: the longer one of the pair is drawn dotted.
+  const owners = new Map<number, number[]>()
+  routes.forEach((r, i) => { for (const cell of r.cells.keys()) owners.set(cell, [...(owners.get(cell) ?? []), i]) })
+  const dotted = new Set<number>()
+  for (const list of owners.values()) {
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        const x = routes[list[a]!]!, y = routes[list[b]!]!
+        if (x.from === y.from || x.to === y.to) continue
+        dotted.add(x.cells.size > y.cells.size ? list[a]! : list[b]!)
+      }
+    }
+  }
+  const bits = new Map<number, number>()
+  const dots = new Map<number, number>()
+  routes.forEach((r, i) => {
+    const into = dotted.has(i) ? dots : bits
+    for (const [cell, bit] of r.cells) into.set(cell, (into.get(cell) ?? 0) | bit)
+  })
+  return { boxes, width, height, bits, dots, marks, key }
 }
 
 function toneOf(node: GoalNode): Tone {
@@ -126,6 +153,13 @@ export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][
     const y = Math.floor(k / stride), x = k % stride
     put(x, y, JOIN[bit] ?? "┼", "edge")
   }
+  // A dotted link shows as dots where it runs alone, and as the line it crosses where they meet.
+  for (const [k, bit] of layout.dots) {
+    const stride = layout.width + 8
+    const y = Math.floor(k / stride), x = k % stride
+    if (layout.bits.has(k)) { put(x, y, JOIN[(layout.bits.get(k) ?? 0) | bit] ?? "┼", "edge"); continue }
+    put(x, y, bit === L || bit === R || bit === (L | R) ? "┄" : bit === U || bit === D || bit === (U | D) ? "┆" : JOIN[bit] ?? "┼", "edge")
+  }
   for (const [k, ch] of layout.marks) {
     const stride = layout.width + 8
     put(k % stride, Math.floor(k / stride), ch, "edge")
@@ -140,8 +174,8 @@ export function drawGraph(layout: GraphLayout, selected: string | null): Cell[][
     lines.forEach((line, r) => [...line].forEach((ch, col) => put(box.x + col, box.y + r, ch, tone)))
     // Where a line joins the box: in on the left, out on the right.
     const my = box.y + (BOX_H >> 1)
-    if (layout.bits.has(layout.key(box.x - 1, my))) put(box.x, my, "┤", tone)
-    if (layout.bits.has(layout.key(box.x + BOX_W, my))) put(box.x + BOX_W - 1, my, "├", tone)
+    if (layout.bits.has(layout.key(box.x - 1, my)) || layout.dots.has(layout.key(box.x - 1, my))) put(box.x, my, "┤", tone)
+    if (layout.bits.has(layout.key(box.x + BOX_W, my)) || layout.dots.has(layout.key(box.x + BOX_W, my))) put(box.x + BOX_W - 1, my, "├", tone)
   }
   return grid
 }

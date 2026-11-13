@@ -109,3 +109,17 @@ test("two goals with the same name get distinct names, so a row is selected and 
   const ids = goalRows(goals, new Set()).map((r) => r.id)
   expect(new Set(ids).size).toBe(ids.length)
 })
+
+test("a link that crosses another is dotted, so each one can be followed", () => {
+  const cross: Goal = {
+    goal_key: "x", open: 0, verified: 0, returned: 0,
+    nodes: [n("a", "A", 0, 0), n("b", "B", 0, 1), n("c", "C", 0, 2), n("x", "X", 1, 0), n("y", "Y", 1, 1), n("z", "Z", 1, 2)],
+    edges: [{ from: "a", to: "x", rel: "" }, { from: "b", to: "y", rel: "" }, { from: "c", to: "z", rel: "" }, { from: "a", to: "z", rel: "" }],
+  }
+  const layout = layoutGraph(cross)
+  expect(layout.dots.size).toBeGreaterThan(0)
+  const picture = text(drawGraph(layout, null))
+  expect(picture).toContain("┆")
+  // Links that only share an end merge, and stay solid.
+  expect(layoutGraph(goal).dots.size).toBe(0)
+})

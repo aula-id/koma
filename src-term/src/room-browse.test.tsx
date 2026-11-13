@@ -107,8 +107,8 @@ test("reports list with their verdict and open to the whole report", async () =>
   expect(t.text()).toContain("no-go")
   expect(t.text()).toContain("manager")
   await act(async () => { await t.screen.mockInput.pressEnter() })
-  // Markdown draws a frame after the screen does.
-  for (let i = 0; i < 4; i++) { await t.settle(); await act(async () => { await t.screen.waitForVisualIdle() }) }
+  // Markdown draws a frame after the screen does, later on a slow machine.
+  for (let i = 0; i < 40 && !t.text().includes("One high finding."); i++) { await t.settle(); await act(async () => { await t.screen.waitForVisualIdle() }) }
   const text = t.text()
   expect(text).toContain("One high finding.")
   expect(text).toContain("findings/ssrf")

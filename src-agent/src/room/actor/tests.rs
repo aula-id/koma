@@ -804,6 +804,35 @@ fn hanging_room_with(
 }
 
 #[tokio::test]
+async fn stop_all_settles_the_assignment_it_stopped_so_nothing_stays_running() {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe" }] }),
+    );
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let mut handle = hanging_room_with(Arc::clone(&coordinator), shelf, registry, &["red"], vec![(("chief", 0), tools("Sending Red.", vec![delegate]))]);
+    handle.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "running").await;
+    for _ in 0..2 {
+        handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "all".into() })).unwrap();
+    }
+    // The stopped lane must not leave its assignment reading as running: that blocks the Chief.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        handle.to_actor.send(ActorMsg::Tick).unwrap();
+        let pending = coordinator.active_work().is_some_and(|w| w.assignments.iter().any(|a| a.avatar == "red" && a.status.is_pending()));
+        if !pending {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the stopped assignment is still pending");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+#[tokio::test]
 async fn a_room_entered_again_continues_the_assignment_it_left() {
     let delegate = call(
         "group_delegate",

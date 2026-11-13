@@ -44,7 +44,7 @@ pub fn embedded_tree() -> Tree {
 ///
 /// Limits: symlinks are not followed, files must be `.md`/`.toml`/`.json` under
 /// 256 KiB, at most 512 files and 4 directory levels, and the directory must be
-/// owned by the same user as the home directory (unix).
+/// owned by the user running koma or the owner of the home directory (unix).
 pub fn read_overlay(dir: &Path, warnings: &mut Vec<String>) -> Tree {
     let mut out = Tree::new();
     let Ok(meta) = std::fs::symlink_metadata(dir) else {
@@ -142,7 +142,10 @@ fn check_owner(dir: &Path) -> Result<(), String> {
     let (Ok(dir_meta), Ok(home_meta)) = (std::fs::metadata(dir), std::fs::metadata(&home)) else {
         return Ok(());
     };
-    if dir_meta.uid() == home_meta.uid() {
+    // The user the process runs as counts too: a container can run as root with another user's home.
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let running_as = unsafe { libc::geteuid() };
+    if dir_meta.uid() == home_meta.uid() || dir_meta.uid() == running_as {
         Ok(())
     } else {
         Err(format!("{} is not owned by the current user", dir.display()))

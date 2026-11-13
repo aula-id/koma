@@ -392,6 +392,10 @@ fn every_coding_agent_tool_is_in_the_room_or_has_a_stated_reason_not_to_be() {
     // Every hosted handler is a real compiled tool, so the allowlist cannot advertise a ghost.
     let compiled = super::builtins::host_tool_specs();
     for name in HOST_HANDLERS {
+        // graph_query is compiled only with the linker feature; a build without it has no such tool.
+        if cfg!(not(feature = "linker")) && *name == "graph_query" {
+            continue;
+        }
         assert!(compiled.iter().any(|s| s.name == *name), "{name} is a host handler with no compiled tool");
     }
 }
