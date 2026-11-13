@@ -219,14 +219,6 @@ impl SkillRegistry {
                 .join("\n"),
         )
     }
-
-    pub fn catalogue_text(&self) -> String {
-        self.skills
-            .values()
-            .map(|skill| format!("- {}: {}", skill.name, skill.description))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 }
 
 pub(crate) fn normalize_skill_root(root: &Path, workdir: Option<&Path>) -> PathBuf {
