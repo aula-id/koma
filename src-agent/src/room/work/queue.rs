@@ -12,6 +12,9 @@ use super::store::{self, new_id, R};
 use crate::room::shelf::Shelf;
 use crate::room::types::{AssignmentStatus, Outcome, Reference};
 
+/// Reviews of one claim that may be superseded before the claim is left for the Chief to decide.
+pub const REVIEW_LOOP_CAP: usize = 6;
+
 fn body(content: &str) -> serde_json::Map<String, Value> {
     match serde_json::from_str::<Value>(content) {
         Ok(Value::Object(map)) => map,
@@ -36,6 +39,16 @@ pub fn enqueue_claim(
     let Some(claim) = shelf.peek(claim_key).map_err(shelf_err)? else {
         return Ok(Some("claim row no longer exists on the shelf".to_string()));
     };
+    // A claim that keeps being rewritten under its review is not converging. Stop queuing it and say so.
+    let loops = store::review_items(conn, &source.work_id)?
+        .iter()
+        .filter(|i| i.claim_key == claim_key && i.status == ReviewStatus::Superseded)
+        .count();
+    if loops >= REVIEW_LOOP_CAP {
+        return Ok(Some(format!(
+            "its review was superseded {loops} times because the claim or its evidence kept changing; it is not queued again. Stop editing it and tell the Chief"
+        )));
+    }
     let claim_body = body(claim.content.as_deref().unwrap_or(""));
     let has_poc = claim_body.get("poc").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty());
     if claim_body.get("kind").and_then(Value::as_str) != Some("claim") || !has_poc {

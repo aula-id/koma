@@ -64,6 +64,8 @@ pub enum FindingKind {
     ReviewLoop,
     /// Findings are confirmed and nobody is writing the report.
     ReportDue,
+    /// Two claims say the same thing.
+    DuplicateClaim,
 }
 
 /// One thing the audit noticed.
@@ -127,6 +129,7 @@ pub fn audit(input: &AuditInput<'_>) -> Result<Vec<Finding>, String> {
     check_repeats(input, &mut findings);
     check_review_loop(input, &mut findings);
     check_report_due(input, &mut findings)?;
+    check_duplicates(input, &mut findings)?;
     findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.key.cmp(&b.key)));
     Ok(findings)
 }
@@ -323,5 +326,33 @@ fn check_report_due(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<()
         note: format!("{} confirmed finding(s) are on the shelf, no review is running and no report is being written. Hand them to the reporter (a report assignment that follows the verification); the goal cannot finish without reports/.", findings.len()),
         refs: findings.iter().take(8).map(|e| e.key.clone()).collect(),
     });
+    Ok(())
+}
+
+/// Two claims about the same host and class that say the same thing waste a review each. Only noted; nothing is merged.
+fn check_duplicates(input: &AuditInput<'_>, out: &mut Vec<Finding>) -> Result<(), String> {
+    let shelf_err = |e: crate::room::shelf::ShelfError| e.0;
+    let claims: Vec<(String, Value)> = input
+        .shelf
+        .scan("claims/")
+        .map_err(shelf_err)?
+        .into_iter()
+        .filter_map(|e| Some((e.key, serde_json::from_str::<Value>(e.content.as_deref()?).ok()?)))
+        .take(200)
+        .collect();
+    for (i, (a, body_a)) in claims.iter().enumerate() {
+        for (b, body_b) in &claims[i + 1..] {
+            if crate::room::shelf::claims_are_near(body_a, body_b) {
+                out.push(Finding {
+                    key: format!("duplicate:{a}:{b}"),
+                    kind: FindingKind::DuplicateClaim,
+                    avatar: None,
+                    severity: Severity::Info,
+                    note: format!("{a} and {b} look like the same claim. Review one and fold the other into it, so the Reviewer does not check it twice."),
+                    refs: vec![a.clone(), b.clone()],
+                });
+            }
+        }
+    }
     Ok(())
 }

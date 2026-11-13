@@ -15,6 +15,7 @@ use super::effects::Effect;
 use super::model::{Assignment, ReviewItem, ReviewStatus, Work};
 use super::queue::enqueue_claim;
 use super::store::{self, new_id, R};
+use crate::room::oracle;
 use crate::room::registry::Registry;
 use crate::room::shelf::Shelf;
 use crate::room::types::{AssignmentKind, AssignmentStatus, Outcome, Reference};
@@ -120,13 +121,23 @@ pub fn review_queue(
         }
     }
 
+    // 2b. A claim whose cited code a program could not find goes straight back to its Red, unreviewed.
+    for item in store::review_items(conn, &work.id)?.iter().filter(|i| i.status == ReviewStatus::Queued) {
+        if oracle::stored(shelf, &item.claim_key, item.claim_revision).is_some_and(|s| s.verdict == Some(oracle::Verdict::Refuted)) {
+            store::update_item(conn, &item.id, ReviewStatus::Returned, None, None)?;
+        }
+    }
+
     // 3. A returned claim goes back to the Red that made it, once.
     for item in store::review_items(conn, &work.id)?.iter().filter(|i| i.status == ReviewStatus::Returned && !i.feedback_sent) {
         let Some(source) = assignments.iter().find(|a| a.id == item.source_assignment_id).cloned() else {
             continue;
         };
         let revision = item.claim_revision.to_string();
-        let note = verdict_note(shelf, item.verdict_key.as_deref());
+        let note = match (item.verdict_key.as_deref(), oracle::stored(shelf, &item.claim_key, item.claim_revision)) {
+            (None, Some(found)) if found.verdict == Some(oracle::Verdict::Refuted) => oracle::feedback(&found.lines),
+            _ => verdict_note(shelf, item.verdict_key.as_deref()),
+        };
         let text = registry
             .render("returned", &[("claim", &item.claim_key), ("revision", &revision), ("note", &note)])
             .map_err(|e| e.to_string())?;
@@ -157,9 +168,11 @@ pub fn review_queue(
     let Some(reviewer) = idle_avatar(registry, &assignments, "reviewer", lane_idle) else {
         return Ok(effects);
     };
+    // A claim whose proof check has not answered yet waits; the others go ahead.
     let queued: Vec<ReviewItem> = store::review_items(conn, &work.id)?
         .into_iter()
         .filter(|i| i.status == ReviewStatus::Queued)
+        .filter(|i| !oracle::stored(shelf, &i.claim_key, i.claim_revision).is_some_and(|s| s.pending))
         .collect();
     let mut batch: Vec<&ReviewItem> = Vec::new();
     let mut snapshot: Vec<Reference> = Vec::new();
@@ -188,7 +201,10 @@ pub fn review_queue(
     }
     let listing = json!(batch
         .iter()
-        .map(|i| json!({ "claim": i.claim_key, "revision": i.claim_revision, "references": i.references }))
+        .map(|i| {
+            let checked = oracle::stored(shelf, &i.claim_key, i.claim_revision).and_then(|s| s.verdict).map_or("unproven", oracle::Verdict::as_str);
+            json!({ "claim": i.claim_key, "revision": i.claim_revision, "code_check": checked, "references": i.references })
+        })
         .collect::<Vec<_>>())
     .to_string();
     let prompt = registry

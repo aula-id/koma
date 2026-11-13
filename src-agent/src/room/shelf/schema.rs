@@ -76,8 +76,20 @@ pub fn typed_tool(kind: &str) -> Option<(String, Value)> {
             f.add("poc", text("Steps or a command that reproduce it"), true);
             f.add("evidence_keys", list("Shelf keys under evidence/"), false);
             f.add("asset_keys", list("Shelf keys under assets/"), false);
+            f.add(
+                "proof",
+                json!({
+                    "type": "array", "maxItems": 16,
+                    "items": { "type": "object", "required": ["path", "needle"], "properties": {
+                        "path": { "type": "string", "description": "The file, relative to the workspace" },
+                        "needle": { "type": "string", "description": "Text copied exactly from that file that shows the problem" }
+                    } },
+                    "description": "Code the claim rests on. A program checks that each needle is really in its file; a claim that cites code that is not there is sent back."
+                }),
+                false,
+            );
             f.cvss();
-            "Publish a vulnerability claim for review."
+            "Publish a vulnerability claim for review. Give proof so a program can check the code it cites."
         }
         "evidence" => {
             f.add("claim_key", text("The claim this supports; starts with claims/"), true);

@@ -246,6 +246,21 @@ impl Coordinator {
         self.store.with_tx(store::active_work).ok().flatten()
     }
 
+    /// Claims waiting for review in the active engagement, as (claim key, claim revision).
+    /// The actor starts the proof check for these.
+    pub fn queued_claims(&self) -> Vec<(String, u64)> {
+        self.store
+            .with_tx(|conn| {
+                let Some(work) = store::active_work(conn)? else { return Ok(Vec::new()) };
+                Ok(store::review_items(conn, &work.id)?
+                    .into_iter()
+                    .filter(|i| i.status == super::model::ReviewStatus::Queued)
+                    .map(|i| (i.claim_key, i.claim_revision))
+                    .collect())
+            })
+            .unwrap_or_default()
+    }
+
     /// The active engagement's key, goal text and open trajectory goals, for the
     /// wake and check-in prompts. `None` when nothing is active.
     pub fn active_brief(&self) -> Option<(String, String, Vec<String>)> {

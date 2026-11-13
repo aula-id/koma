@@ -37,6 +37,26 @@ fn severity(args: &Args) -> Result<String, ShelfError> {
     Ok(value)
 }
 
+/// `proof`: up to 16 `{path, needle}` pairs a program can check against the code.
+fn proof_list(args: &Args) -> Result<Vec<Value>, ShelfError> {
+    let items = match args.get("proof") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) if items.len() <= 16 => items,
+        _ => return fail("proof must be an array of at most 16 {path, needle} objects"),
+    };
+    items
+        .iter()
+        .map(|item| {
+            let path = item.get("path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty() && p.chars().count() <= 512);
+            let needle = item.get("needle").and_then(Value::as_str).filter(|n| !n.trim().is_empty() && n.chars().count() <= 2000);
+            match (path, needle) {
+                (Some(path), Some(needle)) => Ok(json!({ "path": path, "needle": needle })),
+                _ => fail("every proof entry needs a path (the file) and a needle (text that is exactly in it)"),
+            }
+        })
+        .collect()
+}
+
 fn keys_with_prefix(args: &Args, name: &str, prefix: &str) -> Result<Vec<String>, ShelfError> {
     let keys = string_list(args, name, 32)?;
     if keys.iter().any(|k| !k.starts_with(prefix)) {
@@ -71,6 +91,7 @@ pub fn build_record(kind: &str, args: &Args) -> Result<Map<String, Value>, Shelf
                 "host": text_req(args, "host", 512)?,
                 "poc": text_req(args, "poc", 20000)?,
                 "evidence_keys": evidence_keys,
+                "proof": proof_list(args)?,
                 "cve_ids": string_list(args, "cve_ids", 32)?,
                 "cwe_ids": string_list(args, "cwe_ids", 32)?,
                 "cvss_score": optional_cvss(args.get("cvss_score"))?,

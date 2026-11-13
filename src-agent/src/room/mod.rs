@@ -14,6 +14,8 @@ pub mod clerk;
 pub mod cli;
 pub mod daemon;
 pub mod lane;
+pub mod ledger;
+pub mod oracle;
 pub mod registry;
 pub mod shelf;
 pub mod trajectory;

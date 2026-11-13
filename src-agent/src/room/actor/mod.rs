@@ -50,11 +50,13 @@ use crate::room::trajectory::gate;
 use crate::room::work::{Coordinator, Effect, Reconciler};
 
 /// Limits and cadences for a room.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RoomConfig {
     pub chat_max_steps: usize,
     pub work_max_steps: usize,
     pub audit: AuditConfig,
+    /// Directories the proof check may read. Empty turns the check off.
+    pub oracle_roots: Vec<std::path::PathBuf>,
 }
 
 impl Default for RoomConfig {
@@ -63,6 +65,7 @@ impl Default for RoomConfig {
             chat_max_steps: 60,
             work_max_steps: 60,
             audit: AuditConfig::default(),
+            oracle_roots: Vec::new(),
         }
     }
 }
@@ -185,6 +188,9 @@ pub fn spawn_room_in(
         turn_images: Vec::new(),
         chief_images: Vec::new(),
         lanes_dir,
+        oracle_inflight: HashSet::new(),
+        spend: BTreeMap::new(),
+        spend_dirty: HashSet::new(),
         to_actor: to_actor.clone(),
         out,
         config,
@@ -196,6 +202,11 @@ pub fn spawn_room_in(
 struct RoomActor {
     /// Where lane transcripts live; `None` keeps them in memory only.
     lanes_dir: Option<std::path::PathBuf>,
+    /// Proof checks running in the background, by claim and revision.
+    oracle_inflight: HashSet<(String, u64)>,
+    /// What each goal has cost so far, and which books changed since they were saved.
+    spend: BTreeMap<String, crate::room::ledger::Book>,
+    spend_dirty: HashSet<String>,
     coordinator: Arc<Coordinator>,
     shelf: Arc<Shelf>,
     registry: Arc<RegistryHandle>,
@@ -244,6 +255,10 @@ impl RoomActor {
                 ActorMsg::Control(cmd) => self.on_control(cmd),
                 ActorMsg::Interrupt => self.interrupt(),
                 ActorMsg::Tick => self.on_tick(),
+                ActorMsg::Oracle { claim_key, revision, report } => {
+                    self.oracle_inflight.remove(&(claim_key.clone(), revision));
+                    crate::room::oracle::save(&self.shelf, &claim_key, revision, &report);
+                }
                 ActorMsg::LaneEvent { avatar, kind, event } => self.on_lane_event(&avatar, kind, event),
                 ActorMsg::Effects(effects) => self.apply_effects(effects),
                 ActorMsg::Flag(item) => {
@@ -477,6 +492,12 @@ impl RoomActor {
         }
         let is_chief = self.lanes.get(&Slot::new(avatar, kind)).is_some_and(|lane| lane.is_chief);
         match event {
+            LaneEvent::Spent(usage) => {
+                let goal = self.coordinator.active_brief().map_or_else(|| "room".to_string(), |(key, _, _)| key);
+                let shelf = Arc::clone(&self.shelf);
+                self.spend.entry(goal.clone()).or_insert_with(|| crate::room::ledger::load(&shelf, &goal)).add(avatar, usage);
+                self.spend_dirty.insert(goal);
+            }
             LaneEvent::Reasoning(text) => self.emit_part(avatar, kind, LanePart::Reasoning { text }),
             LaneEvent::TextDelta(text) => self.emit_part(avatar, kind, LanePart::TextDelta { text }),
             LaneEvent::ReasoningDelta(text) => self.emit_part(avatar, kind, LanePart::ReasoningDelta { text }),
@@ -643,10 +664,63 @@ impl RoomActor {
     // ---- the periodic tick ----
 
     fn on_tick(&mut self) {
+        self.start_proof_checks();
+        self.keep_books();
         self.reconcile();
         self.run_clerk();
         self.maybe_start_chief();
         self.emit_status();
+    }
+
+    /// Start the proof check for every claim that is queued and has none yet. It runs off the actor's
+    /// thread; the review of that claim waits for it, and the others do not.
+    fn start_proof_checks(&mut self) {
+        if self.config.oracle_roots.is_empty() {
+            return;
+        }
+        for (claim_key, revision) in self.coordinator.queued_claims() {
+            if self.oracle_inflight.contains(&(claim_key.clone(), revision)) {
+                continue;
+            }
+            // A finished result stays; a pending one with no task behind it (the room was restarted) is run again.
+            if crate::room::oracle::stored(&self.shelf, &claim_key, revision).is_some_and(|s| !s.pending) {
+                continue;
+            }
+            let Ok(Some(row)) = self.shelf.peek(&claim_key) else { continue };
+            if row.revision.max(0) as u64 != revision {
+                continue;
+            }
+            let claim: serde_json::Value = serde_json::from_str(row.content.as_deref().unwrap_or("")).unwrap_or_default();
+            crate::room::oracle::mark_pending(&self.shelf, &claim_key, revision);
+            self.oracle_inflight.insert((claim_key.clone(), revision));
+            let roots = self.config.oracle_roots.clone();
+            let back = self.to_actor.clone();
+            tokio::task::spawn_blocking(move || {
+                let report = crate::room::oracle::check(&claim, &roots);
+                let _ = back.send(ActorMsg::Oracle { claim_key, revision, report });
+            });
+        }
+    }
+
+    /// Save the goal's spend when it changed, and write the run snapshot once when a goal first shows.
+    fn keep_books(&mut self) {
+        for goal in std::mem::take(&mut self.spend_dirty) {
+            if let Some(book) = self.spend.get(&goal) {
+                crate::room::ledger::save(&self.shelf, &goal, book);
+            }
+        }
+        if let Some((goal, _, _)) = self.coordinator.active_brief() {
+            let registry = self.registry.current();
+            crate::room::ledger::snapshot(
+                &self.shelf,
+                &goal,
+                &registry,
+                now_ms(),
+                !self.config.oracle_roots.is_empty(),
+                self.config.chat_max_steps,
+                self.config.work_max_steps,
+            );
+        }
     }
 
     fn reconcile(&mut self) {

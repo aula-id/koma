@@ -255,6 +255,9 @@ pub async fn run_lane(
             })
             .await;
 
+        if let Some(usage) = reply.usage {
+            emit(&events, LaneEvent::Spent(usage));
+        }
         if let Some(error) = reply.error {
             emit(&events, LaneEvent::Failed { error });
             return;
