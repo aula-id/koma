@@ -167,6 +167,7 @@ pub fn spawn_room_in(
     config: RoomConfig,
     lanes_dir: Option<std::path::PathBuf>,
 ) -> RoomHandle {
+    builtins.bind_registry(Arc::clone(&registry));
     let (to_actor, rx) = unbounded_channel();
     let (out, events) = unbounded_channel();
     let actor = RoomActor {
@@ -359,6 +360,7 @@ impl RoomActor {
             prompt.push_str("\n\n");
             prompt.push_str(&chat);
         }
+        let prompt = self.with_skills(&registry, avatar, LaneKind::Chat, prompt);
         let digest = self.digest.render();
         let task = if digest.is_empty() {
             text
@@ -591,6 +593,7 @@ impl RoomActor {
                     let registry = self.registry.current();
                     let role = registry.role_of(&assignment.avatar);
                     let prompt = role.map(|r| r.prompt.clone()).unwrap_or_default();
+                    let prompt = self.with_skills(&registry, &assignment.avatar, LaneKind::Work, prompt);
                     let mut task = format!("Goal: {goal}\n\nYour assignment:\n{}", assignment.prompt);
                     if self.resuming {
                         task = format!(
@@ -636,6 +639,19 @@ impl RoomActor {
 
     // ---- the Chief's chat turn ----
 
+    /// The lane's system prompt plus what it needs to know about skills, when its role has the skill tools.
+    fn with_skills(&self, registry: &Registry, avatar: &str, kind: LaneKind, mut prompt: String) -> String {
+        let has_tools = registry.role_of(avatar).is_some_and(|r| r.tools.iter().any(|t| t.handler == "skill_find"));
+        if has_tools {
+            let note = self.builtins.skills_note(avatar, kind);
+            if !note.is_empty() {
+                prompt.push_str("\n\n");
+                prompt.push_str(&note);
+            }
+        }
+        prompt
+    }
+
     fn maybe_start_chief(&mut self) {
         if self.chief_busy || !self.inbox.has_pending() {
             return;
@@ -644,6 +660,7 @@ impl RoomActor {
         let items = self.inbox.drain();
         let task = self.build_chief_turn(items);
         let prompt = registry.role("chief").map(|r| r.prompt.clone()).unwrap_or_default();
+        let prompt = self.with_skills(&registry, "chief", LaneKind::Chat, prompt);
         let model = registry.lane_model("chief", LaneKind::Chat);
         let config = LaneConfig { avatar: "chief".into(), kind: LaneKind::Chat, system: prompt, task, task_images: std::mem::take(&mut self.chief_images), model, max_steps: self.config.chat_max_steps, transcript: self.transcript_for("chief", LaneKind::Chat), objective: self.coordinator.active_brief().map(|(_, goal, _)| goal).unwrap_or_default() };
         self.chief_busy = true;

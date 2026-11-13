@@ -132,6 +132,8 @@ pub struct Role {
     pub id: String,
     pub display: String,
     pub shelf_allow: Vec<String>,
+    /// Skills this role may find and load: names or `prefix-*`. Empty means all.
+    pub skills_allow: Vec<String>,
     pub chat: LaneModel,
     pub work: LaneModel,
     pub tools: Vec<ToolDef>,

@@ -35,6 +35,13 @@ pub trait BuiltinHost: Send + Sync {
     }
     /// The built-in tools a lane of this kind may use.
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec>;
+    /// Hands the host the room's registry, so it can read a role's skill scope. Called once at start.
+    fn bind_registry(&self, _registry: std::sync::Arc<crate::room::registry::RegistryHandle>) {}
+    /// What a lane's system prompt says about skills: that they are found with `skill_find`, the
+    /// pinned ones, and the bodies of those the lane has loaded. Empty when there are none.
+    fn skills_note(&self, _avatar: &str, _kind: LaneKind) -> String {
+        String::new()
+    }
 }
 
 /// A built-in host that offers nothing, for lanes (and tests) with no built-ins.

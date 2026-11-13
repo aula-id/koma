@@ -4,6 +4,7 @@
 pub mod assemble;
 pub mod builtins;
 mod lane_state;
+mod skill_book;
 pub mod model_client;
 pub mod models;
 mod run;

@@ -587,3 +587,38 @@ fn chief_and_clerk_stay_single() {
         );
     }
 }
+
+fn red_with(skills: &str) -> String {
+    let embedded = RegistryHandle::embedded().expect("load").current();
+    let red = embedded.role("red").expect("red");
+    format!(
+        "id = \"red\"\ndisplay = \"{}\"\nshelf_allow = {:?}\nskills_allow = {skills}\n",
+        red.display, red.shelf_allow
+    )
+}
+
+#[test]
+fn every_role_but_the_clerk_can_find_load_and_unload_skills() {
+    let reg = RegistryHandle::embedded().expect("load").current();
+    for id in reg.roles.keys() {
+        let role = reg.role(id).expect("role");
+        let has = |h: &str| role.tools.iter().any(|t| t.handler == h);
+        if id == "clerk" {
+            assert!(!has("skill_find"), "the clerk must not have skills");
+        } else {
+            for h in ["skill_find", "skill_load", "skill_unload"] {
+                assert!(has(h), "the {id} role is missing {h}");
+            }
+            assert!(!has("skill_create") && !has("skill_modify"), "{id} may not write skills");
+            assert!(role.skills_allow.is_empty(), "{id} starts with every skill");
+        }
+    }
+}
+
+#[test]
+fn an_overlay_can_narrow_the_skills_a_role_sees_but_not_widen_them() {
+    let tmp = Tmp::new("skills-narrow");
+    tmp.write("roles/red/role.toml", &red_with("[\"pentest-*\", \"web-*\"]"));
+    let handle = overlaid(&tmp);
+    assert_eq!(handle.current().role("red").expect("red").skills_allow, ["pentest-*", "web-*"]);
+}

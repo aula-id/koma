@@ -438,3 +438,72 @@ fn a_lane_can_load_an_image_the_user_pointed_at() {
     let (outside, none) = b.run_with_messages("red", LaneKind::Chat, &call("load_image", json!({ "path": "/etc/hosts" })));
     assert!(outside.starts_with("error:") && none.is_empty(), "{outside}");
 }
+
+fn skill_dir_with(names: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("koma-room-skills-{}-{}", std::process::id(), names.len()));
+    let _ = std::fs::remove_dir_all(&root);
+    for (name, desc) in names {
+        let d = root.join(".agents/skills").join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), format!("---\ndescription: {desc}\n---\nsteps of {name}")).unwrap();
+    }
+    root
+}
+
+fn skill_host(root: &std::path::Path) -> (CtxBuiltins, Arc<RegistryHandle>) {
+    let mut ctx = context(root);
+    ctx.skill_registry = Some(crate::model::skill::SkillRegistry::load_for_test(root));
+    ctx.session_dir = Some(root.join("session"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let host = CtxBuiltins::from_ctx(ctx);
+    host.bind_registry(Arc::clone(&registry));
+    (host, registry)
+}
+
+#[test]
+fn a_lane_finds_loads_and_unloads_a_skill_and_the_next_run_remembers() {
+    let root = skill_dir_with(&[("jwt-review", "Review how JSON web tokens are signed and checked."), ("filler", "Odd chores.")]);
+    let (host, _) = skill_host(&root);
+    let found = host.run("red", LaneKind::Work, &call("skill_find", json!({"query": "check the JWT tokens"})));
+    assert!(found.contains("jwt-review"), "{found}");
+
+    // Nothing is loaded yet, so the prompt names the tools and carries no body.
+    let note = host.skills_note("red", LaneKind::Work);
+    assert!(note.contains("skill_find") && !note.contains("steps of jwt-review"), "{note}");
+
+    let loaded = host.run("red", LaneKind::Work, &call("skill_load", json!({"name": "jwt-review"})));
+    assert!(loaded.contains("steps of jwt-review"), "{loaded}");
+    // The next run of that lane has the body in its prompt; another lane does not.
+    assert!(host.skills_note("red", LaneKind::Work).contains("# Skill: jwt-review\nsteps of jwt-review"));
+    assert!(!host.skills_note("red", LaneKind::Chat).contains("steps of jwt-review"));
+    assert!(!host.skills_note("reviewer", LaneKind::Work).contains("steps of jwt-review"));
+    // Loading it again does not repeat the body.
+    let again = host.run("red", LaneKind::Work, &call("skill_load", json!({"name": "jwt-review"})));
+    assert!(again.contains("already active"), "{again}");
+
+    let gone = host.run("red", LaneKind::Work, &call("skill_unload", json!({"name": "jwt-review"})));
+    assert!(gone.contains("unloaded"), "{gone}");
+    assert!(!host.skills_note("red", LaneKind::Work).contains("steps of jwt-review"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_skill_the_room_has_no_registry_for_is_reported_not_invented() {
+    let root = skill_dir_with(&[]);
+    let (host, _) = skill_host(&root);
+    assert!(host.run("red", LaneKind::Work, &call("skill_find", json!({"query": "anything"}))).contains("No skills"));
+    assert!(host.skills_note("red", LaneKind::Work).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_lane_cannot_write_skills() {
+    let root = skill_dir_with(&[("a-skill", "A skill.")]);
+    let (host, _) = skill_host(&root);
+    for tool in ["skill_create", "skill_modify"] {
+        let out = host.run("red", LaneKind::Work, &call(tool, json!({"name": "x", "description": "d", "instruction": "i"})));
+        assert!(out.contains("not available"), "{tool}: {out}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
