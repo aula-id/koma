@@ -28,7 +28,7 @@ ALLOW writes and shell commands that target the koma scratch directory
 sanctioned throwaway area for cloning repositories, downloads, and temporary
 files. Cloning, downloading, or creating files there is safe to auto-run.
 
-ALLOW skill with action "create" or "modify". It is the sanctioned way to
+ALLOW skill_create and skill_modify. They are the sanctioned way to
 create or change a skill,
 either in this project (`.agents/skills`) or in the global skill folder
 (`~/.koma/skills` on Linux/macOS, or the user profile `.koma\skills` on
