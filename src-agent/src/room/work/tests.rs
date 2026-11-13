@@ -208,7 +208,7 @@ fn the_first_batch_must_be_a_probe_and_each_kind_has_one_role() {
     assert!(error(&call(json!([{ "avatar": "red", "kind": "probe", "prompt": "p", "reviews_id": "x" }]))).contains("Only verification or report"));
     assert!(error(&call(json!([]))).contains("1..32"));
     assert!(error(&call(json!([{ "avatar": "red", "kind": "bogus", "prompt": "p" }]))).contains("invalid arguments"));
-    assert!(f.co.store().with_tx(|c| Ok(store::latest_work(c)?)).expect("q").is_none(), "failed calls leave no work behind");
+    assert!(f.co.store().with_tx(store::latest_work).expect("q").is_none(), "failed calls leave no work behind");
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn a_review_must_publish_a_verdict_and_a_finding_for_a_confirmed_claim() {
     f.put("put_finding", json!({ "key": "findings/f", "claim_key": "claims/a", "verdict_key": "verdicts/v", "vulnclass": "cors",
         "name": "CORS", "severity": "high", "summary": "s", "host": "h", "expected_revision": 0 }));
     let all: Vec<Reference> = with_verdict.into_iter().chain([r("findings/f", 1)]).collect();
-    assert_eq!(complete(all).expect("complete"), false);
+    assert!(!complete(all).expect("complete"));
     let work_id = f.assignment(0).work_id;
     let status = f.co.store().with_tx(|c| Ok(store::review_items(c, &work_id)?[0].status)).expect("status");
     assert_eq!(status, ReviewStatus::Completed);
@@ -712,7 +712,7 @@ mod reconcile_tests {
 
         let first = rec.tick(f.co.store(), observer(&seen), 0).expect("tick");
         assert_eq!(first.status_changes, [(id.clone(), AssignmentStatus::Running)]);
-        assert_eq!(first.checkins, [wid.clone()]);
+        assert_eq!(first.checkins, std::slice::from_ref(&wid));
         assert!(first.wakes.is_empty());
 
         // same window, unchanged state: no new check-in, no status change

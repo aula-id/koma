@@ -158,8 +158,10 @@ impl ModelBook {
 
 #[cfg(test)]
 pub(crate) fn test_book(dir: &std::path::Path) -> Arc<ModelBook> {
-    let mut config = AppConfig::default();
-    config.providers = vec![serde_json::from_value(serde_json::json!({"uuid": "p1", "name": "acme"})).expect("provider")];
+    let mut config = AppConfig {
+        providers: vec![serde_json::from_value(serde_json::json!({"uuid": "p1", "name": "acme"})).expect("provider")],
+        ..AppConfig::default()
+    };
     config.models = vec![
         serde_json::from_value(serde_json::json!({"uuid": "m1", "name": "Fast", "model_id": "fast-1", "provider_uuid": "p1"})).expect("model"),
         serde_json::from_value(serde_json::json!({"uuid": "m2", "name": "Strong", "model_id": "strong-1", "provider_uuid": "p1"})).expect("model"),

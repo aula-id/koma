@@ -283,7 +283,7 @@ mod tests {
             t.push(ChatMessage::new(Role::Assistant, format!("answer {n} {}", "y".repeat(100))));
         }
         let window = t.window(500);
-        assert_eq!(window.first().map(|m| m.role.clone()), Some(Role::User));
+        assert_eq!(window.first().map(|m| m.role), Some(Role::User));
         assert!(window.last().unwrap().content.starts_with("answer 5"));
         assert!(window.len() < t.messages().len());
         let tiny = t.window(1);

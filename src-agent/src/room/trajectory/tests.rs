@@ -467,7 +467,7 @@ fn the_layered_view_draws_straight_links_and_lists_the_rest() {
 fn the_layered_view_gives_way_to_the_outline_when_too_wide() {
     let view = sample_view();
     assert!(layered(&view, 10).is_none());
-    let narrow = render_all(&[view.clone()], Format::Ascii, Some(10)).expect("render");
+    let narrow = render_all(std::slice::from_ref(&view), Format::Ascii, Some(10)).expect("render");
     assert_eq!(narrow, outline(&view), "falls back to the outline");
     let default = render_all(&[view], Format::Ascii, None).expect("render");
     assert!(default.contains("├─ ") || default.contains("└─ "));
@@ -480,7 +480,7 @@ fn dot_mermaid_and_json_carry_the_same_graph() {
     assert!(d.starts_with("digraph \"retas\"") && d.contains("\"claims/retas/cors\" -> \"findings/retas/cors\" [label=\"proves\"]"), "{d}");
     let m = mermaid(&view);
     assert!(m.starts_with("flowchart LR") && m.contains("-->|proves|"), "{m}");
-    let j: Value = serde_json::from_str(&render_json(&[view.clone()]).expect("json")).expect("parse");
+    let j: Value = serde_json::from_str(&render_json(std::slice::from_ref(&view)).expect("json")).expect("parse");
     assert_eq!(j[0]["goal_key"], "retas");
     assert_eq!(j[0]["counts"]["verified"], 1);
     assert_eq!(j[0]["nodes"].as_array().expect("nodes").len(), view.nodes.len());
