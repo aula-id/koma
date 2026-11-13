@@ -149,8 +149,21 @@ impl ModelBook {
         std::fs::create_dir_all(&self.overlay).map_err(|e| e.to_string())?;
         let text = toml::to_string(&doc).map_err(|e| e.to_string())?;
         let tmp = self.overlay.join("avatars.toml.tmp");
-        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        std::fs::write(&tmp, &text).map_err(|e| e.to_string())?;
+        // A file watcher or a virus scanner can hold the new file for a moment, and Windows then
+        // refuses the rename. Retry briefly, then write in place rather than lose the choice.
+        let mut renamed = false;
+        for attempt in 0..5 {
+            if std::fs::rename(&tmp, &path).is_ok() {
+                renamed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40 * (attempt + 1)));
+        }
+        if !renamed {
+            std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(&tmp);
+        }
         self.registry.reload();
         Ok(())
     }
