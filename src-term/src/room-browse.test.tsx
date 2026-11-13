@@ -171,19 +171,20 @@ test("a node's detail lists what it is referenced from, what it references and i
   await act(async () => { await t.screen.dispose() })
 })
 
-test("g draws the graph in boxes, arrows and scrolls sideways, and t comes back to the tree", async () => {
+test("g draws the graph as a tree growing down, with arrows, and scrolls sideways, and t comes back to the tree", async () => {
   const t = await openRich()
   await t.press(() => t.screen.mockInput.pressKey("g"))
   const graph = t.text()
   expect(graph).toContain("trajectory · graph")
   expect(graph).toContain("╭")
-  expect(graph).toContain("▼")
+  expect(graph).toContain("►")
   expect(graph).toContain("(1.1.1) SSRF claim")
   expect(graph).toMatch(/x 0\/\d+/)
   await t.press(() => t.screen.mockInput.pressArrow("right"))
-  expect(t.text()).toMatch(/x 6\//)
-  await t.press(() => t.screen.mockInput.pressKey("home"))
+  // The tree is narrow, so there is nothing to scroll across until it gets deep.
   expect(t.text()).toMatch(/x 0\//)
+  await t.press(() => t.screen.mockInput.pressKey("home"))
+  expect(t.text()).toMatch(/y 0\//)
   await t.press(() => t.screen.mockInput.pressKey("t"))
   expect(t.text()).not.toContain("trajectory · graph")
   expect(t.text()).toContain("(1.1) asset one")
@@ -193,7 +194,7 @@ test("g draws the graph in boxes, arrows and scrolls sideways, and t comes back 
 test("in the graph tab walks the nodes and enter opens the one that is chosen", async () => {
   const t = await openRich()
   await t.press(() => t.screen.mockInput.pressKey("g"))
-  for (let i = 0; i < 3; i++) await t.press(() => t.screen.mockInput.pressTab())
+  for (let i = 0; i < 2; i++) await t.press(() => t.screen.mockInput.pressTab())
   await t.press(() => t.screen.mockInput.pressEnter())
   const text = t.text()
   expect(text).toContain("SSRF claim")

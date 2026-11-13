@@ -49,7 +49,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const [trail, setTrail] = useState<Detail[]>([])
   const [pick, setPick] = useState(0)
   const detail = trail.at(-1) ?? null
-  // The trajectory has a second way to look: the graph, drawn in boxes you can scroll across.
+  // The trajectory has a second way to look: the graph, a tree of boxes that grows down the screen.
   const [mode, setMode] = useState<"tree" | "graph">("tree")
   const [goalAt, setGoalAt] = useState(0)
   const [boxId, setBoxId] = useState<string | null>(null)
