@@ -22,7 +22,7 @@ const COMMANDS: Suggestion[] = [
   { label: "/report", detail: "the reports, with their detail", insert: "/report" },
   { label: "/stop", detail: "stop a minion, or everything: /stop red, /stop all", insert: "/stop" },
   { label: "/security", detail: "back to the coding chat", insert: "/security" },
-  { label: "/leave", detail: "back to the coding chat", insert: "/leave" },
+  { label: "/leave", detail: "back to the coding chat: /leave switch keeps the room running, /leave stop ends it", insert: "/leave" },
 ]
 
 export const KNOWN_COMMANDS = COMMANDS.map((c) => c.label)
@@ -54,6 +54,7 @@ export function classify(text: string): Typed {
   const [word = "", ...rest] = trimmed.split(/\s+/)
   const lower = word.toLowerCase()
   if (lower.slice(1).includes("/")) return { kind: "message" }
+  if (lower === "/leave" && rest[0] && !["switch", "stop"].includes(rest[0].toLowerCase())) return { kind: "unknown", word: `/leave ${rest[0]}`, near: "/leave switch" }
   if (lower === "/stop") return { kind: "stop", who: (rest[0] ?? "all").replace(/^@/, "").toLowerCase() }
   if (KNOWN_COMMANDS.includes(lower)) return { kind: "message" }
   const near = KNOWN_COMMANDS.find((c) => c.startsWith(lower)) ?? KNOWN_COMMANDS.find((c) => distance(c, lower) <= 2) ?? ""
@@ -67,6 +68,15 @@ export function suggest(draft: string): { title: string; rows: Suggestion[] } {
     const word = (stop[1] ?? "").replace(/^@/, "").toLowerCase()
     const rows = [{ label: "all", detail: "every lane", insert: "/stop all" }, ...PEOPLE.filter((p) => p.label !== "@chief").map((p) => ({ label: p.label.slice(1), detail: p.detail, insert: `/stop ${p.label.slice(1)}` }))]
     return { title: " stop ", rows: rows.filter((row) => row.label.startsWith(word)) }
+  }
+  const leave = /^\/leave\s+(\S*)$/i.exec(draft)
+  if (leave) {
+    const word = (leave[1] ?? "").toLowerCase()
+    const rows = [
+      { label: "switch", detail: "back to the coding chat; the room keeps hunting", insert: "/leave switch" },
+      { label: "stop", detail: "back to the coding chat and end the room", insert: "/leave stop" },
+    ]
+    return { title: " leave ", rows: rows.filter((row) => row.label.startsWith(word)) }
   }
   if (/\s/.test(draft)) return { title: "", rows: [] }
   const pool = draft.startsWith("@") ? PEOPLE : draft.startsWith("/") ? COMMANDS : []

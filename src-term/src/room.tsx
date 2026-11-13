@@ -117,11 +117,11 @@ export function RoomScreen({
     const text = (override ?? draft).trim()
     setDraft("")
     if (!text) return
-    if (/^\/(security|leave)\s+stop$/.test(text)) {
+    if (/^\/(security|leave)\s+stop$/i.test(text)) {
       leave(true)
       return
     }
-    if (text === "/security" || text === "/leave") {
+    if (/^\/(security|leave)(\s+switch)?$/i.test(text)) {
       leave()
       return
     }
