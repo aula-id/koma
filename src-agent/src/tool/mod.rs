@@ -39,6 +39,7 @@ pub mod recovery;
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
+pub mod secure_shelf;
 pub mod seqthink;
 pub mod shell;
 pub mod shell_filter;
@@ -101,6 +102,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "recall"
             | "message_find"
             | "message_load"
+            | "secure_shelf"
             | "skill"
             | "web_search"
             | "web_fetch"
@@ -639,6 +641,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(skill::Skill),
         Box::new(history::MessageFind),
         Box::new(history::MessageLoad),
+        Box::new(secure_shelf::SecureShelf),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
@@ -742,6 +745,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "recall",
     "message_find",
     "message_load",
+    "secure_shelf",
     "web_fetch",
     "web_search",
     "web_download",
