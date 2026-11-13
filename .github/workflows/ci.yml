@@ -117,6 +117,15 @@ jobs:
           cargo build -p agent --no-default-features
           python src-term/scripts/verify-setup-exit.py
 
+      # The secure room is its own daemon (`--kind secure`): bind, accept, one client
+      # round trip and the clean exit, over the same native IPC the chat uses.
+      - name: Secure room daemon self-test
+        shell: bash
+        run: |
+          exe=./target/debug/koma
+          [ "$RUNNER_OS" = "Windows" ] && exe=./target/debug/koma.exe
+          "$exe" --daemon --kind secure --daemon-selftest
+
       - name: Native Windows SSH password helper
         if: runner.os == 'Windows'
         run: ./target/debug/koma.exe --ssh-askpass-self-test
