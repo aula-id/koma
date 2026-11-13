@@ -85,6 +85,11 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   }
   const follow = (to: Detail) => {
     if (to.type === "item") onOpenItem(to.key)
+    // A node stands for a shelf item; its content is the detail, so fetch it with the node.
+    if (to.type === "node") {
+      const key = data?.goals.find((g) => g.goal_key === to.goal)?.nodes.find((n) => n.id === to.node)?.resource_key
+      if (key) onOpenItem(key)
+    }
     setPick(0)
     setTrail((t) => [...t, to])
   }
@@ -322,7 +327,7 @@ function DetailView({ detail, data, item, links, pick, onPick, onFollow, theme, 
     const goal = data?.goals.find((g) => g.goal_key === detail.goal)
     const node = goal?.nodes.find((n) => n.id === detail.node)
     title = node ? node.label || node.id : detail.node
-    body = node ? <NodeBody node={node} goal={goal!} theme={theme} syntaxStyle={syntaxStyle} /> : <text fg={theme.dim}>This node is no longer on the map.</text>
+    body = node ? <NodeBody node={node} goal={goal!} item={item} theme={theme} syntaxStyle={syntaxStyle} /> : <text fg={theme.dim}>This node is no longer on the map.</text>
   } else if (detail.type === "report") {
     const report = data?.reports.find((r) => r.key === detail.key)
     title = report?.title || detail.key
@@ -377,13 +382,19 @@ function ItemBody({ item, theme, syntaxStyle }: { item: OpenItem; theme: Theme; 
   )
 }
 
-function NodeBody({ node, goal, theme, syntaxStyle }: { node: GoalNode; goal: Goal; theme: Theme; syntaxStyle: SyntaxStyle }) {
+function NodeBody({ node, goal, item, theme, syntaxStyle }: { node: GoalNode; goal: Goal; item: OpenItem | null; theme: Theme; syntaxStyle: SyntaxStyle }) {
   const number = describe(goal, node.id)?.number ?? ""
   const rows: [string, string][] = [["number", number ? `(${number})` : ""], ["goal", goal.goal_key], ["kind", node.kind], ["status", node.status], ["severity", node.severity], ["shelf item", node.resource_key]]
   return (
     <>
       {rows.filter(([, v]) => v).map(([name, value]) => <Field key={name} name={name} value={value} theme={theme} syntaxStyle={syntaxStyle} />)}
       {node.note ? <Field name="note" value={node.note} theme={theme} syntaxStyle={syntaxStyle} /> : null}
+      {node.resource_key ? (
+        <box flexDirection="column" paddingTop={1}>
+          <text fg={theme.dim}>{"── content ──"}</text>
+          {item && item.key === node.resource_key ? <ItemBody item={item} theme={theme} syntaxStyle={syntaxStyle} /> : <text fg={theme.dim}>Loading…</text>}
+        </box>
+      ) : null}
     </>
   )
 }

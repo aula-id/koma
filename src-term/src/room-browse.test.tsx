@@ -67,6 +67,7 @@ test("enter on a shelf item asks for it and opens its detail screen", async () =
   const text = t.text()
   expect(text).toContain("claims/web/ssrf")
   expect(text).toContain("fetch follows redirects")
+  expect(t.opened).toContain("claims/web/ssrf")
   expect(text).toContain("evidence/ssrf-1")
   expect(text).toContain("links (1)")
   await act(async () => { t.screen.mockInput.pressEscape(); await new Promise((r) => setTimeout(r, 40)) })
@@ -77,7 +78,7 @@ test("enter on a shelf item asks for it and opens its detail screen", async () =
 })
 
 test("goals fold one at a time and a node opens with the steps around it", async () => {
-  const t = await open("trajectory")
+  const t = await open("trajectory", { item: ssrf })
   expect(t.text()).toContain("api")
   expect(t.text()).toContain("1 open · 0 verified · 0 returned")
   expect(t.text()).toContain("Map the api")
@@ -94,6 +95,7 @@ test("goals fold one at a time and a node opens with the steps around it", async
   const text = t.text()
   expect(text).toContain("Try SSRF")
   expect(text).toContain("fetch takes a url")
+  expect(text).toContain("fetch follows redirects")
   expect(text).toContain("claims/web/ssrf")
   expect(text).toContain("Map the api")
   await act(async () => { await t.screen.dispose() })
