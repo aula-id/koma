@@ -73,6 +73,10 @@ fn connect(remote: Remote) -> anyhow::Result<Connection> {
     let (tx, replies) = mpsc::sync_channel(8);
     std::thread::spawn(move || {
         let mut output = BufReader::new(output);
+        if let Err(error) = crate::remote::preamble::skip_sync(&mut output) {
+            let _ = tx.send(Err(format!("Coding connection failed: {error}")));
+            return;
+        }
         loop {
             let result = (|| -> anyhow::Result<Value> {
                 let mut line = Vec::new();

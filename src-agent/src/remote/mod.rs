@@ -26,6 +26,7 @@ pub(crate) mod auth_windows;
 pub(crate) mod bootstrap;
 pub(crate) mod client;
 pub(crate) mod hosts;
+pub(crate) mod preamble;
 pub(crate) mod secrets;
 pub(crate) mod sessions;
 pub(crate) mod ssh;

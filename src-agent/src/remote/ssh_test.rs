@@ -10,7 +10,7 @@ fn remote_command_quotes_program_and_arguments() {
     // Login+interactive bash so profile/bashrc (cargo, nvm) load; exec keeps
     // stdin for the child. Full argv is shell-quoted inside the -c payload.
     let expected_inner = format!(
-        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec {} {} {} {}"#,
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; printf '\n%s\n' KOMA-STREAM-BEGIN; exec {} {} {} {}"#,
         shell_quote(prog),
         shell_quote("server"),
         shell_quote("--session"),
@@ -28,7 +28,7 @@ fn remote_command_quotes_program_and_arguments() {
 fn remote_command_inner_argv_is_shell_quoted() {
     let cmd = remote_command("/usr/bin/koma", &["--version"]).unwrap();
     let expected_inner = concat!(
-        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#,
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; printf '\n%s\n' KOMA-STREAM-BEGIN; exec "#,
         "'/usr/bin/koma' '--version'"
     );
     assert_eq!(cmd, format!("bash -ilc {}", shell_quote(expected_inner)));
@@ -89,4 +89,40 @@ fn exit_multiplex_is_best_effort_noop_without_master() {
         port: Some(1),
         key: None,
     });
+}
+
+// The command runs on the remote, which is always a POSIX shell; a Windows
+// client has no /bin/sh to run it locally.
+#[cfg(unix)]
+#[test]
+fn remote_command_output_is_readable_through_noisy_startup_files() {
+    // Run the real command under a shell that prints noise first, the way a
+    // chatty .bashrc does, and check the reader sees only the program output.
+    let cmd = remote_command("/bin/echo", &["payload"]).expect("build remote command");
+    let inner = cmd
+        .strip_prefix("bash -ilc ")
+        .expect("bash -ilc wrapper");
+    let script = format!("echo 'Welcome to the server'; printf 'no newline'; eval {inner}");
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", &script])
+        .output()
+        .expect("run /bin/sh");
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    assert_eq!(crate::remote::preamble::strip(&stdout), "payload\n");
+}
+
+#[test]
+fn only_rejected_credentials_count_as_auth_failures() {
+    let rejected: anyhow::Error = super::SshTransportError {
+        stderr: "user@host: Permission denied (publickey,password).".into(),
+    }
+    .into();
+    assert!(super::is_auth_rejection(&rejected.context("bootstrap")));
+    let refused: anyhow::Error = super::SshTransportError {
+        stderr: "ssh: connect to host h port 22: Connection refused".into(),
+    }
+    .into();
+    assert!(!super::is_auth_rejection(&refused));
+    assert!(super::is_transport_error(&refused));
+    assert!(!super::is_auth_rejection(&anyhow::anyhow!("Permission denied")));
 }

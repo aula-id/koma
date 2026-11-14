@@ -115,7 +115,7 @@ async fn run_async(
                     auth::remember_password(r);
                     break;
                 }
-                Err(error) => {
+                Err(error) if ssh::is_auth_rejection(&error) => {
                     auth::forget_stored_password(r);
                     emit(
                         &mut output,
@@ -124,6 +124,18 @@ async fn run_async(
                         },
                     )
                     .await?;
+                }
+                // Not a credentials problem: keep the saved password and show
+                // the real error instead of asking to log in again.
+                Err(error) => {
+                    emit(
+                        &mut output,
+                        Event::Error {
+                            message: format!("remote bootstrap failed: {error:#}"),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
                 }
             }
             resolved = None;

@@ -417,7 +417,8 @@ fn remote_connect_worker(
     );
     if let Err(error) = bootstrap::ensure_koma_compatible(&target, auth.as_ref()) {
         // Stale store password: wipe, re-open UI prompt once, retry bootstrap.
-        if password_from_store {
+        // Any other failure keeps the password and shows the real error.
+        if password_from_store && ssh::is_auth_rejection(&error) {
             let _ = crate::remote::secrets::delete_remote_password(&host_id);
             if is_cancelled() {
                 shared.finish(attempt_id);

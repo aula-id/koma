@@ -642,6 +642,11 @@ pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<R
             auth::remember_password(&resolved);
         }
         Err(e) => {
+            // Only rejected credentials justify dropping the saved password
+            // and asking again; any other failure is reported as is.
+            if !super::ssh::is_auth_rejection(&e) {
+                return Err(e);
+            }
             auth::forget_stored_password(&resolved);
             // One retry with fresh interactive password if store was the source.
             if resolved.from_store {
@@ -674,7 +679,9 @@ pub(crate) fn run_remote_client_target(args: RemoteClientTarget<'_>) -> Result<R
                         );
                     }
                     Err(e2) => {
-                        auth::forget_stored_password(&retry);
+                        if super::ssh::is_auth_rejection(&e2) {
+                            auth::forget_stored_password(&retry);
+                        }
                         return Err(e2);
                     }
                 }

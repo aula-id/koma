@@ -196,3 +196,58 @@ fn matching_version_with_motd_skips_install() {
     assert!(!run_bootstrap(&[noisy], &installs, |_| Ok(true)).unwrap());
     assert_eq!(installs.get(), 0);
 }
+
+#[test]
+fn transport_error_during_check_is_reported_not_installed_over() {
+    let installs = Cell::new(0);
+    let result = ensure_compatible_with(
+        "0.3.16",
+        || {
+            Err(crate::remote::ssh::SshTransportError::for_test(
+                "Permission denied (password).",
+            ))
+        },
+        || {
+            installs.set(installs.get() + 1);
+            Ok(())
+        },
+        |_| {},
+        |_| Ok(true),
+    );
+    let error = result.unwrap_err();
+    assert!(crate::remote::ssh::is_auth_rejection(&error));
+    assert_eq!(installs.get(), 0);
+}
+
+#[test]
+fn broken_binary_reason_reaches_the_error() {
+    let installs = Cell::new(0);
+    let reason = "/home/u/.koma/remote/koma exited with 127: error while loading shared libraries: libwebkit2gtk-4.1.so.0";
+    let mut probes = VecDeque::from([reason, reason]);
+    let error = ensure_compatible_with(
+        "0.3.16",
+        || Err(anyhow::anyhow!(probes.pop_front().unwrap())),
+        || {
+            installs.set(installs.get() + 1);
+            Ok(())
+        },
+        |_| {},
+        |_| panic!("a binary that does not run is reinstalled without asking"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(installs.get(), 1);
+    assert!(error.contains("libwebkit2gtk-4.1.so.0"), "{error}");
+    assert!(error.contains("no headless Linux build"), "{error}");
+}
+
+#[test]
+fn error_summary_drops_bash_job_control_noise() {
+    let stderr = "bash: cannot set terminal process group (-1): Inappropriate ioctl for device\n\
+bash: no job control in this shell\n\
+koma.bin: error while loading shared libraries: libgtk-3.so.0\n";
+    assert_eq!(
+        error_summary(stderr),
+        "koma.bin: error while loading shared libraries: libgtk-3.so.0"
+    );
+}
