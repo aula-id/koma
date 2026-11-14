@@ -135,6 +135,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
         is_foreground: false,
         session_id: None,
         dir_label: String::new(),
+        workdir: None,
         is_current_dir: false,
         remote_host: None,
     });
@@ -151,6 +152,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
             is_foreground,
             session_id: Some(status.session_id),
             dir_label,
+            workdir: Some(status.pwd),
             is_current_dir,
             remote_host: None,
         });
@@ -167,6 +169,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
                 name: m.name,
                 last_active: m.modified,
                 dir_label: store::dir_basename(&m.workdir),
+                workdir: Some(m.workdir),
                 is_current_dir: m.pwd_hash == cur_hash,
                 remote_host: None,
             })
@@ -217,6 +220,7 @@ fn hub_from_remote_discovery(
         is_foreground: false,
         session_id: None,
         dir_label: String::new(),
+        workdir: None,
         is_current_dir: false,
         remote_host: Some(remote_host.to_string()),
     });
@@ -239,6 +243,7 @@ fn hub_from_remote_discovery(
             is_foreground,
             session_id: Some(session.session_id),
             dir_label,
+            workdir: None,
             is_current_dir: false,
             remote_host: Some(remote_host.to_string()),
         });
@@ -264,6 +269,7 @@ fn hub_from_remote_discovery(
                 name: h.name,
                 last_active,
                 dir_label,
+                workdir: None,
                 is_current_dir: false,
                 remote_host: Some(remote_host.to_string()),
             }

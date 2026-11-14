@@ -23,7 +23,7 @@ declare global {
     // one — mirrors KillSession's kill semantics (daemon stops, session moves
     // to History). Omitted/false (the default, unchanged) keeps the current
     // session cooking in the background.
-    | { r: 'NewSession'; kill?: boolean; folder?: boolean }
+    | { r: 'NewSession'; kill?: boolean; folder?: boolean; workdir?: string }
     // Remote cwd picker. Paths remain remote strings and are never passed to the
     // local folder picker/filesystem APIs.
     | { r: 'RequestRemotePath' }

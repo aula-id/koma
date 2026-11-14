@@ -1186,6 +1186,7 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
                 working: None,
                 foreground: None,
                 dir_label: None,
+                workdir: None,
                 current_dir: None,
             },
             SessionKind::Session => PushCooking {
@@ -1195,6 +1196,7 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
                 working: Some(e.working),
                 foreground: Some(e.is_foreground),
                 dir_label: Some(e.dir_label.clone()),
+                workdir: e.workdir.clone(),
                 current_dir: Some(e.is_current_dir),
             },
         })
@@ -1217,6 +1219,7 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
             dir_label: h.dir_label.clone(),
+            workdir: h.workdir.clone(),
             current_dir: h.is_current_dir,
         })
         .collect();
