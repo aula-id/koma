@@ -5,6 +5,11 @@
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --with-research
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --with-lsp
 #   curl -fsSL https://koma.run/install.sh | sh -s -- --gui-window=opaque
+#   curl -fsSL https://koma.run/install.sh | sh -s -- --headless
+#
+# --headless (or KOMA_HEADLESS=1) installs the Linux build without the desktop
+# client: no GTK or WebKit, no sudo, no app-list entry. Use it on servers that
+# you reach with `koma remote`. It has no effect on macOS.
 #
 # Environment overrides:
 #   KOMA_RELEASE_BASE   override the base download URL
@@ -21,10 +26,12 @@ INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
 WITH_RESEARCH=0
 WITH_LSP=0
 GUI_WINDOW=""
+HEADLESS="${KOMA_HEADLESS:-0}"
 for arg in "$@"; do
     case "$arg" in
         --with-research) WITH_RESEARCH=1 ;;
         --with-lsp) WITH_LSP=1 ;;
+        --headless) HEADLESS=1 ;;
         --gui-window=transparent|--gui-window=opaque) GUI_WINDOW="${arg#--gui-window=}" ;;
         --gui-window=*)
             echo "ERROR: --gui-window takes transparent or opaque, not '${arg#--gui-window=}'." >&2
@@ -145,6 +152,14 @@ _koma_fetch_quiet() {
         wget -qO "$2" "$1" 2>/dev/null
     fi
 }
+# Whether a release file exists, without downloading it.
+_koma_exists() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsIL -o /dev/null "$1" 2>/dev/null
+    else
+        wget -q --spider "$1" 2>/dev/null
+    fi
+}
 _koma_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
@@ -254,6 +269,18 @@ case "${os}/${arch}" in
         exit 1
         ;;
 esac
+if [ "$os" != "linux" ]; then
+    HEADLESS=0
+fi
+if [ "$HEADLESS" = "1" ]; then
+    if _koma_exists "${KOMA_RELEASE_BASE}/${asset}-headless"; then
+        asset="${asset}-headless"
+    else
+        echo "WARNING: this release has no headless Linux build; installing the desktop build." >&2
+        echo "  It needs WebKitGTK 4.1 and GTK 3 to start, even for 'koma server'." >&2
+        HEADLESS=0
+    fi
+fi
 url="${KOMA_RELEASE_BASE}/${asset}"
 
 # Linux and macOS install as extensionless "koma".
@@ -819,11 +846,12 @@ _install_linux_shared_libs() {
         fi
     else
         echo "WARNING: could not install shared libraries. koma will not start until they are installed." >&2
+        echo "  On a server without a desktop, re-run with: sh -s -- --headless" >&2
         # shellcheck disable=SC2086
         _pkg_hint $_pkgs
     fi
 }
-if [ "$os" = "linux" ]; then
+if [ "$os" = "linux" ] && [ "$HEADLESS" != "1" ]; then
     _install_linux_shared_libs || true
 fi
 
@@ -875,7 +903,7 @@ window=$_gui_window"
         echo "  sudo mkdir -p /etc/koma && printf 'window=$_gui_window\\n' | sudo tee $_gui_conf" >&2
     fi
 }
-if [ "$os" = "linux" ]; then
+if [ "$os" = "linux" ] && [ "$HEADLESS" != "1" ]; then
     _write_gui_window || true
 fi
 
@@ -910,7 +938,12 @@ fi
 # ---------------------------------------------------------------------------
 _launcher_ok=0
 _step "App list"
-if [ -x "$INSTALL_DIR/koma" ]; then
+if [ "$HEADLESS" = "1" ]; then
+    # Nothing to launch from an app list. Mark it handled so the desktop-entry
+    # fallback below is skipped too.
+    _launcher_ok=1
+    _info "skipped (headless)"
+elif [ -x "$INSTALL_DIR/koma" ]; then
     _launcher_log=$(mktemp)
     if "$INSTALL_DIR/koma" launcher-install >"$_launcher_log" 2>&1; then
         _launcher_ok=1
@@ -1155,8 +1188,12 @@ fi
 echo ""
 printf '%s\n' "${_c_green}${_s_ok}${_c_reset} ${_c_bold}koma installed${_c_reset}  $INSTALL_DIR/$bin_name"
 echo ""
-echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
-if [ "$_launcher_ok" = 1 ]; then
+if [ "$HEADLESS" = "1" ]; then
+    echo "  Headless build: run 'koma' for the TUI, or connect from another machine with 'koma remote'."
+else
+    echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
+fi
+if [ "$_launcher_ok" = 1 ] && [ "$HEADLESS" != "1" ]; then
     echo "  App list: search for Koma."
 fi
 if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then

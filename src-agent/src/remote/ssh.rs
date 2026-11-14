@@ -28,12 +28,71 @@ use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 
 use super::auth::SshAuth;
+use super::preamble::{self, PreambleSkip};
 use super::RemoteTarget;
 
 pub(crate) struct SshSession {
     pub(crate) child: Child,
     pub(crate) stdin: tokio::process::ChildStdin,
-    pub(crate) stdout: BufReader<tokio::process::ChildStdout>,
+    pub(crate) stdout: BufReader<PreambleSkip<tokio::process::ChildStdout>>,
+}
+
+/// Where bootstrap installs the Koma it manages on a remote host. It is kept
+/// apart from the user's own install (`~/.local/bin/koma`), so connecting never
+/// replaces a desktop Koma with a different version or a headless build.
+pub(crate) const MANAGED_KOMA: &str = "$HOME/.koma/remote/koma";
+
+/// `ssh` itself failed (exit 255): the host is unreachable, the connection
+/// dropped, or the credentials were rejected. Remote commands that merely
+/// exit non-zero are not this error.
+#[derive(Debug)]
+pub(crate) struct SshTransportError {
+    stderr: String,
+}
+
+impl SshTransportError {
+    #[cfg(test)]
+    pub(crate) fn for_test(stderr: &str) -> anyhow::Error {
+        Self {
+            stderr: stderr.to_string(),
+        }
+        .into()
+    }
+
+    fn auth_rejected(&self) -> bool {
+        [
+            "Permission denied",
+            "Too many authentication failures",
+            "Authentication failed",
+        ]
+        .iter()
+        .any(|needle| self.stderr.contains(needle))
+    }
+}
+
+impl std::fmt::Display for SshTransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SSH command failed: {}", self.stderr.trim())
+    }
+}
+
+impl std::error::Error for SshTransportError {}
+
+/// Whether the SSH server refused the credentials anywhere in this error's chain.
+/// Only these failures justify deleting a saved password.
+pub(crate) fn is_auth_rejection(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<SshTransportError>()
+            .is_some_and(SshTransportError::auth_rejected)
+    })
+}
+
+/// Whether `ssh` itself failed anywhere in this error's chain.
+pub(crate) fn is_transport_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<SshTransportError>().is_some())
 }
 
 /// Construct the remote server arguments without shell interpolation.
@@ -73,6 +132,10 @@ pub(crate) fn shell_quote(value: &str) -> String {
 /// early-return unless `$-` contains `i`, and rustup/nvm hooks often sit
 /// *after* that guard. `-c` + `exec` keeps bash from reading the SSH stdin
 /// pipe (needed for the stdio bridge / thin clients).
+///
+/// Right before `exec` the shell prints [`preamble::MARKER`] on its own line.
+/// Readers drop everything up to it, so whatever the startup files print
+/// cannot corrupt Koma's output.
 pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     if program.is_empty() || program.contains('\0') || program.contains('\n') {
         anyhow::bail!("invalid remote executable path");
@@ -82,8 +145,10 @@ pub(crate) fn remote_command(program: &str, args: &[&str]) -> Result<String> {
     }
     // Inner script runs inside bash -ilc. Source cargo env explicitly too:
     // some setups only append it to a non-sourced file, and it's cheap/idempotent.
-    let mut inner =
-        String::from(r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; exec "#);
+    let mut inner = format!(
+        r#"[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env" 2>/dev/null; printf '\n%s\n' {}; exec "#,
+        preamble::MARKER
+    );
     inner.push_str(&shell_quote(program));
     for arg in args {
         if arg.contains('\0') || arg.contains('\n') {
@@ -288,21 +353,35 @@ pub(crate) fn exit_multiplex(target: &RemoteTarget) {
     let _ = target; // silence unused on windows
 }
 
-/// Locate the installed remote Koma binary without relying on interactive shell startup files.
-pub(crate) fn find_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
-    let output = exec_remote(
-        target,
-        "for p in \"$HOME/.local/bin/koma\" \"$HOME/bin/koma\" /usr/local/bin/koma /usr/bin/koma; do if [ -x \"$p\" ]; then printf '%s' \"$p\"; exit 0; fi; done; exit 1",
-        auth,
-    )?;
-    if output.is_empty()
-        || !output.starts_with('/')
-        || output.contains('\0')
-        || output.contains('\n')
-    {
-        anyhow::bail!("remote Koma executable path is invalid");
+const KOMA_PATH_PREFIX: &str = "KOMA-PATH:";
+
+/// Locate the remote Koma binary without relying on interactive shell startup
+/// files. The bootstrap-managed copy wins over the user's own install.
+/// `Ok(None)` means no Koma is installed; `Err` means SSH itself failed.
+pub(crate) fn locate_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<Option<String>> {
+    let script = format!(
+        "for p in \"{MANAGED_KOMA}\" \"$HOME/.local/bin/koma\" \"$HOME/bin/koma\" /usr/local/bin/koma /usr/bin/koma; do if [ -x \"$p\" ]; then printf '\\n{KOMA_PATH_PREFIX}%s\\n' \"$p\"; exit 0; fi; done; exit 1"
+    );
+    let output = exec_remote_output(target, &script, auth)?;
+    if !output.success() {
+        return Ok(None);
     }
-    Ok(output)
+    // Startup files can print around our line, so pick it out by its prefix.
+    let path = output
+        .stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(KOMA_PATH_PREFIX))
+        .next_back()
+        .unwrap_or_default();
+    if !path.starts_with('/') || path.contains('\0') {
+        anyhow::bail!("remote Koma executable path is invalid: {path:?}");
+    }
+    Ok(Some(path.to_string()))
+}
+
+/// [`locate_koma`] for callers that need Koma to be there.
+pub(crate) fn find_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
+    locate_koma(target, auth)?.ok_or_else(|| anyhow::anyhow!("Koma is not installed on the remote host"))
 }
 
 pub(crate) fn connect(
@@ -354,7 +433,7 @@ pub(crate) fn connect_command(
     Ok(SshSession {
         child,
         stdin,
-        stdout: BufReader::new(stdout),
+        stdout: BufReader::new(PreambleSkip::new(stdout)),
     })
 }
 
@@ -412,11 +491,27 @@ pub(crate) fn list_dirs(
         .collect())
 }
 
-pub(crate) fn exec_remote(
+/// Output of a one-shot remote command that SSH ran to completion.
+pub(crate) struct RemoteOutput {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+impl RemoteOutput {
+    pub(crate) fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Run `command` on the remote host. `Err` only when `ssh` itself failed
+/// ([`SshTransportError`]); a non-zero remote exit comes back in the output.
+/// Stdout starts after the [`preamble::MARKER`] when the command printed one.
+pub(crate) fn exec_remote_output(
     target: &RemoteTarget,
     command: &str,
     auth: Option<&SshAuth>,
-) -> Result<String> {
+) -> Result<RemoteOutput> {
     let mut cmd = StdCommand::new("ssh");
     apply_std_ssh_base(&mut cmd, target, auth);
     let output = cmd
@@ -427,13 +522,28 @@ pub(crate) fn exec_remote(
         .stderr(Stdio::piped())
         .output()
         .map_err(|e| anyhow::anyhow!("SSH command failed: {e}"))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "SSH command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if output.status.code() == Some(255) {
+        return Err(SshTransportError { stderr }.into());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(RemoteOutput {
+        code: output.status.code(),
+        stdout: preamble::strip(&stdout).trim().to_string(),
+        stderr,
+    })
+}
+
+pub(crate) fn exec_remote(
+    target: &RemoteTarget,
+    command: &str,
+    auth: Option<&SshAuth>,
+) -> Result<String> {
+    let output = exec_remote_output(target, command, auth)?;
+    if !output.success() {
+        anyhow::bail!("SSH command failed: {}", output.stderr.trim());
+    }
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
