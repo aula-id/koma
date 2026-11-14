@@ -1,4 +1,10 @@
 //! Remote koma bootstrap: validate the remote version and install or upgrade it.
+//!
+//! Bootstrap installs its own copy at [`ssh::MANAGED_KOMA`] straight from the
+//! release matching this client. On Linux it takes the headless build, which
+//! needs no GTK or WebKit, and falls back to the GUI build for releases that
+//! publish no headless one. It never runs the desktop installer, so it never
+//! needs sudo or a package manager on the remote.
 
 use std::fmt;
 use std::sync::mpsc;
@@ -57,6 +63,8 @@ enum RemoteVersion {
     Missing,
     Version(SemanticVersion),
     Unrecognized(String),
+    /// A Koma binary is there but does not run; holds why.
+    Broken(String),
 }
 
 impl fmt::Display for RemoteVersion {
@@ -65,6 +73,7 @@ impl fmt::Display for RemoteVersion {
             Self::Missing => f.write_str("missing"),
             Self::Version(version) => version.fmt(f),
             Self::Unrecognized(output) => write!(f, "unrecognized output {output:?}"),
+            Self::Broken(reason) => write!(f, "a Koma that does not run ({reason})"),
         }
     }
 }
@@ -73,7 +82,7 @@ impl fmt::Display for RemoteVersion {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CheckOutcome {
     Compatible,
-    /// Remote binary missing / unreadable — install without asking.
+    /// Remote binary missing or not runnable — install without asking.
     NeedsInstallMissing,
     /// Remote version differs from local — ask before overwriting.
     NeedsUpdate {
@@ -190,19 +199,26 @@ where
         anyhow::anyhow!("local Koma version is not valid semantic version: {local:?}")
     })?;
 
-    // Treat a probe failure (SSH error, broken binary, QEMU/binfmt, etc.) as
-    // "missing" so we fall through to the install path instead of aborting.
-    let observed = match query() {
-        Ok(output) => parse_version_output(&output),
-        Err(_) => RemoteVersion::Missing,
-    };
-
-    match observed {
+    match probe(&mut query)? {
         RemoteVersion::Version(v) if v == expected => Ok(CheckOutcome::Compatible),
-        RemoteVersion::Missing => Ok(CheckOutcome::NeedsInstallMissing),
+        RemoteVersion::Missing | RemoteVersion::Broken(_) => Ok(CheckOutcome::NeedsInstallMissing),
         other => Ok(CheckOutcome::NeedsUpdate {
             observed: other.to_string(),
         }),
+    }
+}
+
+/// Run the version query. An SSH failure (unreachable host, rejected
+/// credentials) is returned as is; any other failure means the remote binary
+/// does not run, which a fresh install can fix.
+fn probe<Q>(query: &mut Q) -> Result<RemoteVersion>
+where
+    Q: FnMut() -> Result<String>,
+{
+    match query() {
+        Ok(output) => Ok(parse_version_output(&output)),
+        Err(error) if ssh::is_transport_error(&error) => Err(error),
+        Err(error) => Ok(RemoteVersion::Broken(format!("{error:#}"))),
     }
 }
 
@@ -225,13 +241,18 @@ where
     install()?;
 
     progress(BootstrapStage::Verifying);
-    let observed = match query() {
-        Ok(output) => parse_version_output(&output),
-        Err(_) => RemoteVersion::Missing,
-    };
+    let observed = probe(&mut query)?;
     if observed != RemoteVersion::Version(expected.clone()) {
+        let hint = match &observed {
+            RemoteVersion::Broken(reason) if missing_shared_libraries(reason) => {
+                "\nThis release has no headless Linux build for the remote, and its desktop \
+                 build needs the GUI libraries (WebKitGTK 4.1, GTK 3). Install them on the \
+                 remote, or use a Koma release that publishes koma-linux-*-headless."
+            }
+            _ => "",
+        };
         anyhow::bail!(
-            "remote Koma version mismatch after install: expected {expected}, observed {observed}"
+            "remote Koma version mismatch after install: expected {expected}, observed {observed}{hint}"
         );
     }
     progress(BootstrapStage::Ready);
@@ -567,27 +588,149 @@ fn prompt_update_remote(
     }
 }
 
-fn query_remote_version(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
-    let path = ssh::find_koma(target, auth)?;
-    let command = ssh::remote_command(&path, &["--version"])?;
-    ssh::exec_remote(
-        target,
-        &format!("{command} 2>/dev/null || echo {MISSING}"),
-        auth,
-    )
+/// The dynamic loader refused to start the binary. With the headless build
+/// that cannot happen, so it means the desktop build was the only one there.
+fn missing_shared_libraries(reason: &str) -> bool {
+    reason.contains("error while loading shared libraries")
 }
 
-/// Install or upgrade koma on the remote machine using the official installer,
-/// pinned to this client's exact version (not `latest`).
+/// `koma --version` on the remote. `MISSING` when no Koma is installed; `Err`
+/// with the binary's own error output when it is installed but does not run.
+fn query_remote_version(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<String> {
+    let Some(path) = ssh::locate_koma(target, auth)? else {
+        return Ok(MISSING.to_string());
+    };
+    let command = ssh::remote_command(&path, &["--version"])?;
+    let output = ssh::exec_remote_output(target, &command, auth)?;
+    if output.success() {
+        return Ok(output.stdout);
+    }
+    let code = output
+        .code
+        .map_or_else(|| "a signal".to_string(), |code| code.to_string());
+    anyhow::bail!("{path} exited with {code}: {}", error_summary(&output.stderr))
+}
+
+/// The last few meaningful stderr lines, without bash's job-control warnings
+/// (`bash -i` with no terminal prints them on every run).
+fn error_summary(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.contains("cannot set terminal process group")
+                && !line.contains("no job control in this shell")
+        })
+        .collect();
+    if lines.is_empty() {
+        return "no error output".to_string();
+    }
+    lines[lines.len().saturating_sub(6)..].join(" / ")
+}
+
+/// Download this client's exact release into [`ssh::MANAGED_KOMA`]. Prefers
+/// the headless Linux build; checks the SHA-256 when the release lists one.
+/// Prints the installed asset name. Arguments: `$1` version.
+const INSTALL_SCRIPT: &str = r#"set -eu
+version=$1
+base="https://github.com/aula-id/koma/releases/download/v$version"
+case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) echo "Koma has no build for $(uname -s)" >&2; exit 2 ;;
+esac
+case "$(uname -m)" in
+    x86_64|amd64) arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) echo "Koma has no build for $(uname -m)" >&2; exit 2 ;;
+esac
+if command -v curl >/dev/null 2>&1; then
+    fetch() { curl -fsSL --retry 3 --connect-timeout 15 -o "$2" "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+    fetch() { wget -q -T 15 -t 3 -O "$2" "$1"; }
+else
+    echo "the remote host has neither curl nor wget" >&2; exit 2
+fi
+dir="$HOME/.koma/remote"
+mkdir -p "$dir"
+tmp="$dir/.download.$$"
+sums="$dir/.sums.$$"
+trap 'rm -f "$tmp" "$sums"' EXIT
+if [ "$os" = linux ]; then
+    candidates="koma-linux-$arch-headless koma-linux-$arch"
+else
+    candidates="koma-darwin-$arch"
+fi
+asset=""
+for name in $candidates; do
+    if fetch "$base/$name" "$tmp" 2>/dev/null; then asset=$name; break; fi
+done
+if [ -z "$asset" ]; then
+    echo "could not download Koma $version for $os/$arch from $base (no network on the remote, or that release does not exist)" >&2
+    exit 3
+fi
+if fetch "$base/SHA256SUMS" "$sums" 2>/dev/null; then
+    want=$(awk -v n="$asset" '{ f = $2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$sums")
+    if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp" | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then got=$(openssl dgst -sha256 "$tmp" | awk '{print $NF}')
+    else echo "the remote host has no sha256sum, shasum or openssl to check the download" >&2; exit 4
+    fi
+    want=$(printf '%s' "$want" | tr 'A-F' 'a-f')
+    got=$(printf '%s' "$got" | tr 'A-F' 'a-f')
+    if [ -z "$want" ] || [ "$got" != "$want" ]; then
+        echo "checksum check failed for $asset (expected ${want:-no entry}, got $got)" >&2
+        exit 4
+    fi
+fi
+chmod 755 "$tmp"
+mv -f "$tmp" "$dir/koma"
+printf '%s
+' "$asset"
+"#;
+
+/// One install at a time per host. The GUI panes, terminal helper and coding
+/// worker can all bootstrap the same host at once.
+fn host_install_lock(target: &RemoteTarget) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let key = format!("{}@{}:{}", target.user, target.host, target.port.unwrap_or(22));
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.entry(key).or_default().clone()
+}
+
+/// Install this client's exact version on the remote host.
 fn install_koma(target: &RemoteTarget, auth: Option<&SshAuth>) -> Result<()> {
     let version = env!("CARGO_PKG_VERSION");
-    // Pin KOMA_RELEASE_BASE to the matching tagged release so a newer GitHub
-    // "latest" never leaves remote ahead of this client (exact-match policy).
-    let cmd = format!(
-        "KOMA_RELEASE_BASE=https://github.com/aula-id/koma/releases/download/v{version} \
-         curl -fsSL https://koma.run/install.sh | sh"
+    let lock = host_install_lock(target);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Another connection may have finished the same install while we waited.
+    if let (Ok(output), Some(expected)) = (
+        query_remote_version(target, auth),
+        parse_semantic_version(version),
+    ) {
+        if parse_version_output(&output) == RemoteVersion::Version(expected) {
+            return Ok(());
+        }
+    }
+    // `sh -c` so the script runs the same under any login shell (fish, csh).
+    let command = format!(
+        "sh -c {} koma-install {}",
+        ssh::shell_quote(INSTALL_SCRIPT),
+        ssh::shell_quote(version)
     );
-    ssh::exec_remote(target, &cmd, auth)?;
+    let output = ssh::exec_remote_output(target, &command, auth)?;
+    if !output.success() {
+        anyhow::bail!(
+            "installing Koma {version} on the remote failed: {}",
+            error_summary(&output.stderr)
+        );
+    }
     Ok(())
 }
 
