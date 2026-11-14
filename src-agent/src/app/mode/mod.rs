@@ -26,7 +26,7 @@ mod picker;
 mod quit_confirm;
 pub mod remote;
 mod rewind;
-pub mod security;
+
 mod session_hub;
 pub mod settings;
 pub mod skill_cmd;
@@ -40,7 +40,7 @@ pub use ext_screen::ExtScreenState;
 pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
 pub use remote::RemoteState;
-pub use security::{CatalogFilter, CatalogRow, SafetyImageRow, SecPane, SecurityState};
+
 pub use store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 pub use todo::{parse_todo_file, TodoState};
 // `HelpEntry` is part of the module's public surface and will be consumed by the
@@ -277,12 +277,6 @@ pub enum Mode {
     /// count for the warning text. Boxed for consistency with the other overlay
     /// variants (it is small, but the box keeps `Mode` uniform + cheap to move).
     QuitConfirm(Box<QuitConfirmState>),
-    /// Security daemon control panel (`/security`): a full-screen status view +
-    /// lifecycle controls (start/stop/restart/toggle) + the tool inventory from the
-    /// daemon's last handshake. No editor sub-modes — control panel only. The inner
-    /// [`SecurityState`] holds the daemon status snapshot + the tool-list cursor.
-    /// Boxed to keep `Mode` small, consistent with the other full-screen variants.
-    Security(Box<SecurityState>),
     /// Bash job panel (`/bash`): a READ-ONLY master/detail view of the
     /// foreground session's bash jobs — FG park + true background (the LEFT pane
     /// lists them, the RIGHT pane shows the selected job's command + status +

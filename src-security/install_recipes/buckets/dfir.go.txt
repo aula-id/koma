@@ -1,2 +1,0 @@
-github.com/FalconForceTeam/FalconHound@latest
-github.com/rabbitstack/fibratus@latest

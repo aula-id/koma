@@ -33,7 +33,7 @@ pub mod onboard_provider;
 pub mod quit_confirm;
 pub mod remote;
 pub mod scroll;
-pub mod security;
+
 pub mod session_hub;
 pub mod session_picker;
 pub mod settings;
@@ -231,7 +231,6 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         }
         Mode::ExtScreen(s) => extscreen::draw(frame, s, &palette),
         Mode::ExtStore(s) => store::draw(frame, s, &palette),
-        Mode::Security(s) => security::draw(frame, s, &palette),
         Mode::Bash(b) => {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);

@@ -94,7 +94,6 @@ fn has_setup(cli: &RunCli, system_extra: &Option<String>) -> bool {
         || cli.model.is_some()
         || cli.effort.is_some()
         || cli.mode.is_some()
-        || cli.security.is_some()
         || cli.max_tokens.is_some()
         || cli.short_send.is_some()
         || cli.context_window_limit.is_some()
@@ -167,21 +166,6 @@ fn apply_run_setup(
         anyhow::ensure!(
             state.name == name.trim(),
             "daemon did not apply the requested session name"
-        );
-    }
-    if let Some(enabled) = cli
-        .security
-        .or_else(|| (mode == Some("yolo")).then_some(true))
-    {
-        state = apply_request(conn, ClientRequest::SetSecurityEnabled { enabled })?;
-        if enabled {
-            state = wait_for_state(conn, state, "security daemon startup", |s| {
-                s.security_running
-            })?;
-        }
-        anyhow::ensure!(
-            state.security_enabled == enabled,
-            "daemon did not apply security setting"
         );
     }
     if let Some(uuid) = model {

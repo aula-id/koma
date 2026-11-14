@@ -39,7 +39,6 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
             | "--model"
             | "--effort"
             | "--mode"
-            | "--security"
             | "--max-tokens"
             | "--short-send"
             | "--context-window-limit"
@@ -79,7 +78,6 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
                 }
                 run.mode = Some(mode);
             }
-            "--security" => run.security = Some(toggle()?),
             "--max-tokens" => run.max_tokens = Some(number()?.min(1_000_000) as u32),
             "--short-send" => run.short_send = Some(toggle()?),
             "--context-window-limit" => run.context_window_limit = Some(number()?),
@@ -105,9 +103,6 @@ fn parse_into(args: &[String], run: &mut RunCli) -> Result<(), String> {
     }
     if run.system.is_some() && run.system_file.is_some() {
         return Err("pass only one of --system or --system-file".into());
-    }
-    if run.mode.as_deref() == Some("yolo") && run.security == Some(false) {
-        return Err("--mode yolo requires security on".into());
     }
     if run
         .extensions

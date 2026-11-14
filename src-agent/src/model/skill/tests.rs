@@ -189,7 +189,7 @@ fn setup_skill_root(
 fn empty_roots_gives_empty_registry() {
     let reg = SkillRegistry::load_isolated(None, &[]);
     assert!(reg.is_empty());
-    assert!(reg.catalogue_text().is_empty());
+    assert!(reg.prompt_text().is_none());
 }
 
 #[test]
@@ -627,4 +627,107 @@ fn companion_reads_require_inventory_identity_generation_and_containment() {
         .is_err());
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── Search tests ───────────────────────────────────────────────────────────
+
+fn def(name: &str, description: &str, extra: &str) -> super::def::SkillDef {
+    let content = format!("---\ndescription: {description}\n{extra}---\nbody of {name}");
+    parse_skill(name, &content, SkillSource::Global, format!("/tmp/{name}.md").into(), None).unwrap()
+}
+
+fn big_registry() -> SkillRegistry {
+    let mut defs: Vec<_> = (0..1000).map(|i| def(&format!("filler-{i}"), &format!("Generic helper number {i} for odd chores."), "")).collect();
+    defs.push(def("jwt-review", "Review how a service signs and checks JSON web tokens.", "tags: [auth, token]\n"));
+    defs.push(def("sql-injection-hunt", "Look for unsafe string-built database queries.", ""));
+    SkillRegistry::from_defs(defs)
+}
+
+#[test]
+fn search_finds_the_right_skill_among_a_thousand() {
+    use super::search::Scope;
+    let reg = big_registry();
+    let (hits, total) = reg.search("check the JWT token handling", &Scope::default(), 0, 5);
+    assert_eq!(hits[0].name, "jwt-review");
+    assert!(total >= 1);
+    let (hits, _) = reg.search("database queries injection", &Scope::default(), 0, 5);
+    assert_eq!(hits[0].name, "sql-injection-hunt");
+}
+
+#[test]
+fn search_by_tag_and_exact_name() {
+    use super::search::Scope;
+    let reg = big_registry();
+    assert_eq!(reg.search("auth", &Scope::default(), 0, 3).0[0].name, "jwt-review");
+    assert_eq!(reg.search("jwt-review", &Scope::default(), 0, 3).0[0].name, "jwt-review");
+}
+
+#[test]
+fn an_empty_query_lists_nothing() {
+    use super::search::Scope;
+    let reg = big_registry();
+    assert_eq!(reg.search("", &Scope::default(), 0, 5), (vec![], 0));
+    assert_eq!(reg.search("the and", &Scope::default(), 0, 5).1, 0);
+}
+
+#[test]
+fn search_pages_and_counts() {
+    use super::search::Scope;
+    let reg = big_registry();
+    let (first, total) = reg.search("helper chores", &Scope::default(), 0, 10);
+    let (second, _) = reg.search("helper chores", &Scope::default(), 10, 10);
+    assert_eq!(first.len(), 10);
+    assert!(total > 900);
+    assert!(first.iter().all(|a| second.iter().all(|b| a.name != b.name)));
+}
+
+#[test]
+fn scope_hides_what_a_role_may_not_see() {
+    use super::search::Scope;
+    let reg = big_registry();
+    let only_sql = Scope::new(&["sql-*".to_string()]);
+    assert!(only_sql.allows("sql-injection-hunt"));
+    assert!(!only_sql.allows("jwt-review"));
+    assert!(reg.search("jwt token", &only_sql, 0, 5).0.is_empty());
+    assert_eq!(reg.search("database queries", &only_sql, 0, 5).0[0].name, "sql-injection-hunt");
+    assert!(Scope::new(&["*-review".to_string()]).allows("jwt-review"));
+    assert!(Scope::new(&["a*c".to_string()]).allows("abc"));
+    assert!(!Scope::new(&["a*c".to_string()]).allows("abd"));
+}
+
+#[test]
+fn pinned_skills_are_listed_for_the_prompt() {
+    use super::search::Scope;
+    let reg = SkillRegistry::from_defs(vec![def("daily", "Daily routine.", "pinned: true\n"), def("rare", "Rare thing.", "")]);
+    let pinned = reg.pinned(&Scope::default(), 8);
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].name, "daily");
+}
+
+#[test]
+fn a_clear_winner_needs_no_rerank() {
+    use super::search::{decisive, Hit};
+    let h = |n: &str, s| Hit { name: n.into(), score: s };
+    assert!(decisive(&[]));
+    assert!(decisive(&[h("a", 5)]));
+    assert!(decisive(&[h("a", 40), h("b", 10)]));
+    assert!(!decisive(&[h("a", 14), h("b", 12)]));
+}
+
+#[test]
+fn the_prompt_does_not_grow_with_the_number_of_skills() {
+    use super::search::Scope;
+    let few = SkillRegistry::from_defs((0..3).map(|i| def(&format!("s{i}"), "A skill.", "")).collect());
+    let many = big_registry();
+    assert_eq!(few.pinned(&Scope::default(), 8).len(), 0);
+    let prompt = |reg: &SkillRegistry| crate::resources::build_system_prompt(None, None, None, reg.prompt_text().as_deref());
+    let (a, b) = (prompt(&few), prompt(&many));
+    assert_eq!(a, b, "a thousand skills must read the same as three");
+    assert!(b.contains("skill_find") && !b.contains("filler-5"));
+    // No skills at all: no skills section.
+    assert!(!prompt(&SkillRegistry::from_defs(vec![])).contains("\n\n# Skills\n"));
+    // Pinned ones are shown, and only those.
+    let pinned = SkillRegistry::from_defs(vec![def("daily", "Daily routine.", "pinned: true\n"), def("rare", "Rare.", "")]);
+    let p = prompt(&pinned);
+    assert!(p.contains("- daily: Daily routine.") && !p.contains("- rare:"));
 }

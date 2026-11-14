@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { act, useEffect, useMemo } from "react"
 import { SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/react"
@@ -194,4 +197,44 @@ for (const trigger of ["enter", "click", "shortcut"]) test(`suspended Restart re
     expect(view.captureCharFrame()).toContain("Welcome to Koma")
     expect(exited).toBe(0)
   } finally { await act(async () => { await view.dispose() }) }
+})
+
+// `/security` turns the session screen into the room screen. Returning early above a hook
+// changes the hook count and React throws "Rendered fewer hooks than expected".
+test.skipIf(process.platform === "win32")("entering the secure room keeps the hook order", async () => {
+  const transport = new Transport(), ctrlC = { current: () => {} }
+  const saved = { bin: process.env.KOMA_BIN, data: process.env.KOMA_TEST_DATA_DIR }
+  // The room asks `koma` to switch daemons. `true` accepts any arguments and does nothing.
+  process.env.KOMA_BIN = "/usr/bin/true"
+  process.env.KOMA_TEST_DATA_DIR = mkdtempSync(join(tmpdir(), "koma-room-hooks-"))
+  function Harness() {
+    const renderer = useRenderer()
+    const style = useMemo(() => SyntaxStyle.fromStyles({}, renderer.nativeScene), [renderer])
+    useEffect(() => () => style.destroy(), [style])
+    return <SessionScreen id="s" transport={transport} syntaxStyle={style} ctrlC={ctrlC} onExit={() => {}} onHome={() => {}} onOpen={() => {}} onRemote={() => {}} onPalette={() => {}} />
+  }
+  let view!: Awaited<ReturnType<typeof testRender>>
+  await act(async () => { view = await testRender(<Harness />, { width: 80, height: 24, exitOnCtrlC: false }) })
+  try {
+    await settle(view)
+    expect(view.captureCharFrame()).toContain("Welcome to Koma")
+    // The fixture connects as a remote host. `/security` only enters the room locally, and the
+    // handler reads this when the frame arrives.
+    Object.assign(transport, { remote: false })
+    await act(async () => { transport.emit("EnterSecure") })
+    // The loading screen is up at once; the room replaces it when the daemon answers or fails.
+    await view.renderOnce()
+    expect(view.captureCharFrame()).toContain("opening session")
+    // Nothing answers (`true` is the daemon). Ctrl+C on the loading screen leaves without a prompt.
+    // Leaving only detaches, so the session screen is back at once.
+    await act(async () => { ctrlC.current() })
+    await act(async () => { await Bun.sleep(50) })
+    await view.renderOnce()
+    expect(view.captureCharFrame()).not.toContain("Quit to chat?")
+    expect(view.captureCharFrame()).toContain("Welcome to Koma")
+  } finally {
+    await act(async () => { await view.dispose() })
+    if (saved.bin === undefined) delete process.env.KOMA_BIN; else process.env.KOMA_BIN = saved.bin
+    if (saved.data === undefined) delete process.env.KOMA_TEST_DATA_DIR; else process.env.KOMA_TEST_DATA_DIR = saved.data
+  }
 })

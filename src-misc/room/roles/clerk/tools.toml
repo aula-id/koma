@@ -1,0 +1,13 @@
+[[tool]]
+name = "clerk_flag"
+handler = "clerk_flag"
+description = "Raise a finding about a work lane to the Chief. This is the only channel the clerk has."
+[tool.schema]
+type = "object"
+required = ["avatar", "severity", "note"]
+additionalProperties = false
+[tool.schema.properties]
+avatar = { type = "string" }
+severity = { type = "string", enum = ["info", "warn", "stop"] }
+note = { type = "string", minLength = 1, maxLength = 2000 }
+refs = { type = "array", maxItems = 16, items = { type = "string", maxLength = 128 } }

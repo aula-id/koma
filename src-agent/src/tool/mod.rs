@@ -35,18 +35,18 @@ pub mod plan;
 mod plan_policy;
 pub mod pong;
 pub mod recovery;
-pub mod scope;
-pub mod scope_grant;
+
 mod screen_browser;
 pub mod sdlc;
 pub mod search;
+pub mod secure_shelf;
 pub mod seqthink;
 pub mod shell;
 pub mod shell_filter;
 pub mod skill;
 pub mod task;
 pub mod todo;
-pub mod verdict;
+
 
 pub use dircache::DirCache;
 pub use output::CallTrack;
@@ -102,7 +102,12 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "recall"
             | "message_find"
             | "message_load"
-            | "skill"
+            | "secure_shelf"
+            | "skill_find"
+            | "skill_load"
+            | "skill_unload"
+            | "skill_create"
+            | "skill_modify"
             | "web_search"
             | "web_fetch"
             | "web_page"
@@ -129,8 +134,6 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "browser_tabs"
             | "browser_inspect"
             | "show_image"
-            // Security: Plan may browse the catalog only (no run/fs/runtime mutate).
-            | "sec_catalog"
     )
 }
 
@@ -499,7 +502,11 @@ fn sdlc_push_refspec_is_mission_branch(spec: &str, mission_branch: &str) -> bool
     dest == mission_branch
 }
 
+/// See [`ToolCtx::skill_rank`].
+pub type SkillRank = Arc<dyn Fn(&str, &[(String, String)]) -> Option<Vec<String>> + Send + Sync>;
+
 /// Shared context handed to every tool invocation.
+#[derive(Clone)]
 pub struct ToolCtx {
     /// Live parent-session Plan restriction, shared with deferred calls and
     /// delegates. Checked immediately before dispatch; it cannot undo I/O that
@@ -508,20 +515,6 @@ pub struct ToolCtx {
     /// Absolute workspace root (the session's primary workdir). Follows a live
     /// `cd`, so this is the run's cwd, not an allow-list.
     pub workspace: PathBuf,
-    /// The session's cyber lane, when security mode has one armed. `None` in a
-    /// plain coding session. A `sec_` call with no lane is refused.
-    pub cyber_lane: Option<crate::app::sec::lane::Lane>,
-    /// Why `sec_` calls are refused. Set when [`crate::app::sec::active::effective`]
-    /// fails. `None` when a lane is in force.
-    pub sec_block: Option<String>,
-    /// Tool names the user turned off in the security panel.
-    pub sec_inactive: Vec<String>,
-    /// Stable session identity. Every dynamic target traces back to this, so two
-    /// sessions on one checkout cannot collide on a board, a scope record or a
-    /// spilled artifact. Mirrors `SessionRuntime::id`.
-    ///
-    /// Read by [`scope::ScopeBase::of`].
-    pub session_id: String,
     /// All configured workspace roots (may be >1).
     pub workspaces: Vec<PathBuf>,
     pub dir_cache: Arc<RwLock<DirCache>>,
@@ -544,8 +537,6 @@ pub struct ToolCtx {
     pub active_skill_names: Option<Vec<String>>,
     /// The GLOBAL MCP client manager.
     pub mcp_manager: Option<Arc<crate::app::mcp::McpManager>>,
-    /// The GLOBAL security daemon client manager.
-    pub sec_manager: Option<Arc<crate::app::sec::SecDaemonManager>>,
     /// Whether `bash`/`git_operator` should run their "saving" output path.
     pub bash_saving: bool,
     /// Directory tee'd full command logs.
@@ -554,6 +545,12 @@ pub struct ToolCtx {
     pub session_dir: Option<PathBuf>,
     /// Absolute paths of currently loaded dir-form skill directories.
     pub active_skill_dirs: Vec<PathBuf>,
+    /// Which skills this caller may find and load. `None` means all (the chat); a secure-room role
+    /// narrows it to its own.
+    pub skill_scope: Option<crate::model::skill::search::Scope>,
+    /// Re-orders `skill_find` candidates by intent with one model call: (request, [(name, description)])
+    /// returns names best first. `None`, or an answer of `None`, leaves the word-match order.
+    pub skill_rank: Option<SkillRank>,
     /// When `false`, mutating path resolution (`resolve` / write/edit/delete)
     /// must NOT accept absolute paths merely because they lie under the
     /// process-global scratch root. SDLC execute/integrate sets this false so
@@ -654,9 +651,14 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Remember),
         Box::new(memory::Forget),
         Box::new(memory::Recall),
-        Box::new(skill::Skill),
+        Box::new(skill::SkillFind),
+        Box::new(skill::SkillLoad),
+        Box::new(skill::SkillUnload),
+        Box::new(skill::SkillCreate),
+        Box::new(skill::SkillModify),
         Box::new(history::MessageFind),
         Box::new(history::MessageLoad),
+        Box::new(secure_shelf::SecureShelf),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
@@ -707,7 +709,11 @@ const AGENT_PICKER_EXCLUDED: &[&str] = &[
     "task_send",
     "pong",
     "dir_cache_update",
-    "skill",
+    "skill_find",
+    "skill_load",
+    "skill_unload",
+    "skill_create",
+    "skill_modify",
     // Sub-agent continuation currently cannot inject synthetic image messages.
     "load_image",
 ];
@@ -760,6 +766,8 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "recall",
     "message_find",
     "message_load",
+    "skill_find",
+    "secure_shelf",
     "web_fetch",
     "web_search",
     "web_download",
@@ -979,7 +987,7 @@ fn partial_canonicalize(as_path: &Path) -> PathBuf {
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].
 pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String {
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
-    let mut args: serde_json::Value =
+    let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     if ctx
         .plan_read_only
@@ -1026,103 +1034,6 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
             return output::finish_tool_output(ctx, &call.function.name, &args, raw);
         }
     }
-    if crate::security::is_sec_tool(&call.function.name) {
-        // Fail-closed boundary. `ctx` carries the manager but not the lane flag
-        // or the advertised set, so ask the manager for its own view: an
-        // unadvertised/forged `sec_` name must not run even when the daemon is
-        // live and armed.
-        if let Some(mgr) = ctx.sec_manager.as_ref() {
-            // Meta control plane: catalog / runtime / fs / run.
-            if crate::app::sec::meta::is_meta_tool(&call.function.name) {
-                return dispatch_sec_meta(ctx, mgr, &call.function.name, &mut args);
-            }
-            let lane_refusal = scope::lane_refusal(ctx, &call.function.name, &mut args);
-            if let Some(reason) = lane_refusal {
-                let denied = verdict::TypedResult {
-                    verdict: verdict::Verdict::Blocked,
-                    excerpt: reason,
-                    handle: None,
-                };
-                return output::finish_tool_output(
-                    ctx,
-                    &call.function.name,
-                    &args,
-                    denied.to_json(),
-                );
-            }
-            if let Some(reason) = mgr.refusal(&call.function.name, scope::sec_enabled(ctx, &call.function.name)) {
-                // A refusal is the tool's own `error` verdict, not a transport
-                // failure: it becomes typed so the model sees the same shape it
-                // sees from every other outcome.
-                let refusal = verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: reason,
-                    handle: None,
-                };
-                return output::finish_tool_output(
-                    ctx,
-                    &call.function.name,
-                    &args,
-                    refusal.to_json(),
-                );
-            }
-            // The lane gate already ran. Scope admission is the remaining check.
-            let lane_refusal = scope::admit_from_call(ctx, &call.function.name, &args);
-            // Admit before anything else: a call whose target the scope does
-            // not cover must not reach the container at all.
-            if let Some(reason) = lane_refusal {
-                let denied = verdict::TypedResult {
-                    verdict: verdict::Verdict::Blocked,
-                    excerpt: reason,
-                    handle: None,
-                };
-                return output::finish_tool_output(
-                    ctx,
-                    &call.function.name,
-                    &args,
-                    denied.to_json(),
-                );
-            }
-
-            // Parse before the output caps run. The verdict is the result; the
-            // excerpt is only its body, and `finish_tool_output` trims bodies.
-            // Untyped results (no verdict) go through the unchanged path below.
-            let typed = match mgr.execute_blocking(&call.function.name, &args) {
-                // Hold an oversized payload aside BEFORE it reaches the model: a
-                // 200-row scan is a turn's context otherwise. Reuses the same tmp
-                // spill the other tools use, so cleanup is already handled.
-                Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
-                    output::spill_foreign(ctx.session_dir.as_deref(), &call.function.name, body)
-                }),
-                Err(e) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: e,
-                    handle: None,
-                },
-            };
-            // A verdict clears or fails the binding: only a confirmation keeps
-            // an addressable target. A `not_found` or a crash leaves nothing to
-            // revisit, so the record goes rather than lingering as a dead link
-            // that a later call would happily re-admit.
-            scope::settle(ctx, &call.function.name, &args, typed.verdict);
-            // Frame the body at the ONE place every sec_ result reaches the model:
-            // a target controls this text, so the model is told where the trusted
-            // metadata ends. The verdict and handle ride above the fence, so a body
-            // forging either cannot win.
-            let framed = crate::app::sec::untrusted::frame_result(
-                &typed.excerpt,
-                typed.verdict.as_str(),
-                typed.handle.as_deref(),
-                crate::app::sec::untrusted::Origin::ToolOutput,
-            );
-            let framed = verdict::TypedResult {
-                verdict: typed.verdict,
-                excerpt: framed,
-                handle: typed.handle,
-            };
-            return output::finish_tool_output(ctx, &call.function.name, &args, framed.to_json());
-        }
-    }
     output::finish_tool_output(
         ctx,
         &call.function.name,
@@ -1132,411 +1043,6 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 }
 
 /// Update the session security working set after a successful catalog/run touch.
-fn touch_sec_working_set(ctx: &ToolCtx, op: &str, raw_or_name: &str, extra: &str) {
-    let Some(dir) = ctx.session_dir.as_ref() else {
-        return;
-    };
-    let mut ws = crate::app::sec::working_set::load(dir);
-    if let Some(lane) = scope::lane_of(ctx) {
-        ws.set_lane(lane.label());
-    }
-    match op {
-        "pin" => {
-            ws.pin(raw_or_name, extra, "");
-        }
-        "run" => {
-            ws.pin(raw_or_name, "", "");
-            ws.set_last_run(raw_or_name, extra);
-        }
-        "categories" => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
-                if let Some(arr) = v.get("categories").and_then(|c| c.as_array()) {
-                    // `{"name","tools"}` rows; plain strings from older daemons.
-                    let cats: Vec<String> = arr
-                        .iter()
-                        .filter_map(|x| {
-                            x.as_str()
-                                .or_else(|| x.get("name").and_then(|n| n.as_str()))
-                                .map(|s| s.to_string())
-                        })
-                        .collect();
-                    ws.remember_categories(&cats);
-                }
-            }
-        }
-        "get" => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
-                if let Some(tool) = v.get("tool") {
-                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let blurb = tool
-                        .get("description")
-                        .or_else(|| tool.get("blurb"))
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
-                    let effect = tool.get("effect").and_then(|n| n.as_str()).unwrap_or("");
-                    if !name.is_empty() {
-                        ws.pin(name, blurb, effect);
-                    }
-                }
-            }
-        }
-        "list" => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_or_name) {
-                if let Some(arr) = v.get("tools").and_then(|c| c.as_array()) {
-                    // Pin first few list hits lightly (name only) so a page is not lost entirely.
-                    for tool in arr.iter().take(5) {
-                        let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                        let blurb = tool.get("blurb").and_then(|n| n.as_str()).unwrap_or("");
-                        let effect = tool.get("effect").and_then(|n| n.as_str()).unwrap_or("");
-                        if !name.is_empty() {
-                            ws.pin(name, blurb, effect);
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    let _ = crate::app::sec::working_set::store(dir, &ws);
-}
-
-fn dispatch_sec_meta(
-    ctx: &ToolCtx,
-    mgr: &std::sync::Arc<crate::app::sec::SecDaemonManager>,
-    name: &str,
-    args: &mut serde_json::Value,
-) -> String {
-    // Meta tools still need a cyber lane selected (security mode on).
-    // Plan mode is gated earlier via tool_allowed_in_plan (sec_catalog only).
-    if let Some(reason) = scope::lane_refusal(ctx, name, args) {
-        let denied = verdict::TypedResult {
-            verdict: verdict::Verdict::Blocked,
-            excerpt: reason,
-            handle: None,
-        };
-        return output::finish_tool_output(ctx, name, args, denied.to_json());
-    }
-    if let Some(reason) = mgr.refusal(name, scope::sec_enabled(ctx, name)) {
-        let refusal = verdict::TypedResult {
-            verdict: verdict::Verdict::Error,
-            excerpt: reason,
-            handle: None,
-        };
-        return output::finish_tool_output(ctx, name, args, refusal.to_json());
-    }
-
-    let typed = match name {
-        "sec_lane" => {
-            let wanted = args.get("lane").and_then(|v| v.as_str()).unwrap_or("");
-            match crate::app::sec::lane_switch::parse(wanted) {
-                Ok(lane) => {
-                    crate::app::sec::lane_switch::request(&ctx.session_id, lane);
-                    verdict::TypedResult {
-                        verdict: verdict::Verdict::Untyped,
-                        excerpt: format!(
-                            "lane set — {}",
-                            crate::app::sec::lane_switch::summary(lane)
-                        ),
-                        handle: None,
-                    }
-                }
-                Err(e) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: e,
-                    handle: None,
-                },
-            }
-        }
-        "sec_catalog" => {
-            let op = args
-                .get("op")
-                .and_then(|v| v.as_str())
-                .filter(|op| !op.trim().is_empty())
-                .unwrap_or("categories");
-            let mut payload = args.clone();
-            if let Some(obj) = payload.as_object_mut() {
-                obj.remove("op");
-                if !obj.contains_key("lane") {
-                    if let Some(lane) = scope::lane_of(ctx) {
-                        obj.insert(
-                            "lane".into(),
-                            serde_json::Value::String(lane.label().to_string()),
-                        );
-                    }
-                }
-                // The model only ever sees tools the active guests can run.
-                if op == "list" {
-                    obj.insert("filter".into(), serde_json::Value::String("ready".into()));
-                }
-            }
-            match mgr.catalog_op(op, &payload) {
-                Ok(raw) => {
-                    match op {
-                        "get" => touch_sec_working_set(ctx, "get", &raw, ""),
-                        "list" => touch_sec_working_set(ctx, "list", &raw, ""),
-                        "categories" => touch_sec_working_set(ctx, "categories", &raw, ""),
-                        _ => {}
-                    }
-                    verdict::TypedResult {
-                        verdict: verdict::Verdict::Untyped,
-                        excerpt: raw,
-                        handle: None,
-                    }
-                }
-                Err(e) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: e,
-                    handle: None,
-                },
-            }
-        }
-        "sec_runtime" => {
-            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
-            let mut payload = serde_json::json!({});
-            if let Some(obj) = args.as_object() {
-                let mut map = serde_json::Map::new();
-                for (k, v) in obj {
-                    if k != "op" {
-                        map.insert(k.clone(), v.clone());
-                    }
-                }
-                payload = serde_json::Value::Object(map);
-            }
-            // Targets reach the daemon only from the confirmed scope record. The
-            // record is written by the approval prompt, never by this call, so a
-            // request nobody confirmed stops here and the allowlist stays shut.
-            if scope::lane_of(ctx) != Some(crate::app::sec::lane::Lane::Research) {
-                match scope_grant::requested(name, args) {
-                    Err(reason) => {
-                        return output::finish_tool_output(
-                            ctx,
-                            name,
-                            args,
-                            verdict::TypedResult {
-                                verdict: verdict::Verdict::Error,
-                                excerpt: reason,
-                                handle: None,
-                            }
-                            .to_json(),
-                        );
-                    }
-                    Ok(Some(request)) => {
-                        let current = scope_grant::current(ctx);
-                        if !scope_grant::covered(current.as_ref(), &request) {
-                            return output::finish_tool_output(
-                                ctx,
-                                name,
-                                args,
-                                verdict::TypedResult {
-                                    verdict: verdict::Verdict::Blocked,
-                                    excerpt: scope_grant::UNCONFIRMED.into(),
-                                    handle: None,
-                                }
-                                .to_json(),
-                            );
-                        }
-                        if let Some(obj) = payload.as_object_mut() {
-                            obj.insert(
-                                "targets".into(),
-                                serde_json::json!(scope_grant::wire(&request.targets)),
-                            );
-                            obj.insert(
-                                "exclusions".into(),
-                                serde_json::json!(scope_grant::wire(&request.exclusions)),
-                            );
-                        }
-                    }
-                    Ok(None) => {}
-                }
-            }
-            // Lane net policy: Research never carries egress allowlist; Red may use
-            // scope targets only when provided (empty up = deny-all offline guest).
-            if let Some(obj) = payload.as_object_mut() {
-                use crate::app::sec::lane::Lane;
-                match scope::lane_of(ctx) {
-                    Some(Lane::Research) => {
-                        obj.insert("targets".into(), serde_json::json!([]));
-                        obj.insert("exclusions".into(), serde_json::json!([]));
-                        if op == "net" {
-                            obj.insert("mode".into(), serde_json::Value::String("off".into()));
-                        }
-                    }
-                    Some(Lane::Red) if op == "net" => {
-                        let mode = obj.get("mode").and_then(|v| v.as_str()).unwrap_or("off");
-                        let targets_empty = obj
-                            .get("targets")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.is_empty())
-                            .unwrap_or(true);
-                        if mode == "scope" && targets_empty {
-                            return output::finish_tool_output(
-                                ctx,
-                                name,
-                                args,
-                                verdict::TypedResult {
-                                    verdict: verdict::Verdict::Blocked,
-                                    excerpt: "red lane: sec_runtime net mode=scope requires targets (host/IP allowlist from confirmed scope)"
-                                        .into(),
-                                    handle: None,
-                                }
-                                .to_json(),
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            match mgr.runtime_op(op, &payload) {
-                Ok(raw) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Untyped,
-                    excerpt: raw,
-                    handle: None,
-                },
-                Err(e) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: e,
-                    handle: None,
-                },
-            }
-        }
-        "sec_fs" => {
-            let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
-            let mut payload = args.clone();
-            if let Some(obj) = payload.as_object_mut() {
-                obj.remove("op");
-                // Workspace roots become allow_roots for copy_in.
-                if op == "copy_in" && !obj.contains_key("allow_roots") {
-                    let roots: Vec<String> = ctx
-                        .workspaces
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect();
-                    obj.insert("allow_roots".into(), serde_json::json!(roots));
-                }
-            }
-            match mgr.fs_op(op, &payload) {
-                Ok(raw) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Untyped,
-                    excerpt: raw,
-                    handle: None,
-                },
-                Err(e) => verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: e,
-                    handle: None,
-                },
-            }
-        }
-        "sec_run" => {
-            let inner = args
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if inner.is_empty() || crate::app::sec::meta::is_meta_tool(&inner) {
-                verdict::TypedResult {
-                    verdict: verdict::Verdict::Error,
-                    excerpt: "sec_run requires a concrete tool name (see sec_catalog)".into(),
-                    handle: None,
-                }
-            } else {
-                let mut inner_args = args
-                    .get("args")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({}));
-                if !inner_args.is_object() {
-                    inner_args = serde_json::json!({});
-                }
-                // Admit path on the INNER tool name — meta must not bypass lane/scope.
-                if let Some(reason) = scope::lane_refusal(ctx, &inner, &mut inner_args) {
-                    verdict::TypedResult {
-                        verdict: verdict::Verdict::Blocked,
-                        excerpt: reason,
-                        handle: None,
-                    }
-                } else if let Some(reason) = mgr.refusal(&inner, scope::lane_of(ctx).is_some()) {
-                    verdict::TypedResult {
-                        verdict: verdict::Verdict::Error,
-                        excerpt: reason,
-                        handle: None,
-                    }
-                } else if let Some(reason) = scope::admit_from_call(ctx, &inner, &inner_args) {
-                    verdict::TypedResult {
-                        verdict: verdict::Verdict::Blocked,
-                        excerpt: reason,
-                        handle: None,
-                    }
-                } else {
-                    let lane_s = scope::lane_of(ctx).map(|l| l.label().to_string());
-                    let typed = match mgr.execute_blocking_in_lane(
-                        &inner,
-                        &inner_args,
-                        lane_s.as_deref(),
-                    ) {
-                        Ok(raw) => verdict::enforce_shape(verdict::parse(&raw), |body| {
-                            output::spill_foreign(ctx.session_dir.as_deref(), &inner, body)
-                        }),
-                        Err(e) => verdict::TypedResult {
-                            verdict: verdict::Verdict::Error,
-                            excerpt: e,
-                            handle: None,
-                        },
-                    };
-                    scope::settle(ctx, &inner, &inner_args, typed.verdict);
-                    touch_sec_working_set(ctx, "run", &inner, typed.verdict.as_str());
-                    let framed = crate::app::sec::untrusted::frame_result(
-                        &typed.excerpt,
-                        typed.verdict.as_str(),
-                        typed.handle.as_deref(),
-                        crate::app::sec::untrusted::Origin::ToolOutput,
-                    );
-                    return output::finish_tool_output(
-                        ctx,
-                        name,
-                        args,
-                        verdict::TypedResult {
-                            verdict: typed.verdict,
-                            excerpt: framed,
-                            handle: typed.handle,
-                        }
-                        .to_json(),
-                    );
-                }
-            }
-        }
-        other => verdict::TypedResult {
-            verdict: verdict::Verdict::Error,
-            excerpt: format!("unknown sec meta tool: {other}"),
-            handle: None,
-        },
-    };
-
-    // Catalog/runtime/fs results are control-plane JSON (not target-controlled
-    // bodies); still frame lightly for consistency when Ok from a run path.
-    let excerpt = typed.excerpt;
-    let framed = if name == "sec_run" {
-        crate::app::sec::untrusted::frame_result(
-            &excerpt,
-            typed.verdict.as_str(),
-            typed.handle.as_deref(),
-            crate::app::sec::untrusted::Origin::ToolOutput,
-        )
-    } else {
-        excerpt
-    };
-    output::finish_tool_output(
-        ctx,
-        name,
-        args,
-        verdict::TypedResult {
-            verdict: typed.verdict,
-            excerpt: framed,
-            handle: typed.handle,
-        }
-        .to_json(),
-    )
-}
-
 /// Find which workspace contains the given absolute path.
 pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
     for ws in workspaces {
@@ -1551,8 +1057,3 @@ pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "mod_test.rs"]
 mod tests;
-// Shared minimal `ToolCtx` for tests. Re-exported rather than declared a second
-// time: the file is already a `#[path]` module under `seqthink`, and a second
-// `mod` declaration makes clippy warn about a doubly-loaded file.
-#[cfg(test)]
-pub(crate) use seqthink::test_ctx;

@@ -40,7 +40,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/store",
         "Browse and install extensions from the koma.run marketplace",
     ),
-    ("/security", "Security daemon control panel"),
+    ("/security", "Hand this session to the secure room"),
     ("/remote", "Manage remote SSH hosts and sessions"),
     (
         "/task",

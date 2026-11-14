@@ -66,7 +66,7 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
             if state.rest.yolo_armed {
                 state.rest.set_agent_mode(AgentMode::Yolo);
             } else {
-                state.rest.fg_mut().status = "yolo locked — enable it in /security first".into();
+                state.rest.fg_mut().status = "yolo is locked".into();
                 return Ok(());
             }
         }

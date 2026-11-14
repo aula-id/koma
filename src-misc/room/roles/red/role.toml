@@ -1,0 +1,6 @@
+id = "red"
+display = "Lab Red"
+shelf_allow = ["get", "list", "put_claim", "put_evidence", "put_asset", "put_scope", "put_trajectory"]
+
+[chat]
+[work]

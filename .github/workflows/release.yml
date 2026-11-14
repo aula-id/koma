@@ -288,7 +288,7 @@ jobs:
   publish:
     # build -> check -> publish. Source tests belong to ci.yml and ran on the
     # PR; this pipeline only checks the binaries it built (verify, and the MSI
-    # checks inside windows-package). Guest images build after this, tier by tier.
+    # checks inside windows-package).
     if: >-
       ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v')
       && needs.build.result == 'success'
@@ -300,8 +300,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      # Named downloads only. A bare download also pulls the Docker build
-      # record, and that blob failed after five retries on v0.4.9.
+      # Named downloads only, so each asset is fetched by its own artifact name.
       - uses: actions/download-artifact@v4
         with:
           name: koma-linux-x64
@@ -385,76 +384,3 @@ jobs:
           mkdir published
           curl -fsSL --retry 5 --retry-delay 10 "$base/koma-linux-x64" -o published/koma-linux-x64
           (cd published && grep ' koma-linux-x64$' ../published-sums | sha256sum --check --strict -)
-
-  # Guest images (only on v*-security tags). They start after the binaries are
-  # published and run one tier at a time, so a release never has 30 builds at
-  # once. A failed tier does not stop the next; each build reports on its own.
-  safety-matrix:
-    name: plan koma-safety images
-    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-security')
-    runs-on: ubuntu-22.04
-    outputs:
-      core: ${{ steps.plan.outputs.core }}
-      ext: ${{ steps.plan.outputs.ext }}
-      src: ${{ steps.plan.outputs.src }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: One image per composition in compositions.json
-        id: plan
-        # Every composition the /security panel lists gets an image, so no row
-        # offers a pull that cannot succeed. Bare :version / :latest is minimal.
-        # core: minimal + the 8 base domains. ext: npm/cargo shards, recon-2, lab.
-        # src: from-source shards, the slowest builds.
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          comps = json.load(open("src-security/install_recipes/buckets/compositions.json"))
-          base = {"kali": "kalilinux/kali-rolling"}
-          core_ids = {"minimal", "recon", "web", "identity", "cloud", "rev", "crypto", "pxn", "dfir"}
-          tiers = {"core": [{"composition": "minimal", "tag_suffix": "", "base_image": "python:3.11-slim-bookworm"}], "ext": [], "src": []}
-          for c in comps:
-              tier = "core" if c["id"] in core_ids else "src" if c["id"].endswith("-src") else "ext"
-              tiers[tier].append({
-                  "composition": c["id"],
-                  "tag_suffix": f"-{c['id']}",
-                  "base_image": base.get(c.get("base_hint"), "python:3.11-slim-bookworm"),
-              })
-          for name, rows in tiers.items():
-              print(f"{name}={json.dumps(rows)}")
-          PY
-
-  images-core:
-    name: images (core)
-    needs: [safety-matrix, publish]
-    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/safety-image.yml
-    with:
-      include: ${{ needs.safety-matrix.outputs.core }}
-      max-parallel: 5
-
-  images-ext:
-    name: images (ext)
-    needs: [safety-matrix, images-core]
-    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/safety-image.yml
-    with:
-      include: ${{ needs.safety-matrix.outputs.ext }}
-      max-parallel: 4
-
-  images-src:
-    name: images (src)
-    needs: [safety-matrix, images-ext]
-    if: ${{ !cancelled() && needs.safety-matrix.result == 'success' }}
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/safety-image.yml
-    with:
-      include: ${{ needs.safety-matrix.outputs.src }}
-      max-parallel: 3

@@ -5,7 +5,6 @@ import { usePaste } from "@opentui/react"
 import type { Theme } from "../theme.ts"
 import { Controls, DraftContext, NativeDraftContext, InputSuspendedContext, Fullscreen, Overlay, nativeMenuInput } from "./bits.tsx"
 import { agentFields, mcpFields, agentsView, extScreenView, extensionsView, mcpView, remoteView, storeView } from "./manage.tsx"
-import { securityView } from "./security.tsx"
 import {
   attachmentsView,
   bashView,
@@ -124,8 +123,6 @@ function viewOf(name: string, body: Rec, theme: Theme, wide: boolean, onMove: (i
       return storeView(body as MenuData["ExtStore"] & Rec, theme, wide, onMove)
     case "ExtScreen":
       return extScreenView(body as MenuData["ExtScreen"] & Rec, theme, onMove)
-    case "Security":
-      return securityView(body as MenuData["Security"] & Rec, theme, onMove, send)
     case "Remote":
       return remoteView(body as MenuData["Remote"] & Rec, theme, wide, onMove, send)
     case "Onboard":

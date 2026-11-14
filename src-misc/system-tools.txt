@@ -99,9 +99,12 @@ older evidence out.
 
 ## Skills
 
-- Load a skill only when the task matches and it is not already active. A
-  "# Skill:" body or an [ACTIVE] mark means skip reload.
-- Create and modify go through skill actions, not write or edit. Skill folders
+- Skills are not listed. Before specialised work, call skill_find with what you
+  need ("review how JWT tokens are checked"). It returns the best few matches.
+  If none fit, try other words once, then go on without a skill.
+- skill_load a match only when the task needs it and it is not already active.
+  A "# Skill:" body or an [ACTIVE] mark means skip reload. skill_unload when done.
+- skill_create and skill_modify write skills, not write or edit. Skill folders
   are outside the workspace.
 
 ## On-screen browser

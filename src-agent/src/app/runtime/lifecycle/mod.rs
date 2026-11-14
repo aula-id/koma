@@ -219,20 +219,6 @@ pub(crate) fn build_startup(
         ));
     }
 
-    // Build the security-daemon client. Mint a per-process token and, if the
-    // daemon is installed, auto-start it (M1: gated only on install; a later
-    // milestone adds the /security enabled-toggle gate). Non-blocking.
-    let sec_token = uuid::Uuid::new_v4().to_string();
-    let sec = crate::app::sec::SecDaemonManager::new(&handle);
-    // Auto-start is gated on BOTH install and the runtime enable flag. The flag
-    // starts `false` so the daemon stays off by default; the `/security` panel's
-    // toggle key (`t`) sets it and calls `.start()` explicitly.
-    if crate::security::is_installed() && state.rest.security_enabled {
-        sec.start(sec_token.clone());
-    }
-    state.rest.sec_token = sec_token;
-    state.rest.sec_manager = Some(sec);
-
     // Build the extension host manager and auto-start each session-active daemon-kind
     // extension recorded in the config registry. Best-effort: each start is offloaded
     // onto the blocking pool (`ensure_started` blocks on its handshake, so running it on
@@ -690,12 +676,6 @@ pub(crate) fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime
         // uninstall gap this doesn't cover).
         state.rest.ext_agents.clear();
     }
-    // TODO sec stop: `state.rest.sec_manager` has the identical stop()-before-runtime-
-    // drop shape (same kill_on_drop child, same reason to run before `drop(rt)`) but is
-    // NOT wired here yet. Left as a follow-up rather than risk the security daemon's
-    // shutdown behavior in this pass — confirm first that calling `stop()`
-    // unconditionally on every TUI + daemon shutdown path doesn't regress anything the
-    // `/security` panel relies on.
     // Best-effort: unregister this process from the linker daemon so its
     // root refcounts decrement and the daemon can idle-reap.
     #[cfg(feature = "linker")]

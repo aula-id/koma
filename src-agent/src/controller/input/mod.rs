@@ -32,7 +32,7 @@ mod picker;
 mod quit_confirm;
 mod remote;
 mod rewind;
-mod security;
+
 mod session_hub;
 mod settings;
 mod skill_cmd;
@@ -42,11 +42,11 @@ mod usage;
 
 pub use action::Action;
 pub use chat::{file_ref_partial, handle_chat};
-pub use clipboard::request_clipboard_image;
+pub use clipboard::{read_clipboard_png, request_clipboard_image};
 pub use key_input::handle_key_input;
 pub use onboard::handle_onboard;
 pub use onboard_provider::handle_onboard_provider;
-pub use paste::handle_paste;
+pub use paste::{handle_paste, image_path_paste};
 pub use picker::handle_picker;
 pub use quit_confirm::handle_quit_confirm;
 pub use rewind::handle_rewind;
@@ -117,7 +117,6 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Extensions(e) => extensions::handle_extensions(e, &mut state.rest, key),
         Mode::ExtScreen(s) => ext_screen::handle_ext_screen(s, &mut state.rest, key),
         Mode::ExtStore(s) => store::handle_store(s, &mut state.rest, key),
-        Mode::Security(s) => security::handle_security(s, &mut state.rest, key),
         Mode::Bash(b) => bash::handle_bash(b, &mut state.rest, key),
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),
         Mode::Attachments(a) => attachments::handle_attachments(a, &mut state.rest, key),

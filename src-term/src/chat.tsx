@@ -50,7 +50,7 @@ function useTerminalSize() {
   return size
 }
 
-const COMPOSER_KEYS = [
+export const COMPOSER_KEYS = [
   { name: "return", action: "submit" as const },
   { name: "enter", action: "submit" as const },
   { name: "kpenter", action: "submit" as const },
@@ -66,7 +66,7 @@ const COMPOSER_KEYS = [
   // Kitty can report Ctrl+J as the linefeed codepoint rather than the letter j.
   { name: "\n", ctrl: true, action: "newline" as const },
 ]
-const PALETTE_KEYS = [
+export const PALETTE_KEYS = [
   { name: "up", action: "palette-nav" as const },
   { name: "down", action: "palette-nav" as const },
   { name: "tab", action: "palette-nav" as const },
@@ -86,6 +86,7 @@ export function Chat({
   sendTracked,
   onFlushError,
   onRecycle: _onRecycle,
+  roomOn = false,
 }: {
   snap: Snapshot
   theme: Theme
@@ -101,6 +102,8 @@ export function Chat({
   onFlushError: (text: string) => void
   /** Kept for launcher API compatibility. View recycle is disabled. */
   onRecycle?: (id: string) => void
+  /** A secure room is running beside this chat. */
+  roomOn?: boolean
 }) {
   void _onRecycle
   const flushRef = useRef<() => Promise<boolean>>(async () => true)
@@ -141,6 +144,7 @@ export function Chat({
         session={session}
         theme={theme}
         pressure={pressure}
+        roomOn={roomOn}
         cleaning={cleaning}
         focused={focused}
         compact={Boolean(modalOverlay)}
@@ -672,7 +676,7 @@ const DOTTED_RAIL = {
   cross: " ",
 }
 
-function AssistantCard({ theme, children }: { theme: Theme; children: ReactNode }) {
+export function AssistantCard({ theme, children }: { theme: Theme; children: ReactNode }) {
   return (
     <box flexDirection="row">
       <box width={1} border={BORDER_LEFT} borderColor={theme.fg} customBorderChars={DOTTED_RAIL} />
@@ -824,7 +828,7 @@ function dressList(list: ListNode) {
   }
 }
 
-function Reasoning({
+export function Reasoning({
   text,
   theme,
   syntaxStyle,
@@ -864,16 +868,19 @@ export function AttachmentPile({ attachments, theme }: {attachments: Attachment[
   </box>
 }
 
-function ToolCard({
+export function ToolCard({
   call,
   result,
   theme,
   syntaxStyle,
+  digest: given,
 }: {
   call: ToolCall
   result?: ChatMessage
   theme: Theme
   syntaxStyle: SyntaxStyle
+  /** A readable body for the payload; the room sets it for its own tools. */
+  digest?: string | null
 }) {
   const [open, setOpen] = useState(false)
   const [hot, setHot] = useState(false)
@@ -885,7 +892,7 @@ function ToolCard({
     return () => clearInterval(timer)
   }, [done])
   const mark = done ? "✓" : (SPINNER[tick % SPINNER.length] ?? "⠋")
-  const digest = planDigest(call.function.arguments)
+  const digest = given ?? planDigest(call.function.arguments)
   const image = result ? showImagePath(result.content) : null
   return (
     <box border borderStyle="rounded" borderColor={hot ? theme.accent : theme.dim} flexDirection="column">
@@ -1069,6 +1076,40 @@ function Palette({
     ? commands.map((row) => ({ label: row.name, detail: row.desc }))
     : files.map((row) => ({ label: row, detail: "" }))
   const selected = rows.length === 0 ? 0 : command ? suggestions.selected : Math.min(snap.global.palette_sel, rows.length - 1)
+  return (
+    <SuggestPopup
+      rows={rows}
+      selected={selected}
+      title={command ? " commands " : " files "}
+      theme={theme}
+      onPress={async (absolute) => {
+        if (!await flushRef.current()) return
+        const steps = command ? commands[absolute]!.sourceIndex - snap.global.palette_sel : absolute - selected
+        if (steps === 0) return
+        const code = steps > 0 ? "Down" : "Up"
+        for (let i = 0; i < Math.abs(steps); i++) send({ SendKey: { code, mods: 0 } })
+      }}
+    />
+  )
+}
+
+/**
+ * The `/` and `@` popup: a fixed window of rows over a list, the highlight kept in view.
+ * The chat and the secure room both draw their suggestions through it.
+ */
+export function SuggestPopup({
+  rows,
+  selected,
+  title,
+  theme,
+  onPress,
+}: {
+  rows: { label: string; detail: string }[]
+  selected: number
+  title: string
+  theme: Theme
+  onPress: (absolute: number) => void | Promise<void>
+}) {
   const signature = rows.map((row) => row.label).join("\n")
   const signatureRef = useRef(signature)
   const [start, setStart] = useState(0)
@@ -1087,7 +1128,7 @@ function Palette({
       borderStyle="rounded"
       borderColor={theme.dim}
       flexDirection="column"
-      title={command ? " commands " : " files "}
+      title={title}
       titleColor={theme.dim}
     >
       {slots.map((row, index) => {
@@ -1100,13 +1141,7 @@ function Palette({
             detail={row.detail}
             theme={theme}
             selected={absolute === selected}
-            onPress={async () => {
-              if (!await flushRef.current()) return
-              const steps = command ? commands[absolute]!.sourceIndex - snap.global.palette_sel : absolute - selected
-              if (steps === 0) return
-              const code = steps > 0 ? "Down" : "Up"
-              for (let i = 0; i < Math.abs(steps); i++) send({ SendKey: { code, mods: 0 } })
-            }}
+            onPress={() => onPress(absolute)}
           />
         )
       })}
@@ -1127,6 +1162,7 @@ function Composer({
   sendTracked,
   flushRef,
   onFlushError,
+  roomOn = false,
 }: {
   snap: Snapshot
   session: SessionSnap
@@ -1140,6 +1176,7 @@ function Composer({
   sendTracked: (request: unknown) => Promise<string>
   flushRef: { current: () => Promise<boolean> }
   onFlushError: (text: string) => void
+  roomOn?: boolean
 }) {
   const { height, width } = useTerminalSize()
   const renderer = useRenderer()
@@ -1432,7 +1469,7 @@ function Composer({
         <Status snap={snap} session={session} theme={theme} cleaning={cleaning} />
       </box>
       </box>
-      <RamLine pressure={pressure} session={session} theme={theme} />
+      <RamLine pressure={pressure} session={session} theme={theme} roomOn={roomOn} />
     </box>
   )
 }
@@ -1492,10 +1529,10 @@ export function tipReveal(tip: string, count: number, width: number): string {
   return [...text].slice(0, Math.max(0, count)).join("")
 }
 
-function Tips({ theme, width }: { theme: Theme; width: number }) {
+export function Tips({ theme, width, tips = COMPOSER_TIPS }: { theme: Theme; width: number; tips?: string[] }) {
   const [index, setIndex] = useState(0)
   const [count, setCount] = useState(0)
-  const tip = COMPOSER_TIPS[index] ?? ""
+  const tip = tips[index] ?? ""
   const room = Math.max(0, width - 12)
   const full = [...tip].slice(0, room).join("")
   const visible = tipReveal(tip, count, room)
@@ -1509,7 +1546,7 @@ function Tips({ theme, width }: { theme: Theme; width: number }) {
       return () => clearTimeout(timer)
     }
     const timer = setTimeout(() => {
-      setIndex((value) => (value + 1) % COMPOSER_TIPS.length)
+      setIndex((value) => (value + 1) % tips.length)
       setCount(0)
     }, 3000)
     return () => clearTimeout(timer)
@@ -1553,7 +1590,7 @@ function Status({ snap, session, theme, cleaning = false }: { snap: Snapshot; se
   )
 }
 
-function RamLine({ pressure, session, theme }: { pressure: Pressure; session: SessionSnap; theme: Theme }) {
+function RamLine({ pressure, session, theme, roomOn = false }: { pressure: Pressure; session: SessionSnap; theme: Theme; roomOn?: boolean }) {
   const [rss, setRss] = useState(() => memoryFootprint())
   useEffect(() => {
     const timer = setInterval(() => setRss(memoryFootprint()), 1000)
@@ -1565,9 +1602,22 @@ function RamLine({ pressure, session, theme }: { pressure: Pressure; session: Se
   return (
     <box height={1} flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
       <text fg={color}>{`RAM[${mb}mb]`}</text>
-      <DrssMark active={session.context_usage?.drss_active === true} theme={theme} />
+      <box flexDirection="row" columnGap={2}>
+        {roomOn ? <RoomMark theme={theme} /> : null}
+        <DrssMark active={session.context_usage?.drss_active === true} theme={theme} />
+      </box>
     </box>
   )
+}
+
+/** The secure room is still working in the background. `/security` goes back to it. */
+export function RoomMark({ theme }: { theme: Theme }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setTick((value) => value + 1), 500)
+    return () => clearInterval(timer)
+  }, [])
+  return <text fg={tick % 2 === 0 ? theme.accent : theme.dim}>{"◉ secure room"}</text>
 }
 
 const DRSS_LABEL = "[DRSS]"
@@ -1652,7 +1702,7 @@ function usageReadout(session: SessionSnap): string | null {
   return `${context} ↑${fmtCount(input)}${cache} ↓${fmtCount(session.tokens_out)} $${session.cost.toFixed(4)}`
 }
 
-function Choice({
+export function Choice({
   label,
   detail,
   theme,

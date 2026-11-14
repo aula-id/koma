@@ -46,6 +46,23 @@ fn config_with(
 }
 
 #[test]
+fn a_lane_provider_uses_that_providers_credentials() {
+    let config = config_with(
+        "main/model",
+        "https://main.example",
+        "planner/model",
+        "https://planner.example",
+    );
+    let settings = Settings::default();
+    let resolved =
+        resolve_lane_route(&config, &settings, "planner-provider", Some("planner/model")).unwrap();
+    assert_eq!(resolved.model_id, "planner/model");
+    assert_eq!(resolved.endpoint, "https://planner.example");
+    assert_eq!(resolved.api_key, "key-planner");
+    assert!(resolve_lane_route(&config, &settings, "no-such-provider", Some("planner/model")).is_none());
+}
+
+#[test]
 fn non_plan_mode_always_uses_main_even_with_planner_assigned() {
     let config = config_with(
         "main/model",
