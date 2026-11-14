@@ -5,15 +5,11 @@ use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 /// A minimal `ToolCtx` for tests — `seqthink` never touches it.
-pub(crate) fn test_ctx() -> ToolCtx {
+fn test_ctx() -> ToolCtx {
     ToolCtx {
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: std::path::PathBuf::from("."),
-        session_id: "sess-test".into(),
-        cyber_lane: None,
-        sec_block: None,
-        sec_inactive: Vec::new(),
-        workspaces: vec![std::path::PathBuf::from(".")],
+                workspaces: vec![std::path::PathBuf::from(".")],
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
         memory_dir: None,
         worktrees_dir: None,
@@ -24,8 +20,9 @@ pub(crate) fn test_ctx() -> ToolCtx {
         skill_registry: None,
         active_skill_names: None,
         active_skill_dirs: Vec::new(),
+        skill_scope: None,
+        skill_rank: None,
         mcp_manager: None,
-        sec_manager: None,
         bash_saving: true,
         bash_log_dir: None,
         session_dir: None,

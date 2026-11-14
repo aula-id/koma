@@ -1,1 +1,0 @@
-github.com/bearer/bearer@latest

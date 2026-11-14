@@ -1,0 +1,225 @@
+[[tool]]
+name = "group_task_complete"
+handler = "group_task_complete"
+description = "Submit the result of your assignment once, citing the exact shelf keys and revisions you produced."
+[tool.schema]
+type = "object"
+required = ["result", "outcome", "references"]
+additionalProperties = false
+[tool.schema.properties]
+assignment_id = { type = "string" }
+result = { type = "string", minLength = 1, maxLength = 20000 }
+outcome = { type = "string", enum = ["passed", "failed", "uncertain"] }
+references = { type = "array", maxItems = 32, items = { type = "object", required = ["key", "revision"], properties = { key = { type = "string", minLength = 1, maxLength = 128 }, revision = { type = "integer", minimum = 1 } } } }
+
+# Host computer. The work lane runs these on this machine. Chat lanes do not
+# see them. Schemas advertised to the model come from the compiled tools.
+[[tool]]
+name = "read"
+handler = "read"
+description = "Read a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "write"
+handler = "write"
+description = "Create or overwrite a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "edit"
+handler = "edit"
+description = "Edit a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "delete"
+handler = "delete"
+description = "Delete a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "dir_list"
+handler = "dir_list"
+description = "List a directory on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "grep"
+handler = "grep"
+description = "Search file contents on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "glob"
+handler = "glob"
+description = "Find files by name on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash"
+handler = "bash"
+description = "Run a foreground shell command on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "remember"
+handler = "remember"
+description = "Save a memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "recall"
+handler = "recall"
+description = "Read a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "forget"
+handler = "forget"
+description = "Delete a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "message_find"
+handler = "message_find"
+description = "Search this lane's own earlier messages, or read one by reference."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "message_load"
+handler = "message_load"
+description = "Read an exact earlier message from this lane's history."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_find"
+handler = "skill_find"
+description = "Find a skill by what you need it for."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_load"
+handler = "skill_load"
+description = "Load a skill by name."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_unload"
+handler = "skill_unload"
+description = "Unload a skill that is done."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "cd"
+handler = "cd"
+description = "Change this lane's working directory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "checklist"
+handler = "checklist"
+description = "Keep a task checklist for this lane."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "load_image"
+handler = "load_image"
+description = "Look at an image file."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search"
+handler = "web_search"
+description = "Search the web."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_fetch"
+handler = "web_fetch"
+description = "Fetch one URL."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_tabs"
+handler = "browser_tabs"
+description = "List or open browser tabs."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_inspect"
+handler = "browser_inspect"
+description = "Inspect a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_interact"
+handler = "browser_interact"
+description = "Click, type, or scroll in a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "browser_evaluate"
+handler = "browser_evaluate"
+description = "Run JavaScript in a browser tab."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash_output"
+handler = "bash_output"
+description = "Poll a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "bash_kill"
+handler = "bash_kill"
+description = "Stop a background bash job."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_page"
+handler = "web_page"
+description = "Read a web page in full."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search_full"
+handler = "web_search_full"
+description = "Search the web with full results."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "graph_query"
+handler = "graph_query"
+description = "Query the code graph."
+[tool.schema]
+type = "object"

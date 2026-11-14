@@ -1,8 +1,7 @@
 //! Extension host CORE.
 //!
 //! koma installs, verifies, spawns, and talks to a signed extension. This module is
-//! the Rust-side host manager, keyed PER-EXTENSION (unlike the single security daemon
-//! it is cloned from — [`crate::app::sec`]). For each running daemon-kind extension it
+//! the Rust-side host manager, keyed PER-EXTENSION. For each running daemon-kind extension it
 //! owns a child process and a DUPLEX unix-socket connection: koma `Invoke`s the
 //! extension (the "contributes" side) and the extension `Call`s back into koma (the
 //! "requires" side) over the same link.
@@ -403,7 +402,7 @@ impl ExtHostManager {
     /// [`Self::invoke`] with an explicit round-trip `timeout` instead of the default
     /// [`CALL_TIMEOUT`].
     ///
-    /// THE SYNC→ASYNC BRIDGE (mirrors `SecDaemonManager::execute_blocking`): under a
+    /// THE SYNC→ASYNC BRIDGE: under a
     /// brief lock it grabs the writer + a fresh id + a clone of the `pending` map, drops
     /// the lock, registers a `oneshot`, spawns the write, and bridges the `oneshot` to a
     /// `std::sync::mpsc` this thread blocks on with `recv_timeout`.

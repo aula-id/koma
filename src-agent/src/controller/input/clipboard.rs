@@ -66,6 +66,12 @@ pub fn request_clipboard_image(rest: &mut AppStateRest) {
     });
 }
 
+/// Read the clipboard image as PNG bytes, blocking. For callers with no
+/// composer state of their own (the secure room's daemon).
+pub fn read_clipboard_png() -> Result<Vec<u8>, String> {
+    fetch_clipboard_png()
+}
+
 // ===========================================================================
 // Linux backend (Wayland `wl-paste` / X11 `xclip`)
 // ===========================================================================

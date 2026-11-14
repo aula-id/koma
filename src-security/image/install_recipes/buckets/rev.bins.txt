@@ -1,7 +1,0 @@
-apktool
-bandit
-enum4linux
-jadx
-radare2
-trivy
-bearer

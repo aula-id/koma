@@ -231,7 +231,6 @@ pub(super) fn force_dirty_while_live(state: &AppState, shimmer_active: bool) -> 
     any_compacting
         || shimmer_active
         || super::has_running_subagents(state)
-        || state.rest.sec_health_rx.is_some()
         || state.rest.oauth_rx.is_some()
         || state.rest.agent_mode() == crate::app::state::AgentMode::Plan
         // Like the Plan header, the DRSS badge animates at the existing idle

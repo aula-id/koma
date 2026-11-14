@@ -87,23 +87,6 @@ pub(super) fn drain_version(state: &mut AppState) -> bool {
     dirty
 }
 
-/// Drain a leftover security health probe, if one is still in flight.
-///
-/// The dashboard no longer folds install-health into the panel. The channel stays
-/// so a probe started elsewhere cannot leak; the result is discarded.
-pub(super) fn drain_sec_health(state: &mut AppState) -> bool {
-    let Some(mut hrx) = state.rest.sec_health_rx.take() else {
-        return false;
-    };
-    match hrx.try_recv() {
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-            state.rest.sec_health_rx = Some(hrx);
-            false
-        }
-        _ => false,
-    }
-}
-
 /// Drain the `/settings` OAuth submenu's connect-flow channel (mirrors
 /// `sec_health_rx`): a spawned Codex/Kilo Code flow sends `CodexUrl`/`KiloCode`
 /// once it has something to show, then exactly one terminal event (`Success` or
@@ -1079,36 +1062,6 @@ pub(super) fn fetch_catalogue_debounced(
     dirty
 }
 
-/// While `/security` is open: keep mode-state runtime fields in sync with the
-/// non-blocking probe cache, and let the cache kick a background refresh when
-/// its TTL expires. Daemon owns the async probe; the panel only consumes the
-/// cached answer (FE/BE). Returns dirty when any open panel's runtime strip changed.
-pub(super) fn sync_security_runtime_cache(state: &mut AppState) -> bool {
-    let mut any_open = false;
-    // Peek without holding mut borrows across the cache call.
-    for s in state.rest.sessions.iter() {
-        if matches!(s.mode, Mode::Security(_)) {
-            any_open = true;
-            break;
-        }
-    }
-    if !any_open {
-        return false;
-    }
-    let (ok, label) = crate::security::runtime_status_cached();
-    let mut dirty = false;
-    for s in security_states(state) {
-        if s.status.runtime_ok != ok || s.status.runtime != label {
-            s.status.runtime_ok = ok;
-            s.status.runtime = label.clone();
-            dirty = true;
-        }
-    }
-    dirty
-}
-
-// The dashboard no longer animates a health-probe spinner.
-
 /// ADVANCE the OAuth submenu's connect-flow spinner while a Codex/Kilo Code
 /// flow is waiting. Mirrors the security health-probe advance above: only the
 /// WAIT screens carry a `frame` counter (the picker/paste/failed screens don't
@@ -1130,33 +1083,12 @@ pub(super) fn advance_oauth_spinner(state: &mut AppState) -> bool {
     dirty
 }
 
-/// De-globalization helper (C3): mutably borrow the [`SecurityState`] of EVERY session
-/// currently showing the `/security` panel.
-///
-/// `service_global` runs OUTSIDE any client bracket, so the transient foreground cursor is
-/// stale scratch — a drain that targets "the open `/security` panel" must reach the
-/// session(s) actually in `Mode::Security`, not the foreground. In the single-window case
-/// at most one session is in that mode, so the iterator yields one element and behaviour is
-/// identical to the old `if let Mode::Security(s) = &mut state.mode`.
-fn security_states(
-    state: &mut AppState,
-) -> impl Iterator<Item = &mut crate::app::mode::SecurityState> {
-    state
-        .rest
-        .sessions
-        .iter_mut()
-        .filter_map(|s| match &mut s.mode {
-            Mode::Security(sec) => Some(sec.as_mut()),
-            _ => None,
-        })
-}
-
 /// De-globalization helper (C3): mutably borrow the [`crate::app::mode::SettingsState`]
 /// of EVERY session currently showing the `/settings` dashboard.
 ///
 /// The OAuth submenu's connect-flow drain (above) lands here outside any client
 /// bracket, so it must reach whichever session(s) are actually in `Mode::Settings` —
-/// never the (stale) foreground. Mirrors [`security_states`]; in the single-window
+/// never the (stale) foreground. In the single-window
 /// case at most one session matches.
 fn settings_states(
     state: &mut AppState,

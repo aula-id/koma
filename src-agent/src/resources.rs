@@ -215,15 +215,16 @@ pub fn build_system_prompt(
     }
     if let Some(sk) = skills {
         let sk = sk.trim();
+        s.push_str("\n\n# Skills\n");
+        s.push_str(
+            "Skills are saved step-by-step playbooks. They are not listed here. Before specialised \
+             work, call skill_find with what you need, then skill_load the one that fits (skip it if \
+             it is [ACTIVE] or a \"# Skill:\" body is already in context). skill_unload when done. \
+             skill_create and skill_modify write skills (not write/edit). Dir-form companions: read \
+             absolute paths under skill_dir from the load result.",
+        );
         if !sk.is_empty() {
-            s.push_str("\n\n# Skills\n");
-            s.push_str(
-                "Name + description only. Load with skill action=load when the task \
-                 matches and the skill is not already active ([ACTIVE] or a \
-                 \"# Skill:\" body means skip reload). Unload when done. Create/modify \
-                 via skill actions (not write/edit). Dir-form companions: read absolute \
-                 paths under skill_dir from the load result.\n",
-            );
+            s.push_str("\nPinned skills (load directly):\n");
             s.push_str(sk);
         }
     }

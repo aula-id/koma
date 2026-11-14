@@ -1,0 +1,6 @@
+id = "blue"
+display = "Lab Blue"
+shelf_allow = ["get", "list", "put", "put_result", "put_asset", "put_trajectory"]
+
+[chat]
+[work]

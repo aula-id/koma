@@ -135,27 +135,90 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await proc.exited
 }
 
-/** Start `koma --daemon --session <id>` in its own session so Ctrl-C stays with the UI. */
-export function spawnDaemon(sessionId: string): void {
-  const child = spawn(komaBin(), ["--daemon", "--session", sessionId], {
+/** Sessions whose socket must not be filled by a coding daemon. */
+const daemonHolds = new Set<string>()
+
+export function holdDaemon(sessionId: string): void {
+  daemonHolds.add(sessionId)
+}
+
+export function releaseDaemon(sessionId: string): void {
+  daemonHolds.delete(sessionId)
+}
+
+export function pidPath(sessionId: string): string {
+  return join(dataDir(), "run", `${sessionId}.pid`)
+}
+
+export function sessionLockPath(cwd: string, sessionId: string): string {
+  return join(sessionDir(cwd, sessionId), "session.lock")
+}
+
+/** Start a session daemon. `secure` runs the room instead of the coding daemon. */
+export function spawnDaemon(sessionId: string, kind?: "secure", env?: Record<string, string>): void {
+  const args = ["--daemon", "--session", sessionId]
+  if (kind === "secure") args.push("--kind", "secure")
+  const child = spawn(komaBin(), args, {
     detached: true,
     stdio: "ignore",
     cwd: process.cwd(),
+    env: env ? { ...process.env, ...env } : process.env,
   })
   child.unref()
 }
 
-export async function ensureDaemon(sessionId: string): Promise<void> {
+export async function ensureDaemon(sessionId: string, waitMs = 8000): Promise<void> {
   const path = socketPath(sessionId)
   if (await probeSocket(path)) return
+  if (daemonHolds.has(sessionId)) {
+    const deadline = Date.now() + waitMs
+    while (Date.now() < deadline) {
+      if (await probeSocket(path)) return
+      await Bun.sleep(50)
+    }
+    throw new Error(`session ${sessionId} is switching daemons`)
+  }
   // The daemon unlinks a stale socket itself before it binds.
   spawnDaemon(sessionId)
-  const deadline = Date.now() + 8000
+  const deadline = Date.now() + waitMs
   while (Date.now() < deadline) {
     if (await probeSocket(path)) return
     await Bun.sleep(100)
   }
   throw new Error(`session daemon did not accept on ${path}`)
+}
+
+/** True when the socket, the pid file, and the session lock are all gone. */
+export function daemonReleased(sessionId: string, cwd = process.cwd()): boolean {
+  if (process.platform !== "win32" && existsSync(socketPath(sessionId))) return false
+  if (existsSync(pidPath(sessionId))) return false
+  if (existsSync(sessionLockPath(cwd, sessionId))) return false
+  return true
+}
+
+/** Stop one daemon and start the other. The hold blocks `ensureDaemon` while the socket is empty. */
+export async function switchDaemon(sessionId: string, kind: "secure" | "coding", cwd = process.cwd()): Promise<void> {
+  holdDaemon(sessionId)
+  try {
+    await killSession(sessionId)
+    const deadline = Date.now() + 8000
+    while (!daemonReleased(sessionId, cwd)) {
+      if (Date.now() > deadline) throw new Error(`session ${sessionId} did not release its daemon`)
+      if (process.platform === "win32" && await probeSocket(socketPath(sessionId))) {
+        await Bun.sleep(50)
+        continue
+      }
+      await Bun.sleep(50)
+    }
+    spawnDaemon(sessionId, kind === "secure" ? "secure" : undefined)
+    const up = Date.now() + 8000
+    while (!(await probeSocket(socketPath(sessionId)))) {
+      if (Date.now() > up) throw new Error(`session daemon did not accept on ${socketPath(sessionId)}`)
+      await Bun.sleep(100)
+    }
+  } finally {
+    releaseDaemon(sessionId)
+  }
 }
 
 async function probeSocket(path: string): Promise<boolean> {
@@ -167,4 +230,36 @@ async function probeSocket(path: string): Promise<boolean> {
     socket.once("error", () => finish(false))
     socket.setTimeout(500, () => finish(false))
   })
+}
+
+/**
+ * The secure room is its own daemon with its own session, named after the chat it came from.
+ * The chat daemon keeps running beside it, so leaving the room does not stop the hunt.
+ */
+export function roomSessionId(chatId: string): string {
+  return uuidV5Simple(NAMESPACE_OID, `secure-room:${chatId}`)
+}
+
+/** True while this chat's room daemon is accepting connections. */
+export function roomRunning(chatId: string): Promise<boolean> {
+  return probeSocket(socketPath(roomSessionId(chatId)))
+}
+
+/** Start the room daemon unless it is already up, and wait for it. Returns the room's session id. */
+export async function openRoom(chatId: string): Promise<string> {
+  const id = roomSessionId(chatId)
+  const path = socketPath(id)
+  if (await probeSocket(path)) return id
+  spawnDaemon(id, "secure", { KOMA_ROOM_PARENT: chatId })
+  const deadline = Date.now() + 12000
+  while (!(await probeSocket(path))) {
+    if (Date.now() > deadline) throw new Error(`the secure room did not accept on ${path}`)
+    await Bun.sleep(100)
+  }
+  return id
+}
+
+/** Stop this chat's room daemon. */
+export async function stopRoom(chatId: string): Promise<void> {
+  await killSession(roomSessionId(chatId))
 }

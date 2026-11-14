@@ -1,0 +1,30 @@
+//! What a coordinator tool call asks the rest of the room to do.
+//!
+//! The coordinator only decides and records. Starting lanes, steering them and
+//! posting messages are the lane runner's job, so each call returns these as
+//! data and the runner applies them after the transaction committed.
+
+use super::model::Assignment;
+
+/// Who a line in the room is for. `User` is the conversation with the user: what they said, what the
+/// Chief and the specialists they spoke to said back, and the final report. `Team` is the team
+/// working: dispatches, results, the work lanes, and the Chief's own steps when nobody asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Audience {
+    #[default]
+    User,
+    Team,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// Start a work lane for this assignment. `goal` is the registered goal text.
+    StartLane { assignment: Assignment, goal: String },
+    /// Inject a steering message into the avatar's running lane (or hold it for
+    /// the next turn if the lane is idle).
+    Steer { avatar: String, text: String },
+    /// A message every chat view should show. `nonce` makes posting idempotent,
+    /// and `work_id` ties it to its work so it goes when that work ends.
+    Visible { author: String, text: String, nonce: String, work_id: String, audience: Audience },
+}

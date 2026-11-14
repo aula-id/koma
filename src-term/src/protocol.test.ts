@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, needsResync, showImagePath } from "./protocol.ts"
+import { controlOf, decodeFrames, encodeFrame, fold, FrameReader, modeName, needsRestart, needsResync, showImagePath } from "./protocol.ts"
 import { uuidV5Simple } from "./paths.ts"
 import { themeFor } from "./theme.ts"
 
 describe("frames", () => {
+  test("EnterSecure is the room handoff", () => {
+    expect(controlOf("EnterSecure")).toEqual({ kind: "secure" })
+  })
   test("round-trips a replace-input request", () => {
     const request = { ReplaceInput: { text: "hi", cursor: 2 } }
     const frames = decodeFrames(encodeFrame(request))

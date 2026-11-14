@@ -17,6 +17,8 @@ import { ModeSurface } from "./modes/surface.tsx"
 import { foregroundSession, modeName, type RemoteHandoff, type Snapshot } from "./protocol.ts"
 import { QuitScreen, quitState } from "./quit.tsx"
 import { rewindOf } from "./screens.tsx"
+import { RoomScreen } from "./room.tsx"
+import { roomRunning } from "./paths.ts"
 import { DaemonLink } from "./socket.ts"
 import { SuspendedScreen } from "./suspended.tsx"
 import { themeFor, type Theme } from "./theme.ts"
@@ -56,6 +58,17 @@ export function SessionScreen({
   ctrlC?: { current: () => void }
 }) {
   const [attempt, setAttempt] = useState(0)
+  const [room, setRoom] = useState(false)
+  // The room keeps running after /leave, so the chat shows whether it is still up.
+  const [roomOn, setRoomOn] = useState(false)
+  useEffect(() => {
+    if (transport?.remote) return
+    let dead = false
+    const check = () => { void roomRunning(id).then((up) => { if (!dead) setRoomOn(up) }).catch(() => {}) }
+    check()
+    const timer = setInterval(check, 4000)
+    return () => { dead = true; clearInterval(timer) }
+  }, [id, room, transport?.remote])
   const usageReaderRef = useRef<UsageReader | null>(null)
   const [usageReader, setUsageReader] = useState<UsageReader | null>(null)
   useEffect(() => {
@@ -177,6 +190,15 @@ export function SessionScreen({
           onRemote(control.remote)
           return
         }
+        if (control.kind === "secure") {
+          if (transport?.remote) {
+            report("/security stays on this machine. Open the session locally to enter the room.")
+            return
+          }
+          link.detach()
+          setRoom(true)
+          return
+        }
         if (control.kind === "update") {
           if (transport?.remote || !onUpdate) {
             report("/update only works in a local session. On the host, run `koma update`.")
@@ -295,11 +317,12 @@ export function SessionScreen({
   }
 
   usePaste((event) => {
+    if (room) return
     if (quit || exiting != null || approval && !warming) { event.preventDefault(); event.stopPropagation() }
   })
 
   useKeyboard((key) => {
-    if (key.eventType === "release" || phase === "error") return
+    if (key.eventType === "release" || phase === "error" || room) return
     if (exiting != null) { key.preventDefault(); key.stopPropagation(); return }
     if ((key.ctrl && key.name === "c") || key.sequence === "\u0003" || key.name === "ctrl+c") {
       interrupt()
@@ -393,6 +416,11 @@ export function SessionScreen({
     }
   })
 
+  // Every hook above runs on every render. Returning earlier changes the hook count
+  // and React throws "Rendered fewer hooks than expected" the moment `room` turns on.
+  if (room) {
+    return <RoomScreen id={id} theme={theme} syntaxStyle={syntaxStyle} ctrlC={ctrlC} onLeave={() => { setRoom(false); setAttempt((n) => n + 1) }} />
+  }
   if (phase === "connecting") {
     return <OpeningSplash theme={theme} />
   }
@@ -450,6 +478,7 @@ export function SessionScreen({
         send={send}
         sendTracked={sendTracked}
         onFlushError={report}
+        roomOn={roomOn}
         onRecycle={onRecycle && !transport?.remote ? (sessionId) => { linkRef.current?.detach(); onRecycle(sessionId) } : undefined}
       />
     </box>

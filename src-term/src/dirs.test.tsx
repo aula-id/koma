@@ -48,9 +48,13 @@ test("a directory guide lists folders inside the typed path and skips files", as
     const theme = themeFor("forest")
     const view = await testRender(<FolderGuide draft={`/adddir ${project}/s`} cwd={root} theme={theme} />, { width: 80, height: 16 })
     try {
-      await act(async () => { await Bun.sleep(80) })
-      await act(async () => { await view.waitForVisualIdle() })
-      const frame = view.captureCharFrame()
+      // The listing is read from disk, so a slow runner can need longer than a fixed wait.
+      let frame = ""
+      for (let i = 0; i < 40 && !frame.includes("src"); i++) {
+        await act(async () => { await Bun.sleep(50) })
+        await act(async () => { await view.waitForVisualIdle() })
+        frame = view.captureCharFrame()
+      }
       expect(frame).toContain("src")
       expect(frame).not.toContain("notes")
       expect(frame).not.toContain("readme.txt")

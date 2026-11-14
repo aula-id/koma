@@ -252,7 +252,6 @@ fn menu_action(
                     | Mode::Extensions(_)
                     | Mode::ExtStore(_)
                     | Mode::ExtScreen(_)
-                    | Mode::Security(_)
                     | Mode::Help(_)
                     | Mode::Effort(_) => return Ok(()),
                     _ => {}
@@ -577,17 +576,6 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
                 s.selected = index;
             }
         }
-        Mode::Security(s) => match s.pane {
-            crate::app::mode::SecPane::Refused => {
-                s.refused_selected = index;
-            }
-            crate::app::mode::SecPane::Images => {
-                s.images_selected = index;
-            }
-            crate::app::mode::SecPane::Tools => {
-                s.selected = index;
-            }
-        },
         Mode::SessionPicker(s) => {
             s.selected = bounded(index, s.filtered_idx.len())?;
         }
@@ -624,19 +612,6 @@ fn select(state: &mut AppState, group: &str, index: usize, id: Option<&str>) -> 
 }
 
 fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
-    // `/security` lane chooser: a direct pick, not a key replay of the `l` cycle.
-    if field == "lane" && matches!(state.mode(), Mode::Security(_)) {
-        use crate::app::sec::lane::Lane;
-        let lane = match value.trim().to_ascii_lowercase().as_str() {
-            "" | "none" => None,
-            "research" => Some(Lane::Research),
-            "red" => Some(Lane::Red),
-            "blue" => Some(Lane::Blue),
-            other => bail!("Unknown lane '{other}'"),
-        };
-        let fg = state.rest.foreground;
-        return crate::app::runtime::actions::security::handle_security_lane(state, fg, lane);
-    }
     if field == "editor" {
         let editor = match state.mode_mut() {
             Mode::Agents(s) => s.editor.as_mut().map(|(_, e)| e),
@@ -722,15 +697,6 @@ fn replace(state: &mut AppState, field: &str, value: String) -> Result<()> {
                 s.result_sel = 0;
             }
         }
-        Mode::Security(s) => match field {
-            "pane" => {
-                s.set_pane(
-                    crate::app::mode::SecPane::parse(&value)
-                        .unwrap_or(crate::app::mode::SecPane::Tools),
-                );
-            }
-            _ => bail!("Unknown security field"),
-        },
         Mode::KeyInput(s) => match field {
             "endpoint" => s.endpoint = value,
             "api_key" => s.api_key = value,

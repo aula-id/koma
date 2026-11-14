@@ -1,0 +1,62 @@
+# Who is in the room. Each avatar points at a role, which supplies its prompt,
+# tools and shelf permissions. Models set here override the role's per lane.
+# The chief and the clerk are single: their avatar id is the role id.
+# Specialist roles may have several avatars, like `red-web` and `red-api` on
+# the red role. `alias` is the short tag shown under the composer.
+
+[[avatar]]
+id = "chief"
+role = "chief"
+alias = "CF"
+
+[[avatar]]
+id = "red"
+role = "red"
+alias = "LR"
+
+[[avatar]]
+id = "reviewer"
+role = "reviewer"
+alias = "RV"
+
+[[avatar]]
+id = "reporter"
+role = "reporter"
+alias = "RR"
+
+[[avatar]]
+id = "clerk"
+role = "clerk"
+alias = "CK"
+
+[[avatar]]
+id = "red-web"
+role = "red"
+alias = "LW"
+display = "Lab Red Web"
+
+[[avatar]]
+id = "red-api"
+role = "red"
+alias = "LA"
+display = "Lab Red API"
+
+[[avatar]]
+id = "researcher"
+role = "researcher"
+alias = "RS"
+
+[[avatar]]
+id = "re"
+role = "re"
+alias = "RE"
+
+[[avatar]]
+id = "builder"
+role = "builder"
+alias = "BD"
+
+[[avatar]]
+id = "blue"
+role = "blue"
+alias = "LB"

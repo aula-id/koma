@@ -10,6 +10,7 @@ import {
   Archive,
   AlertCircle,
   Brain,
+  Library,
   Check,
   ChevronDown,
   ChevronRight,
@@ -65,6 +66,8 @@ function toolBoxMeta(name: string): { label: string; Icon: IconType } {
   if (name.startsWith('web_')) return { label: 'web', Icon: Globe }
   if (name.startsWith('screen_browser')) return { label: 'browser', Icon: Frame }
   if (name === 'recall') return { label: 'memory', Icon: Brain }
+  if (name === 'skill_find') return { label: 'find skill', Icon: Library }
+  if (name.startsWith('skill_')) return { label: name.replace('skill_', '') + ' skill', Icon: Library }
   if (name.startsWith('mcp__')) return { label: 'mcp', Icon: Plug }
   if (name.startsWith('sec_')) return { label: 'sec', Icon: Shield }
   return { label: name, Icon: Terminal }

@@ -127,6 +127,15 @@ settings persistence.
   run in the background; `image_pull` drives an animated spinner/bar (local timer,
   only while pulling) on the Images summary row, the pulling row, the Guest tile
   and the Tools state column; `image_pull_result` keeps the last outcome visible.
+- The secure room (`src/room.tsx`, `RoomView`) reuses the chat signature: the user's
+  message is a `panel` card with a solid accent rail, every other author sits behind
+  the dotted `┊` rail with the name inked (Chief accent, red `error`, reviewer `info`,
+  reporter `warn`). The composer is the rounded `[$]` box with `secure` top-right.
+  The chat is always one full-width column, never beside a pane. `/status`, `/shelf`,
+  `/trajectory` and `/model` open full screen and Esc returns. `@name` and `/command`
+  autocomplete in an overlay above the composer. `/model` lists the minions, then a
+  lane, then the models registered in the coding agent, with search; the daemon owns
+  the list and writes the choice to the session overlay.
 - Text editors fit their allocated height and retain the caret in view. Extension
   documents scroll to the selected action. Usage respects cost/token selection.
 - Hub, quit, loading, and the subagent viewer also have independent compositions

@@ -1,0 +1,6 @@
+id = "builder"
+display = "Lab Builder"
+shelf_allow = ["get", "list", "put", "put_result"]
+
+[chat]
+[work]

@@ -25,7 +25,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 /// Lifecycle state of a [`BashJob`], advanced by the worker thread (and flipped
 /// to `Killed` by [`kill_bash_job`]). Mirrors the SHAPE of
-/// [`crate::app::subagent::SubAgentStatus`] / [`crate::app::sec::SecStatus`].
+/// [`crate::app::subagent::SubAgentStatus`].
 ///
 /// - `Running`: the child is in flight (the initial state).
 /// - `Done(code)`: the child exited; `code` is its exit status (`-1` if the

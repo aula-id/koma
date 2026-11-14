@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// (extremely unlikely on Linux), the daemon proceeds WITHOUT that handler rather
 /// than aborting — a controller's `QuitDaemon` still provides a clean stop path.
 #[cfg(unix)]
-pub(super) fn install_daemon_signals(
+pub(crate) fn install_daemon_signals(
     handle: &tokio::runtime::Handle,
 ) -> Arc<std::sync::atomic::AtomicBool> {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,7 +126,7 @@ pub(super) fn install_daemon_signals(
 /// runs entirely inside the still-alive daemon loop. There is no SIGHUP-survive equivalent
 /// (a detached daemon has no controlling terminal to lose).
 #[cfg(windows)]
-pub(super) fn install_daemon_signals(
+pub(crate) fn install_daemon_signals(
     handle: &tokio::runtime::Handle,
 ) -> Arc<std::sync::atomic::AtomicBool> {
     use std::sync::atomic::{AtomicBool, Ordering};

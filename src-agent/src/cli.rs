@@ -145,13 +145,8 @@ pub struct RunCli {
     /// Optional reasoning effort (`--effort`): `off`/`none`/`default`/`low`/`high`/….
     pub effort: Option<String>,
     /// Optional agent mode (`--mode`): `auto`/`normal`/`plan`/`yolo`/`sdlc`.
-    /// `yolo` requires security on + yolo armed (headless arms automatically when
-    /// `--mode yolo` or when `--security on` is paired with yolo).
+    /// `yolo` arms itself for this headless run.
     pub mode: Option<String>,
-    /// Optional security daemon toggle (`--security on|off`).
-    /// `on` starts the security daemon (autocheck strat) and is required for yolo;
-    /// `off` stops it and disarms yolo.
-    pub security: Option<bool>,
     /// Optional reply limit (`--max-tokens N`). `0` = 128k fallback, bounded by context.
     pub max_tokens: Option<u32>,
     /// DRSS master switch and context overrides, matching General settings.
@@ -182,7 +177,6 @@ impl Default for RunCli {
             model: None,
             effort: None,
             mode: None,
-            security: None,
             max_tokens: None,
             short_send: None,
             context_window_limit: None,
@@ -204,9 +198,7 @@ pub struct Opts {
     pub internet_fullmode_install: bool,
     /// When `true`, remove the Python full-mode (browser) environment then exit.
     pub internet_fullmode_uninstall: bool,
-    /// When `true`, provision the Python security daemon environment then exit.
-    pub security_install: bool,
-    /// Modifier for `--internet-fullmode-install` / `--security-install`: overwrite an existing install.
+    /// Modifier for `--internet-fullmode-install`: overwrite an existing install.
     pub force: bool,
     /// When `true`, run the daemon IPC transport self-test then exit
     /// (`--ipc-selftest` flag).
@@ -263,6 +255,9 @@ pub struct Opts {
     /// When `true`, write the Linux desktop entry or the macOS app bundle and
     /// exit (`koma launcher-install`). Hidden plumbing for `install.sh`.
     pub launcher_install: bool,
+    /// Daemon kind (`--kind <name>`). `Some("secure")` runs the room daemon
+    /// instead of the coding daemon. Absent on every coding launch.
+    pub kind: Option<String>,
     /// The session UUID this invocation is bound to (`--session <id>`).
     ///
     /// Daemon-per-session: a fresh `koma` MINTS this on the CLIENT side, then spawns its
@@ -317,6 +312,9 @@ pub struct Opts {
     /// coding panel. Short-circuited in `main` before the TUI (same pattern as
     /// `doctor` / `ext`).
     pub lsp: Option<crate::lsp::LspCli>,
+    /// `koma room …`: read-only views of a secure-room session. Short-circuited
+    /// in `main` before the TUI (same pattern as `lsp`).
+    pub room: Option<crate::room::cli::RoomCli>,
     /// `koma run …` headless one-shot against the default session-daemon path.
     /// Short-circuited in `main` before the TUI (never uses `--local` / standalone).
     pub run: Option<RunCli>,
@@ -383,7 +381,6 @@ pub fn print_help() -> i32 {
          flags:\n\
          \x20 --resume                       open the resume hub\n\
          \x20 --session <id>                 bind this invocation to a specific session id\n\
-         \x20 --security-install [--force]   install security daemon + minimal guest image\n\
          \x20 --internet-fullmode-install    install internet full-mode (Playwright) stack\n\
          \x20 --version, -V                  print the version and exit\n\
          \x20 --help, -h                     print this help and exit\n\
@@ -398,7 +395,6 @@ pub fn print_help() -> i32 {
          \x20   --model SLUG         set Main only (name|model_id|uuid; same as agent model:)\n\
          \x20   --effort LEVEL       off|none|default|low|medium|high|…\n\
          \x20   --mode MODE          auto|normal|plan|yolo|sdlc\n\
-         \x20   --security on|off    start/stop security daemon (yolo needs on)\n\
          \x20   --max-tokens N       reply limit (0=128k fallback; bounded by context)\n\
          \x20   --short-send on|off  enable/disable DRSS for this session\n\
          \x20   --context-window-limit N  context override (0=detected, bumped down to 300000; a positive N may exceed 300000 up to the detected model window)\n\
@@ -459,7 +455,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--resume" => opts.resume = true,
             "--internet-fullmode-install" => opts.internet_fullmode_install = true,
             "--internet-fullmode-uninstall" => opts.internet_fullmode_uninstall = true,
-            "--security-install" => opts.security_install = true,
             "--force" => opts.force = true,
             "--ipc-selftest" => opts.ipc_selftest = true,
             "--daemon-selftest" => opts.daemon_selftest = true,
@@ -485,6 +480,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         if pair[0] == "--cwd" {
             opts.cwd = Some(pair[1].clone());
         }
+        if pair[0] == "--kind" {
+            opts.kind = Some(pair[1].clone());
+        }
     }
 
     // Positional verb/subcommand scan: skip argv[0] and look at the FIRST positional
@@ -506,6 +504,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     // positionals, so they cannot collide with the `daemon <verb>` parsing.
     const VALUE_FLAGS: &[&str] = &[
         "--session",
+        "--kind",
         "--cwd",
         "--key",
         "--port",
@@ -520,7 +519,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         "--model",
         "--effort",
         "--mode",
-        "--security",
         "--max-tokens",
         "--short-send",
         "--context-window-limit",
@@ -627,6 +625,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                 .cloned()
                 .collect();
             opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
+        }
+        Some("room") => {
+            // Everything after the `room` verb; re-collected from `all` so flag
+            // values such as `--goal x` survive the non-`--` positional filter.
+            let room_args: Vec<String> = all
+                .iter()
+                .skip(1) // argv[0]
+                .skip_while(|a| a.as_str() != "room")
+                .skip(1) // the `room` token itself
+                .cloned()
+                .collect();
+            opts.room = Some(crate::room::cli::RoomCli::parse(&room_args));
         }
         Some("run") => {
             opts.run = Some(run_args::parse(&all[1..]));

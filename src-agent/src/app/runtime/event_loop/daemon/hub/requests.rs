@@ -797,12 +797,9 @@ impl DaemonHub {
                 self.set_effort(idx, state, effort);
             }
 
-            // Headless / non-panel security toggle: start or stop the security daemon
-            // via the same handlers the Security panel Daemon checkbox uses.
             ClientRequest::SetSecurityEnabled { enabled } => {
                 self.set_security_enabled(idx, state, enabled);
             }
-            // Headless YOLO arm/disarm (gated on security daemon running).
             ClientRequest::SetYoloArmed { armed } => {
                 self.set_yolo_armed(idx, state, armed);
             }

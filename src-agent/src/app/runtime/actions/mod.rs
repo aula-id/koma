@@ -38,7 +38,7 @@ mod plan_decision;
 // `pub(crate)` so the daemon hub can call `handle_security_start` /
 // `handle_security_stop` / `handle_set_yolo_armed` for headless IPC
 // (`SetSecurityEnabled` / `SetYoloArmed`) without opening the Security panel.
-pub(crate) mod security;
+
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
@@ -372,82 +372,6 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::StoreInstallConfirm => {
             store::handle_store_install_confirm(state, handle)?;
-        }
-
-        Action::CloseSecurity => {
-            security::handle_close_security(state)?;
-        }
-
-        // Daemon start/stop/toggle no longer have their own Actions — the Daemon checkbox
-        // (handled inside `SecurityToggleTool`) starts/stops the daemon directly, calling
-        // `handle_security_start` / `handle_security_stop`. Only restart keeps a key (`r`).
-        Action::SecurityRestart => {
-            security::handle_security_restart(state)?;
-        }
-
-        Action::SecurityToggleTool => {
-            security::handle_security_toggle_tool(state)?;
-        }
-
-        Action::SecurityToggleDaemon => {
-            security::handle_security_toggle_daemon(state)?;
-        }
-
-        Action::SecurityToggleYolo => {
-            security::handle_security_toggle_yolo(state)?;
-        }
-
-        Action::SecurityEnterYolo => {
-            security::handle_security_enter_yolo(state)?;
-        }
-
-        Action::SecurityRefreshDashboard => {
-            security::handle_security_refresh_dashboard(state)?;
-        }
-
-        Action::SecurityToggleDomain => {
-            security::handle_security_toggle_domain(state)?;
-        }
-
-        Action::SecurityInstall(key) => {
-            security::handle_security_install(key, state)?;
-        }
-
-        Action::SecurityLane(lane) => {
-            let idx = state.rest.foreground;
-            security::handle_security_lane(state, idx, lane)?;
-        }
-
-        Action::SecurityEnableAllTools => {
-            security::handle_security_enable_all(state)?;
-        }
-
-        Action::SecurityDisableAllTools => {
-            security::handle_security_disable_all(state)?;
-        }
-
-        Action::SecurityRefreshToolkit => {
-            security::handle_security_refresh_toolkit(state)?;
-        }
-
-        Action::SecurityEnsureRuntime => {
-            security::handle_security_ensure_runtime(state)?;
-        }
-
-        Action::SecurityImagePull(id) => {
-            security::handle_security_image_pull(id, state)?;
-        }
-
-        Action::SecurityImageActivate(id) => {
-            security::handle_security_image_activate(id, state)?;
-        }
-
-        Action::SecurityImageRemove(id) => {
-            security::handle_security_image_remove(id, state)?;
-        }
-
-        Action::SecurityImageRefresh => {
-            security::handle_security_image_refresh(state)?;
         }
 
         Action::CloseBash => {

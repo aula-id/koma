@@ -390,6 +390,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
         hub.drain_update_pending(state);
+        hub.drain_secure_handoff(state);
 
         // 3a-pre3b. `/remote` hand-off: `Action::RemoteConnect` set
         //     `state.rest.connect_remote_pending = Some(target)` INSTEAD of relying on the
@@ -457,9 +458,6 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     Run BEFORE `stream_deltas` so an auto-deny's idle state folds into this
         //     tick's frames.
         let _ = service_approval_park_timeouts(state, hub.client_count() > 0);
-
-        // 3a-sec. Apply a finished background `/security` image pull before streaming.
-        crate::app::runtime::actions::security::poll_security_jobs(state);
 
         // 3a-todo. Passive todo refresh: for every session whose mode is Todo,
         //     re-read memory/TODO.md periodically (same 500ms cadence as the TUI).

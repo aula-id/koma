@@ -1,7 +1,0 @@
-c7decrypt
-crypto-identifier
-cryptoguard
-cryptorex
-cryscanner
-avet
-depix

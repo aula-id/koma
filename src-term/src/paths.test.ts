@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { dataDir, savedPalette, sessionDir, socketPath } from "./paths.ts"
+import { daemonReleased, dataDir, ensureDaemon, holdDaemon, releaseDaemon, savedPalette, sessionDir, socketPath } from "./paths.ts"
 import { DaemonLink } from "./socket.ts"
 import { encodeFrame, FrameReader } from "./protocol.ts"
 
@@ -23,6 +23,19 @@ test("launcher data directory is shared by palette, sessions, and Unix endpoints
     else process.env.KOMA_DATA_DIR = previous
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("a held session is not given a coding daemon", async () => {
+  holdDaemon("switching-session")
+  try {
+    await expect(ensureDaemon("switching-session", 80)).rejects.toThrow("switching daemons")
+  } finally {
+    releaseDaemon("switching-session")
+  }
+})
+
+test("a session with no socket, pid, or lock is free", () => {
+  expect(daemonReleased("missing-session", "/tmp/koma-missing")).toBe(true)
 })
 
 test("local daemon link probes and attaches over a Unix socket or Windows named pipe", async () => {

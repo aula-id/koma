@@ -496,6 +496,45 @@ fn assigned_model<'a>(
         })
 }
 
+/// A room lane that names its own provider. `provider` is a catalogue provider
+/// name or uuid. `model`, when set, selects that provider's entry by model id,
+/// display name, or uuid. The route carries that provider's endpoint and key.
+/// `None` when the name is not a configured provider, or the model is not one
+/// of its entries — the caller then keeps the session's base route.
+pub fn resolve_lane_route(
+    config: &AppConfig,
+    settings: &Settings,
+    provider: &str,
+    model: Option<&str>,
+) -> Option<Resolved> {
+    let needle = provider.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    let conn = config.providers.iter().find(|provider| {
+        provider.uuid == needle || provider.name.eq_ignore_ascii_case(needle)
+    })?;
+    let want = model.map(str::trim).filter(|model| !model.is_empty());
+    let matches = |entry: &ModelEntry| {
+        entry.provider_uuid == conn.uuid
+            && match want {
+                Some(want) => {
+                    entry.model_id.eq_ignore_ascii_case(want)
+                        || entry.name.eq_ignore_ascii_case(want)
+                        || entry.uuid == want
+                }
+                None => true,
+            }
+    };
+    let entry = settings
+        .session_models
+        .iter()
+        .find(|entry| matches(entry))
+        .or_else(|| config.models.iter().find(|entry| matches(entry)))?;
+    // Awareness keeps effort empty here. The lane applies its own effort after.
+    from_entry(config, settings, entry, ModelRole::Awareness)
+}
+
 /// Resolve configured ownership for onboarding. Broken explicit owners never inherit.
 pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
     if let Some((entry, _)) = assigned_model(config, settings, role) {

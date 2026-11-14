@@ -1,3 +1,0 @@
-github.com/CMEPW/221b@latest
-github.com/optiv/Freeze@latest
-github.com/lc/gau/v2/cmd/gau@latest

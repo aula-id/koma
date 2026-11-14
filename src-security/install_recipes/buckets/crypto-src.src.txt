@@ -1,7 +1,0 @@
-https://github.com/claudijd/c7decrypt
-https://github.com/Acceis/crypto_identifier
-https://github.com/CryptoGuardOSS/cryptoguard
-https://github.com/zhanglikernel/CRYPTOREX
-https://github.com/amit-choudhari/cryscanner
-https://github.com/govolution/avet
-https://github.com/spipm/Depixelization_poc

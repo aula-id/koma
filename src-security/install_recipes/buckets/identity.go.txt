@@ -1,3 +1,0 @@
-github.com/Qianlitp/crawlergo@latest
-github.com/devploit/dontgo403@latest
-github.com/jaeles-project/jaeles@latest

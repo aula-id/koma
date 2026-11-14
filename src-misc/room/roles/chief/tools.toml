@@ -1,0 +1,168 @@
+[[tool]]
+name = "group_delegate"
+handler = "group_delegate"
+description = "Hand a goal to specialists by avatar id. One assignment per avatar per batch; reuse goal_key for later rounds of the same engagement."
+[tool.schema]
+type = "object"
+required = ["goal_key", "goal", "dispatch_key", "assignments"]
+additionalProperties = false
+[tool.schema.properties]
+goal_key = { type = "string", minLength = 1, maxLength = 128 }
+goal = { type = "string", minLength = 1, maxLength = 20000 }
+dispatch_key = { type = "string", minLength = 1, maxLength = 128 }
+assignments = { type = "array", minItems = 1, maxItems = 32, items = { type = "object", required = ["avatar", "kind", "prompt"], properties = { avatar = { type = "string" }, kind = { type = "string", enum = ["probe", "investigation", "verification", "report", "execution"] }, prompt = { type = "string", minLength = 1, maxLength = 20000 }, reviews_id = { type = "string" }, retry_of = { type = "string" } } } }
+
+[[tool]]
+name = "group_status"
+handler = "group_status"
+description = "Current work, assignments, confirmation queue and open trajectory goals."
+[tool.schema]
+type = "object"
+additionalProperties = false
+[tool.schema.properties]
+
+[[tool]]
+name = "group_nudge"
+handler = "group_nudge"
+description = "Send a steering note to a running specialist, for example to make it publish unpublished findings."
+[tool.schema]
+type = "object"
+required = ["avatar"]
+additionalProperties = false
+[tool.schema.properties]
+avatar = { type = "string" }
+note = { type = "string", maxLength = 2000 }
+
+[[tool]]
+name = "group_finish"
+handler = "group_finish"
+description = "Close the engagement with the final report. Refused until every gate passes."
+[tool.schema]
+type = "object"
+required = ["report"]
+additionalProperties = false
+[tool.schema.properties]
+report = { type = "string", minLength = 1, maxLength = 20000 }
+
+[[tool]]
+name = "room_stop"
+handler = "room_stop"
+description = "Stop a specialist now. Its chat and work lanes are cut off at once, and its assignment is left unproven. Use it when the user asks to stop someone, or when a lane is off track and a nudge will not fix it. Not for ending a goal that is going well."
+[tool.schema]
+type = "object"
+required = ["avatar"]
+additionalProperties = false
+[tool.schema.properties]
+avatar = { type = "string", description = "The specialist to stop, such as red" }
+
+[[tool]]
+name = "message_user"
+handler = "message_user"
+description = "Send the user a short message now, without ending the turn."
+[tool.schema]
+type = "object"
+required = ["text"]
+additionalProperties = false
+[tool.schema.properties]
+text = { type = "string", minLength = 1, maxLength = 4000 }
+
+# The Chief only manages: it reads, remembers, looks things up and delegates. Changing files,
+# running commands and driving the browser belong to the specialists. Schemas advertised to the model come from the compiled tools.
+# Every specialist gets the same host set, web and browser included.
+[[tool]]
+name = "read"
+handler = "read"
+description = "Read a file on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "dir_list"
+handler = "dir_list"
+description = "List a directory on this host."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "remember"
+handler = "remember"
+description = "Save a memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "recall"
+handler = "recall"
+description = "Read a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "forget"
+handler = "forget"
+description = "Delete a saved memory."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "message_find"
+handler = "message_find"
+description = "Search this lane's own earlier messages, or read one by reference."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "message_load"
+handler = "message_load"
+description = "Read an exact earlier message from this lane's history."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_find"
+handler = "skill_find"
+description = "Find a skill by what you need it for."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_load"
+handler = "skill_load"
+description = "Load a skill by name."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "skill_unload"
+handler = "skill_unload"
+description = "Unload a skill that is done."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_search"
+handler = "web_search"
+description = "Search the web."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "web_fetch"
+handler = "web_fetch"
+description = "Fetch one URL."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "checklist"
+handler = "checklist"
+description = "Keep a task checklist for this lane."
+[tool.schema]
+type = "object"
+
+[[tool]]
+name = "load_image"
+handler = "load_image"
+description = "Look at an image file."
+[tool.schema]
+type = "object"

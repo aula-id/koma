@@ -240,15 +240,6 @@ fn existing_full_output(body: &str) -> Option<PathBuf> {
 
 /// Write the unclipped body to `<session_dir>/tmp/<epoch>_<tool>.txt`.
 /// Best-effort: a spill failure must never break the tool result.
-/// Spill `body` into the session tmp dir for a caller that already holds the bytes
-/// and only needs somewhere to point a handle at. Shares the naming, the GC and
-/// the size ceiling with the truncation spill, so a sec_ payload is cleaned up by
-/// the same sweep as everything else.
-pub fn spill_foreign(session_dir: Option<&Path>, name: &str, body: &str) -> Option<String> {
-    spill_full_output(session_dir, name, body)
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
 fn spill_full_output(session_dir: Option<&Path>, name: &str, body: &str) -> Option<PathBuf> {
     let session_dir = session_dir?;
     let dir = session_tool_tmp_dir(session_dir);

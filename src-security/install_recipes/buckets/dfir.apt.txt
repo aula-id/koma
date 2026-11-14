@@ -1,6 +1,0 @@
-exiftool
-extundelete
-fenrir
-foremost
-loki
-yara

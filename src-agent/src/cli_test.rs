@@ -204,8 +204,6 @@ fn run_model_effort_mode_security_flags() {
             "off",
             "--mode",
             "yolo",
-            "--security",
-            "on",
             "--once",
         ]
         .into_iter()
@@ -215,7 +213,6 @@ fn run_model_effort_mode_security_flags() {
     assert_eq!(run.model.as_deref(), Some("laguna-s-2.1"));
     assert_eq!(run.effort.as_deref(), Some("off"));
     assert_eq!(run.mode.as_deref(), Some("yolo"));
-    assert_eq!(run.security, Some(true));
     assert!(run.once);
 }
 
@@ -286,14 +283,14 @@ fn run_max_tokens_flag() {
 }
 
 #[test]
-fn run_security_off_parses() {
+fn run_security_flag_is_rejected() {
     let opts = parse(
         ["koma", "run", "--prompt", "x", "--security", "off"]
             .into_iter()
             .map(String::from),
     );
     let run = opts.run.expect("run cli");
-    assert_eq!(run.security, Some(false));
+    assert!(run.error.as_deref().unwrap().contains("--security"));
 }
 
 #[test]
@@ -388,6 +385,26 @@ fn session_flag_value_is_not_unknown_command() {
         opts.session.as_deref(),
         Some("7d59eb3c-59e2-4ffc-a3a5-2f15e54918d6")
     );
+    assert!(opts.unknown_command.is_none());
+}
+
+#[test]
+fn kind_secure_is_not_a_positional_verb() {
+    let opts = parse(
+        [
+            "koma",
+            "--daemon",
+            "--kind",
+            "secure",
+            "--session",
+            "abc-123",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    assert!(opts.daemon);
+    assert_eq!(opts.kind.as_deref(), Some("secure"));
+    assert_eq!(opts.session.as_deref(), Some("abc-123"));
     assert!(opts.unknown_command.is_none());
 }
 
