@@ -91,11 +91,14 @@ fn exit_multiplex_is_best_effort_noop_without_master() {
     });
 }
 
+// The command runs on the remote, which is always a POSIX shell; a Windows
+// client has no /bin/sh to run it locally.
+#[cfg(unix)]
 #[test]
 fn remote_command_output_is_readable_through_noisy_startup_files() {
     // Run the real command under a shell that prints noise first, the way a
     // chatty .bashrc does, and check the reader sees only the program output.
-    let cmd = remote_command("/bin/echo", &["payload"]).unwrap();
+    let cmd = remote_command("/bin/echo", &["payload"]).expect("build remote command");
     let inner = cmd
         .strip_prefix("bash -ilc ")
         .expect("bash -ilc wrapper");
@@ -103,8 +106,8 @@ fn remote_command_output_is_readable_through_noisy_startup_files() {
     let output = std::process::Command::new("/bin/sh")
         .args(["-c", &script])
         .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
+        .expect("run /bin/sh");
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
     assert_eq!(crate::remote::preamble::strip(&stdout), "payload\n");
 }
 
