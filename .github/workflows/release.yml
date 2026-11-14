@@ -3,6 +3,10 @@ name: release
 # Build koma on a version-tag push and attach the packages to the GitHub release.
 # Linux/macOS binary asset names MUST match install.sh:
 #   koma-linux-x64, koma-linux-arm64, koma-darwin-arm64, koma-darwin-x64
+# plus the headless Linux builds that `koma remote` installs on servers:
+#   koma-linux-x64-headless, koma-linux-arm64-headless
+# Headless builds leave out the gui feature, so they need no GTK or WebKit.
+# The arm64 build is already headless; publish copies it under both names.
 #
 # All builds ship the GUI feature by default (default = ["gui"] in Cargo.toml),
 # so `koma gui` works out of the box on every platform. Linux raw binaries
@@ -44,6 +48,11 @@ jobs:
             asset: koma-linux-x64
             cross: false
             buildflags: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: koma-linux-x64-headless
+            cross: false
+            buildflags: "--no-default-features --features linker"
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             asset: koma-linux-arm64
@@ -101,7 +110,7 @@ jobs:
           } >> .cargo/config.toml
 
       - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !endsWith(matrix.asset, '-headless')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
@@ -264,6 +273,8 @@ jobs:
         include:
           - os: ubuntu-22.04
             asset: koma-linux-x64
+          - os: ubuntu-22.04
+            asset: koma-linux-x64-headless
           - os: ubuntu-24.04-arm
             asset: koma-linux-arm64
           - os: macos-latest
@@ -277,8 +288,17 @@ jobs:
           name: ${{ matrix.asset }}
           path: release-check
       - name: Install GUI system libraries
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !endsWith(matrix.asset, '-headless')
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0
+      # The headless build must start with no GUI libraries at all.
+      - name: Check the headless build links no GUI libraries
+        if: endsWith(matrix.asset, '-headless')
+        run: |
+          set -euo pipefail
+          if ldd release-check/${{ matrix.asset }} | grep -E 'gtk|webkit|soup|javascriptcore'; then
+            echo "::error::${{ matrix.asset }} links GUI libraries"
+            exit 1
+          fi
       - name: Verify copied executable offline
         shell: bash
         run: |
@@ -307,6 +327,10 @@ jobs:
           path: release-assets
       - uses: actions/download-artifact@v4
         with:
+          name: koma-linux-x64-headless
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
           name: koma-linux-arm64
           path: release-assets
       - uses: actions/download-artifact@v4
@@ -329,7 +353,8 @@ jobs:
             test -n "$found"
             mv "$found" release-assets/koma-x64.msi
           fi
-          for file in koma-linux-x64 koma-linux-arm64 koma-darwin-arm64 koma-darwin-x64 koma-x64.msi; do
+          cp release-assets/koma-linux-arm64 release-assets/koma-linux-arm64-headless
+          for file in koma-linux-x64 koma-linux-x64-headless koma-linux-arm64 koma-linux-arm64-headless koma-darwin-arm64 koma-darwin-x64 koma-x64.msi; do
             test -s "release-assets/$file" || { echo "::error::missing $file"; find release-assets -type f; exit 1; }
           done
       # install.sh and install.ps1 check their download against this file.
@@ -337,7 +362,7 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          sha256sum koma-linux-x64 koma-linux-arm64 koma-darwin-arm64 koma-darwin-x64 koma-x64.msi > SHA256SUMS
+          sha256sum koma-linux-x64 koma-linux-x64-headless koma-linux-arm64 koma-linux-arm64-headless koma-darwin-arm64 koma-darwin-x64 koma-x64.msi > SHA256SUMS
           cat SHA256SUMS
           sha256sum --check --strict SHA256SUMS
       - name: Hammer the release identity
@@ -351,7 +376,9 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release-assets/koma-linux-x64
+            release-assets/koma-linux-x64-headless
             release-assets/koma-linux-arm64
+            release-assets/koma-linux-arm64-headless
             release-assets/koma-darwin-arm64
             release-assets/koma-darwin-x64
             release-assets/koma-x64.msi
