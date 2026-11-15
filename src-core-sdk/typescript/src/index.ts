@@ -30,16 +30,25 @@ function unassignParams(params: RoleUnassignParams): Record<string, unknown> {
   return out;
 }
 
-/** The name `create` sends: trimmed, 1 to 200 characters, no control characters. */
+/** A session name as the adapter checks it: no control characters (before trimming), then trimmed to 1 to 200 characters. */
 function sessionName(name: unknown): string {
   return local(() => {
     string(name);
+    if (/[\u0000-\u001f\u007f]/.test(name)) throw new Error('name must not contain control characters');
     const trimmed = name.trim();
     const length = [...trimmed].length;
     if (length < 1 || length > MAX_NAME_CHARS) throw new Error('name must be 1 to 200 characters');
-    if (/[\u0000-\u001f\u007f]/.test(trimmed)) throw new Error('name must not contain control characters');
     return trimmed;
   });
+}
+
+const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** A new skill name: lowercase letters, digits and single hyphens, at most 64 bytes, not `skill` or `readme`. */
+function newSkillName(name: unknown): string {
+  if (typeof name !== 'string' || !SKILL_NAME.test(name) || Buffer.byteLength(name) > 64 || name === 'skill' || name === 'readme') {
+    throw invalid('invalid_name', 'Skill name must be lowercase letters, digits and single hyphens, at most 64 bytes, and not skill or readme');
+  }
+  return name;
 }
 
 export class Client {
@@ -129,7 +138,9 @@ abstract class HostCalls {
   }
   /** Refused for another live coding session (`reason` "live"). */
   async renameSession(params: SessionRenameParams, request?: RequestOptions): Promise<SessionRenameResult> {
-    return this.request('sessions.rename', plain(params, ['session_id']), request);
+    const out = plain(params, ['session_id']);
+    try { out.name = sessionName(out.name); } catch (e) { throw invalid('invalid_name', e instanceof Error ? e.message : String(e)); }
+    return this.request('sessions.rename', out, request);
   }
   async deleteSession(params: { session_id: string }, request?: RequestOptions): Promise<SessionDeleteResult> {
     return this.request('sessions.delete', plain(params, ['session_id']), request);
@@ -151,10 +162,15 @@ abstract class HostCalls {
     return this.request('skills.read_file', plain(params, ['name', 'path']), request);
   }
   async createSkill(params: SkillCreateParams, request?: RequestOptions): Promise<SkillWriteResult> {
-    return this.request('skills.create', plain(params, ['name']), request);
+    const out = plain(params);
+    out.name = newSkillName(out.name);
+    return this.request('skills.create', out, request);
   }
   async updateSkill(params: SkillUpdateParams, request?: RequestOptions): Promise<SkillUpdateResult> {
-    return this.request('skills.update', plain(params, ['tier', 'name']), request);
+    const out = plain(params, ['tier', 'name']);
+    const patch = local(() => { object(out.patch); return { ...out.patch } as Record<string, unknown>; });
+    if (patch.name !== undefined) patch.name = newSkillName(patch.name);
+    return this.request('skills.update', { ...out, patch }, request);
   }
   async removeSkill(params: SkillRemoveParams, request?: RequestOptions): Promise<SkillRemoveResult> {
     return this.request('skills.remove', plain(params, ['tier', 'name']), request);
@@ -459,6 +475,22 @@ export class Room extends HostCalls {
   async reattach(params: { tail?: number; wait_ms?: number } = {}, request?: RequestOptions): Promise<AttachResult> {
     const timeoutMs = Math.max(30_000, (params.wait_ms ?? 2_000) + 5_000);
     const call = this.request<AttachResult>('room.attach', { ...plain(params), session_id: this.sessionId }, { timeoutMs, ...request });
+    this.binding = call;
+    try {
+      this.attached = await call;
+      this.lastLine = this.attached.history.last_line_seq ?? 0;
+      return this.attached;
+    } finally { this.binding = undefined; }
+  }
+  /**
+   * Start the room again (`room.open` on its parent) after its daemon exited, and take the view. Starts a new epoch like
+   * `reattach`. Fails locally when the room's parent session is not known.
+   */
+  async reopen(params: { tail?: number; wait_ms?: number } = {}, request?: RequestOptions): Promise<AttachResult> {
+    const parent = this.attached.room.parent_session_id;
+    if (parent === null || parent === undefined) throw new SdkError('invalid_input', 'The room has no known parent session; use Client.roomOpen');
+    const timeoutMs = Math.max(30_000, (params.wait_ms ?? 12_000) + 10_000);
+    const call = this.request<AttachResult>('room.open', { ...plain(params), parent_session_id: parent }, { timeoutMs, ...request });
     this.binding = call;
     try {
       this.attached = await call;

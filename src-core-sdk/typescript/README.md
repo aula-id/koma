@@ -151,7 +151,7 @@ for await (const event of room.events()) {
 await room.close();   // sends room.close (stop: true also stops the room's daemon) and releases the adapter
 ```
 
-A `Room` owns one adapter, like a `Session`. Methods: `send`, `interrupt`, `control({ action, avatar, note? })`, `status`, `history`, `shelf`, `item`, `trajectory`, `reports`, `spend`, `team`, `setModel`, `upsertAvatar`, `removeAvatar`, `reattach`, `events`, `close`, plus `epoch`, `sessionId`, `attachResult` and `requestsRemaining`. Reads come from disk and keep working after the live view ended. `send` is never retried: a lost reply throws `DeliveryUnknownError`. A message with attachments needs a room that supports it (`peer_unsupported` otherwise).
+A `Room` owns one adapter, like a `Session`. Methods: `send`, `interrupt`, `control({ action, avatar, note? })`, `status`, `history`, `shelf`, `item`, `trajectory`, `reports`, `spend`, `team`, `setModel`, `upsertAvatar`, `removeAvatar`, `reattach`, `reopen` (start the room again through its parent after its daemon exited), `events`, `close`, plus `epoch`, `sessionId`, `attachResult` and `requestsRemaining`. Reads come from disk and keep working after the live view ended. `send` is never retried: a lost reply throws `DeliveryUnknownError`. A message with attachments needs a room that supports it (`peer_unsupported` otherwise).
 
 **Events.** `room.events()` yields typed room events (`room.line`, `room.delta`, `room.status`, `room.notice`, `room.gap`, `room.closed`) of the current epoch only. Line numbers (`line_seq`) belong to an epoch and are never compared with the envelope `seq`. Lines already seen are not repeated. After `room.gap`, a hole in the event sequence, or a client-side `event_overflow`, the iterator reads the missed lines back with `room.history` and yields them as `room.line` events with `recovered: true`, then the current status as `room.status` with `recovered: true`. It never calls `state`. Page older lines yourself with `room.history({ before_line_seq })`; the ring holds what the daemon replayed (at most 2000 lines) plus later lines.
 
@@ -163,7 +163,7 @@ Like a session adapter, a room adapter accepts a fixed number of requests; watch
 
 ## Errors from newer adapters
 
-With feature `errors.reason`, `SdkError` may carry `reason` (branch on it, never on the message), `binding` and `allowed` (on a call made in the wrong binding), `written` (`true` when an `unknown` outcome committed bytes) and `detail`. A mutation whose outcome is unknown throws `DeliveryUnknownError`, as before; config deletes, `unassignRole`, `clearMainPin`, `setEffort`, `setLimits`, session rename/delete/stop, skill writes, `room.send` and team writes count as mutations, a delete with `dry_run:true` does not.
+With feature `errors.reason`, `SdkError` may carry `reason` (branch on it, never on the message), `binding` and `allowed` (on a call made in the wrong binding), `written` (`true` when an `unknown` outcome committed bytes) and `detail`. A mutation whose outcome is unknown throws `DeliveryUnknownError`, as before; config deletes, `unassignRole`, `clearMainPin`, `setEffort`, `setLimits`, session rename/delete/stop, skill writes, `room.open`, `room.attach` (and `reattach`, `reopen`), `room.close`, `room.send`, `room.interrupt`, `room.control` and team writes count as mutations, a delete with `dry_run:true` does not.
 
 ```ts
 try { await host.deleteProvider({ provider_uuid, if_revision }); }

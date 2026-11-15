@@ -398,35 +398,31 @@ async fn the_same_name_in_both_project_tiers_is_addressed_by_tier() {
     .unwrap();
     assert_eq!(agents["description"], "from agents");
 
-    // Discovery keeps only the winner of the project tiers, so the shadowed
-    // copy is not addressable until the winner goes.
-    let hidden = call(
-        &mut adapter,
-        "skills.update",
-        json!({"workdir":workdir,"tier":"project-agent","name":"demo","patch":{"description":"x"}}),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(reason(&hidden), Some("not_found"));
+    // Each tier is read from its own root, so the shadowed copy is listed,
+    // and it can be edited and removed while the winner stays.
+    let listed = call(&mut adapter, "skills.list", json!({"workdir":workdir}))
+        .await
+        .unwrap();
+    let rows: Vec<(&str, bool, &Value)> = listed["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["name"] == "demo")
+        .map(|row| {
+            (
+                row["tier"].as_str().unwrap(),
+                row["effective"].as_bool().unwrap(),
+                &row["shadowed_by"],
+            )
+        })
+        .collect();
     assert_eq!(
-        std::fs::read_to_string(fx.tier_root(".agent").join("demo").join("SKILL.md")).unwrap(),
-        "---\ndescription: from agent\n---\nAgent body.\n"
+        rows,
+        [
+            ("project-agent", false, &json!("project-agents")),
+            ("project-agents", true, &Value::Null),
+        ]
     );
-
-    let removed = call(
-        &mut adapter,
-        "skills.remove",
-        json!({"workdir":workdir,"tier":"project-agents","name":"demo",
-               "generation":agents["generation"]}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(removed["removed"], true);
-    assert_eq!(removed["now_effective"]["tier"], "project-agent");
-    assert_eq!(removed["now_effective"]["description"], "from agent");
-    assert_eq!(removed["propagation"], json!({"skills":"next_rebuild"}));
-    assert!(!fx.tier_root(".agents").join("demo").exists());
-
     let updated = call(
         &mut adapter,
         "skills.update",
@@ -437,7 +433,38 @@ async fn the_same_name_in_both_project_tiers_is_addressed_by_tier() {
     assert_eq!(updated["skill"]["tier"], "project-agent");
     assert_eq!(updated["skill"]["description"], "edited");
     assert_eq!(updated["skill"]["instruction"], "Agent body.");
+    assert_eq!(updated["skill"]["shadowed_by"], "project-agents");
+    let shadowed = call(
+        &mut adapter,
+        "skills.get",
+        json!({"workdir":workdir,"tier":"project-agent","name":"demo"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shadowed["description"], "edited");
 
+    let removed = call(
+        &mut adapter,
+        "skills.remove",
+        json!({"workdir":workdir,"tier":"project-agent","name":"demo",
+               "generation":shadowed["generation"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed["removed"], true);
+    assert_eq!(removed["now_effective"]["tier"], "project-agents");
+    assert!(!fx.tier_root(".agent").join("demo").exists());
+    assert!(fx.tier_root(".agents").join("demo").exists());
+
+    let removed = call(
+        &mut adapter,
+        "skills.remove",
+        json!({"workdir":workdir,"tier":"project-agents","name":"demo",
+               "generation":agents["generation"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed["now_effective"], Value::Null);
     let gone = call(
         &mut adapter,
         "skills.remove",
@@ -446,6 +473,29 @@ async fn the_same_name_in_both_project_tiers_is_addressed_by_tier() {
     .await
     .unwrap_err();
     assert_eq!(reason(&gone), Some("not_found"));
+}
+
+#[tokio::test]
+async fn broken_skills_are_listed_with_the_loader_reason() {
+    let fx = Fixture::new();
+    let root = fx.tier_root(".agents");
+    std::fs::create_dir_all(root.join("broken")).unwrap();
+    // Not UTF-8, so the loader cannot read it.
+    std::fs::write(root.join("broken").join("SKILL.md"), b"\xff\xfe body").unwrap();
+    let (mut adapter, _rx) = fx.adapter();
+    let listed = call(
+        &mut adapter,
+        "skills.list",
+        json!({"workdir":fx.workdir(),"include_diagnostics":true}),
+    )
+    .await
+    .unwrap();
+    let diagnostics = listed["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(diagnostics[0]["path"].as_str().unwrap().ends_with("SKILL.md"));
+    let error = diagnostics[0]["error"].as_str().unwrap();
+    assert!(!error.is_empty() && !error.contains("error log"), "{error}");
+    assert_eq!(listed["diagnostics_truncated"], false);
 }
 
 #[tokio::test]
@@ -586,6 +636,45 @@ async fn advanced_yaml_is_not_saved() {
 
 // ── install ────────────────────────────────────────────────────────────────
 
+/// Set the uncompressed size that the local and central headers of `name`
+/// declare, leaving the compressed data as it is.
+fn understate(zip: &mut [u8], name: &str, size: u32) {
+    let mut patched = 0;
+    for at in 0..zip.len().saturating_sub(46) {
+        let (signature, size_at, name_at) = match &zip[at..at + 4] {
+            [0x50, 0x4b, 0x03, 0x04] => ("local", 22, 30),
+            [0x50, 0x4b, 0x01, 0x02] => ("central", 24, 46),
+            _ => continue,
+        };
+        let len_at = if signature == "local" { 26 } else { 28 };
+        let len = u16::from_le_bytes([zip[at + len_at], zip[at + len_at + 1]]) as usize;
+        if zip.get(at + name_at..at + name_at + len) == Some(name.as_bytes()) {
+            zip[at + size_at..at + size_at + 4].copy_from_slice(&size.to_le_bytes());
+            patched += 1;
+        }
+    }
+    assert_eq!(patched, 2, "both headers of {name}");
+}
+
+#[tokio::test]
+async fn an_entry_larger_than_its_header_says_is_too_large() {
+    let fx = Fixture::new();
+    let (mut adapter, _rx) = fx.adapter();
+    let big = vec![b'x'; 9 * 1024 * 1024];
+    let mut package = zip_of(&[("zb/SKILL.md", ENTRY), ("zb/big.txt", &big)]);
+    understate(&mut package, "zb/big.txt", 10);
+    let error = call(
+        &mut adapter,
+        "skills.install",
+        json!({"scope":"computer","data_b64":b64(&package)}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "invalid_request");
+    assert_eq!(reason(&error), Some("too_large"));
+    assert_eq!(error.delivery, "not_sent");
+}
+
 #[tokio::test]
 async fn inline_size_is_checked_before_decoding() {
     let fx = Fixture::new();
@@ -625,7 +714,7 @@ async fn install_takes_exactly_one_source() {
     let neither = call(&mut adapter, "skills.install", json!({"scope":"computer"}))
         .await
         .unwrap_err();
-    assert_eq!(reason(&neither), Some("missing_params"));
+    assert_eq!(reason(&neither), Some("conflicting_params"));
     let relative = call(
         &mut adapter,
         "skills.install",
@@ -803,6 +892,37 @@ async fn remove_refuses_a_tree_with_a_symlink() {
     assert_eq!(error.code, "invalid_state");
     assert!(root.join("linked").join("SKILL.md").is_file());
     assert_eq!(std::fs::read_to_string(fx.base.join("target.txt")).unwrap(), "keep");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn project_writes_refuse_a_symlinked_tier_directory() {
+    let fx = Fixture::new();
+    let outside = fx.base.join("outside");
+    write_skill(&outside.join("skills"), "there", "Outside", "Body.");
+    std::os::unix::fs::symlink(&outside, fx.work().join(".agents")).unwrap();
+    let (mut adapter, _rx) = fx.adapter();
+    let workdir = fx.workdir();
+    let calls = [
+        ("skills.create", json!({"workdir":workdir,"scope":"project","name":"p2",
+            "description":"d","instruction":"Body."})),
+        ("skills.install", json!({"workdir":workdir,"scope":"project","name":"p3",
+            "data_b64":b64(&zip_of(&[("SKILL.md", ENTRY)]))})),
+        ("skills.update", json!({"workdir":workdir,"tier":"project-agents","name":"there",
+            "patch":{"description":"x"}})),
+        ("skills.remove", json!({"workdir":workdir,"tier":"project-agents","name":"there"})),
+    ];
+    for (method, params) in calls {
+        let error = call(&mut adapter, method, params).await.unwrap_err();
+        assert_eq!(error.code, "invalid_state", "{method}");
+        assert_eq!(reason(&error), Some("read_only"), "{method}");
+    }
+    assert!(!outside.join("skills").join("p2").exists());
+    assert!(!outside.join("skills").join("p3").exists());
+    assert_eq!(
+        std::fs::read_to_string(outside.join("skills").join("there").join("SKILL.md")).unwrap(),
+        "---\ndescription: Outside\n---\nBody.\n"
+    );
 }
 
 // ── bound ──────────────────────────────────────────────────────────────────

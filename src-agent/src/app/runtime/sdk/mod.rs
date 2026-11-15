@@ -76,19 +76,20 @@ fn event_frames(previous: &mut Option<State>, state: State, seq: &mut u64) -> Ve
 }
 /// Room events come from `queue` and share the envelope `seq`. Those queued
 /// before a response are written before it, so a `room.send` echo precedes
-/// its response; a held queue opens only after the next response.
-async fn writer(
-    mut responses: mpsc::Receiver<Value>,
+/// its response. A held queue opens only once the response that claimed the
+/// hold is out, never after an earlier response that was still being written.
+async fn writer<W: tokio::io::AsyncWrite + Unpin>(
+    mut out: W,
+    mut responses: mpsc::Receiver<(Value, Option<u64>)>,
     mut states: watch::Receiver<Option<State>>,
     queue: std::sync::Arc<events::EventQueue>,
 ) -> Result<()> {
-    let mut out = tokio::io::stdout();
     let mut seq = 0u64;
     let mut previous = None;
     loop {
-        let mut responded = false;
+        let mut released = None;
         let frames = tokio::select! {biased;
-         r=responses.recv()=>match r{Some(r)=>{responded=true;let mut f=queue.take_ready(&mut seq);f.push(r);f},None=>break},
+         r=responses.recv()=>match r{Some((r,hold))=>{released=hold;let mut f=queue.take_ready(&mut seq);f.push(r);f},None=>break},
          changed=states.changed()=>{if changed.is_err(){break}let s=states.borrow_and_update().clone();let Some(s)=s else{continue};event_frames(&mut previous,s,&mut seq)}
          _=queue.ready()=>queue.take_ready(&mut seq),
         };
@@ -103,8 +104,8 @@ async fn writer(
             .await
             .context("stdout stalled")??;
         }
-        if responded {
-            queue.response_written();
+        if let Some(generation) = released {
+            queue.response_written(generation);
         }
     }
     Ok(())
@@ -120,7 +121,12 @@ pub async fn serve() -> Result<()> {
     let (tx, rx) = mpsc::channel(1);
     let (events, states) = watch::channel(None);
     let mut adapter = Adapter::new(events);
-    let mut output = tokio::spawn(writer(rx, states, std::sync::Arc::clone(&adapter.queue)));
+    let mut output = tokio::spawn(writer(
+        tokio::io::stdout(),
+        rx,
+        states,
+        std::sync::Arc::clone(&adapter.queue),
+    ));
     let (input_tx, mut input_rx) = mpsc::channel(1);
     let input = tokio::spawn(async move {
         let mut stdin = BufReader::new(tokio::io::stdin());
@@ -148,7 +154,9 @@ pub async fn serve() -> Result<()> {
   }}else{tokio::select!{r=input_rx.recv()=>r,w=&mut output=>{return w.context("writer task")?;}}};
   let Some(r)=request else{break};let r=r?;
   let (frame,end)=respond(r,&mut seen,&mut adapter).await?;
-  tx.send(frame).await.context("stdout writer closed")?;
+  // A hold set while this request was answered is released by this frame only.
+  let hold=adapter.queue.claim_hold();
+  tx.send((frame,hold)).await.context("stdout writer closed")?;
   // The bound coding connection failed while host work ran: end as v1 does.
   if let Some(lost)=adapter.lost.take(){return Err(lost)}
   if end{break}

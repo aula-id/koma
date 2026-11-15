@@ -37,6 +37,7 @@ test('skills create, update, remove with generation and read-only tiers', async 
     assert.equal(made.skill.tier, 'global'); assert.equal(made.skill.raw, null); assert.equal(made.propagation.skills, 'next_rebuild');
     await assert.rejects(host.createSkill({ scope: 'computer', name: 'fresh-one', description: 'Fresh', instruction: 'Steps.' }), e => e.reason === 'exists');
     await assert.rejects(host.createSkill({ scope: 'computer', name: 'Bad Name', description: 'x', instruction: 'y' }), e => e.reason === 'invalid_name');
+    await assert.rejects(host.updateSkill({ tier: 'global', name: 'fresh-one', patch: { name: 'Bad' } }), e => e.code === 'invalid_input' && e.reason === 'invalid_name');
     const updated = await host.updateSkill({ tier: 'global', name: 'fresh-one', generation: made.skill.generation, patch: { description: 'Changed' } });
     assert.equal(updated.skill.description, 'Changed'); assert.equal(updated.renamed, false);
     assert.notEqual(updated.skill.generation, made.skill.generation);

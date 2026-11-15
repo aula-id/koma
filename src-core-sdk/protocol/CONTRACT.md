@@ -465,7 +465,7 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `already_bound` | `invalid_state` | not_sent | binders (E3) | a binding is held |
 | `peer_unsupported` | `invalid_state` | not_sent | calls that need the daemon | the daemon lacks the needed feature |
 | `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"` |
-| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `skills.update`, `skills.install` | none of the required alternatives was given |
+| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `skills.update` | none of the required alternatives was given |
 | `conflicting_params` | `invalid_request` | not_sent | `config.roles.unassign`, `skills.install` | params that exclude each other were combined (`if_revision` with session scope; both or neither of `data_b64` and `path`) |
 | `bad_cursor` | `invalid_request` | not_sent | `sessions.list`, `skills.list` | the cursor does not decode |
 | `invalid_name` | `invalid_request` | not_sent | `create`, `sessions.rename`, `skills.*` | a name breaks its rule or holds control characters |
@@ -1343,9 +1343,9 @@ GoalNode = {id: string, label: string, kind: string, status: string|null, severi
 * Binding: ROOM(live) or ROOM(closed).
 * Params: `{goal?: string}`, with or without the `trajectory/` prefix.
 * Result: `{goals: [Goal] (≤ 200), goals_truncated: bool}`. An empty shelf
-  gives `goals:[]`.
+  gives `goals:[]`, and so does a `goal` the shelf does not hold.
 * `rank` and `row` place a node in the goal's grid of `columns` by `rows`.
-* Errors: `not_found` (an unknown `goal`), `room_unreadable`, `io_error`.
+* Errors: `room_unreadable`, `io_error`.
 * Idempotency: read.
 
 ### `room.reports`

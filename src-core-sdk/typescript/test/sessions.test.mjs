@@ -39,6 +39,7 @@ test('sessions.rename: not live, live elsewhere, busy', async () => {
     await assert.rejects(host.renameSession({ session_id: 'sess-busy', name: 'x' }), e => e.reason === 'sqlite_busy');
     await assert.rejects(host.renameSession({ session_id: 'nope', name: 'x' }), e => e.code === 'not_found');
     await assert.rejects(host.renameSession({ session_id: '', name: 'x' }), e => e.code === 'invalid_input');
+    await assert.rejects(host.renameSession({ session_id: 'sess-coding-b', name: 'a\n' }), e => e.code === 'invalid_input' && e.reason === 'invalid_name');
   } finally { await host.close(); await c.close(); }
 });
 

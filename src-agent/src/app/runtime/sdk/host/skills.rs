@@ -42,6 +42,7 @@ pub const NAME_BYTES: usize = 64;
 /// `skills.get` `raw`, `skills.read_file` `text` and a new skill's text.
 const TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_DIAGNOSTICS: usize = 200;
+const MAX_DIAGNOSTIC_CHARS: usize = 1000;
 const MAX_LISTED: usize = 64;
 const MAX_COMPANIONS: usize = 1000;
 const MAX_DESCRIPTION_CHARS: usize = 2000;
@@ -233,10 +234,6 @@ impl Tier {
         matches!(self, Self::Global | Self::ProjectAgent | Self::ProjectAgents)
     }
 
-    fn project(self) -> bool {
-        matches!(self, Self::Claude | Self::ProjectAgent | Self::ProjectAgents)
-    }
-
     fn dir(self) -> Option<&'static str> {
         match self {
             Self::Claude => Some(".claude"),
@@ -282,6 +279,8 @@ struct TierLoad {
     tier: Tier,
     registry: SkillRegistry,
     entries: Vec<Entry>,
+    /// The skill files of this tier's root that could not be loaded.
+    skipped: Vec<skill::SkippedSkill>,
 }
 
 impl TierLoad {
@@ -338,17 +337,6 @@ fn global_root(store: &ConfigStore) -> Result<GlobalRoot, RpcError> {
         .parent()
         .ok_or_else(|| io_error("the config path has no parent"))?;
     Ok(GlobalRoot::At(dir.to_path_buf()))
-}
-
-/// Every tier of one workdir, as discovery sees it.
-#[cfg(not(test))]
-fn load_workdir(workdir: &Path) -> SkillRegistry {
-    SkillRegistry::load(Some(workdir), &[])
-}
-
-#[cfg(test)]
-fn load_workdir(workdir: &Path) -> SkillRegistry {
-    SkillRegistry::load_for_test(workdir)
 }
 
 /// What one call works on.
@@ -444,62 +432,49 @@ impl Context {
         }
     }
 
-    /// Load one tier. A skill of the `claude` or `project-agent` tier that a
-    /// later project tier shadows is not in the result: discovery keeps only
-    /// the winner of the project tiers.
+    /// Load one tier from its own root, shadowed skills included. Nothing
+    /// is logged: what could not be loaded is kept in `skipped`.
     fn load(&self, tier: Tier) -> Result<TierLoad, RpcError> {
-        let (registry, source) = self.registry(tier)?;
-        let entries = entries_of(&registry, source, tier);
+        let root = self.root(tier)?;
+        let (defs, skipped) = skill::load_root_with_diagnostics(&root, tier.source());
+        let registry = SkillRegistry::from_defs(defs);
+        let entries = entries_of(&registry, tier.source(), tier);
         Ok(TierLoad {
             tier,
             registry,
             entries,
+            skipped,
         })
     }
 
-    #[cfg(not(test))]
-    fn registry(&self, tier: Tier) -> Result<(SkillRegistry, SkillSource), RpcError> {
-        match tier {
-            Tier::Global => Ok((SkillRegistry::load(None, &[]), SkillSource::Global)),
-            Tier::ExtraRoot(_) => {
-                let root = self.root(tier)?;
-                Ok((
-                    SkillRegistry::load(None, &[root]),
-                    SkillSource::ExtraRoot(0),
-                ))
-            }
-            project => {
-                let workdir = self.project_workdir(project)?;
-                Ok((load_workdir(&workdir), project.source()))
-            }
-        }
-    }
-
-    /// Tests load each tier without the real global root. A global or extra
-    /// root `<dir>/<.claude|.agent|.agents>/skills` loads as that project
-    /// tier of `<dir>`.
-    #[cfg(test)]
-    fn registry(&self, tier: Tier) -> Result<(SkillRegistry, SkillSource), RpcError> {
-        if tier.project() {
-            let workdir = self.project_workdir(tier)?;
-            return Ok((load_workdir(&workdir), tier.source()));
-        }
-        let root = self.root(tier)?;
-        let source = match root
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-        {
-            Some(".claude") => SkillSource::Claude,
-            Some(".agent") => SkillSource::ProjectAgent,
-            Some(".agents") => SkillSource::ProjectAgents,
-            _ => return Err(io_error("a test skill root must be <dir>/.agents/skills")),
+    /// Refuse a write to a project tier whose directory (`.agent`, `.agents`)
+    /// is a symbolic link or whose root resolves outside the workdir: a
+    /// write never leaves the project it was asked for.
+    fn writable(&self, tier: Tier) -> Result<(), RpcError> {
+        let (Some(dir), Some(workdir)) = (tier.dir(), &self.workdir) else {
+            return Ok(());
         };
-        let base = root
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| io_error("a test skill root must be <dir>/.agents/skills"))?;
-        Ok((load_workdir(base), source))
+        let refuse = || {
+            RpcError::reason(
+                Reason::ReadOnly,
+                format!(
+                    "{dir} in the workdir is a symbolic link or leads outside it; the {} tier cannot be written",
+                    tier.name()
+                ),
+            )
+        };
+        let base = workdir.join(dir);
+        if std::fs::symlink_metadata(&base).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse());
+        }
+        let root = base.join("skills");
+        if std::fs::symlink_metadata(&root).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse());
+        }
+        match std::fs::canonicalize(&root) {
+            Ok(resolved) if !resolved.starts_with(workdir) => Err(refuse()),
+            _ => Ok(()),
+        }
     }
 
     fn project_workdir(&self, tier: Tier) -> Result<PathBuf, RpcError> {
@@ -537,30 +512,12 @@ fn winners(loads: &[TierLoad]) -> HashMap<String, Tier> {
     winners
 }
 
-/// Whether a `tier` skill named `name` can be missing from its load only
-/// because a later project tier holds the same name.
-fn maybe_hidden(loads: &[TierLoad], tier: Tier, name: &str) -> bool {
-    matches!(tier, Tier::Claude | Tier::ProjectAgent)
-        && loads.iter().any(|load| {
-            load.tier.project() && load.tier.rank() > tier.rank() && load.find(name).is_some()
-        })
-}
-
 fn find_in<'a>(loads: &'a [TierLoad], tier: Tier, name: &str) -> Result<&'a Entry, RpcError> {
     let load = loads
         .iter()
         .find(|load| load.tier == tier)
         .ok_or_else(|| not_found(format!("there is no {} tier here", tier.name())))?;
-    if let Some(entry) = load.find(name) {
-        return Ok(entry);
-    }
-    if maybe_hidden(loads, tier, name) {
-        return Err(not_found(format!(
-            "{name} in the {} tier is not reachable while a later project tier holds a skill of the same name",
-            tier.name()
-        )));
-    }
-    Err(not_found("no such skill"))
+    load.find(name).ok_or_else(|| not_found("no such skill"))
 }
 
 fn tier_load(loads: &[TierLoad], tier: Tier) -> Result<&TierLoad, RpcError> {
@@ -1036,7 +993,7 @@ fn list(context: Context, map: Map<String, Value>) -> Result<Value, RpcError> {
         _ => None,
     };
     let (diagnostics, diagnostics_truncated) = if include_diagnostics {
-        diagnostics(&context, &loads)
+        diagnostics(&loads)
     } else {
         (Vec::new(), false)
     };
@@ -1049,67 +1006,19 @@ fn list(context: Context, map: Map<String, Value>) -> Result<Value, RpcError> {
     })
 }
 
-/// Skill files in each root that discovery did not load. Discovery records
-/// why in koma's error log; a `claude` or `project-agent` file whose name a
-/// later project tier holds is left out, since it may only be shadowed.
-fn diagnostics(context: &Context, loads: &[TierLoad]) -> (Vec<Diagnostic>, bool) {
-    let mut out = Vec::new();
-    let mut truncated = false;
-    for load in loads {
-        let Ok(root) = context.root(load.tier) else {
-            continue;
-        };
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-            let candidate = if metadata.is_file() {
-                let is_md = path.extension().is_some_and(|ext| ext == "md");
-                let stem = path
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().to_lowercase());
-                match stem {
-                    Some(stem) if is_md && stem != "readme" => Some((stem, path.clone())),
-                    _ => None,
-                }
-            } else if metadata.is_dir() {
-                ["SKILL.md", "skill.md"]
-                    .iter()
-                    .map(|file| path.join(file))
-                    .find(|file| {
-                        std::fs::symlink_metadata(file)
-                            .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
-                    })
-                    .map(|file| (entry.file_name().to_string_lossy().to_lowercase(), file))
-            } else {
-                None
-            };
-            let Some((name, file)) = candidate else {
-                continue;
-            };
-            if load.find(&name).is_some() || maybe_hidden(loads, load.tier, &name) {
-                continue;
-            }
-            if out.len() >= MAX_DIAGNOSTICS {
-                truncated = true;
-                break;
-            }
-            out.push(Diagnostic {
-                path: display_path(&file),
-                error: "the skill could not be loaded; koma's error log records why".into(),
-            });
-        }
-    }
-    (out, truncated)
+/// The skill files of each root that could not be loaded, with the
+/// loader's reason, in discovery order.
+fn diagnostics(loads: &[TierLoad]) -> (Vec<Diagnostic>, bool) {
+    let mut all = loads.iter().flat_map(|load| load.skipped.iter());
+    let out: Vec<Diagnostic> = all
+        .by_ref()
+        .take(MAX_DIAGNOSTICS)
+        .map(|skipped| Diagnostic {
+            path: display_path(&skipped.path),
+            error: skipped.error.chars().take(MAX_DIAGNOSTIC_CHARS).collect(),
+        })
+        .collect();
+    (out, all.next().is_some())
 }
 
 // ── skills.get / skills.read_file ──────────────────────────────────────────
@@ -1246,6 +1155,7 @@ fn create(context: Context, map: Map<String, Value>) -> Result<Value, RpcError> 
         instruction,
     };
     check_edit_size(&edit)?;
+    context.writable(tier)?;
     let root = context.root(tier)?;
     if name_taken(&root, &name) {
         return Err(exists(&name));
@@ -1293,6 +1203,7 @@ fn update(context: Context, map: Map<String, Value>) -> Result<Value, RpcError> 
     let triggers = triggers_param(&patch)?;
     let tools = tools_param(&patch)?;
     let instruction = instruction_param(&patch)?;
+    context.writable(tier)?;
 
     let loads = context.load_all()?;
     let entry = find_in(&loads, tier, &name)?.clone();
@@ -1352,8 +1263,10 @@ fn package_bytes(map: &Map<String, Value>) -> Result<Vec<u8>, RpcError> {
     let inline = map.get("data_b64");
     let path = map.get("path");
     match (inline, path) {
-        (Some(_), Some(_)) => Err(RpcError::reason(Reason::ConflictingParams, "give exactly one of data_b64 and path")),
-        (None, None) => Err(RpcError::reason(Reason::MissingParams, "give one of data_b64 and path")),
+        (Some(_), Some(_)) | (None, None) => Err(RpcError::reason(
+            Reason::ConflictingParams,
+            "give exactly one of data_b64 and path",
+        )),
         (Some(Value::String(data)), None) => {
             if data.len() > INLINE_B64_CHARS {
                 return Err(too_large(format!(
@@ -1455,6 +1368,8 @@ fn preflight(bytes: &[u8]) -> Result<Package, RpcError> {
         return Err(too_large("the package has too many entries"));
     }
     let mut paths: Vec<(PathBuf, bool)> = Vec::new();
+    // `(index, name, limit)` of every file entry, measured below.
+    let mut measured: Vec<(usize, String, u64)> = Vec::new();
     let mut files = 0usize;
     let mut total = 0u64;
     for index in 0..archive.len() {
@@ -1499,8 +1414,26 @@ fn preflight(bytes: &[u8]) -> Result<Package, RpcError> {
             if total > ZIP_BYTES {
                 return Err(too_large("the package exceeds 64 MiB uncompressed"));
             }
+            measured.push((index, raw.clone(), limit));
         }
         paths.push((path, is_dir));
+    }
+    // The sizes in the headers can understate the data: decompress each file
+    // as the installer does, up to one byte past its cap, and count the bytes.
+    let mut total = 0u64;
+    for (index, raw, limit) in measured {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|_| invalid_package("the zip archive is malformed"))?;
+        let size = std::io::copy(&mut entry.by_ref().take(limit + 1), &mut std::io::sink())
+            .map_err(|_| invalid_package(format!("the package entry {raw} cannot be read")))?;
+        if size > limit {
+            return Err(too_large(format!("{raw} exceeds its size limit")));
+        }
+        total = total.saturating_add(size);
+        if total > ZIP_BYTES {
+            return Err(too_large("the package exceeds 64 MiB uncompressed"));
+        }
     }
     let entry_file = |prefix: Option<&Path>, exact: bool| {
         paths.iter().any(|(path, is_dir)| {
@@ -1587,12 +1520,12 @@ fn entry_parses(bytes: &[u8], top: Option<&str>, name: &str) -> bool {
         "koma-skill-check-{}",
         uuid::Uuid::new_v4().simple()
     ));
-    let dir = scratch.join(".agents").join("skills").join(name);
+    let dir = scratch.join(name);
     let parsed = std::fs::create_dir_all(&dir).is_ok()
         && std::fs::write(dir.join("SKILL.md"), text).is_ok()
-        && entries_of(&load_workdir(&scratch), SkillSource::ProjectAgents, Tier::ProjectAgents)
+        && skill::load_root(&scratch, SkillSource::ProjectAgents)
             .iter()
-            .any(|entry| entry.name == name);
+            .any(|def| def.name == name);
     let _ = std::fs::remove_dir_all(&scratch);
     parsed
 }
@@ -1612,6 +1545,7 @@ fn install(context: Context, map: Map<String, Value>) -> Result<Value, RpcError>
             check_new_name(top)?
         }
     };
+    context.writable(tier)?;
     let root = context.root(tier)?;
     if name_taken(&root, &name) {
         return Err(exists(&name));
@@ -1666,6 +1600,7 @@ fn remove(context: Context, map: Map<String, Value>) -> Result<Value, RpcError> 
     context.require(tier)?;
     let name = address_name(&map)?;
     let generation = generation_param(&map)?;
+    context.writable(tier)?;
     let loads = context.load_all()?;
     let entry = find_in(&loads, tier, &name)?.clone();
     check_generation(&entry, generation.as_deref())?;

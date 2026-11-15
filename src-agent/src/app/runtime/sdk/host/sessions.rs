@@ -43,6 +43,8 @@ pub trait SessionHost: Send + Sync {
     fn set_name(&self, id: &str, name: &str) -> anyhow::Result<()>;
     /// Remove the session dir and its registry row.
     fn delete(&self, dir: &Path) -> anyhow::Result<()>;
+    /// The bucket directory names under the sessions dir.
+    fn buckets(&self) -> anyhow::Result<Vec<String>>;
     /// Stop the daemon of `id`; true when it is gone afterwards.
     fn stop(&self, id: &str) -> bool;
 
@@ -102,6 +104,11 @@ impl SessionHost for Home {
     fn delete(&self, dir: &Path) -> anyhow::Result<()> {
         real_data_dir()?;
         crate::model::store::delete_session(dir)
+    }
+
+    fn buckets(&self) -> anyhow::Result<Vec<String>> {
+        real_data_dir()?;
+        bucket_names(&crate::model::store::sessions_dir()?)
     }
 
     fn stop(&self, id: &str) -> bool {
@@ -377,18 +384,47 @@ fn unverified_registry(message: String) -> RpcError {
         .written()
 }
 
+/// The directory names in `sessions`; none when it does not exist.
+pub fn bucket_names(sessions: &Path) -> anyhow::Result<Vec<String>> {
+    let entries = match std::fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    Ok(entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect())
+}
+
+/// The directory a partial delete left behind: its registry row is gone,
+/// so it is found by its id in the buckets.
+fn leftover_dir(host: &dyn SessionHost, id: &str) -> Result<Option<PathBuf>, RpcError> {
+    if !valid_id(id) {
+        return Ok(None);
+    }
+    let buckets = host.buckets().map_err(|e| {
+        RpcError::reason(Reason::IoError, format!("the sessions dir could not be read: {e}"))
+    })?;
+    Ok(buckets
+        .iter()
+        .filter(|bucket| valid_hash(bucket))
+        .filter_map(|bucket| host.session_dir(bucket, id).ok())
+        .find(|dir| std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir())))
+}
+
 fn delete_session(host: &dyn SessionHost, id: &str) -> Result<DeleteResult, RpcError> {
     if is_live(host, id) {
         return Err(live_refusal());
     }
     let rows = host.rows().map_err(registry_error)?;
-    let row = rows
-        .iter()
-        .find(|row| row.uuid == id)
-        .ok_or_else(not_found)?;
-    let dir = dir_of(host, row).ok_or_else(|| {
-        RpcError::reason(Reason::IoError, "the registry row does not name a session directory")
-    })?;
+    let dir = match rows.iter().find(|row| row.uuid == id) {
+        Some(row) => dir_of(host, row).ok_or_else(|| {
+            RpcError::reason(Reason::IoError, "the registry row does not name a session directory")
+        })?,
+        // A retry after a partial delete finishes the removal.
+        None => leftover_dir(host, id)?.ok_or_else(not_found)?,
+    };
     if host.owner_alive(&dir) {
         return Err(RpcError::reason(Reason::SessionLocked, "the session is locked by a running process"));
     }

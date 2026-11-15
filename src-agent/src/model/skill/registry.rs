@@ -191,8 +191,10 @@ impl SkillRegistry {
         Self::load_isolated(Some(root), &[])
     }
 
-    #[cfg(test)]
-    pub(super) fn from_defs(defs: Vec<SkillDef>) -> Self {
+    /// A registry of exactly `defs`, keyed by name: one root's skills from
+    /// [`load_root`], so the persistence functions can address a skill that
+    /// the merged registry shadows.
+    pub(crate) fn from_defs(defs: Vec<SkillDef>) -> Self {
         Self { skills: defs.into_iter().map(|d| (d.name.clone(), d)).collect() }
     }
 
@@ -319,7 +321,6 @@ pub(crate) fn global_skills_dir() -> anyhow::Result<PathBuf> {
 
 /// A skill entry that discovery found but could not load.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // read by the SDK skill listing, which is not wired up yet
 pub(crate) struct SkippedSkill {
     /// The flat skill file or the `SKILL.md` of a dir-form skill.
     pub path: PathBuf,
@@ -372,8 +373,16 @@ pub(crate) fn load_with_diagnostics(
 /// skill that a later tier shadows in the merged registry is still reachable.
 /// Skills that fail to load are left out without logging; the merged load
 /// reports them. An absent root gives an empty list.
-#[allow(dead_code)] // called by the SDK skill listing, which is not wired up yet
 pub(crate) fn load_root(root: &Path, source: SkillSource) -> Vec<SkillDef> {
+    load_root_with_diagnostics(root, source).0
+}
+
+/// [`load_root`], together with the skills of that root that could not be
+/// loaded, collected without logging.
+pub(crate) fn load_root_with_diagnostics(
+    root: &Path,
+    source: SkillSource,
+) -> (Vec<SkillDef>, Vec<SkippedSkill>) {
     let mut skills = BTreeMap::new();
     let mut skipped = Vec::new();
     scan_skills_root(
@@ -382,7 +391,7 @@ pub(crate) fn load_root(root: &Path, source: SkillSource) -> Vec<SkillDef> {
         &mut skills,
         &mut SkipSink::Collect(&mut skipped),
     );
-    skills.into_values().collect()
+    (skills.into_values().collect(), skipped)
 }
 
 fn scan_skills_root(

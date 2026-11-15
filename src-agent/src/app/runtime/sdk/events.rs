@@ -7,7 +7,9 @@
 //! `room.gap` (the lines stay in the room's ring). `room.status` is a latest-wins
 //! slot. Only one epoch is accepted at a time, so nothing of an older binding is
 //! written after a rebind. While an attach is being answered the queue is held,
-//! and the writer releases it once that response is out. A coding binding never
+//! and the writer releases it once that attach response is out: every
+//! activation has its own generation, and only the response that carries it
+//! releases the hold. A coding binding never
 //! queues anything here, so its events are written exactly as before.
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
@@ -68,6 +70,11 @@ struct Inner {
     bytes: usize,
     status: Option<Value>,
     held: bool,
+    /// Counts activations, so a hold is released only by its own response.
+    generation: u64,
+    /// The hold of the latest activation, until the response it belongs to
+    /// takes it.
+    unclaimed: Option<u64>,
     /// The `line_seq` of the last line the client has: from the attach result,
     /// then from each written `room.line`.
     last_line: u64,
@@ -137,17 +144,29 @@ impl EventQueue {
     }
 
     /// Start accepting `epoch`. Everything queued for an earlier epoch is
-    /// discarded, and nothing is written until the next response is out.
-    /// `last_line_seq` is the newest line the attach result already carries.
+    /// discarded, and nothing is written until the response being answered
+    /// (the one that claims this hold with [`EventQueue::claim_hold`]) is
+    /// out. `last_line_seq` is the newest line the attach result already
+    /// carries.
     pub fn activate(&self, epoch: &str, last_line_seq: u64) {
         let mut inner = self.lock();
+        let generation = inner.generation + 1;
         *inner = Inner {
             accepting: Some(epoch.to_string()),
             label: epoch.to_string(),
             held: true,
+            generation,
+            unclaimed: Some(generation),
             last_line: last_line_seq,
             ..Inner::default()
         };
+    }
+
+    /// The hold set while the current request was answered, if any. The
+    /// response frame carries it to the writer, which passes it to
+    /// [`EventQueue::response_written`] once that frame is out.
+    pub fn claim_hold(&self) -> Option<u64> {
+        self.lock().unclaimed.take()
     }
 
     /// Stop accepting events. What is already queued is still written, before
@@ -290,10 +309,11 @@ impl EventQueue {
         frames
     }
 
-    /// A response was written: a held queue may now be written.
-    pub fn response_written(&self) {
+    /// The response that claimed hold `generation` was written: the queue
+    /// may now be written, unless a later activation holds it again.
+    pub fn response_written(&self, generation: u64) {
         let mut inner = self.lock();
-        if inner.held {
+        if inner.held && inner.generation == generation {
             inner.held = false;
             let pending = !inner.items.is_empty() || inner.status.is_some();
             drop(inner);
@@ -301,6 +321,15 @@ impl EventQueue {
                 self.notify.notify_one();
             }
         }
+    }
+}
+
+/// What the writer does once a response is out, for tests that dispatch
+/// without the writer.
+#[cfg(test)]
+pub fn release_after_response(queue: &EventQueue) {
+    if let Some(generation) = queue.claim_hold() {
+        queue.response_written(generation);
     }
 }
 

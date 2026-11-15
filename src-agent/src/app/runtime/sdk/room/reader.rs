@@ -230,6 +230,11 @@ pub enum Want {
 pub struct Pending {
     pub want: Want,
     pub reply: oneshot::Sender<Value>,
+    /// For an `sdk_user` send: the text of the adapter's echo line. The
+    /// reader numbers it when the accepting `sdk_ack` arrives, before it
+    /// reads the next frame, so the echo precedes the room's reply to it.
+    /// The ack is handed over with `echo_line_seq` set.
+    pub echo: Option<String>,
 }
 
 /// The mutable state of one binding, shared by the reader and the handlers.
@@ -528,14 +533,27 @@ impl Core {
         self.bump();
     }
 
-    /// Hand a direct answer to the pending request that waits for it.
-    fn answer(&self, got: Want, value: Value) {
+    /// Hand a direct answer to the pending request that waits for it. An
+    /// accepting ack of a send first puts the send's echo line in the ring.
+    fn answer(&self, got: Want, mut value: Value) {
         let mut state = self.lock();
-        if state.pending.as_ref().is_some_and(|p| p.want == got) {
-            if let Some(pending) = state.pending.take() {
-                let _ = pending.reply.send(value);
+        if !state.pending.as_ref().is_some_and(|p| p.want == got) {
+            return;
+        }
+        let Some(pending) = state.pending.take() else {
+            return;
+        };
+        drop(state);
+        if let Some(text) = &pending.echo {
+            if value.get("ok").and_then(Value::as_bool) == Some(true) {
+                let inserts = super::send::ack_inserts(&value);
+                let line_seq = self.echo(&crate::room::daemon::stage::with_inserts(text, &inserts));
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("echo_line_seq".into(), json!(line_seq));
+                }
             }
         }
+        let _ = pending.reply.send(value);
     }
 
     fn stall(&self) {

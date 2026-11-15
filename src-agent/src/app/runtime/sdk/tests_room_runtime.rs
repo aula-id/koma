@@ -94,6 +94,9 @@ struct Script {
     live: Vec<Value>,
     lanes: Vec<&'static str>,
     ack_ok: bool,
+    /// Written right after the answer to a send, as a room that replies at
+    /// once does.
+    reply: Option<Value>,
 }
 
 impl Default for Script {
@@ -104,6 +107,7 @@ impl Default for Script {
             live: Vec::new(),
             lanes: vec!["chief", "red-web", "clerk"],
             ack_ok: true,
+            reply: None,
         }
     }
 }
@@ -266,6 +270,14 @@ async fn serve(
                                 "error": format!("could not read the image with key {PLANTED_KEY}")}})
                         };
                         write_value(&mut write, &ack).await?;
+                        if let Some(reply) = &script.reply {
+                            write_value(&mut write, reply).await?;
+                        }
+                    }
+                    "user" => {
+                        if let Some(reply) = &script.reply {
+                            write_value(&mut write, reply).await?;
+                        }
                     }
                     "sdk_reload" => {
                         let id = value["sdk_reload"]["id"].clone();
@@ -381,7 +393,7 @@ impl Rig {
         )
         .await;
         // As the writer does once a response is out.
-        self.adapter.queue.response_written();
+        crate::app::runtime::sdk::events::release_after_response(&self.adapter.queue);
         result
     }
 
@@ -512,7 +524,7 @@ async fn no_event_precedes_the_attach_response_and_line_seq_is_not_the_envelope_
     tokio::time::sleep(Duration::from_millis(200)).await;
     // Held until the response is written.
     assert!(rig.events().is_empty(), "nothing before the response");
-    rig.adapter.queue.response_written();
+    crate::app::runtime::sdk::events::release_after_response(&rig.adapter.queue);
     let mut events = Vec::new();
     until("the live line event", || {
         events.extend(rig.adapter.queue.take_ready(&mut rig.seq));
@@ -760,6 +772,47 @@ async fn sdk_user_sends_one_frame_with_or_without_attachments_and_echoes_first()
     assert_eq!(shell["acked"], true);
     assert_eq!(fake.received("sdk_user")[2]["sdk_user"]["text"], "!echo hi");
     assert!(fake.received("user").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_written_right_after_the_send_comes_after_its_echo() {
+    // The room's answer to a send is the sync point: its echo is numbered
+    // before the reply that follows the ack on the stream.
+    let (mut rig, _fake) = single_room(Script {
+        reply: Some(chief("the clerk only speaks to the chief")),
+        ..Script::default()
+    });
+    attach(&mut rig, 0).await;
+    rig.events();
+    let mut echoes = Vec::new();
+    for n in 0..20 {
+        let sent = rig
+            .call("room.send", json!({"text": format!("@clerk hello {n}")}))
+            .await
+            .unwrap();
+        echoes.push(sent["echo_line_seq"].as_u64().unwrap());
+    }
+    let mut events = Vec::new();
+    until("every reply", || {
+        events.extend(rig.events());
+        line_events(&events).len() >= 40
+    })
+    .await;
+    let lines: Vec<(u64, String)> = line_events(&events)
+        .iter()
+        .map(|e| {
+            (
+                e["line"]["line_seq"].as_u64().unwrap(),
+                e["line"]["origin"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    for (n, pair) in lines.chunks(2).enumerate() {
+        assert_eq!(pair[0].1, "adapter_echo", "{lines:?}");
+        assert_eq!(pair[0].0, echoes[n]);
+        assert_eq!(pair[1].1, "room", "{lines:?}");
+        assert!(pair[1].0 > pair[0].0);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1233,7 +1286,7 @@ fn line_body(epoch: &str, seq: u64) -> Value {
 fn the_queue_merges_deltas_per_author_lane_and_kind() {
     let queue = EventQueue::new();
     queue.activate("e", 0);
-    queue.response_written();
+    crate::app::runtime::sdk::events::release_after_response(&queue);
     queue.push_delta("e", "a", "chat", "text", "He");
     queue.push_delta("e", "b", "chat", "text", "x");
     queue.push_delta("e", "a", "chat", "text", "llo");
@@ -1269,7 +1322,7 @@ fn the_queue_merges_deltas_per_author_lane_and_kind() {
 fn an_overflowing_queue_drops_lines_and_deltas_for_one_gap() {
     let queue = EventQueue::new();
     queue.activate("e", 3);
-    queue.response_written();
+    crate::app::runtime::sdk::events::release_after_response(&queue);
     queue.push(
         "e",
         "room.notice",
@@ -1300,7 +1353,7 @@ fn an_overflowing_queue_drops_lines_and_deltas_for_one_gap() {
 fn the_queue_holds_until_a_response_and_accepts_one_epoch() {
     let queue = EventQueue::new();
     queue.activate("old", 0);
-    queue.response_written();
+    crate::app::runtime::sdk::events::release_after_response(&queue);
     queue.push_line("old", 1, line_body("old", 1));
     queue.activate("new", 5);
     queue.push_line("old", 2, line_body("old", 2));
@@ -1309,7 +1362,7 @@ fn the_queue_holds_until_a_response_and_accepts_one_epoch() {
     queue.set_status("new", json!({"epoch": "new", "status": {"n": 2}}));
     let mut seq = 0;
     assert!(queue.take_ready(&mut seq).is_empty(), "held");
-    queue.response_written();
+    crate::app::runtime::sdk::events::release_after_response(&queue);
     let frames = queue.take_ready(&mut seq);
     assert_eq!(frames.len(), 2);
     assert!(frames.iter().all(|f| f["epoch"] == "new"));
@@ -1318,6 +1371,40 @@ fn the_queue_holds_until_a_response_and_accepts_one_epoch() {
     queue.deactivate();
     queue.push_line("new", 7, line_body("new", 7));
     assert!(queue.take_ready(&mut seq).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_earlier_response_still_being_written_does_not_release_an_attach_hold() {
+    use tokio::io::AsyncBufReadExt;
+    let queue = std::sync::Arc::new(EventQueue::new());
+    let (out, read) = tokio::io::duplex(256);
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let (_states_tx, states) = tokio::sync::watch::channel(None);
+    let writer = tokio::spawn(writer(out, rx, states, std::sync::Arc::clone(&queue)));
+    // A large earlier response is still being written while the attach is
+    // answered: the reader is slow and the pipe holds only 256 bytes.
+    let big = json!({"type": "response", "id": "history", "result": "x".repeat(64 * 1024)});
+    tx.send((big, None)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    queue.activate("e", 0);
+    queue.push_line("e", 1, line_body("e", 1));
+    let hold = queue.claim_hold();
+    assert!(hold.is_some());
+    let attach = json!({"type": "response", "id": "attach", "result": {}});
+    tx.send((attach, hold)).await.unwrap();
+    let mut lines = tokio::io::BufReader::new(read).lines();
+    let mut order = Vec::new();
+    while order.len() < 3 {
+        let line = lines.next_line().await.unwrap().unwrap();
+        let frame: Value = serde_json::from_str(&line).unwrap();
+        order.push(frame["id"].as_str().map_or_else(
+            || frame["event"].as_str().unwrap().to_string(),
+            str::to_string,
+        ));
+    }
+    assert_eq!(order, ["history", "attach", "room.line"]);
+    drop(tx);
+    writer.await.unwrap().unwrap();
 }
 
 fn text_line(text: &str) -> RoomLine {

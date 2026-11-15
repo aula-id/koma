@@ -100,7 +100,7 @@ A `Session` also has the global config writes `config_providers_delete`, `config
 
 ## Sessions
 
-`Host` lists and manages sessions of every kind without binding one. Each call is gated on the adapter's `methods`.
+`Host` lists and manages sessions of every kind without binding one. Each call is gated on the adapter's `methods`. The session, usage, skill and room-listing calls below, and the `room_team_get`/`room_*` template calls, work in every binding: a `Session` or `Room` has them too and sends them on its own adapter.
 
 ```python
 page = await host.sessions_list(kind="all", live=None, limit=100)     # SessionPage, newest first
