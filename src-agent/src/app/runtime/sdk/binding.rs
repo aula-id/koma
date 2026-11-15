@@ -1,5 +1,6 @@
 //! What one adapter process is bound to, and the errors for a call made in the
 //! wrong binding.
+pub use super::room::RoomBinding;
 use super::{
     connection::Connection,
     protocol::{Reason, RpcError},
@@ -33,23 +34,13 @@ impl BindingState {
     }
 }
 
-/// A room binding. It has no values yet, so the room states can be named in
-/// the route table and in errors but never entered.
-pub enum RoomBinding {}
-
-impl RoomBinding {
-    pub fn state(&self) -> BindingState {
-        match *self {}
-    }
-}
-
 /// One adapter holds at most one binding. A coding binding never returns to
-/// unbound.
+/// unbound; a room binding does on `room.close`. A room binding is ROOM(live)
+/// while its stream is up and ROOM(closed) after it ended.
 pub enum Binding {
     Unbound,
     Coding(Box<Connection>),
-    #[allow(dead_code)] // Uninhabited until rooms can be bound.
-    Room(RoomBinding),
+    Room(Box<RoomBinding>),
 }
 
 impl Binding {
@@ -67,12 +58,25 @@ impl Binding {
             _ => None,
         }
     }
+
+    pub fn room(&self) -> Option<&RoomBinding> {
+        match self {
+            Binding::Room(room) => Some(room),
+            _ => None,
+        }
+    }
+
+    pub fn room_mut(&mut self) -> Option<&mut RoomBinding> {
+        match self {
+            Binding::Room(room) => Some(room),
+            _ => None,
+        }
+    }
 }
 
 /// How a method relates to bindings; it decides which error a call in the
 /// wrong binding gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Families without methods yet keep their refusal rules here.
 pub enum Family {
     /// v1 session methods: `state`, `submit`, `enqueue`, `interrupt`,
     /// `interrupt_and_submit`, `approve`.

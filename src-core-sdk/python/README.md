@@ -98,13 +98,81 @@ A `Session` also has the global config writes `config_providers_delete`, `config
 
 `session.requests_remaining` counts the requests this adapter still accepts. When it reaches 0 calls raise `TransportError` before sending; detach and `resume` the session from a fresh adapter well before that.
 
+## Sessions
+
+`Host` lists and manages sessions of every kind without binding one. Each call is gated on the adapter's `methods`.
+
+```python
+page = await host.sessions_list(kind="all", live=None, limit=100)     # SessionPage, newest first
+while page.next_cursor:                                               # cursors are opaque; pass them back
+    page = await host.sessions_list(limit=100, cursor=page.next_cursor)
+await host.sessions_rename(session_id, "nightly build")               # a room, or a session that is not live
+await host.sessions_stop(session_id)                                  # disconnects every client of that daemon
+await host.sessions_delete(session_id)                                # refused while live, locked or bound
+```
+
+A `SessionRow` has `kind` (`coding` or `room`), `live`, `working` (`None` for rooms), `locked`, `bound`, and for linked sessions `parent_session_id` / `room_session_id` / `room_live`. Renaming another *live* coding session is refused with `reason == "live"`: rename it from the adapter bound to it, or stop it first. A delete or stop whose outcome is unknown raises `DeliveryUnknown`; list again before retrying. A delete keeps usage rows and a child room (`orphaned_room_session_id`).
+
+`client.create(cwd, name="nightly build")` names the session. It needs the `create.name` feature (otherwise `IncompatibleAdapter`, before anything starts). If naming fails the session still exists: check `session.warnings` for `rename_failed`. See [`examples/sessions.py`](examples/sessions.py).
+
+## Usage
+
+```python
+report = await host.usage_query(from_at=start, to_at=end, group_by="model", bucket="day", tz_offset_minutes=0)
+report.totals.cost, report.ledger          # LedgerState.MISSING: nothing was ever recorded; not an error
+for g in report.groups: ...                # sorted by cost; `groups_truncated` if `limit` cut them
+for b in report.buckets: ...               # ascending, empty buckets included
+```
+
+`group_by` is `none`, `model`, `role` or `session`; `bucket` is `none`, `hour`, `day` or `week`. Times are unix seconds; the default window is the last 30 days. More than 400 days or 1000 buckets is `reason == "range_too_large"`; a query that takes over 2 s is `query_timeout`. Only the roles `main` and `sub:<agent>` are recorded; a room's lanes appear under the room's session id (`chief` is its Main). A query holds a read lock on the ledger while it runs, so poll no more than every 30 seconds. See [`examples/usage.py`](examples/usage.py).
+
+## Skills
+
+```python
+page = await host.skills_list(workdir="/abs/project", include_diagnostics=True)   # every tier; `effective` marks the winner
+detail = await host.skills_get("code-review", tier="project-agents", workdir="/abs/project", include_raw=True)
+made = await host.skills_create(scope="project", workdir="/abs/project", name="triage",
+                                description="Triage issues", instruction="Label them.")
+await host.skills_update(tier="project-agents", workdir="/abs/project", name="triage",
+                         generation=made.skill.generation, patch={"instruction": "Label and assign."})
+await host.skills_install(scope="computer", data=open("pack.zip", "rb").read())   # or path="/abs/pack.zip"
+await host.skills_remove(tier="project-agents", workdir="/abs/project", name="triage")
+```
+
+A skill is addressed by `(tier, name)`; the tiers are `global`, `claude`, `project-agent`, `project-agents` and `extra-root:<n>`. New skills go to scope `computer` (`global`) or `project` (`project-agents`). The `claude` and `extra-root` tiers are read only (`reason == "read_only"`). Project tiers need `workdir` on a `Host` (`workdir_required`). Pass the `generation` you read to `skills_update` and `skills_remove`; a changed skill is `reason == "stale"`. New skill names are lowercase letters, digits and single hyphens, up to 64 bytes, and not `skill` or `readme`; the client checks this before sending.
+
+`skills_install(data=...)` sends the zip inline, base64 encoded: at most 28 MiB (`hello.limits["skills"]["inline_zip_bytes"]`), checked before anything is encoded or sent. `inline_zip(data)` is the same helper if you want the encoded text. A larger zip (up to 64 MiB) goes by `path=`, which must be absolute and readable by the adapter. Results carry `propagation.skills`: `next_rebuild` (a running coding session sees the change at its next system-prompt rebuild) or `room_restart` (a room reads its skills when it starts). See [`examples/skills.py`](examples/skills.py).
+
+## Room
+
+A room is the multi-agent team of a coding session. `client.room_open(parent_session_id)` starts it if needed and attaches; `client.room_attach(room_session_id)` attaches a running one (`reason == "not_running"` otherwise). Each `Room` owns one adapter. **A room has one live viewer**: opening or attaching takes the view from any other client, the terminal included.
+
+```python
+async with await client.room_open(parent_id, tail=20) as room:
+    room.attached.tail, room.attached.roster, room.attached.status      # render these first
+    await room.send("scan /login", to="scout")                          # shell=True runs a shell line; attachments= for images/text
+    async for event in room.events():                                   # typed, current epoch only
+        match event:
+            case RoomLineEvent(line=line): print(line.author, line.text)
+            case RoomStatusEvent(status=status): ...
+            case RoomClosedEvent(reason=reason): print(reason); break   # the iterator ends here
+```
+
+Calls: `send`, `interrupt`, `control(action, avatar, note=)` (`pause`, `resume`, `stop`, `redirect`), `status`, `history`, `shelf_list`, `item`, `trajectory`, `reports`, `spend`, `team_get`, `models_set`, `avatars_upsert`, `avatars_remove`, and `close(stop=False)` (releases the room and the adapter; `aclose()` only drops the connection). `room.requests_remaining` counts the requests the adapter still accepts; attach again from a fresh `Room` before it reaches 0. A room write whose outcome is unknown raises `DeliveryUnknown` and is never retried: a failed send moves the binding to closed, so read `history()` before sending again.
+
+**Events.** `RoomLineEvent` (history lines, in `line_seq` order, each once), `RoomDeltaEvent` (streaming text, never history), `RoomStatusEvent`, `RoomNoticeEvent` (`stalled` means the view is stale; the binding stays open), `RoomGapEvent` and `RoomClosedEvent`. A line is identified by `(epoch, line_seq)`; `line_seq` restarts at 1 in each epoch, and the envelope `seq` is a different counter. `events()` ignores events of an earlier epoch. After a `RoomGapEvent`, or when the client-side queue overflowed (256 events), it fetches the missed lines with `history()` and yields them as `RoomLineEvent(recovered=True)`, then a fresh `RoomStatusEvent`. It never reads coding-session `state`. `history()` holds the room's replay (at most 2000 lines) plus live lines, nothing older.
+
+**Closing.** `RoomClosedEvent.reason` is `taken_over` (another client attached), `daemon_exit` or `stream_error`. The handle reports it (`room.closed_reason`, `room.live`) and does not re-attach by itself, or two clients would take the view from each other forever. Reads (`history`, `shelf_list`, `item`, ...) keep working on a closed room; writes to the room are `reason == "room_closed"`. `await room.reattach()` takes the room back (`room.attach`), `await room.reopen()` starts it again (`room.open` on its parent); each starts a new epoch with a fresh line buffer.
+
+**Team.** `team_get()` returns the effective team for a layer (`room` by default, or `target="template"` for `~/.koma/room/`). `models_set`, `avatars_upsert` and `avatars_remove` take `target="room"` or `"template"` and `if_revision=team.revision`. An omitted `model`, `effort`, `display` or `alias` keeps the layer's value; `None` clears it so the layer below applies. Roles are read only. The result's `applies` says when it takes effect: `live` (the next lane turn), `next_reload` or `next_start`; the template is read once when a room starts. `Host.room_team_get`, `room_models_set`, `room_avatars_upsert` and `room_avatars_remove` edit the template without a room, and `Host.room_list()` lists rooms. Writes with `target="template"` need the `room.template` feature. See [`examples/room.py`](examples/room.py).
+
 ## Errors and new values
 
 `RemoteError` exposes `code`, `message`, and from newer adapters `reason`, `binding`, `allowed`, `written` and `detail`. Branch on `reason`, never on `message`; handle an unknown `reason` by its `code`. A call made in the wrong binding has `reason="wrong_binding"` with the adapter's `binding` and the `allowed` ones.
 
 A mutation answered with `delivery:"unknown"` raises `DeliveryUnknown`; its `cause` is the `RemoteError`, whose `written` is `True` when bytes were committed (`reason="unverified"`). Read the config again before doing anything else. `dry_run=True` deletes and all reads are not mutations.
 
-Enum-like strings added after v1 are open: `ConfigFile`, `ConfigViewKind`, `MainFallback`, `KeyState`, `ProviderKind`, `RouteOrigin`, `RouteReason`, `EffortState` and `PropagationStatus` map a value this library does not know to their `OTHER` member instead of failing. Treat `OTHER` as "unknown, show it neutrally". The original enums (`Role`, `GateKind`, `TurnStatus`, `Disposition`, policy) and `PublicRole` are closed; an unknown value there is a protocol error.
+Enum-like strings added after v1 are open: `ConfigFile`, `ConfigViewKind`, `MainFallback`, `KeyState`, `ProviderKind`, `RouteOrigin`, `RouteReason`, `EffortState`, `PropagationStatus`, and the session, usage, skill and room enums (`SessionKind`, `LedgerState`, `SkillScope`, `LineKind`, `LanePhase`, `CloseReason`, `Applies`, ...) map a value this library does not know to their `OTHER` member instead of failing. Treat `OTHER` as "unknown, show it neutrally". The original enums (`Role`, `GateKind`, `TurnStatus`, `Disposition`, policy) and `PublicRole` are closed; an unknown value there is a protocol error.
 
 ## Maintainers
 

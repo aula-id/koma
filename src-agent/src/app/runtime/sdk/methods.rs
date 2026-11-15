@@ -3,7 +3,7 @@
 use super::{
     binding::{refusal, BindingState, Family},
     coding,
-    host::config,
+    host::{config, usage},
     protocol::{Request, RpcError},
     Adapter,
 };
@@ -26,10 +26,28 @@ pub const LEGACY_METHODS: &[&str] = &[
 ];
 
 /// Static per binary; never depends on the binding.
-pub const FEATURES: &[&str] = &["errors.reason", "state.session_info", "config.lock"];
+pub const FEATURES: &[&str] = &[
+    "errors.reason",
+    "state.session_info",
+    "config.lock",
+    "create.name",
+    "bindings.room",
+    "events.room",
+    "room.template",
+];
 
 /// Every event kind this binary can emit.
-pub const EVENTS: &[&str] = &["state", "output_append", "turn"];
+pub const EVENTS: &[&str] = &[
+    "state",
+    "output_append",
+    "turn",
+    "room.line",
+    "room.delta",
+    "room.status",
+    "room.notice",
+    "room.closed",
+    "room.gap",
+];
 
 pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, RpcError>> + 'a>>;
 /// A handler runs only after its route accepted the current binding.
@@ -61,6 +79,9 @@ impl Route {
 const UNBOUND: &[BindingState] = &[BindingState::Unbound];
 const CODING: &[BindingState] = &[BindingState::Coding];
 const ANY: &[BindingState] = &BindingState::ALL;
+const ROOM_BINDERS: &[BindingState] = &[BindingState::Unbound, BindingState::RoomClosed];
+const ROOM: &[BindingState] = &[BindingState::RoomLive, BindingState::RoomClosed];
+const ROOM_LIVE: &[BindingState] = &[BindingState::RoomLive];
 
 const fn route(
     method: &'static str,
@@ -144,6 +165,156 @@ pub const ROUTES: &[Route] = &[
         Family::Coding,
         CODING,
         coding::handle_sessions_info,
+    ),
+    route(
+        "sessions.list",
+        Family::Host,
+        ANY,
+        super::host::sessions::handle_list,
+    ),
+    route(
+        "sessions.rename",
+        Family::Host,
+        ANY,
+        super::host::sessions::handle_rename,
+    ),
+    route(
+        "sessions.delete",
+        Family::Host,
+        ANY,
+        super::host::sessions::handle_delete,
+    ),
+    route(
+        "sessions.stop",
+        Family::Host,
+        ANY,
+        super::host::sessions::handle_stop,
+    ),
+    // The ledger is global, so any binding may read it.
+    route("usage.query", Family::Host, ANY, usage::handle_query),
+    // Skills run in-process on disk in every binding; no skill IPC is sent.
+    route(
+        "skills.list",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_list,
+    ),
+    route("skills.get", Family::Host, ANY, super::host::skills::handle_get),
+    route(
+        "skills.read_file",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_read_file,
+    ),
+    route(
+        "skills.install",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_install,
+    ),
+    route(
+        "skills.remove",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_remove,
+    ),
+    route(
+        "skills.create",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_create,
+    ),
+    route(
+        "skills.update",
+        Family::Host,
+        ANY,
+        super::host::skills::handle_update,
+    ),
+    route("room.list", Family::Host, ANY, super::room::handle_list),
+    // In ROOM(closed) these drop the dead binding and bind anew.
+    route(
+        "room.open",
+        Family::Binder,
+        ROOM_BINDERS,
+        super::room::handle_open,
+    ),
+    route(
+        "room.attach",
+        Family::Binder,
+        ROOM_BINDERS,
+        super::room::handle_attach,
+    ),
+    route("room.close", Family::Room, ROOM, super::room::handle_close),
+    route(
+        "room.send",
+        Family::RoomSocket,
+        ROOM_LIVE,
+        super::room::send::handle_send,
+    ),
+    route(
+        "room.interrupt",
+        Family::RoomSocket,
+        ROOM_LIVE,
+        super::room::send::handle_interrupt,
+    ),
+    route(
+        "room.control",
+        Family::RoomSocket,
+        ROOM_LIVE,
+        super::room::send::handle_control,
+    ),
+    route("room.status", Family::Room, ROOM, super::room::handle_status),
+    route(
+        "room.history",
+        Family::Room,
+        ROOM,
+        super::room::handle_history,
+    ),
+    route(
+        "room.shelf.list",
+        Family::Room,
+        ROOM,
+        super::room::reads::handle_shelf_list,
+    ),
+    route("room.item", Family::Room, ROOM, super::room::reads::handle_item),
+    route(
+        "room.trajectory",
+        Family::Room,
+        ROOM,
+        super::room::reads::handle_trajectory,
+    ),
+    route(
+        "room.reports",
+        Family::Room,
+        ROOM,
+        super::room::reads::handle_reports,
+    ),
+    route("room.spend", Family::Room, ROOM, super::room::spend::handle_spend),
+    // `target:"template"` works in any binding; the handlers refuse
+    // `target:"room"` outside a room binding.
+    route(
+        "room.team.get",
+        Family::Host,
+        ANY,
+        super::room::team::handle_get,
+    ),
+    route(
+        "room.models.set",
+        Family::Host,
+        ANY,
+        super::room::team::handle_models_set,
+    ),
+    route(
+        "room.avatars.upsert",
+        Family::Host,
+        ANY,
+        super::room::team::handle_avatars_upsert,
+    ),
+    route(
+        "room.avatars.remove",
+        Family::Host,
+        ANY,
+        super::room::team::handle_avatars_remove,
     ),
 ];
 

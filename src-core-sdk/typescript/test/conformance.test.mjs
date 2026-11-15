@@ -185,7 +185,8 @@ test('hello carries methods features events limits and requires only the v1 capa
   assert.deepEqual(hello.capabilities, ['create','resume','state','submit','enqueue','interrupt','interrupt_and_submit','approve','configure','detach']);
   assert.ok(hello.methods.includes('config.get') && hello.methods.includes('sessions.info'));
   assert.ok(hello.features.includes('errors.reason'));
-  assert.deepEqual(hello.events, ['state', 'output_append', 'turn']);
+  assert.deepEqual(hello.events.slice(0, 3), ['state', 'output_append', 'turn']);
+  assert.ok(hello.events.includes('room.line') && hello.events.includes('room.gap'));
   assert.equal(hello.limits.request_ids, 65536);
  } finally { await c.close(); }
  const legacy = client('legacy_hello');
@@ -293,13 +294,19 @@ test('wrong binding errors expose reason binding allowed', async () => {
  } finally { await t.close(); }
  const unbound = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'wrong_binding'], timeoutMs: 1000 });
  try {
-  // Room methods are not advertised, so they are unsupported; the role is checked before the binding.
-  await assert.rejects(unbound.request('room.status', {}), e => e.code === 'unsupported_method' && e.reason === undefined);
+  // The role is checked before the binding.
+  await assert.rejects(unbound.request('room.status', {}), e => e.reason === 'wrong_binding' && e.allowed.join() === 'room_live,room_closed');
   await assert.rejects(unbound.request('config.roles.unassign', { role: 'planner', scope: 'session' }), e => e.reason === 'out_of_range');
   // Unbound detach keeps its v1 error, with no added keys.
   await assert.rejects(unbound.request('detach', {}), e => e.code === 'invalid_state' && e.message === 'no session bound'
    && e.reason === undefined && e.binding === undefined);
  } finally { await unbound.close(); }
+ const closed = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'wrong_binding', '--binding', 'room_closed'], timeoutMs: 1000 });
+ try {
+  await assert.rejects(closed.request('config.limits.get', {}), e => e.reason === 'wrong_binding' && e.binding === 'room_closed'
+   && e.message === 'config.limits.get requires binding coding; this adapter is room_closed');
+  assert.equal((await closed.request('config.get', {})).view, 'global');
+ } finally { await closed.close(); }
 });
 
 test('session config calls keep session_info ordered by observed_at_ms', async () => {

@@ -40,7 +40,27 @@ pub fn limits() -> serde_json::Value {
             "total_bytes": ATTACHMENT_BYTES,
         },
         "config": {"lock_wait_ms": CONFIG_LOCK_WAIT.as_millis()},
-        "time": {"ipc_ms": super::connection::BUDGET.as_millis()},
+        "list": {
+            "sessions": super::host::sessions::LIST_MAX,
+            "usage_groups": crate::model::usage::query::MAX_GROUP_LIMIT,
+            "usage_buckets": crate::model::usage::query::MAX_BUCKETS,
+            "skills": super::host::skills::MAX_LIST,
+            "rooms": super::room::LIST_ROOMS,
+            "history_lines": super::room::ring::HISTORY_LINES,
+            "shelf_rows": super::room::reads::SHELF_ROWS,
+            "reports": super::room::reads::REPORTS,
+            "trajectory_goals": super::room::reads::GOALS,
+            "trajectory_nodes": super::room::reads::GOAL_NODES,
+            "trajectory_edges": super::room::reads::GOAL_EDGES,
+        },
+        "room": super::room::limits(),
+        "skills": super::host::skills::limits(),
+        "time": {
+            "ipc_ms": super::connection::BUDGET.as_millis(),
+            "session_stop_ms": super::host::sessions::STOP_BUDGET.as_millis(),
+            "usage_query_ms": crate::model::usage::query::DEADLINE.as_millis(),
+            "room_start_ms": super::room::ROOM_START_MAX.as_millis(),
+        },
     })
 }
 #[derive(Debug, Deserialize)]
@@ -81,6 +101,9 @@ pub struct Create {
     pub policy: Option<Policy>,
     #[serde(default)]
     pub external_approvals: bool,
+    /// Validated before anything is spawned; applied once the session is
+    /// attached.
+    pub name: Option<serde_json::Value>,
 }
 #[derive(Debug, Deserialize)]
 pub struct Resume {
@@ -182,6 +205,48 @@ pub enum Reason {
     IoError,
     Unverified,
     PartialApply,
+    Binary,
+    BoundSelf,
+    ClerkNotAddressable,
+    EpochChanged,
+    InvalidName,
+    LaneRunning,
+    LayerRejected,
+    Live,
+    NoMainRoute,
+    NoSuchLane,
+    NoWorkLane,
+    NotARoom,
+    NotRunning,
+    NoteRequired,
+    ParentIsRoom,
+    PartialDelete,
+    ReadOnly,
+    RejectedByRoom,
+    ReservedId,
+    RestoreFailed,
+    RoleImmutable,
+    RoomIdInUse,
+    RoomStartFailed,
+    RoomUnreadable,
+    SessionLocked,
+    SqliteBusy,
+    StillRunning,
+    TargetRequired,
+    UnknownAvatar,
+    UnknownModel,
+    UnknownRole,
+    UnsafeYaml,
+    WorkdirRequired,
+    AttachmentRefused,
+    BadCursor,
+    Exists,
+    InvalidPackage,
+    PeerUnsupported,
+    QueryTimeout,
+    RangeTooLarge,
+    StreamError,
+    TooLarge,
 }
 
 impl Reason {
@@ -207,6 +272,48 @@ impl Reason {
             Reason::IoError => "io_error",
             Reason::Unverified => "unverified",
             Reason::PartialApply => "partial_apply",
+            Reason::AttachmentRefused => "attachment_refused",
+            Reason::BadCursor => "bad_cursor",
+            Reason::Exists => "exists",
+            Reason::InvalidPackage => "invalid_package",
+            Reason::PeerUnsupported => "peer_unsupported",
+            Reason::QueryTimeout => "query_timeout",
+            Reason::RangeTooLarge => "range_too_large",
+            Reason::StreamError => "stream_error",
+            Reason::TooLarge => "too_large",
+            Reason::Binary => "binary",
+            Reason::BoundSelf => "bound_self",
+            Reason::ClerkNotAddressable => "clerk_not_addressable",
+            Reason::EpochChanged => "epoch_changed",
+            Reason::InvalidName => "invalid_name",
+            Reason::LaneRunning => "lane_running",
+            Reason::LayerRejected => "layer_rejected",
+            Reason::Live => "live",
+            Reason::NoMainRoute => "no_main_route",
+            Reason::NoSuchLane => "no_such_lane",
+            Reason::NoWorkLane => "no_work_lane",
+            Reason::NotARoom => "not_a_room",
+            Reason::NotRunning => "not_running",
+            Reason::NoteRequired => "note_required",
+            Reason::ParentIsRoom => "parent_is_room",
+            Reason::PartialDelete => "partial_delete",
+            Reason::ReadOnly => "read_only",
+            Reason::RejectedByRoom => "rejected_by_room",
+            Reason::ReservedId => "reserved_id",
+            Reason::RestoreFailed => "restore_failed",
+            Reason::RoleImmutable => "role_immutable",
+            Reason::RoomIdInUse => "room_id_in_use",
+            Reason::RoomStartFailed => "room_start_failed",
+            Reason::RoomUnreadable => "room_unreadable",
+            Reason::SessionLocked => "session_locked",
+            Reason::SqliteBusy => "sqlite_busy",
+            Reason::StillRunning => "still_running",
+            Reason::TargetRequired => "target_required",
+            Reason::UnknownAvatar => "unknown_avatar",
+            Reason::UnknownModel => "unknown_model",
+            Reason::UnknownRole => "unknown_role",
+            Reason::UnsafeYaml => "unsafe_yaml",
+            Reason::WorkdirRequired => "workdir_required",
         }
     }
 
@@ -215,8 +322,28 @@ impl Reason {
             Reason::OutOfRange
             | Reason::MissingParams
             | Reason::ConflictingParams
-            | Reason::NotOffered => "invalid_request",
-            Reason::NotFound => "not_found",
+            | Reason::NotOffered
+            | Reason::AttachmentRefused
+            | Reason::BadCursor
+            | Reason::InvalidPackage
+            | Reason::RangeTooLarge
+            | Reason::TooLarge
+            | Reason::Binary
+            | Reason::ClerkNotAddressable
+            | Reason::InvalidName
+            | Reason::LayerRejected
+            | Reason::NoSuchLane
+            | Reason::NoWorkLane
+            | Reason::NoteRequired
+            | Reason::ParentIsRoom
+            | Reason::ReservedId
+            | Reason::RoleImmutable
+            | Reason::TargetRequired
+            | Reason::WorkdirRequired => "invalid_request",
+            Reason::NotFound
+            | Reason::UnknownAvatar
+            | Reason::UnknownModel
+            | Reason::UnknownRole => "not_found",
             Reason::WrongBinding
             | Reason::AlreadyBound
             | Reason::RoomClosed
@@ -224,20 +351,51 @@ impl Reason {
             | Reason::Managed
             | Reason::MainChanged
             | Reason::OptionsNotReady
-            | Reason::DaemonRefused => "invalid_state",
+            | Reason::DaemonRefused
+            | Reason::Exists
+            | Reason::PeerUnsupported
+            | Reason::BoundSelf
+            | Reason::EpochChanged
+            | Reason::LaneRunning
+            | Reason::Live
+            | Reason::NoMainRoute
+            | Reason::NotARoom
+            | Reason::NotRunning
+            | Reason::ReadOnly
+            | Reason::RejectedByRoom
+            | Reason::RoomIdInUse
+            | Reason::SessionLocked
+            | Reason::UnsafeYaml => "invalid_state",
             Reason::LockTimeout
             | Reason::ConfigUnreadable
             | Reason::SaveFailed
             | Reason::FrameLimit
             | Reason::IoError
             | Reason::Unverified
-            | Reason::PartialApply => "unavailable",
+            | Reason::PartialApply
+            | Reason::QueryTimeout
+            | Reason::StreamError
+            | Reason::PartialDelete
+            | Reason::RestoreFailed
+            | Reason::RoomStartFailed
+            | Reason::RoomUnreadable
+            | Reason::SqliteBusy
+            | Reason::StillRunning => "unavailable",
         }
     }
 
     /// Whether the outcome of an error with this reason is unknown.
     pub fn unknown(self) -> bool {
-        matches!(self, Reason::Unverified | Reason::PartialApply)
+        matches!(
+            self,
+            Reason::Unverified
+                | Reason::PartialApply
+                | Reason::PartialDelete
+                | Reason::RestoreFailed
+                | Reason::RoomStartFailed
+                | Reason::StillRunning
+                | Reason::StreamError
+        )
     }
 }
 

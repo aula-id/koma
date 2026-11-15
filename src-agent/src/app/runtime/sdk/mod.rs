@@ -4,14 +4,26 @@ mod coding;
 pub(crate) mod configure;
 mod connection;
 mod dto;
+mod events;
 mod host;
 mod methods;
 mod protocol;
 mod reconcile;
+mod room;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_config;
+#[cfg(test)]
+mod tests_room_runtime;
+#[cfg(test)]
+mod tests_room_team;
+#[cfg(test)]
+mod tests_sessions;
+#[cfg(test)]
+mod tests_skills;
+#[cfg(test)]
+mod tests_usage;
 use anyhow::{Context, Result};
 use binding::Binding;
 use protocol::*;
@@ -62,17 +74,23 @@ fn event_frames(previous: &mut Option<State>, state: State, seq: &mut u64) -> Ve
     *previous = Some(state);
     frames
 }
+/// Room events come from `queue` and share the envelope `seq`. Those queued
+/// before a response are written before it, so a `room.send` echo precedes
+/// its response; a held queue opens only after the next response.
 async fn writer(
     mut responses: mpsc::Receiver<Value>,
     mut states: watch::Receiver<Option<State>>,
+    queue: std::sync::Arc<events::EventQueue>,
 ) -> Result<()> {
     let mut out = tokio::io::stdout();
     let mut seq = 0u64;
     let mut previous = None;
     loop {
+        let mut responded = false;
         let frames = tokio::select! {biased;
-         r=responses.recv()=>match r{Some(r)=>vec![r],None=>break},
+         r=responses.recv()=>match r{Some(r)=>{responded=true;let mut f=queue.take_ready(&mut seq);f.push(r);f},None=>break},
          changed=states.changed()=>{if changed.is_err(){break}let s=states.borrow_and_update().clone();let Some(s)=s else{continue};event_frames(&mut previous,s,&mut seq)}
+         _=queue.ready()=>queue.take_ready(&mut seq),
         };
         for frame in frames {
             let mut bytes = serde_json::to_vec(&frame)?;
@@ -84,6 +102,9 @@ async fn writer(
             })
             .await
             .context("stdout stalled")??;
+        }
+        if responded {
+            queue.response_written();
         }
     }
     Ok(())
@@ -98,7 +119,8 @@ pub async fn serve() -> Result<()> {
     drop(stdout);
     let (tx, rx) = mpsc::channel(1);
     let (events, states) = watch::channel(None);
-    let mut output = tokio::spawn(writer(rx, states));
+    let mut adapter = Adapter::new(events);
+    let mut output = tokio::spawn(writer(rx, states, std::sync::Arc::clone(&adapter.queue)));
     let (input_tx, mut input_rx) = mpsc::channel(1);
     let input = tokio::spawn(async move {
         let mut stdin = BufReader::new(tokio::io::stdin());
@@ -116,7 +138,6 @@ pub async fn serve() -> Result<()> {
             }
         }
     });
-    let mut adapter = Adapter::new(events);
     let mut seen = std::collections::HashSet::new();
     let result:Result<()>=async {
  loop {
@@ -135,6 +156,10 @@ pub async fn serve() -> Result<()> {
  Ok(())
  }.await;
     // Closing this socket is sufficient. Never send QuitDaemon, even on errors.
+    // A live room is detached with `quit`, which leaves the room running.
+    if let Some(room) = adapter.binding.room_mut() {
+        room.quit().await;
+    }
     let Adapter {
         binding, events, ..
     } = adapter;
@@ -164,6 +189,12 @@ pub struct Adapter {
     pub lost: Option<anyhow::Error>,
     /// Where config reads and writes go.
     pub config: host::config::ConfigStore,
+    /// Room events on their way to the stdout writer.
+    pub queue: std::sync::Arc<events::EventQueue>,
+    /// The secret values scrubbed from room text, kept across bindings.
+    pub scrub: room::scrub::SharedScrubber,
+    /// Where rooms are found, started and stopped.
+    pub room_env: room::RoomEnv,
 }
 impl Adapter {
     pub fn new(events: watch::Sender<Option<State>>) -> Self {
@@ -172,6 +203,9 @@ impl Adapter {
             events,
             lost: None,
             config: host::config::ConfigStore::home(),
+            queue: std::sync::Arc::new(events::EventQueue::new()),
+            scrub: room::scrub::shared(),
+            room_env: room::RoomEnv::home(),
         }
     }
     /// Runs blocking host work (disk, SQLite, zip, waiting on another
@@ -259,5 +293,9 @@ async fn dispatch(r: Request, adapter: &mut Adapter) -> Result<Value, RpcError> 
         return Err(RpcError::new("unsupported_method", "unsupported method"));
     };
     route.check(adapter.binding.state())?;
+    if r.method == "detach" && adapter.binding.room().is_some() {
+        let _: serde_json::Map<String, Value> = params(r.params)?;
+        return room::detach(adapter).await;
+    }
     (route.handler)(r, adapter).await
 }
