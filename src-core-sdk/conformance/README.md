@@ -221,3 +221,7 @@ the OAuth catalogue and HTTP proxies pointed at a closed loopback port, and a ch
 that no log names a public catalogue host), validates every frame against
 `protocol/schema.json` when jsonschema is installed, and stops the session daemon it
 started and removes its data directory.
+`smoke_fresh_home.py` runs the adapter on a data directory that does not exist yet
+and then on an empty one, with `KOMA_TELEMETRY=0` and `KOMA_TEST_OFFLINE=1`: every
+`config`, `sessions`, `usage`, `skills` and `room` read answers empty, `missing` or
+`not_found` (never `io_error`), and the reads create nothing in the data directory.

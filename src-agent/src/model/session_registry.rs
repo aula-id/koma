@@ -16,10 +16,11 @@
 //! on save, `set_name` on rename, `list_by_pwd` for the picker, `get` to source
 //! a session's display name on load.
 
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::model::store::registry_path;
 
@@ -74,6 +75,33 @@ fn open() -> Result<Connection> {
     let conn = Connection::open(registry_path()?)?;
     ensure_schema(&conn)?;
     Ok(conn)
+}
+
+/// Open the registry read-only, or `None` when it does not exist yet: a koma
+/// home with no data dir, no registry file, or a file without the `sessions`
+/// table has no sessions. Creates no directory, file or schema.
+fn open_existing() -> Result<Option<Connection>> {
+    open_existing_at(&registry_path()?)
+}
+
+/// [`open_existing`] against an explicit registry path.
+fn open_existing_at(path: &Path) -> Result<Option<Connection>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let has_table = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    Ok(has_table.then_some(conn))
 }
 
 /// Unix-seconds timestamp, or 0 if the clock is before the epoch (won't happen
@@ -162,7 +190,11 @@ pub fn list_by_pwd(pwd_hash: &str) -> Result<Vec<RegRow>> {
 
 /// All sessions across ALL working directories, most-recently updated first.
 pub fn list_all() -> Result<Vec<RegRow>> {
-    let conn = open()?;
+    list_all_in(&open()?)
+}
+
+/// [`list_all`] against an already-open registry connection.
+fn list_all_in(conn: &Connection) -> Result<Vec<RegRow>> {
     let mut stmt = conn.prepare(
         "SELECT uuid, pwd_hash, name, workdir, updated_at FROM sessions ORDER BY updated_at DESC",
     )?;
@@ -184,10 +216,29 @@ pub fn list_all() -> Result<Vec<RegRow>> {
 
 /// Every session across ALL working directories with all of its columns,
 /// most-recently updated first (ties broken by UUID). Read-only: it writes no
-/// row and touches no timestamp.
+/// row, touches no timestamp, and a registry that does not exist yet lists
+/// nothing without being created.
 #[allow(dead_code)] // listed for session overviews outside the TUI picker
 pub fn list_all_full() -> Result<Vec<RegRowFullCreated>> {
-    list_all_full_in(&open()?)
+    list_all_full_at(&registry_path()?)
+}
+
+/// [`list_all_full`] against an explicit registry path.
+#[allow(dead_code)] // reached through `list_all_full`
+pub(crate) fn list_all_full_at(path: &Path) -> Result<Vec<RegRowFullCreated>> {
+    match open_existing_at(path)? {
+        Some(conn) => list_all_full_in(&conn),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Every session as [`list_all`] lists it, read-only: a registry that does
+/// not exist yet lists nothing and is not created.
+pub fn list_all_existing() -> Result<Vec<RegRow>> {
+    match open_existing()? {
+        Some(conn) => list_all_in(&conn),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// [`list_all_full`] against an already-open registry connection.
@@ -289,5 +340,60 @@ mod tests {
         assert_eq!(conn.total_changes(), before);
         let rows = list_all_full_in(&conn).unwrap();
         assert_eq!((rows[0].created_at, rows[0].updated_at), (10, 20));
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("koma-registry-{tag}-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn missing_data_dir_lists_nothing_and_creates_nothing() {
+        let dir = scratch("nodir");
+        let path = dir.join("session.sqlite");
+        assert!(open_existing_at(&path).unwrap().is_none());
+        assert!(list_all_full_at(&path).unwrap().is_empty());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn missing_registry_file_lists_nothing_and_creates_nothing() {
+        let dir = scratch("nofile");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.sqlite");
+        assert!(open_existing_at(&path).unwrap().is_none());
+        assert!(list_all_full_at(&path).unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn registry_without_schema_lists_nothing_and_adds_no_table() {
+        let dir = scratch("noschema");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.sqlite");
+        std::fs::write(&path, b"").unwrap();
+        assert!(list_all_full_at(&path).unwrap().is_empty());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_registry_lists_its_rows_read_only() {
+        let dir = scratch("rows");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            ensure_schema(&conn).unwrap();
+            insert(&conn, "a", 10, 20);
+        }
+        let rows = list_all_full_at(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].uuid, "a");
+        let conn = open_existing_at(&path).unwrap().unwrap();
+        assert!(conn.execute("DELETE FROM sessions", []).is_err());
+        drop(conn);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

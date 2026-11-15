@@ -264,11 +264,7 @@ pub fn registry_names() -> Result<HashMap<String, Known>, RpcError> {
     let io = |e: &dyn std::fmt::Display| {
         RpcError::reason(Reason::IoError, format!("session registry: {e}"))
     };
-    let path = crate::model::store::registry_path().map_err(|e| io(&e))?;
-    if !path.is_file() {
-        return Ok(HashMap::new());
-    }
-    let rows = crate::model::session_registry::list_all().map_err(|e| io(&e))?;
+    let rows = crate::model::session_registry::list_all_existing().map_err(|e| io(&e))?;
     Ok(rows
         .into_iter()
         .map(|row| {
