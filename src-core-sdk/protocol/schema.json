@@ -739,6 +739,328 @@
             "method",
             "params"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "view": {
+                  "enum": [
+                    "global",
+                    "session"
+                  ]
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.providers.delete"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "provider_uuid": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                },
+                "dry_run": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "provider_uuid"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.models.delete"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "model_uuid": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                },
+                "dry_run": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "model_uuid"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.roles.unassign"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "enum": [
+                    "main",
+                    "awareness",
+                    "safeguard",
+                    "compactor",
+                    "planner"
+                  ]
+                },
+                "scope": {
+                  "enum": [
+                    "global",
+                    "session"
+                  ]
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "role"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.effort.get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.effort.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "effort": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
+                },
+                "if_main_model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "effort"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.limits.get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.limits.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "max_output_tokens": {
+                  "anyOf": [
+                    {
+                      "const": 0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 256,
+                      "maximum": 1000000
+                    }
+                  ]
+                },
+                "context_window_limit": {
+                  "anyOf": [
+                    {
+                      "const": 0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 1024,
+                      "maximum": 100000000
+                    }
+                  ]
+                },
+                "context_model_alias": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              },
+              "required": [],
+              "anyOf": [
+                {
+                  "required": [
+                    "max_output_tokens"
+                  ]
+                },
+                {
+                  "required": [
+                    "context_window_limit"
+                  ]
+                },
+                {
+                  "required": [
+                    "context_model_alias"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.info"
+            },
+            "params": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
         }
       ]
     },
@@ -846,6 +1168,28 @@
             "not_sent",
             "unknown"
           ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "binding": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowed": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "written": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "object"
         }
       },
       "required": [
@@ -1048,6 +1392,94 @@
               "detach"
             ]
           }
+        },
+        "methods": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "features": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "events": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "frame_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "request_ids": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "text_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "attachments": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "pasted_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "total_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "lock_wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            },
+            "time": {
+              "type": "object",
+              "properties": {
+                "ipc_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            }
+          },
+          "required": []
         }
       },
       "required": [
@@ -1056,6 +1488,726 @@
         "binary",
         "diagnostics",
         "capabilities"
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "provider_uuid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "api_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "endpoint_redacted": {
+          "type": "boolean"
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "has_key": {
+          "type": "boolean"
+        },
+        "key_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "provider_uuid",
+        "name",
+        "api_type",
+        "endpoint",
+        "endpoint_redacted",
+        "managed",
+        "has_key",
+        "key_state",
+        "model_count"
+      ]
+    },
+    "oauth": {
+      "type": "object",
+      "properties": {
+        "oauth_uuid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "has_token": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "oauth_uuid",
+        "name",
+        "provider",
+        "has_token",
+        "expires_at"
+      ]
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "model_uuid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider_uuid": {
+          "type": "string"
+        },
+        "provider_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "main",
+              "awareness",
+              "safeguard",
+              "compactor",
+              "planner"
+            ]
+          },
+          "uniqueItems": true,
+          "maxItems": 5
+        },
+        "other_roles": {
+          "type": "boolean"
+        },
+        "source_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model_uuid",
+        "name",
+        "model_id",
+        "provider_uuid",
+        "provider_kind",
+        "provider_name",
+        "route",
+        "roles",
+        "other_roles",
+        "source_uuid"
+      ]
+    },
+    "role_route": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "main",
+            "awareness",
+            "safeguard",
+            "compactor",
+            "planner"
+          ]
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "configured_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "origin",
+        "model_uuid",
+        "source_uuid",
+        "configured_model",
+        "provider_uuid",
+        "provider_name",
+        "effective_model",
+        "reason"
+      ]
+    },
+    "config_view": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{16}|absent)$"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "view": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/provider"
+          },
+          "maxItems": 256
+        },
+        "providers_truncated": {
+          "type": "boolean"
+        },
+        "oauth": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/oauth"
+          },
+          "maxItems": 64
+        },
+        "oauth_truncated": {
+          "type": "boolean"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          },
+          "maxItems": 2000
+        },
+        "models_truncated": {
+          "type": "boolean"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/role_route"
+          },
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "main_fallback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "revision",
+        "file",
+        "view",
+        "providers",
+        "providers_truncated",
+        "oauth",
+        "oauth_truncated",
+        "models",
+        "models_truncated",
+        "roles",
+        "main_fallback"
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "context_window_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "context_model_alias": {
+          "type": "string"
+        },
+        "effective_window": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_output_tokens",
+        "context_window_limit",
+        "context_model_alias",
+        "effective_window"
+      ]
+    },
+    "session_usage": {
+      "type": "object",
+      "properties": {
+        "last_prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "last_cached_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens_total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cost_total": {
+          "type": "number",
+          "minimum": 0
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "prompt_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "effective_window": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "estimated": {
+                  "type": "boolean"
+                },
+                "cached_tokens": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "drss_active": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "prompt_tokens",
+                "effective_window",
+                "estimated",
+                "cached_tokens",
+                "drss_active"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "last_prompt_tokens",
+        "last_cached_tokens",
+        "output_tokens_total",
+        "cost_total",
+        "context"
+      ]
+    },
+    "session_info": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "minLength": 1
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/role_route"
+          },
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/session_usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "daemon": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "ipc_protocol": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            }
+          },
+          "required": [
+            "version",
+            "ipc_protocol",
+            "capabilities"
+          ]
+        },
+        "observed_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "name",
+        "effort",
+        "routes",
+        "limits",
+        "usage",
+        "daemon",
+        "observed_at_ms"
+      ]
+    },
+    "propagation": {
+      "type": "object",
+      "properties": {
+        "bound": {
+          "type": "string",
+          "minLength": 1
+        },
+        "broadcast": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rebind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rooms": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": []
+    },
+    "provider_delete_result": {
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "removed": {
+          "type": "object",
+          "properties": {
+            "provider_uuid": {
+              "type": "string",
+              "minLength": 1
+            },
+            "models_removed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "main_reset": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "provider_uuid",
+            "models_removed",
+            "main_reset"
+          ]
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "dry_run",
+        "removed",
+        "config",
+        "propagation"
+      ]
+    },
+    "model_delete_result": {
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "removed": {
+          "type": "object",
+          "properties": {
+            "model_uuid": {
+              "type": "string",
+              "minLength": 1
+            },
+            "roles_released": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "main",
+                  "awareness",
+                  "safeguard",
+                  "compactor",
+                  "planner"
+                ]
+              },
+              "uniqueItems": true,
+              "maxItems": 5
+            },
+            "main_reset": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "model_uuid",
+            "roles_released",
+            "main_reset"
+          ]
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "dry_run",
+        "removed",
+        "config",
+        "propagation"
+      ]
+    },
+    "role_unassign_result": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "previous_model_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "changed",
+        "previous_model_uuid",
+        "config",
+        "propagation"
+      ]
+    },
+    "effort_options_result": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "selected": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "main_model_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "options",
+        "selected",
+        "note",
+        "main_model_uuid"
+      ]
+    },
+    "effort_result": {
+      "type": "object",
+      "properties": {
+        "effort": {
+          "type": "string",
+          "minLength": 1
+        },
+        "main_model_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "superseded": {
+          "type": "boolean"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "effort",
+        "main_model_uuid",
+        "superseded"
+      ]
+    },
+    "limits_result": {
+      "type": "object",
+      "properties": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "context_window_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "context_model_alias": {
+          "type": "string"
+        },
+        "effective_window": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "max_output_tokens",
+        "context_window_limit",
+        "context_model_alias",
+        "effective_window"
       ]
     },
     "response": {
@@ -1077,6 +2229,9 @@
                   "properties": {
                     "state": {
                       "$ref": "#/$defs/state"
+                    },
+                    "session_info": {
+                      "$ref": "#/$defs/session_info"
                     }
                   },
                   "required": [
@@ -1113,6 +2268,38 @@
                 },
                 {
                   "$ref": "#/$defs/configure_result"
+                },
+                {
+                  "$ref": "#/$defs/config_view"
+                },
+                {
+                  "$ref": "#/$defs/provider_delete_result"
+                },
+                {
+                  "$ref": "#/$defs/model_delete_result"
+                },
+                {
+                  "$ref": "#/$defs/role_unassign_result"
+                },
+                {
+                  "$ref": "#/$defs/effort_options_result"
+                },
+                {
+                  "$ref": "#/$defs/effort_result"
+                },
+                {
+                  "$ref": "#/$defs/limits_result"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "session_info": {
+                      "$ref": "#/$defs/session_info"
+                    }
+                  },
+                  "required": [
+                    "session_info"
+                  ]
                 }
               ]
             }

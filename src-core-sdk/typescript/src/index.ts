@@ -1,8 +1,28 @@
 import { isAbsolute } from 'node:path';
 import { Transport } from './transport.js';
-import { configureParams, local, textId, validateInput, validatePolicy } from './validate.js';
-import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method } from './types.js';
+import { configureParams, local, object, textId, validateInput, validatePolicy } from './validate.js';
+import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method, type SessionInfo, type ConfigView, type ConfigGetParams, type ProviderDeleteParams, type ProviderDeleteResult, type ModelDeleteParams, type ModelDeleteResult, type RoleUnassignParams, type RoleUnassignResult, type EffortGetParams, type EffortOptions, type EffortSetParams, type EffortResult, type Limits, type LimitsSetParams, type LimitsResult } from './types.js';
 export * from './types.js';
+
+/** A stateless adapter is replaced once this many requests were sent, well before the per-process cap. */
+export const HOST_RECYCLE_AFTER = 60_000;
+
+/** Copies caller params so later edits by the caller cannot change what is validated against the reply. */
+function plain(params: object | undefined, ids: readonly string[] = []): Record<string, unknown> {
+  return local(() => {
+    if (params !== undefined) object(params);
+    const out = { ...params } as Record<string, unknown>;
+    for (const key of ids) textId(out[key]);
+    return out;
+  });
+}
+
+/** The scope is always sent, so a call without one is global on every adapter. */
+function unassignParams(params: RoleUnassignParams): Record<string, unknown> {
+  const out = plain(params, ['role']);
+  out.scope ??= 'global';
+  return out;
+}
 
 export class Client {
   private connections = new Set<Transport>();
@@ -18,6 +38,8 @@ export class Client {
   }
   async release(t: Transport): Promise<void> { this.connections.delete(t); await t.close(); }
   async probe(): Promise<Hello> { const t = await this.connect(); try { return t.hello!; } finally { await this.release(t); } }
+  /** A handle for calls that need no session. It starts its adapter on first use and replaces it before the request-id limit. */
+  host(): Host { return new Host(() => this.connect(), t => this.release(t)); }
   /** Write providers and model roles before a session exists. No daemon is started. */
   async configure(options: ConfigureOptions, request?: RequestOptions): Promise<ConfigureResult> {
     const params = configureParams(options);
@@ -44,8 +66,8 @@ export class Client {
   private async bind(method: 'create' | 'resume', params: Record<string, unknown>, options?: RequestOptions): Promise<Session> {
     const t = await this.connect();
     try {
-      const result = await t.request<{ state: State }>(method, params, options);
-      return new Session(this, t, result.state);
+      const result = await t.request<{ state: State; session_info?: SessionInfo }>(method, params, options);
+      return new Session(this, t, result.state, result.session_info ?? null);
     } catch (e) { await this.release(t); throw e; }
   }
   async close(): Promise<void> {
@@ -55,18 +77,136 @@ export class Client {
   async [Symbol.asyncDispose](): Promise<void> { await this.close(); }
 }
 
+/**
+ * Session-less calls on an UNBOUND adapter. The adapter holds no state, so it is started on first use and replaced
+ * transparently once HOST_RECYCLE_AFTER requests were sent, or after it failed. A failed call is never retried.
+ */
+export class Host {
+  private current?: Promise<Transport>;
+  private inflight = new Map<Transport, number>();
+  private retired = new Set<Transport>();
+  private closed = false;
+  constructor(private readonly connect: () => Promise<Transport>, private readonly release: (t: Transport) => Promise<void>) {}
+  private async transport(): Promise<Transport> {
+    while (true) {
+      if (this.closed) throw new SdkError('closed', 'Host is closed');
+      const starting = this.current ??= this.connect();
+      let t: Transport;
+      try { t = await starting; }
+      catch (e) { if (this.current === starting) this.current = undefined; throw e; }
+      if (t.usable && t.requestsSent < Math.min(HOST_RECYCLE_AFTER, t.requestIdLimit)) return t;
+      if (this.current === starting) { this.current = undefined; this.retire(t); }
+    }
+  }
+  /** The old adapter finishes its in-flight requests before it is closed. */
+  private retire(t: Transport): void {
+    if (this.inflight.get(t)) this.retired.add(t);
+    else void this.release(t);
+  }
+  private async request<T>(method: Method, params: Record<string, unknown>, options?: RequestOptions): Promise<T> {
+    const t = await this.transport();
+    this.inflight.set(t, (this.inflight.get(t) ?? 0) + 1);
+    try { return await t.request<T>(method, params, options); }
+    finally {
+      const left = (this.inflight.get(t) ?? 1) - 1;
+      if (left) this.inflight.set(t, left);
+      else { this.inflight.delete(t); if (this.retired.delete(t)) void this.release(t); }
+    }
+  }
+  /** hello of the current adapter. */
+  async hello(): Promise<Hello> { return (await this.transport()).hello!; }
+  /** Whether the adapter implements a method: hello `methods`, or `capabilities` for an older adapter. */
+  async supports(method: string): Promise<boolean> { return (await this.transport()).supports(method); }
+  /** Write providers and model roles. No daemon is started. */
+  async configure(options: ConfigureOptions, request?: RequestOptions): Promise<ConfigureResult> {
+    return this.request('configure', configureParams(options), request);
+  }
+  /** Read config.json as a redacted view. Secret values are never returned. */
+  async getConfig(params?: ConfigGetParams, request?: RequestOptions): Promise<ConfigView> {
+    return this.request('config.get', plain(params), request);
+  }
+  async deleteProvider(params: ProviderDeleteParams, request?: RequestOptions): Promise<ProviderDeleteResult> {
+    return this.request('config.providers.delete', plain(params, ['provider_uuid']), request);
+  }
+  async deleteModel(params: ModelDeleteParams, request?: RequestOptions): Promise<ModelDeleteResult> {
+    return this.request('config.models.delete', plain(params, ['model_uuid']), request);
+  }
+  /** Clear a role globally (scope "global" unless given). */
+  async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
+    return this.request('config.roles.unassign', unassignParams(params), request);
+  }
+  async close(): Promise<void> {
+    this.closed = true;
+    const current = this.current; this.current = undefined;
+    const retired = [...this.retired]; this.retired.clear();
+    await Promise.all([
+      ...retired.map(t => this.release(t)),
+      ...(current ? [current.then(t => this.release(t), () => undefined)] : []),
+    ]);
+  }
+  async [Symbol.asyncDispose](): Promise<void> { await this.close(); }
+}
+
 export class Session {
-  constructor(private readonly client: Client, private readonly transport: Transport, private state: State) {}
+  private latestInfo: SessionInfo | null;
+  constructor(private readonly client: Client, private readonly transport: Transport, private state: State, info: SessionInfo | null = null) {
+    this.latestInfo = info;
+  }
   get sessionId(): string { return this.state.session_id; }
   get stderrTail(): string { return this.transport.diagnostics; }
+  /** Latest per-session facts, or null when the adapter sends none (an older adapter). */
+  get sessionInfo(): SessionInfo | null { return this.latestInfo; }
+  /** Requests left before this adapter's request-id limit. Reconnect with resume from a new client before it reaches 0. */
+  get requestsRemaining(): number { return this.transport.requestsRemaining; }
+  /** Whether the adapter implements a method: hello `methods`, or `capabilities` for an older adapter. */
+  supports(method: string): boolean { return this.transport.supports(method); }
   private async request<T>(method: Method, params: Record<string, unknown>, options?: RequestOptions): Promise<T> {
     try { return await this.transport.request<T>(method, params, options); }
     catch (e) { if (e instanceof DeliveryUnknownError) e.sessionId = this.sessionId; throw e; }
   }
+  /** session_info is ordered by observed_at_ms, independent of the state revision. */
+  private observe<T>(result: T): T {
+    const info = (result as { session_info?: SessionInfo }).session_info;
+    if (info && (!this.latestInfo || info.observed_at_ms >= this.latestInfo.observed_at_ms)) this.latestInfo = info;
+    return result;
+  }
   async getState(options?: RequestOptions): Promise<State> {
-    const result = await this.request<{ state: State }>('state', {}, options);
+    const result = this.observe(await this.request<{ state: State; session_info?: SessionInfo }>('state', {}, options));
     if (result.state.revision > this.state.revision) this.state = result.state;
     return this.state;
+  }
+  /** Read fresh session_info. The adapter answers from what it last observed; no daemon round trip. */
+  async info(options?: RequestOptions): Promise<SessionInfo> {
+    this.observe(await this.request<{ session_info: SessionInfo }>('sessions.info', {}, options));
+    return this.latestInfo!;
+  }
+  /** Read config. The default view on a session is "session" (with the session's own role routes). */
+  async getConfig(params?: ConfigGetParams, request?: RequestOptions): Promise<ConfigView> {
+    return this.request('config.get', plain(params), request);
+  }
+  async deleteProvider(params: ProviderDeleteParams, request?: RequestOptions): Promise<ProviderDeleteResult> {
+    return this.observe(await this.request<ProviderDeleteResult>('config.providers.delete', plain(params, ['provider_uuid']), request));
+  }
+  async deleteModel(params: ModelDeleteParams, request?: RequestOptions): Promise<ModelDeleteResult> {
+    return this.observe(await this.request<ModelDeleteResult>('config.models.delete', plain(params, ['model_uuid']), request));
+  }
+  /** Clear a role globally, as Host.unassignRole does (scope "global" unless given). To drop this session's own Main pin, use clearMainPin. */
+  async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
+    return this.observe(await this.request<RoleUnassignResult>('config.roles.unassign', unassignParams(params), request));
+  }
+  /** Clear this session's Main pin, so Main follows the global assignment. Resets effort. */
+  async clearMainPin(request?: RequestOptions): Promise<RoleUnassignResult> {
+    return this.observe(await this.request<RoleUnassignResult>('config.roles.unassign', { role: 'main', scope: 'session' }, request));
+  }
+  async getEffort(params?: EffortGetParams, request?: RequestOptions): Promise<EffortOptions> {
+    return this.request('config.effort.get', plain(params), request);
+  }
+  async setEffort(params: EffortSetParams, request?: RequestOptions): Promise<EffortResult> {
+    return this.observe(await this.request<EffortResult>('config.effort.set', plain(params, ['effort']), request));
+  }
+  async getLimits(request?: RequestOptions): Promise<Limits> { return this.request('config.limits.get', {}, request); }
+  async setLimits(params: LimitsSetParams, request?: RequestOptions): Promise<LimitsResult> {
+    return this.observe(await this.request<LimitsResult>('config.limits.set', plain(params), request));
   }
   async *events(options?: Pick<RequestOptions, 'signal'>): AsyncGenerator<Event> {
     for await (const event of this.transport.events(options, () => this.getState(options))) {

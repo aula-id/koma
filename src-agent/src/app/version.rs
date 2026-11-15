@@ -303,11 +303,38 @@ fn cmp_semver(left: &Semver, right: &Semver) -> Ordering {
 
 /// Spawn a NON-BLOCKING background check for a newer koma release.
 pub fn spawn_check(tx: tokio::sync::mpsc::UnboundedSender<VersionInfo>) {
+    spawn_check_unless(update_check_disabled(), tx);
+}
+
+/// Start the fetch thread unless `disabled`. A disabled check drops `tx` at once
+/// and makes no network request.
+fn spawn_check_unless(disabled: bool, tx: tokio::sync::mpsc::UnboundedSender<VersionInfo>) {
+    if disabled {
+        return;
+    }
     std::thread::spawn(move || {
         if let Ok(info) = fetch_latest() {
             let _ = tx.send(info);
         }
     });
+}
+
+/// Debug-only switch for tests and smokes that must not reach the network:
+/// `KOMA_TEST_OFFLINE=1` turns the update check off. Release builds always check.
+fn update_check_disabled() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        offline_switch_set(std::env::var_os("KOMA_TEST_OFFLINE").as_deref())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
+}
+
+#[cfg(debug_assertions)]
+fn offline_switch_set(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 /// Minimum gap between attach-triggered checks, so a reconnect storm sends one request.
@@ -316,6 +343,9 @@ const REENTRY_GAP: Duration = Duration::from_secs(30);
 /// [`spawn_check`] for a client attach. Skipped when another attach checked within
 /// [`REENTRY_GAP`]; session spawns keep calling [`spawn_check`] directly.
 pub fn spawn_check_on_reentry(tx: tokio::sync::mpsc::UnboundedSender<VersionInfo>) {
+    if update_check_disabled() {
+        return;
+    }
     use std::sync::Mutex;
     use std::time::Instant;
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
@@ -413,6 +443,29 @@ mod tests {
         assert_eq!(
             choose_release(&ahead, "0.4.7-preview.1").unwrap().tag_name,
             "v0.4.8-preview.1"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_offline_switch_needs_exactly_one() {
+        assert!(offline_switch_set(Some("1".as_ref())));
+        assert!(!offline_switch_set(None));
+        assert!(!offline_switch_set(Some("".as_ref())));
+        assert!(!offline_switch_set(Some("0".as_ref())));
+        assert!(!offline_switch_set(Some("true".as_ref())));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_disabled_check_starts_no_fetch_thread() {
+        // A started thread would hold the sender until its fetch ends, so the
+        // channel would still be open here.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        spawn_check_unless(offline_switch_set(Some("1".as_ref())), tx);
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
         );
     }
 

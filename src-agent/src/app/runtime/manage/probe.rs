@@ -9,7 +9,7 @@
 //! resolving unchanged. `probe_status` has no external caller today, so no
 //! re-export is needed for it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::ipc::frame::FrameReader;
@@ -174,6 +174,15 @@ pub fn broadcast_unload_extension(ext_id: &str) {
     }
 }
 
+/// How a fan-out went: `reached` daemons were written the frame, `failed` live
+/// daemons could not be (no socket path, refused connect, or a failed write).
+/// Delivery is fire-and-forget, so `reached` means written, not acknowledged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BroadcastReport {
+    pub reached: usize,
+    pub failed: usize,
+}
+
 /// FIRE-AND-FORGET fan-out of a [`ClientRequest::ReloadGlobalCatalogue`] to
 /// every live session-daemon — the config-change broadcast that makes OTHER
 /// daemons re-read `~/.koma/config.json` + global agents from disk so their
@@ -182,33 +191,53 @@ pub fn broadcast_unload_extension(ext_id: &str) {
 /// Best-effort throughout, identical contract to [`broadcast_unload_extension`]:
 /// connect → write one frame → drop. Called on a background OS thread by
 /// [`super::save_config_and_broadcast`] so the saving daemon's event loop
-/// never blocks on peer connects.
+/// never blocks on peer connects. Callers that need the outcome use
+/// [`broadcast_reload_global_catalogue_report`], which sends the same frames.
 pub fn broadcast_reload_global_catalogue() {
+    let _ = broadcast_reload_global_catalogue_report();
+}
+
+/// [`broadcast_reload_global_catalogue`] that also counts the daemons it
+/// reached and the ones it could not. Failures are logged exactly as before.
+pub fn broadcast_reload_global_catalogue_report() -> BroadcastReport {
+    let targets = list_live_sessions().into_iter().map(|status| {
+        let sock = store::daemon_sock_path(&status.session_id);
+        (status.session_id, sock)
+    });
+    send_reload_to(targets, &mut |body| {
+        store::append_global_error_log("config-reload", &body)
+    })
+}
+
+/// Write one [`ClientRequest::ReloadGlobalCatalogue`] frame to each target,
+/// passing every failure's log line to `log`. Split from the session sweep so
+/// the counting can be exercised against sockets a test controls.
+fn send_reload_to(
+    targets: impl IntoIterator<Item = (String, anyhow::Result<PathBuf>)>,
+    log: &mut dyn FnMut(String),
+) -> BroadcastReport {
     let req = ClientRequest::ReloadGlobalCatalogue;
-    for status in list_live_sessions() {
-        let sock = match store::daemon_sock_path(&status.session_id) {
+    let mut report = BroadcastReport::default();
+    for (session_id, sock) in targets {
+        let sock = match sock {
             Ok(p) => p,
             Err(e) => {
-                store::append_global_error_log(
-                    "config-reload",
-                    &format!(
-                        "reload fan-out: no socket path for session {}: {e}",
-                        status.session_id
-                    ),
-                );
+                report.failed += 1;
+                log(format!(
+                    "reload fan-out: no socket path for session {session_id}: {e}"
+                ));
                 continue;
             }
         };
-        if let Err(e) = send_unload_frame(&sock, &req) {
-            store::append_global_error_log(
-                "config-reload",
-                &format!(
-                    "reload fan-out to session {} failed: {e}",
-                    status.session_id
-                ),
-            );
+        match send_unload_frame(&sock, &req) {
+            Ok(()) => report.reached += 1,
+            Err(e) => {
+                report.failed += 1;
+                log(format!("reload fan-out to session {session_id} failed: {e}"));
+            }
         }
     }
+    report
 }
 
 /// Search preferences need no catalogue or modal rebuild.
@@ -311,4 +340,111 @@ pub fn spawn_into_session(
         std::io::ErrorKind::InvalidData,
         "no spawn ack within frame cap",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::frame::{read_frame, FrameReader};
+
+    fn unique() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    }
+
+    /// A socket path nobody listens on, kept short for the unix path limit.
+    fn sock_path(tag: &str) -> PathBuf {
+        let nanos = unique();
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("koma-bc-{tag}-{nanos}"));
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            dir.join("d.sock")
+        }
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"\\.\pipe\koma-bc-{tag}-{nanos}"))
+        }
+    }
+
+    fn cleanup(sock: &Path) {
+        #[cfg(unix)]
+        if let Some(dir) = sock.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        #[cfg(windows)]
+        let _ = sock;
+    }
+
+    #[test]
+    fn a_refused_socket_and_a_missing_path_count_as_failed() {
+        let refused = sock_path("refused");
+        let targets = vec![
+            ("refused".to_string(), Ok(refused.clone())),
+            ("pathless".to_string(), Err(anyhow::anyhow!("no run dir"))),
+        ];
+        let mut lines = Vec::new();
+        let report = send_reload_to(targets, &mut |line| lines.push(line));
+        cleanup(&refused);
+
+        assert_eq!(
+            report,
+            BroadcastReport {
+                reached: 0,
+                failed: 2
+            }
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("reload fan-out to session refused failed: "));
+        assert_eq!(
+            lines[1],
+            "reload fan-out: no socket path for session pathless: no run dir"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_socket_is_reached_with_one_reload_frame() {
+        let live = sock_path("live");
+        let refused = sock_path("dead");
+        let listener = crate::ipc::server::bind(&live).expect("bind");
+        let server = tokio::spawn(async move {
+            let mut conn = crate::ipc::server::accept(&listener).await.expect("accept");
+            let mut reader = FrameReader::new();
+            read_frame(&mut conn, &mut reader).await.expect("read frame")
+        });
+
+        let targets = vec![
+            ("live".to_string(), Ok(live.clone())),
+            ("dead".to_string(), Ok(refused.clone())),
+        ];
+        let report = tokio::task::spawn_blocking(move || {
+            let mut lines = Vec::new();
+            let report = send_reload_to(targets, &mut |line| lines.push(line));
+            (report, lines)
+        })
+        .await
+        .expect("join fan-out");
+        let frame = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("frame within timeout")
+            .expect("join server");
+        cleanup(&live);
+        cleanup(&refused);
+
+        let (report, lines) = report;
+        assert_eq!(
+            report,
+            BroadcastReport {
+                reached: 1,
+                failed: 1
+            }
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            frame,
+            serde_json::to_vec(&ClientRequest::ReloadGlobalCatalogue).expect("encode")
+        );
+    }
 }

@@ -47,6 +47,65 @@ Mutation timeouts, cancellation after writing, malformed replies and disconnects
 `wait_turn` returns the observed final record, not proof of task success; hidden/newer turns or timeout raise `ObservationUnavailable`. `finished` only means normal execution ended.
 Context exit, `close`, `detach` and EOF only close the adapter connection; they do not stop the daemon or running turn. Explicitly interrupt if that is intended.
 
+## Discovery
+
+`Hello` (from `probe()`, `session.hello` or `host.hello`) carries `methods`, `features`, `events` and `limits`. They are empty when the adapter is older than them; such an adapter implements exactly `capabilities`, the ten original methods. `hello.supports(name)` checks `methods`, falling back to `capabilities`. Every call is gated this way: a method the adapter does not list raises `IncompatibleAdapter` before anything is sent.
+
+## Config
+
+`client.host()` returns a `Host` for calls that need no session. It runs its own unbound adapter, started on the first call. An adapter accepts a fixed number of requests (`hello.limits["request_ids"]`, 65,536); `Host` replaces its adapter after 60,000 requests (`recycle_after=`), and replaces a failed adapter on the next call. The call that failed is never retried.
+
+```python
+from koma_sdk import Client, RemoteError
+
+async with Client("/absolute/path/to/koma") as client:
+    async with client.host() as host:
+        view = await host.config_get()          # ConfigView; never contains a key or token
+        for p in view.providers:
+            print(p.provider_uuid, p.name, p.endpoint, p.key_state)
+        print(view.route("main").effective_model, view.main_fallback)
+
+        plan = await host.config_providers_delete(uuid, if_revision=view.revision, dry_run=True)
+        print(plan.removed.models_removed, plan.removed.main_reset)   # nothing written
+        try:
+            done = await host.config_providers_delete(uuid, if_revision=plan.config.revision)
+        except RemoteError as exc:
+            if exc.reason == "stale":            # config.json changed since the dry run
+                ...
+```
+
+`Host` also has `configure(providers=, models=)`, `config_models_delete(model_uuid, if_revision=, dry_run=)` and `config_roles_unassign(role, if_revision=)` (global scope; an unassigned `compactor`, `awareness` or `planner` then inherits Main, while `safeguard` never does). Mutations return the fresh `config` plus `propagation`, which reports what happened after the commit (`bound`, `broadcast`, `rebind`, `rooms`); a `failed` value there does not mean the write failed. See [`examples/config.py`](examples/config.py).
+
+`endpoint` values have URL credentials, query and fragment removed (`endpoint_redacted`); never pass one back to `configure`. A list with `*_truncated` set is incomplete.
+
+## Session settings
+
+A `Session` adds the calls that act on its own coding session:
+
+```python
+info = await session.info()                 # SessionInfo: name, effort, routes, limits, daemon
+opts = await session.effort_get()           # EffortOptions(state=READY|LOADING|UNSUPPORTED, options, selected)
+await session.effort_set("high", if_main_model=opts.main_model_uuid)
+await session.limits_set(max_output_tokens=4096)   # 0 = auto; context_model_alias="" clears
+limits = await session.limits_get()
+view = await session.config_get()           # view="session" (with its Main pin) or view="global"
+await session.clear_main_pin()              # clears this session's Main pin; effort resets
+```
+
+A `Session` also has the global config writes `config_providers_delete`, `config_models_delete` and `config_roles_unassign`, with the same parameters as on `Host`. On a session they go through its daemon, and the result carries `session_info`. `config_roles_unassign` is always global scope; only `clear_main_pin` touches the session's own Main.
+
+`session.session_info` holds the newest `SessionInfo` seen. It arrives beside `state` in `create`, `resume` and `get_state()` results, and in the results above. It is not ordered by the state revision: a newer one replaces the held one only when its `observed_at_ms` is higher. A change to it emits no event and does not bump the revision; call `info()` or `get_state()` to refresh. It is `None` with an older adapter.
+
+`session.requests_remaining` counts the requests this adapter still accepts. When it reaches 0 calls raise `TransportError` before sending; detach and `resume` the session from a fresh adapter well before that.
+
+## Errors and new values
+
+`RemoteError` exposes `code`, `message`, and from newer adapters `reason`, `binding`, `allowed`, `written` and `detail`. Branch on `reason`, never on `message`; handle an unknown `reason` by its `code`. A call made in the wrong binding has `reason="wrong_binding"` with the adapter's `binding` and the `allowed` ones.
+
+A mutation answered with `delivery:"unknown"` raises `DeliveryUnknown`; its `cause` is the `RemoteError`, whose `written` is `True` when bytes were committed (`reason="unverified"`). Read the config again before doing anything else. `dry_run=True` deletes and all reads are not mutations.
+
+Enum-like strings added after v1 are open: `ConfigFile`, `ConfigViewKind`, `MainFallback`, `KeyState`, `ProviderKind`, `RouteOrigin`, `RouteReason`, `EffortState` and `PropagationStatus` map a value this library does not know to their `OTHER` member instead of failing. Treat `OTHER` as "unknown, show it neutrally". The original enums (`Role`, `GateKind`, `TurnStatus`, `Disposition`, policy) and `PublicRole` are closed; an unknown value there is a protocol error.
+
 ## Maintainers
 
 ```sh

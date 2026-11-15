@@ -1,13 +1,19 @@
 //! Public JSONL adapter. Mutations are serialized through a single IPC owner.
+mod binding;
+mod coding;
 pub(crate) mod configure;
 mod connection;
+mod dto;
+mod host;
+mod methods;
 mod protocol;
 mod reconcile;
 #[cfg(test)]
 mod tests;
-use crate::ipc::proto::{ClientRequest as C, DaemonEvent as E};
+#[cfg(test)]
+mod tests_config;
 use anyhow::{Context, Result};
-use connection::Connection;
+use binding::Binding;
 use protocol::*;
 use serde_json::{json, Value};
 use tokio::{
@@ -84,7 +90,7 @@ async fn writer(
 }
 pub async fn serve() -> Result<()> {
     // Emit and flush hello before even constructing the stdin reader.
-    let hello = json!({"type":"hello","protocol":1,"binary":{"path":std::env::current_exe()?.to_string_lossy(),"version":env!("CARGO_PKG_VERSION")},"diagnostics":[],"capabilities":METHODS});
+    let hello = protocol::hello(&std::env::current_exe()?.to_string_lossy());
     let mut stdout = tokio::io::stdout();
     stdout.write_all(&serde_json::to_vec(&hello)?).await?;
     stdout.write_all(b"\n").await?;
@@ -110,31 +116,29 @@ pub async fn serve() -> Result<()> {
             }
         }
     });
-    let mut conn: Option<Connection> = None;
+    let mut adapter = Adapter::new(events);
     let mut seen = std::collections::HashSet::new();
     let result:Result<()>=async {
  loop {
-  let request=if let Some(c)=conn.as_mut(){tokio::select!{
+  let request=if let Some(c)=adapter.binding.coding_mut(){tokio::select!{
    r=input_rx.recv()=>r,
    f=c.receive()=>{f?;c.flush_resync().await?;continue},
    w=&mut output=>{return w.context("writer task")?;}
   }}else{tokio::select!{r=input_rx.recv()=>r,w=&mut output=>{return w.context("writer task")?;}}};
   let Some(r)=request else{break};let r=r?;
-  anyhow::ensure!(!r.id.is_empty(),"empty request ID");
-  // Bound lifetime correlation storage; never silently forget IDs and allow reuse.
-  anyhow::ensure!(seen.len()<65536,"request lifetime limit reached; detach and reconnect");
-  let id=r.id.clone();let method=r.method.clone();
-  let response=if !seen.insert(id.clone()){Err(RpcError::new("invalid_request","duplicate request id"))}else{dispatch(r,&mut conn,&events).await};
-  let fatal=response.as_ref().err().is_some_and(|e|e.delivery=="unknown");
-  let frame=match response{Ok(result)=>json!({"type":"response","id":id,"result":result}),Err(error)=>json!({"type":"response","id":id,"error":error})};
-  let frame=if serde_json::to_vec(&frame)?.len()>MAX_LINE {json!({"type":"response","id":id,"error":RpcError::new("unavailable","state exceeds frame limit")})}else{frame};
+  let (frame,end)=respond(r,&mut seen,&mut adapter).await?;
   tx.send(frame).await.context("stdout writer closed")?;
-  if method=="detach"||fatal{break}
+  // The bound coding connection failed while host work ran: end as v1 does.
+  if let Some(lost)=adapter.lost.take(){return Err(lost)}
+  if end{break}
  }
  Ok(())
  }.await;
     // Closing this socket is sufficient. Never send QuitDaemon, even on errors.
-    drop(conn);
+    let Adapter {
+        binding, events, ..
+    } = adapter;
+    drop(binding);
     input.abort();
     drop(tx);
     drop(events);
@@ -151,305 +155,109 @@ pub async fn serve() -> Result<()> {
     };
     result.and(written)
 }
-async fn dispatch(
-    r: Request,
-    conn: &mut Option<Connection>,
-    events: &watch::Sender<Option<State>>,
-) -> Result<Value, RpcError> {
-    if !METHODS.contains(&r.method.as_str()) {
-        return Err(RpcError::new("unsupported_method", "unsupported method"));
-    }
-    if r.method == "configure" {
-        return configure_call(r.params, conn).await;
-    }
-    if r.method == "create" || r.method == "resume" {
-        if conn.is_some() {
-            return Err(RpcError::new("invalid_state", "session already bound"));
+/// What one adapter process holds while it serves requests.
+pub struct Adapter {
+    pub binding: Binding,
+    pub events: watch::Sender<Option<State>>,
+    /// Set when the bound coding connection failed while host work ran. The
+    /// loop answers the request, then ends with this error.
+    pub lost: Option<anyhow::Error>,
+    /// Where config reads and writes go.
+    pub config: host::config::ConfigStore,
+}
+impl Adapter {
+    pub fn new(events: watch::Sender<Option<State>>) -> Self {
+        Self {
+            binding: Binding::Unbound,
+            events,
+            lost: None,
+            config: host::config::ConfigStore::home(),
         }
-        let (id, cwd, resume, policy, model, external) = if r.method == "create" {
-            let p: Create = params(r.params)?;
-            let path = std::path::PathBuf::from(&p.cwd);
-            if !path.is_absolute() || !path.is_dir() {
-                return Err(RpcError::new(
-                    "invalid_request",
-                    "cwd must be an absolute existing directory",
-                ));
+    }
+    /// Runs blocking host work (disk, SQLite, zip, waiting on another
+    /// process) on the blocking pool. Meanwhile the bound coding connection is
+    /// still drained, so its daemon never stalls on a full socket and state
+    /// events keep flowing. A failure of that connection is kept in `lost`
+    /// and the work still runs to completion.
+    pub async fn blocking<T, F>(&mut self, work: F) -> Result<T, RpcError>
+    where
+        F: FnOnce() -> Result<T, RpcError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let mut task = tokio::task::spawn_blocking(work);
+        if self.lost.is_none() {
+            if let Binding::Coding(c) = &mut self.binding {
+                loop {
+                    tokio::select! {
+                        joined = &mut task => return joined.map_err(|e| RpcError::new("internal", e.to_string()))?,
+                        frame = c.receive() => {
+                            let drained = match frame {
+                                Ok(_) => c.flush_resync().await,
+                                Err(e) => Err(e),
+                            };
+                            if let Err(e) = drained {
+                                self.lost = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            let model = if let Some(id) = p.model_id {
-                let config = crate::model::app_config::AppConfig::load();
-                let settings = crate::model::settings::Settings::default();
-                let m =
-                    crate::app::resolve::find_model_entry_by_slug(&config, &settings, &id, None)
-                        .ok_or_else(|| RpcError::new("not_found", "unknown model"))?;
-                Some((m.uuid.clone(), m.model_id.clone()))
-            } else {
-                None
-            };
-            (
-                uuid::Uuid::new_v4().to_string(),
-                Some(p.cwd),
-                false,
-                Some(p.policy.unwrap_or_default()),
-                model,
-                p.external_approvals,
-            )
-        } else {
-            let p: Resume = params(r.params)?;
-            let id = p.session_id;
-            if uuid::Uuid::parse_str(&id).is_err() {
-                return Err(RpcError::new("not_found", "unknown session"));
-            }
-            let row = tokio::task::spawn_blocking({
-                let id = id.clone();
-                move || crate::model::session_registry::get(&id)
-            })
-            .await
+        }
+        task.await
             .map_err(|e| RpcError::new("internal", e.to_string()))?
-            .map_err(|e| RpcError::new("unavailable", e.to_string()))?
-            .ok_or_else(|| RpcError::new("not_found", "unknown session"))?;
-            (
-                id,
-                Some(row.workdir),
-                true,
-                p.policy,
-                None,
-                p.external_approvals,
-            )
-        };
-        if policy
-            .as_ref()
-            .is_some_and(|p| p.approval == Approval::Default)
-            && !external
-        {
-            return Err(RpcError::new(
-                "invalid_request",
-                "approval default requires external_approvals opt-in",
-            ));
-        }
-        let spawn_id = id.clone();
-        let workdir = cwd.clone();
-        tokio::task::spawn_blocking(move || {
-            super::manage::ensure_daemon_running(
-                &spawn_id,
-                resume,
-                workdir.as_deref().map(std::path::Path::new),
-            )
-        })
-        .await
-        .map_err(RpcError::unknown)?
-        .map_err(RpcError::unknown)?;
-        let mut c = Connection::attach(id, cwd, events.clone())
-            .await
-            .map_err(RpcError::unknown)?;
-        c.readback().await?;
-        c.projection.external_approvals = external;
-        // Only this connection opts into answering tool gates.
-        c.ack(C::SetApprovalChannel { enabled: external }).await?;
-        if let Some(p) = policy {
-            c.ack(C::SetSessionPolicy {
-                request_id: r.id.clone(),
-                plan: match p.plan {
-                    Plan::Allow => crate::ipc::proto::PlanPolicy::Allow,
-                    Plan::Forbid => crate::ipc::proto::PlanPolicy::Forbid,
-                },
-                approval: match p.approval {
-                    Approval::Default => crate::ipc::proto::ApprovalPolicy::Default,
-                    Approval::Reject => crate::ipc::proto::ApprovalPolicy::Reject,
-                },
-            })
-            .await?;
-            c.readback().await?;
-            if c.projection.policy.as_ref() != Some(&p) {
-                return Err(RpcError::unknown("daemon did not apply policy"));
-            }
-        }
-        if let Some((uuid, expected)) = model {
-            c.ack(C::SetSessionMain {
-                model_uuid: Some(uuid),
-            })
-            .await?;
-            if c.readback().await?.model != expected {
-                return Err(RpcError::unknown("daemon did not apply requested model"));
-            }
-        }
-        let state = c.state().await?;
-        c.ready = true;
-        c.publish();
-        *conn = Some(c);
-        return Ok(json!({"state":state}));
-    }
-    let c = conn
-        .as_mut()
-        .ok_or_else(|| RpcError::new("invalid_state", "no session bound"))?;
-    match r.method.as_str() {
-        "state" => {
-            let _: serde_json::Map<String, Value> = params(r.params)?;
-            Ok(json!({"state":c.state().await?}))
-        }
-        "detach" => {
-            let _: serde_json::Map<String, Value> = params(r.params)?;
-            Ok(json!({"detached":true}))
-        }
-        "submit" | "enqueue" | "interrupt_and_submit" | "interrupt" => {
-            let id = r.id;
-            let req = match r.method.as_str() {
-                "submit" | "enqueue" => {
-                    let input: Input = params(r.params)?;
-                    let (text, attachments) =
-                        tokio::task::spawn_blocking(move || attachments(input))
-                            .await
-                            .map_err(|e| RpcError::new("internal", e.to_string()))??;
-                    if r.method == "submit" {
-                        C::SubmitTurnWithAttachments {
-                            request_id: id.clone(),
-                            text,
-                            attachments,
-                        }
-                    } else {
-                        C::EnqueueFollowUp {
-                            request_id: id.clone(),
-                            text,
-                            attachments,
-                        }
-                    }
-                }
-                "interrupt" => {
-                    let p: Target = params(r.params)?;
-                    C::InterruptTurn {
-                        request_id: id.clone(),
-                        turn_id: p.turn_id,
-                    }
-                }
-                _ => {
-                    let p: Replacement = params(r.params)?;
-                    let (text, attachments) =
-                        tokio::task::spawn_blocking(move || attachments(p.input))
-                            .await
-                            .map_err(|e| RpcError::new("internal", e.to_string()))??;
-                    C::InterruptAndSubmit {
-                        request_id: id.clone(),
-                        turn_id: p.turn_id,
-                        text,
-                        attachments,
-                    }
-                }
-            };
-            let event = c
-                .rpc(req, |e| match e {
-                    E::TurnResult { request_id, .. }
-                    | E::InterruptAndSubmitResult { request_id, .. } => request_id == &id,
-                    _ => false,
-                })
-                .await?;
-            Ok(turn_result(&c.projection.id, event)?)
-        }
-        "approve" => {
-            let p: Decision = params(r.params)?;
-            let state = c.state().await?;
-            if !state.external_approvals
-                || !state
-                    .pending_approval
-                    .as_ref()
-                    .is_some_and(|a| a.call_id == p.call_id)
-            {
-                return Err(RpcError::new(
-                    "invalid_state",
-                    "target call is not awaiting opted-in tool approval",
-                ));
-            }
-            let s = c.projection.session.as_ref().ok_or_else(|| {
-                RpcError::new("invalid_state", "no active session")
-            })?;
-            let call = s
-                .pending_tool_calls
-                .get(s.tool_idx)
-                .ok_or_else(|| RpcError::new("invalid_state", "no pending tool approval"))?;
-            if matches!(call.function.name.as_str(), "plan_ready" | "mission_ready") {
-                return Err(RpcError::new(
-                    "invalid_state",
-                    "plan and mission decisions are not tool approvals",
-                ));
-            }
-            c.ack(C::ApproveTool {
-                approve: p.approve,
-                call_id: Some(p.call_id),
-            })
-            .await?;
-            Ok(json!({"approved":p.approve}))
-        }
-        other => {
-            let message = format!("SDK method `{other}` is not implemented.");
-            crate::model::notifications::record(
-                Some(c.projection.id.clone()),
-                crate::model::notifications::Entry::new(message.clone(), "error", "sdk"),
-            );
-            Err(RpcError::new("unsupported_method", message))
-        }
     }
 }
-async fn configure_call(
-    params: Value,
-    conn: &mut Option<Connection>,
-) -> Result<Value, RpcError> {
-    configure::check(&params).map_err(|message| RpcError::new("invalid_request", message))?;
-    if let Some(connection) = conn.as_mut() {
-        connection.configure(params).await
+/// Answers one request. Returns the response frame and whether the process
+/// ends after it: always after `detach`, even a failed one, and after an
+/// `unknown` outcome on the bound coding connection.
+async fn respond(
+    r: Request,
+    seen: &mut std::collections::HashSet<String>,
+    adapter: &mut Adapter,
+) -> Result<(Value, bool)> {
+    anyhow::ensure!(!r.id.is_empty(), "empty request ID");
+    // Bound lifetime correlation storage; never silently forget IDs and allow reuse.
+    anyhow::ensure!(
+        seen.len() < REQUEST_IDS,
+        "request lifetime limit reached; detach and reconnect"
+    );
+    let id = r.id.clone();
+    let method = r.method.clone();
+    let legacy = methods::find(&method).is_some_and(|route| route.legacy());
+    let response = if !seen.insert(id.clone()) {
+        Err(RpcError::new("invalid_request", "duplicate request id"))
     } else {
-        let mut config = crate::model::app_config::AppConfig::load();
-        let require_main = !configure::has_main(&config);
-        let applied = configure::apply(&mut config, &params, require_main)
-            .map_err(|message| RpcError::new("invalid_request", message))?;
-        config.save().map_err(|error| {
-            RpcError::new("unavailable", format!("configure save failed: {error}"))
-        })?;
-        Ok(applied.reply)
+        dispatch(r, adapter).await
+    };
+    let fatal = response
+        .as_ref()
+        .err()
+        .is_some_and(|e| e.ends_process(legacy));
+    let frame = match response {
+        Ok(result) => json!({"type":"response","id":id,"result":result}),
+        Err(error) => json!({"type":"response","id":id,"error":error}),
+    };
+    let frame = if serde_json::to_vec(&frame)?.len() > MAX_LINE {
+        json!({"type":"response","id":id,"error":oversized(legacy)})
+    } else {
+        frame
+    };
+    Ok((frame, method == "detach" || fatal))
+}
+/// The error that replaces a response too large for one frame. v1 methods keep
+/// their v1 text; a new method's oversized result is a read that sent nothing.
+fn oversized(legacy: bool) -> RpcError {
+    if legacy {
+        RpcError::new("unavailable", "state exceeds frame limit")
+    } else {
+        RpcError::reason(Reason::FrameLimit, "result exceeds frame limit")
     }
 }
-fn turn_result(session_id: &str, e: E) -> Result<Value, RpcError> {
-    let (d, id, reason, interrupted) = match e {
-        E::TurnResult {
-            disposition,
-            turn_id,
-            reason,
-            ..
-        } => (disposition, turn_id, reason, None),
-        E::InterruptAndSubmitResult {
-            disposition,
-            turn_id,
-            reason,
-            interrupted_turn_id,
-            ..
-        } => (disposition, turn_id, reason, Some(interrupted_turn_id)),
-        _ => {
-            let message = "Turn reply was not a turn result.".to_string();
-            crate::model::notifications::record(
-                Some(session_id.to_string()),
-                crate::model::notifications::Entry::new(message.clone(), "error", "sdk"),
-            );
-            return Err(RpcError::new("unavailable", message));
-        }
+async fn dispatch(r: Request, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let Some(route) = methods::find(&r.method) else {
+        return Err(RpcError::new("unsupported_method", "unsupported method"));
     };
-    let reason = reason.map(|message| {
-        let code = if message.contains("stale_turn") {
-            "stale_turn"
-        } else if message.contains("queue_full") {
-            "queue_full"
-        } else if message.contains("busy") {
-            "busy"
-        } else {
-            "invalid_input"
-        };
-        json!({"code":code,"message":message})
-    });
-    let disposition = match d {
-        crate::ipc::proto::TurnDisposition::Started => "started",
-        crate::ipc::proto::TurnDisposition::Queued => "queued",
-        crate::ipc::proto::TurnDisposition::Rejected => "rejected",
-        crate::ipc::proto::TurnDisposition::Interrupted => "interrupted",
-    };
-    let mut v = json!({"disposition":disposition,"turn_id":id,"reason":reason});
-    if let Some(id) = interrupted {
-        v["interrupted_turn_id"] = json!(id)
-    }
-    Ok(v)
+    route.check(adapter.binding.state())?;
+    (route.handler)(r, adapter).await
 }

@@ -1,5 +1,6 @@
 //! Explicit SDK attach: protocol/capability negotiation, never fingerprint restart.
 use super::{
+    dto::{DaemonInfo, SessionInfo, MAX_CAPABILITIES},
     protocol::{RpcError, State},
     reconcile::Reconcile,
 };
@@ -23,6 +24,34 @@ pub struct Connection {
     seq: u64,
     resync_needed: bool,
     events: watch::Sender<Option<State>>,
+    /// The last `ready` effort options, for the Main model uuid they were
+    /// derived for.
+    pub effort_cache: Option<(Option<String>, Vec<String>)>,
+    /// Provider and OAuth names from the adapter's last read of `config.json`,
+    /// for routes the daemon's snapshot does not name.
+    pub names: Vec<(String, String)>,
+}
+
+/// The daemon's `/effort` menu, as `GetEffortOptions` reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffortMenu {
+    /// `"ready"`, `"loading"` or `"unsupported"`.
+    pub state: String,
+    pub options: Vec<String>,
+    pub note: String,
+}
+
+/// `session_info.daemon` from the daemon's `Hello`.
+pub fn daemon_info(version: &str, protocol: u32, capabilities: &[String]) -> DaemonInfo {
+    DaemonInfo {
+        version: version.to_string(),
+        ipc_protocol: protocol,
+        capabilities: capabilities
+            .iter()
+            .take(MAX_CAPABILITIES)
+            .cloned()
+            .collect(),
+    }
 }
 impl Connection {
     pub async fn attach(
@@ -42,6 +71,8 @@ impl Connection {
                 seq: 0,
                 resync_needed: false,
                 events,
+                effort_cache: None,
+                names: Vec::new(),
             };
             c.send(&ClientRequest::Attach {
                 foreground_id: Some(id),
@@ -59,6 +90,7 @@ impl Connection {
                         protocol == crate::ipc::proto::IPC_PROTOCOL_VERSION,
                         "unsupported daemon protocol {protocol}"
                     );
+                    c.projection.info.daemon = daemon_info(&version, protocol, &capabilities);
                     c.version = version;
                     c.capabilities = capabilities;
                 }
@@ -86,6 +118,24 @@ impl Connection {
         })
         .await
         .context("daemon attach timeout")?
+    }
+    /// A connection on a stream whose peer plays the daemon, for tests.
+    #[cfg(test)]
+    pub fn for_test(stream: IpcStream, id: &str) -> Self {
+        let (events, _) = watch::channel(None);
+        Self {
+            stream,
+            reader: FrameReader::new(),
+            projection: Reconcile::new(id.to_string()),
+            ready: false,
+            version: String::new(),
+            capabilities: vec![],
+            seq: 0,
+            resync_needed: false,
+            events,
+            effort_cache: None,
+            names: Vec::new(),
+        }
     }
     pub async fn send(&mut self, r: &ClientRequest) -> Result<()> {
         client::send_frame(&mut self.stream, &serde_json::to_vec(r)?).await?;
@@ -203,6 +253,82 @@ impl Connection {
             Err(RpcError::new("unavailable", message))
         }
     }
+    /// `session_info` as of the frames received so far. Costs no IPC.
+    pub fn session_info(&self) -> SessionInfo {
+        self.projection.session_info(|uuid| {
+            self.names
+                .iter()
+                .find(|(id, _)| id == uuid)
+                .map(|(_, name)| name.clone())
+        })
+    }
+    /// Make the daemon re-read `config.json` before it acts on the catalogue,
+    /// so a write it has not loaded is not reverted by its next save.
+    pub async fn reload_catalogue(&mut self) -> Result<(), RpcError> {
+        self.ack(ClientRequest::ReloadGlobalCatalogue).await
+    }
+    /// Ask for the `/effort` menu. While the daemon is still loading it, keep
+    /// reading for up to `wait` for the push that follows.
+    pub async fn effort_options(&mut self, wait: Duration) -> Result<EffortMenu, RpcError> {
+        let reply = self
+            .rpc(ClientRequest::GetEffortOptions, |e| {
+                matches!(e, DaemonEvent::EffortOptions { .. })
+            })
+            .await?;
+        let mut menu = effort_menu(reply);
+        let deadline = tokio::time::Instant::now() + wait;
+        while menu.as_ref().is_some_and(|m| m.state == "loading") {
+            let frame = match tokio::time::timeout_at(deadline, self.receive()).await {
+                Err(_) => break,
+                Ok(frame) => frame.map_err(RpcError::unknown)?,
+            };
+            self.flush_resync().await.map_err(RpcError::unknown)?;
+            if let Some(pushed) = effort_menu(frame.event) {
+                menu = Some(pushed);
+            }
+        }
+        menu.ok_or_else(|| {
+            RpcError::reason(
+                super::protocol::Reason::IoError,
+                "effort reply was not an effort menu",
+            )
+        })
+    }
+    /// `SetEffort`. The daemon's reply is a `SettingsValues` push that carries
+    /// no request id, so it proves nothing; callers confirm by [`Self::readback`].
+    pub async fn set_effort(&mut self, effort: String) -> Result<(), RpcError> {
+        self.rpc(ClientRequest::SetEffort { effort }, |e| {
+            matches!(e, DaemonEvent::SettingsValues { .. })
+        })
+        .await
+        .map(|_| ())
+    }
+    /// `SetSessionPrefs` with only the three limit fields set. Confirmed, like
+    /// [`Self::set_effort`], by a readback.
+    pub async fn set_limits(
+        &mut self,
+        max_output_tokens: Option<u32>,
+        context_window_limit: Option<u64>,
+        context_model_alias: Option<String>,
+    ) -> Result<(), RpcError> {
+        let request = ClientRequest::SetSessionPrefs {
+            short_send: None,
+            sliding_cache: None,
+            bash_saving: None,
+            coding_autosave: None,
+            internet_mode: None,
+            workdir: None,
+            subagent_max_turns: None,
+            short_send_engage_n: None,
+            short_send_tail_n: None,
+            max_output_tokens,
+            context_window_limit,
+            context_model_alias,
+        };
+        self.rpc(request, |e| matches!(e, DaemonEvent::SettingsValues { .. }))
+            .await
+            .map(|_| ())
+    }
     pub async fn state(&mut self) -> Result<State, RpcError> {
         self.readback().await?;
         // Force an ordered authoritative snapshot, including pending tool gate/history.
@@ -216,6 +342,22 @@ impl Connection {
                 "selected session has no authoritative snapshot",
             )
         })
+    }
+}
+
+fn effort_menu(event: DaemonEvent) -> Option<EffortMenu> {
+    match event {
+        DaemonEvent::EffortOptions {
+            options,
+            note,
+            state,
+            ..
+        } => Some(EffortMenu {
+            state,
+            options,
+            note,
+        }),
+        _ => None,
     }
 }
 
@@ -253,6 +395,8 @@ mod tests {
             seq: 0,
             resync_needed: false,
             events,
+            effort_cache: None,
+            names: Vec::new(),
         }
     }
     #[tokio::test]
