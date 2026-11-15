@@ -695,3 +695,268 @@ fn a_lane_is_one_unit_across_layers() {
     assert_eq!(layered(""), lower);
     assert_eq!(layered("[avatar.work]\n"), lower);
 }
+
+fn layered_handle(template: &Tmp, session: &Tmp) -> RegistryHandle {
+    RegistryHandle::with_layers(Some(template.path().to_path_buf()), session.path().to_path_buf())
+        .expect("embedded registry loads")
+}
+
+/// The registry without its version, which only counts reloads.
+fn unversioned(reg: &Registry) -> Registry {
+    Registry { version: 0, ..reg.clone() }
+}
+
+fn tools_toml(handlers: &[&str]) -> String {
+    handlers
+        .iter()
+        .map(|h| {
+            format!("[[tool]]\nname = \"{h}\"\nhandler = \"{h}\"\ndescription = \"{h}\"\n[tool.schema]\ntype = \"object\"\n")
+        })
+        .collect()
+}
+
+#[test]
+fn no_template_dir_gives_the_same_registry_as_the_overlay_alone() {
+    let session = Tmp::new("layers-none-session");
+    session.write("roles/red/role.toml", RED_ROLE_NARROWED);
+    session.write("roles/clerk/role.toml", "id = \"clerk\"\ndisplay = \"Clerk\"\nshelf_allow = [\"get\", \"put_verdict\"]\n");
+    let missing = session.path().join("no-such-template");
+    let alone = overlaid(&session);
+    for handle in [
+        RegistryHandle::with_layers(None, session.path().to_path_buf()).expect("load"),
+        RegistryHandle::with_layers(Some(missing.clone()), session.path().to_path_buf()).expect("load"),
+    ] {
+        assert_eq!(handle.current(), alone.current());
+        assert_eq!(handle.report(), alone.report());
+        assert_eq!(handle.check_overlay_file("avatars.toml", "x ="), alone.check_overlay_file("avatars.toml", "x ="));
+    }
+    assert_eq!(alone.template_revision(), None);
+    assert_eq!(alone.template_dir(), None);
+    let absent = RegistryHandle::with_layers(Some(missing.clone()), session.path().to_path_buf()).expect("load");
+    assert_eq!(absent.template_revision().as_deref(), Some("absent"));
+    assert_eq!(absent.template_dir(), Some(missing.as_path()));
+}
+
+#[test]
+fn the_session_narrows_the_template_which_narrows_the_base() {
+    let template = Tmp::new("layers-narrow-template");
+    let session = Tmp::new("layers-narrow-session");
+    let red_role = |shelf: &str, skills: &str| {
+        format!("id = \"red\"\ndisplay = \"Lab Red\"\nshelf_allow = {shelf}\nskills_allow = {skills}\n")
+    };
+    template.write(
+        "roles/red/role.toml",
+        &red_role("[\"get\", \"list\", \"put_claim\", \"put_evidence\"]", "[\"web-*\", \"pentest-*\"]"),
+    );
+    template.write("roles/red/tools.toml", &tools_toml(&["read", "grep", "bash"]));
+
+    // Within the template: accepted.
+    session.write("roles/red/role.toml", &red_role("[\"get\", \"list\"]", "[\"web-*\"]"));
+    session.write("roles/red/tools.toml", &tools_toml(&["read", "grep"]));
+    let handle = layered_handle(&template, &session);
+    assert!(handle.report().warnings.is_empty(), "{:?}", handle.report().warnings);
+    let reg = handle.current();
+    let red = reg.role("red").expect("red");
+    assert_eq!(red.shelf_allow, ["get", "list"]);
+    assert_eq!(red.skills_allow, ["web-*"]);
+    let handlers: Vec<&str> = red.tools.iter().map(|t| t.handler.as_str()).collect();
+    assert_eq!(handlers, ["read", "grep"]);
+
+    // Wider than the template, though the base allows it: each file is dropped
+    // whole and the template's version stays in force.
+    session.write("roles/red/role.toml", &red_role("[\"get\", \"put_asset\"]", "[\"web-*\"]"));
+    session.write("roles/red/tools.toml", &tools_toml(&["read", "glob"]));
+    handle.reload();
+    let warnings = handle.report().warnings;
+    assert!(warnings.iter().any(|w| w == "roles/red/role.toml: shelf tool 'put_asset' would widen the role; file ignored"), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("roles/red/tools.toml: handler 'glob'")), "{warnings:?}");
+    let reg = handle.current();
+    let red = reg.role("red").expect("red");
+    assert_eq!(red.shelf_allow, ["get", "list", "put_claim", "put_evidence"]);
+    assert_eq!(red.skills_allow, ["web-*", "pentest-*"]);
+    let handlers: Vec<&str> = red.tools.iter().map(|t| t.handler.as_str()).collect();
+    assert_eq!(handlers, ["read", "grep", "bash"]);
+
+    session.write("roles/red/role.toml", &red_role("[\"get\"]", "[\"osint-*\"]"));
+    handle.reload();
+    assert!(handle
+        .report()
+        .warnings
+        .iter()
+        .any(|w| w == "roles/red/role.toml: skills_allow would widen the role; file ignored"));
+
+    // The template is held to the base the same way, and its warnings say so.
+    template.write("roles/clerk/role.toml", "id = \"clerk\"\ndisplay = \"Clerk\"\nshelf_allow = [\"get\", \"put_verdict\"]\n");
+    let fresh = Tmp::new("layers-narrow-empty");
+    let handle = layered_handle(&template, &fresh);
+    let embedded = RegistryHandle::embedded().expect("load").current();
+    assert_eq!(handle.current().role("clerk"), embedded.role("clerk"));
+    assert!(handle.report().warnings.iter().any(|w| w.starts_with("template: roles/clerk/role.toml: ") && w.contains("widen")));
+}
+
+#[test]
+fn avatars_merge_field_by_field_across_three_layers() {
+    let template = Tmp::new("layers-avatar-template");
+    let session = Tmp::new("layers-avatar-session");
+    template.write(
+        "avatars.toml",
+        "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\ndisplay = \"Template Web\"\n[avatar.work]\nprovider = \"p-t\"\nmodel = \"m-t\"\neffort = \"high\"\n\
+         [avatar.chat]\nprovider = \"p-c\"\nmodel = \"m-c\"\n\
+         [[avatar]]\nid = \"red-cli\"\nrole = \"red\"\ndisplay = \"Red CLI\"\nalias = \"rc\"\n",
+    );
+    session.write(
+        "avatars.toml",
+        "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\nalias = \"sw\"\n[avatar.work]\nmodel = \"m-s\"\n[avatar.chat]\neffort = \"low\"\n\
+         [[avatar]]\nid = \"red-cli\"\nrole = \"red\"\ndisplay = \"Session CLI\"\n",
+    );
+    let handle = layered_handle(&template, &session);
+    assert!(handle.report().warnings.is_empty(), "{:?}", handle.report().warnings);
+    let reg = handle.current();
+    let web = reg.avatars.get("red-web").expect("red-web");
+    assert_eq!(web.display.as_deref(), Some("Template Web"), "the display comes from the template");
+    assert_eq!(web.alias.as_deref(), Some("SW"), "the alias comes from the session");
+    // A model set in the session owns the whole lane.
+    assert_eq!(web.work, LaneModel { provider: None, model: Some("m-s".into()), effort: None });
+    // An effort alone keeps the template's model and provider.
+    assert_eq!(
+        web.chat,
+        LaneModel { provider: Some("p-c".into()), model: Some("m-c".into()), effort: Some("low".into()) }
+    );
+    // A template avatar is in the room, restyled by the session.
+    assert_eq!(reg.display_of("red-cli"), "Session CLI");
+    assert_eq!(reg.alias_of("red-cli"), "RC");
+
+    // Without the session entry the base alias shows through the template.
+    std::fs::remove_file(session.path().join("avatars.toml")).expect("remove");
+    handle.reload();
+    let reg = handle.current();
+    assert_eq!(reg.display_of("red-web"), "Template Web");
+    assert_eq!(reg.alias_of("red-web"), "LW");
+    assert_eq!(reg.lane_model("red-web", LaneKind::Work).model.as_deref(), Some("m-t"));
+}
+
+#[test]
+fn the_template_is_read_once_and_the_session_still_reloads() {
+    let template = Tmp::new("layers-frozen-template");
+    let session = Tmp::new("layers-frozen-session");
+    template.write("prompts/chief_status.md", "Template status.");
+    template.write("avatars.toml", "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\ndisplay = \"Template Web\"\n");
+    let handle = layered_handle(&template, &session);
+    let revision = handle.template_revision();
+    assert_eq!(revision.as_deref().map(str::len), Some(16));
+    let before = handle.current();
+    assert_eq!(before.display_of("red-web"), "Template Web");
+
+    template.write("avatars.toml", "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\ndisplay = \"Edited Web\"\n");
+    template.write("roles/red/role.toml", "this is not toml");
+    assert!(!handle.reload(), "a template edit must not reach a built handle");
+    assert_eq!(handle.current(), before);
+    assert_eq!(handle.template_revision(), revision);
+    assert!(handle.report().warnings.is_empty(), "{:?}", handle.report().warnings);
+
+    session.write("avatars.toml", "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\nalias = \"xw\"\n");
+    assert!(handle.reload(), "the session overlay still reloads");
+    let reg = handle.current();
+    assert_eq!(reg.display_of("red-web"), "Template Web");
+    assert_eq!(reg.alias_of("red-web"), "XW");
+
+    // A handle built now sees the edit.
+    let rebuilt = layered_handle(&template, &session);
+    assert_eq!(rebuilt.current().display_of("red-web"), "Edited Web");
+    assert_ne!(rebuilt.template_revision(), revision);
+}
+
+#[test]
+fn a_broken_template_does_not_block_or_drop_session_files() {
+    let template = Tmp::new("layers-broken-template");
+    let session = Tmp::new("layers-broken-session");
+    template.write("avatars.toml", "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\n[[avatar]]\nid = \"red-web\"\nrole = \"red\"\n");
+    let handle = layered_handle(&template, &session);
+    let warnings = handle.report().warnings;
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("template: avatars.toml: "), "{warnings:?}");
+    assert!(!blocks_avatar_write(&warnings[0], "red-web"));
+    assert!(!handle.drops_overlay_file(&warnings[0], "avatars.toml"));
+    let entry = "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\n[avatar.work]\nmodel = \"m\"\n";
+    assert!(handle.check_overlay_file("avatars.toml", entry).is_empty());
+    // The session's own broken file is still caught.
+    assert!(!handle.check_overlay_file("avatars.toml", "not toml").is_empty());
+}
+
+#[test]
+fn the_overlay_check_sees_avatars_from_the_template() {
+    let template = Tmp::new("layers-check-template");
+    let session = Tmp::new("layers-check-session");
+    template.write("avatars.toml", "[[avatar]]\nid = \"red-cli\"\nrole = \"red\"\n");
+    let handle = layered_handle(&template, &session);
+    let changed = handle.check_overlay_file("avatars.toml", "[[avatar]]\nid = \"red-cli\"\nrole = \"blue\"\n");
+    assert_eq!(changed, ["avatars.toml: avatar 'red-cli' cannot change its role; ignored"]);
+}
+
+#[test]
+fn validate_layers_matches_the_handle_and_reports_broken_or_widening_files() {
+    let template = Tmp::new("layers-validate-template");
+    let session = Tmp::new("layers-validate-session");
+    template.write("roles/red/role.toml", "id = \"red\"\ndisplay = \"Lab Red\"\nshelf_allow = [\"get\", \"list\"]\n");
+    template.write("avatars.toml", "[[avatar]]\nid = \"red-cli\"\nrole = \"red\"\n");
+    session.write("avatars.toml", "[[avatar]]\nid = \"red-cli\"\nrole = \"red\"\nalias = \"rc\"\n");
+    let handle = layered_handle(&template, &session);
+    let read = |dir: &Tmp| {
+        let mut warnings = Vec::new();
+        let tree = read_overlay(dir.path(), &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        tree
+    };
+    let (template_tree, session_tree) = (read(&template), read(&session));
+    let (reg, warnings) = validate_layers(&template_tree, Some(&session_tree));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(unversioned(&reg), unversioned(&handle.current()));
+
+    // The template alone, for the layer below the session.
+    let (below, _) = validate_layers(&template_tree, None);
+    assert!(below.avatars.contains_key("red-cli"));
+    assert_eq!(below.avatars.get("red-cli").and_then(|a| a.alias.clone()), None);
+    assert!(!validate_layers(&Tree::new(), None).0.avatars.contains_key("red-cli"));
+
+    // A session file wider than the template.
+    let mut widening = session_tree.clone();
+    widening.insert(
+        "roles/red/role.toml".into(),
+        "id = \"red\"\ndisplay = \"Lab Red\"\nshelf_allow = [\"get\", \"list\", \"put_claim\"]\n".into(),
+    );
+    let (reg, warnings) = validate_layers(&template_tree, Some(&widening));
+    assert_eq!(warnings, ["roles/red/role.toml: shelf tool 'put_claim' would widen the role; file ignored"]);
+    assert_eq!(reg.role("red").expect("red").shelf_allow, ["get", "list"]);
+
+    // A broken template file.
+    let mut broken = template_tree.clone();
+    broken.insert("avatars.toml".into(), "[[avatar]\n".into());
+    let (reg, warnings) = validate_layers(&broken, Some(&session_tree));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("template: avatars.toml: "), "{warnings:?}");
+    assert_eq!(reg.avatars.get("red-cli").map(|a| a.alias.as_deref()), Some(Some("RC")));
+}
+
+#[test]
+fn a_layer_revision_is_stable_and_follows_paths_and_bytes() {
+    let tree = |entries: &[(&str, &str)]| -> Tree {
+        entries.iter().map(|(p, t)| ((*p).to_string(), (*t).to_string())).collect()
+    };
+    let one = tree(&[("avatars.toml", "a"), ("prompts/x.md", "b")]);
+    let revision = layer_revision(&one);
+    assert_eq!(revision.len(), 16);
+    assert!(revision.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+    assert_eq!(layer_revision(&one.clone()), revision);
+    assert_ne!(layer_revision(&tree(&[("avatars.toml", "a"), ("prompts/x.md", "c")])), revision);
+    assert_ne!(layer_revision(&tree(&[("avatars.toml", "b"), ("prompts/x.md", "a")])), revision);
+    assert_ne!(layer_revision(&tree(&[("avatars.toml", "a")])), revision);
+    assert_ne!(layer_revision(&tree(&[("avatars.tom", "la")])), layer_revision(&tree(&[("avatars.toml", "a")])));
+    assert_eq!(layer_revision(&Tree::new()), "absent");
+
+    // On disk, the same files give the same revision as the template the handle froze.
+    let template = Tmp::new("layers-revision");
+    template.write("avatars.toml", "a");
+    template.write("prompts/x.md", "b");
+    let session = Tmp::new("layers-revision-session");
+    assert_eq!(layered_handle(&template, &session).template_revision(), Some(revision));
+}

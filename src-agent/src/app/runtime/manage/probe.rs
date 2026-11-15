@@ -98,22 +98,7 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
         Err(_) => return Vec::new(),
     };
 
-    let mut out = Vec::new();
-    let mut any_failed = false;
-    for (_id, path, alive) in &socks {
-        // Skip sockets the cheap connect-probe already shows as dead (saves a Status
-        // round-trip), and mark them for the sweep below.
-        if !alive {
-            any_failed = true;
-            continue;
-        }
-        match probe_status(path) {
-            Some(status) => out.push(status),
-            // Accepted the connect but failed to answer Status (wedged / mid-shutdown):
-            // exclude it and let the stale-sweep re-decide its fate by a fresh connect.
-            None => any_failed = true,
-        }
-    }
+    let (out, any_failed) = probe_listed(&socks);
 
     // Clean up any dead/stale sockets we ran into. `sweep_stale_files` re-probes each
     // socket's liveness itself and never touches a live daemon, so it is safe even
@@ -123,6 +108,46 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
     }
 
     out
+}
+
+/// Discover every live session-daemon exactly like [`list_live_sessions`], but never
+/// clean up: no socket and no pidfile is removed, whatever the probes find.
+///
+/// The cleanup is left out because it also removes every pidfile that has no socket
+/// beside it, and a daemon that is still starting writes its pidfile before it binds
+/// its socket. A caller that polls (a dashboard refreshing every few seconds) would
+/// otherwise delete a starting daemon's pidfile, and a later stop would have no PID to
+/// signal. Dead and wedged daemons are left out of the result and their files stay for
+/// `koma daemon clean` or the next [`list_live_sessions`].
+#[allow(dead_code)] // read by session listings that must not change the run dir
+pub fn probe_live_sessions() -> Vec<SessionStatus> {
+    match super::list_session_sockets() {
+        Ok(socks) => probe_listed(&socks).0,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The probe loop shared by [`list_live_sessions`] and [`probe_live_sessions`]: `Status`
+/// replies from every socket in `socks`, plus whether any socket was dead or failed to
+/// answer. Touches no file.
+fn probe_listed(socks: &[(String, PathBuf, bool)]) -> (Vec<SessionStatus>, bool) {
+    let mut out = Vec::new();
+    let mut any_failed = false;
+    for (_id, path, alive) in socks {
+        // Skip sockets the cheap connect-probe already shows as dead (saves a Status
+        // round-trip), and mark them as failed.
+        if !alive {
+            any_failed = true;
+            continue;
+        }
+        match probe_status(path) {
+            Some(status) => out.push(status),
+            // Accepted the connect but failed to answer Status (wedged / mid-shutdown):
+            // exclude it and report the failure so a sweeping caller re-decides its fate.
+            None => any_failed = true,
+        }
+    }
+    (out, any_failed)
 }
 
 /// FIRE-AND-FORGET fan-out of a [`ClientRequest::UnloadExtension`] to EVERY live
@@ -446,5 +471,64 @@ mod tests {
             frame,
             serde_json::to_vec(&ClientRequest::ReloadGlobalCatalogue).expect("encode")
         );
+    }
+
+    /// A fresh directory under the OS temp root, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "koma-probe-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A socket path nothing listens on: a bound-then-dropped unix socket file, or on
+    /// Windows a plain file whose path no pipe server owns.
+    fn dead_socket(dir: &Path, id: &str) -> PathBuf {
+        let path = dir.join(format!("{id}.sock"));
+        #[cfg(unix)]
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        #[cfg(windows)]
+        std::fs::write(&path, b"").unwrap();
+        path
+    }
+
+    #[test]
+    fn probe_listed_removes_no_socket_or_pidfile() {
+        let tmp = TempDir::new("keep");
+        let dead = dead_socket(&tmp.0, "dead");
+        let dead_pid = tmp.0.join("dead.pid");
+        let orphan_pid = tmp.0.join("starting.pid");
+        std::fs::write(&dead_pid, "1").unwrap();
+        std::fs::write(&orphan_pid, "1").unwrap();
+
+        // Once as the cheap connect-probe reports it, once as a socket that accepted
+        // the connect check but then fails the Status probe.
+        let socks = vec![
+            ("dead".to_string(), dead.clone(), false),
+            ("dead".to_string(), dead.clone(), true),
+        ];
+        let (live, any_failed) = probe_listed(&socks);
+
+        assert!(live.is_empty());
+        assert!(any_failed);
+        assert!(dead.exists(), "dead socket was removed");
+        assert!(dead_pid.exists(), "pidfile of a dead socket was removed");
+        assert!(orphan_pid.exists(), "orphan pidfile was removed");
     }
 }
