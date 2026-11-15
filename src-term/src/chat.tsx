@@ -874,6 +874,7 @@ export function ToolCard({
   theme,
   syntaxStyle,
   digest: given,
+  failed = false,
 }: {
   call: ToolCall
   result?: ChatMessage
@@ -881,6 +882,8 @@ export function ToolCard({
   syntaxStyle: SyntaxStyle
   /** A readable body for the payload; the room sets it for its own tools. */
   digest?: string | null
+  /** The result reported failure; the room sets it from the result's `ok`. */
+  failed?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [hot, setHot] = useState(false)
@@ -891,7 +894,7 @@ export function ToolCard({
     const timer = setInterval(() => setTick((value) => value + 1), 80)
     return () => clearInterval(timer)
   }, [done])
-  const mark = done ? "✓" : (SPINNER[tick % SPINNER.length] ?? "⠋")
+  const mark = done ? (failed ? "✗" : "✓") : (SPINNER[tick % SPINNER.length] ?? "⠋")
   const digest = given ?? planDigest(call.function.arguments)
   const image = result ? showImagePath(result.content) : null
   return (
@@ -906,7 +909,7 @@ export function ToolCard({
         onMouseDown={() => setOpen((value) => !value)}
       >
         <text>
-          <span fg={done ? theme.accent : theme.info}>{`${mark} `}</span>
+          <span fg={done ? (failed ? theme.error : theme.accent) : theme.info}>{`${mark} `}</span>
           <span fg={theme.fg}>{call.function.name}</span>
           <span fg={theme.dim}>{`  ${toolHint(call.function.arguments)}`}</span>
         </text>

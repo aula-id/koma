@@ -77,6 +77,7 @@ export type LaneRow = { avatar: string; display: string; lane: string; model: st
 /** One room wire value, or null when it is not a room frame. */
 export function parseRoomFrame(value: unknown): RoomFrame | null {
   if (value === "hello") return { type: "hello", kind: "" }
+  if (value === "closed") return { type: "closed" }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const body = (key: string) => {

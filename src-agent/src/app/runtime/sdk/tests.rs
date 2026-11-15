@@ -258,3 +258,81 @@ fn pending_call_approval_excludes_plan_and_mission() {
         assert!(!serde_json::to_string(&state).unwrap().contains("secret"));
     }
 }
+
+fn role_params(role: &str) -> Value {
+    json!({
+        "providers": [{
+            "name": "local",
+            "endpoint": "http://127.0.0.1:1/v1",
+            "api_type": "openai",
+            "api_key": "sk-test-role-key",
+        }],
+        "models": {
+            "main": {"provider": "local", "model_id": "main-model"},
+            role: {"provider": "local", "model_id": "role-model"},
+        },
+    })
+}
+
+const CYBER_KEYS: [&str; 8] = [
+    "cyber-red",
+    "cyber_red",
+    "cyber-blue",
+    "cyber_blue",
+    "cyber-research",
+    "cyber_research",
+    "cyber-researcher",
+    "cyber_researcher",
+];
+
+#[tokio::test]
+async fn configure_rejects_cyber_roles_before_any_catalogue_access() {
+    // The rejection comes from the pre-parse, so the unbound path never loads
+    // or saves the real catalogue here.
+    let (events, _) = watch::channel(None);
+    let mut connection = None;
+    for key in CYBER_KEYS {
+        let r = Request {
+            id: key.into(),
+            method: "configure".into(),
+            params: role_params(key),
+        };
+        let error = dispatch(r, &mut connection, &events).await.unwrap_err();
+        assert_eq!(error.code, "invalid_request");
+        assert_eq!(error.message, format!("unknown model role '{key}'"));
+        assert_eq!(error.delivery, "not_sent");
+        assert!(!error.message.contains("sk-test-role-key"));
+        assert!(connection.is_none());
+    }
+}
+
+#[test]
+fn configure_check_and_apply_reject_cyber_roles() {
+    // `configure::check` is the pre-parse `configure_call` runs on every call;
+    // `configure::apply` is what a daemon on this binary runs.
+    for key in CYBER_KEYS {
+        let message = format!("unknown model role '{key}'");
+        assert_eq!(configure::check(&role_params(key)).unwrap_err(), message);
+        let mut config = crate::model::app_config::AppConfig::default();
+        assert_eq!(
+            configure::apply(&mut config, &role_params(key), false).unwrap_err(),
+            message
+        );
+        assert!(config.models.is_empty());
+        assert!(config.providers.is_empty());
+    }
+}
+
+#[test]
+fn configure_public_roles_still_pass() {
+    for role in ["main", "awareness", "safeguard", "compactor", "planner"] {
+        let params = role_params(role);
+        configure::check(&params).unwrap();
+        let mut config = crate::model::app_config::AppConfig::default();
+        let applied = configure::apply(&mut config, &params, true).unwrap();
+        // For `main` the role entry overrides the shared `main` entry.
+        assert_eq!(applied.reply["models"][role]["model_id"], "role-model");
+        assert_eq!(applied.reply["models"]["main"]["provider"], "local");
+        assert!(!applied.reply.to_string().contains("sk-test-role-key"));
+    }
+}

@@ -191,6 +191,40 @@ test("g draws the graph in boxes with arrows, and t comes back to the tree", asy
   await act(async () => { await t.screen.dispose() })
 })
 
+test("a second g goes back to the tree from the graph", async () => {
+  const t = await openRich()
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  expect(t.text()).toContain("trajectory · graph")
+  expect(t.text()).toContain("esc tree")
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  expect(t.text()).not.toContain("trajectory · graph")
+  expect(t.text()).toContain("(1.1) asset one")
+  expect(t.opened).toEqual([])
+  await act(async () => { await t.screen.dispose() })
+})
+
+test("esc in the graph shows the tree, and a second esc closes the screen", async () => {
+  const t = await openRich()
+  const escape = async () => { await act(async () => { t.screen.mockInput.pressEscape(); await new Promise((r) => setTimeout(r, 100)) }); await t.settle() }
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  expect(t.text()).toContain("trajectory · graph")
+  await escape()
+  expect(t.text()).not.toContain("trajectory · graph")
+  expect(t.text()).toContain("(1.1) asset one")
+  expect(t.opened).toEqual([])
+  await escape()
+  expect(t.opened).toEqual(["back"])
+  await act(async () => { await t.screen.dispose() })
+})
+
+test("q in the graph still closes the screen", async () => {
+  const t = await openRich()
+  await t.press(() => t.screen.mockInput.pressKey("g"))
+  await t.press(() => t.screen.mockInput.pressKey("q"))
+  expect(t.opened).toEqual(["back"])
+  await act(async () => { await t.screen.dispose() })
+})
+
 test("in the graph tab walks the nodes and enter opens the one that is chosen", async () => {
   const t = await openRich()
   await t.press(() => t.screen.mockInput.pressKey("g"))
