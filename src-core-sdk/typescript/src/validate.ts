@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { SdkError, type ConfigureOptions, type ErrorDetails, type Hello, type Method, type ModelRoleName, type Policy, type Input, type V1Method } from './types.js';
+import { ROOM_METHODS, SKILL_METHODS, SdkError, type ConfigureOptions, type ErrorDetails, type Hello, type Method, type ModelRoleName, type Policy, type Input, type V1Method } from './types.js';
 export function object(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SdkError('protocol', 'Expected object');
 }
@@ -54,12 +54,24 @@ export function errorDetails(x: Record<string, unknown>): ErrorDetails {
   return out;
 }
 export function validateEvent(x: Record<string, unknown>): void {
+  if (typeof x.event === 'string' && x.event.startsWith('room.')) { validateRoomEvent(x); return; }
   if (x.event === 'state') { validateState(x.state); bool(x.resynced); return; }
   if (!Number.isSafeInteger(x.revision) || (x.revision as number) < 1) throw new SdkError('protocol', 'Invalid event revision');
   if (x.event === 'output_append') {
     if (!Number.isSafeInteger(x.offset) || (x.offset as number) < 0) throw new SdkError('protocol', 'Invalid append offset');
     string(x.text, true);
   } else if (x.turn !== null) { object(x.turn); string(x.turn.id, true); member(x.turn.state, ['running','finished','interrupted','failed']); nullableString(x.turn.error); }
+}
+function validateRoomEvent(x: Record<string, unknown>): void {
+  string(x.epoch, true);
+  switch (x.event) {
+    case 'room.line': validateRoomLine(x.line); return;
+    case 'room.delta': string(x.author, true); string(x.lane, true); string(x.kind, true); string(x.text); return;
+    case 'room.status': validateRoomStatus(x.status); return;
+    case 'room.notice': string(x.code, true); string(x.text); return;
+    case 'room.closed': string(x.session_id, true); string(x.reason, true); return;
+    case 'room.gap': int(x.after_line_seq); int(x.dropped_lines); int(x.dropped_deltas); return;
+  }
 }
 const ROLES: readonly ModelRoleName[] = ['main', 'awareness', 'safeguard', 'compactor', 'planner'];
 export function configureParams(options: ConfigureOptions): Record<string, unknown> {
@@ -196,10 +208,170 @@ function validateDelete(x: Record<string, unknown>, params: Record<string, unkno
   bool(x.removed.main_reset);
   validateMutation(x, 'global');
 }
+function nullableBool(x: unknown): void { if (x !== null) bool(x); }
+function num(x: unknown): void { if (typeof x !== 'number' || !Number.isFinite(x) || x < 0) throw new SdkError('protocol', 'Expected non-negative number'); }
+function fields(x: Record<string, unknown>, nullable: readonly string[]): void { for (const k of nullable) nullableString(x[k]); }
+function cursorPage(x: Record<string, unknown>, key: string, item: (v: unknown) => void, max: number): void {
+  list(x[key], item); if ((x[key] as unknown[]).length > max) throw new SdkError('protocol', `Too many ${key}`);
+  nullableString(x.next_cursor);
+}
+function validateSessionRow(x: unknown): void {
+  object(x); string(x.session_id, true); fields(x, ['name', 'workdir', 'parent_session_id', 'room_session_id']); string(x.kind, true);
+  nullableInt(x.created_at); nullableInt(x.updated_at); bool(x.live); nullableBool(x.working); bool(x.locked); bool(x.bound); bool(x.room_live);
+}
+function validateTotals(x: unknown): void {
+  object(x); int(x.calls); int(x.tokens_in); int(x.tokens_cached); int(x.tokens_out); num(x.cost);
+}
+function validateUsage(x: Record<string, unknown>): void {
+  if (!Number.isSafeInteger(x.from_at) || !Number.isSafeInteger(x.to_at)) throw new SdkError('protocol', 'Invalid usage window');
+  string(x.ledger, true); validateTotals(x.totals);
+  if (x.groups !== undefined) {
+    list(x.groups, g => {
+      object(g); validateTotals(g); string(g.key); nullableString(g.label);
+      if (g.role_kind !== undefined) string(g.role_kind, true);
+      if (g.agent !== undefined) nullableString(g.agent);
+      if (g.kind !== undefined) nullableString(g.kind);
+      if (g.deleted !== undefined) bool(g.deleted);
+    });
+    bool(x.groups_truncated);
+  }
+  if (x.buckets !== undefined) list(x.buckets, b => { object(b); validateTotals(b); if (!Number.isSafeInteger(b.start_at)) throw new SdkError('protocol', 'Invalid bucket start'); });
+}
+function validateSkillRow(x: unknown): void {
+  object(x); string(x.name, true); string(x.scope, true); string(x.tier, true); string(x.description);
+  strings(x.triggers); bool(x.triggers_truncated); strings(x.tags); bool(x.tags_truncated);
+  bool(x.pinned); bool(x.editable); string(x.generation, true); string(x.path); bool(x.effective); nullableString(x.shadowed_by);
+}
+function validateSkillDetail(x: unknown): void {
+  validateSkillRow(x); object(x);
+  string(x.instruction); strings(x.declared_tools); bool(x.declared_tools_truncated); strings(x.companion_files); bool(x.companion_files_truncated);
+  bool(x.structured_save_supported); nullableString(x.raw);
+}
+function validateSkills(method: string, x: Record<string, unknown>): void {
+  if (method === 'skills.list') {
+    nullableString(x.project_workdir); cursorPage(x, 'skills', validateSkillRow, 1000);
+    list(x.diagnostics, d => { object(d); string(d.path); string(d.error); }); bool(x.diagnostics_truncated);
+  } else if (method === 'skills.get') validateSkillDetail(x);
+  else if (method === 'skills.read_file') { string(x.path); string(x.text); int(x.bytes); }
+  else if (method === 'skills.remove') {
+    if (x.removed !== true) throw new SdkError('protocol', 'Invalid remove result');
+    if (x.now_effective !== null) validateSkillRow(x.now_effective);
+    validatePropagation(x.propagation);
+  } else {
+    validateSkillDetail(x.skill); validatePropagation(x.propagation);
+    if (method === 'skills.update') bool(x.renamed);
+  }
+}
+function validateRoomInfo(x: unknown): void {
+  object(x); string(x.session_id, true); fields(x, ['parent_session_id', 'parent_name', 'name', 'workdir']);
+  bool(x.live); bool(x.locked); bool(x.bound); nullableInt(x.created_at); nullableInt(x.updated_at);
+}
+function validateRoomLine(x: unknown): void {
+  object(x);
+  if (!Number.isSafeInteger(x.line_seq) || (x.line_seq as number) < 1) throw new SdkError('protocol', 'Invalid line_seq');
+  string(x.kind, true); string(x.author, true);
+  fields(x, ['display', 'alias', 'lane', 'audience', 'text', 'call_id', 'tool', 'args', 'result']);
+  nullableBool(x.ok); bool(x.replay); string(x.origin, true); int(x.received_at_ms); bool(x.truncated);
+}
+function validateCounts(x: unknown): void { object(x); int(x.open); int(x.verified); int(x.returned); int(x.reports); }
+function validateRoomStatus(x: unknown): void {
+  object(x); string(x.session_id, true); bool(x.live); bool(x.fresh); nullableInt(x.age_ms); int(x.now_at_ms); validateCounts(x.counts);
+  string(x.counts_basis, true); strings(x.paused); bool(x.paused_truncated);
+  list(x.lanes, l => {
+    object(l); string(l.avatar, true); string(l.display); string(l.alias); string(l.role); nullableString(l.lane); string(l.phase, true); string(l.task);
+    int(l.started_at_ms); int(l.last_event_at_ms); int(l.steps); string(l.last_tool); string(l.error);
+  });
+  bool(x.lanes_truncated);
+  list(x.events, e => { object(e); int(e.at_ms); string(e.avatar); string(e.marker); string(e.label); });
+  string(x.digest); string(x.timeline); string(x.trajectory_outline); string(x.shelf_fingerprint); bool(x.truncated);
+}
+function validateAttach(x: Record<string, unknown>): void {
+  validateRoomInfo(x.room); bool(x.started); object(x.daemon); nullableString(x.daemon.version); strings(x.daemon.features); nullableString(x.daemon.template_revision);
+  string(x.epoch, true); object(x.history); nullableInt(x.history.first_line_seq); nullableInt(x.history.last_line_seq); int(x.history.count); int(x.history.replayed);
+  list(x.tail, validateRoomLine); if (x.status !== null) validateRoomStatus(x.status); strings(x.roster, true); bool(x.roster_truncated);
+}
+function validateShelfRow(x: unknown): void {
+  object(x); string(x.key, true); int(x.revision); int(x.updated_at); string(x.kind); string(x.title); string(x.status);
+}
+function validateGoal(x: unknown): void {
+  object(x); string(x.goal_key, true); validateCounts(x.counts); int(x.columns); int(x.rows);
+  list(x.nodes, n => {
+    object(n); string(n.id, true); string(n.label); string(n.kind); fields(n, ['status', 'severity', 'note', 'resource_key']); nullableInt(n.revision); int(n.rank); int(n.row);
+  });
+  bool(x.nodes_truncated);
+  list(x.edges, e => { object(e); string(e.from, true); string(e.to, true); nullableString(e.rel); });
+  bool(x.edges_truncated);
+}
+function validateReport(x: unknown): void {
+  object(x); string(x.key, true); int(x.revision); int(x.updated_at); string(x.title); string(x.audience); string(x.severity_summary); string(x.go_no_go);
+  strings(x.finding_keys); bool(x.finding_keys_truncated); nullableString(x.markdown);
+}
+function validateSpendEntry(x: unknown): void { object(x); int(x.calls); int(x.prompt_tokens); int(x.completion_tokens); num(x.cost); }
+function validateSpend(x: Record<string, unknown>): void {
+  list(x.goals, g => {
+    object(g); string(g.goal_key, true); validateSpendEntry(g.total);
+    list(g.by_avatar, a => { object(a); string(a.avatar, true); validateSpendEntry(a); }); bool(g.by_avatar_truncated);
+  });
+  bool(x.goals_truncated); object(x.ledger); string(x.ledger.ledger, true); validateTotals(x.ledger.totals);
+  list(x.ledger.by_avatar, a => { object(a); string(a.avatar, true); validateTotals(a.totals); }); bool(x.ledger.by_avatar_truncated);
+}
+function validateField(x: unknown): void { object(x); nullableString(x.value); string(x.origin, true); }
+function validateRoleLane(x: unknown): void { object(x); fields(x, ['provider_uuid', 'model', 'effort']); }
+export function validateTeam(x: unknown): void {
+  object(x); string(x.target, true); string(x.revision, true); bool(x.layer_present); string(x.template_revision, true); bool(x.template_pending_restart);
+  list(x.avatars, a => {
+    object(a); string(a.id, true); string(a.role, true); string(a.defined_in, true); bool(a.removable);
+    validateField(a.display); string(a.display_effective); validateField(a.alias); string(a.alias_effective);
+    list(a.lanes, l => { object(l); string(l.lane, true); validateField(l.provider_uuid); validateField(l.model); validateField(l.effort); nullableString(l.model_label); bool(l.resolves); });
+  });
+  bool(x.avatars_truncated);
+  list(x.roles, r => {
+    object(r); string(r.id, true); string(r.display); strings(r.shelf_allow); if (r.skills_allow !== null) strings(r.skills_allow);
+    validateRoleLane(r.chat); validateRoleLane(r.work); string(r.defined_in, true);
+  });
+  bool(x.roles_truncated);
+  list(x.choices, c => { object(c); string(c.id, true); string(c.name); string(c.model_id); nullableString(c.provider_name); nullableString(c.provider_uuid); });
+  bool(x.choices_truncated); string(x.choices_source, true);
+  list(x.warnings, w => { object(w); string(w.layer, true); string(w.path); string(w.message); }); bool(x.warnings_truncated);
+}
+function validateTeamWrite(x: Record<string, unknown>, method: string, params: Record<string, unknown>): void {
+  validateTeam(x.team); string(x.applies, true); validatePropagation(x.propagation);
+  if (method === 'room.avatars.remove') nullableString(x.reverted_to);
+  if ((x.team as Record<string, unknown>).target !== params.target) throw new SdkError('protocol', 'Team target does not match the call');
+}
+function validateRoom(method: string, x: Record<string, unknown>, params: Record<string, unknown>): void {
+  switch (method) {
+    case 'room.list': cursorPage(x, 'rooms', validateRoomInfo, 500); return;
+    case 'room.open': case 'room.attach': validateAttach(x); return;
+    case 'room.close': if (x.closed !== true) throw new SdkError('protocol', 'Invalid close result'); bool(x.stopped); return;
+    case 'room.send':
+      if (x.sent !== true) throw new SdkError('protocol', 'Invalid send result');
+      bool(x.acked); strings(x.inserts); int(x.echo_line_seq); return;
+    case 'room.interrupt': case 'room.control': if (x.sent !== true) throw new SdkError('protocol', 'Invalid send result'); return;
+    case 'room.status': validateRoomStatus(x); return;
+    case 'room.history':
+      string(x.epoch, true); nullableInt(x.first_line_seq); nullableInt(x.last_line_seq); list(x.lines, validateRoomLine);
+      bool(x.has_more_before); bool(x.has_more_after);
+      if (x.epoch !== params.epoch) throw new SdkError('protocol', 'History epoch does not match the call');
+      return;
+    case 'room.shelf.list': cursorPage(x, 'rows', validateShelfRow, 500); int(x.total); string(x.fingerprint); return;
+    case 'room.item': validateShelfRow(x); string(x.content); if (x.json !== null) object(x.json); bool(x.truncated); return;
+    case 'room.trajectory': list(x.goals, validateGoal); bool(x.goals_truncated); return;
+    case 'room.reports': cursorPage(x, 'reports', validateReport, 100); return;
+    case 'room.spend': validateSpend(x); return;
+    case 'room.team.get': validateTeam(x); return;
+    case 'room.models.set': case 'room.avatars.upsert': case 'room.avatars.remove': validateTeamWrite(x, method, params); return;
+    default: throw new SdkError('protocol', `No result validator for ${method}`);
+  }
+}
 export function validateResult(method: Method, result: unknown, params: Record<string, unknown>): void {
   object(result);
   if (method === 'configure') { validateConfigure(result); return; }
-  if (method === 'create' || method === 'resume' || method === 'state') { validateState(result.state); optionalInfo(result); return; }
+  if (method === 'create' || method === 'resume' || method === 'state') {
+    validateState(result.state); optionalInfo(result);
+    if (result.warnings !== undefined) list(result.warnings, w => { object(w); string(w.code, true); string(w.message); });
+    return;
+  }
   if (method === 'detach') { if (result.detached !== true) throw new SdkError('protocol', 'Invalid detach result'); return; }
   if (method === 'approve') { bool(result.approved); if (result.approved !== params.approve) throw new SdkError('protocol', 'Approval decision mismatch'); return; }
   if (method === 'config.get') {
@@ -222,7 +394,22 @@ export function validateResult(method: Method, result: unknown, params: Record<s
   }
   if (method === 'config.limits.get' || method === 'config.limits.set') { validateLimits(result); optionalInfo(result); return; }
   if (method === 'sessions.info') { validateSessionInfo(result.session_info); return; }
-  validateTurnResult(method, result, params);
+  if (method === 'sessions.list') { cursorPage(result, 'sessions', validateSessionRow, 500); return; }
+  if (method === 'sessions.rename') {
+    validateSessionRow(result.session);
+    if ((result.session as Record<string, unknown>).session_id !== params.session_id) throw new SdkError('protocol', 'Renamed session does not match the call');
+    return;
+  }
+  if (method === 'sessions.delete') {
+    if (result.deleted !== true) throw new SdkError('protocol', 'Invalid delete result');
+    string(result.kind, true); nullableString(result.orphaned_room_session_id); return;
+  }
+  if (method === 'sessions.stop') { if (result.stopped !== true) throw new SdkError('protocol', 'Invalid stop result'); bool(result.was_live); return; }
+  if (method === 'usage.query') { validateUsage(result); return; }
+  if ((SKILL_METHODS as readonly string[]).includes(method)) { validateSkills(method, result); return; }
+  if ((ROOM_METHODS as readonly string[]).includes(method)) { validateRoom(method, result, params); return; }
+  if (method === 'submit' || method === 'enqueue' || method === 'interrupt' || method === 'interrupt_and_submit') { validateTurnResult(method, result, params); return; }
+  throw new SdkError('protocol', `No result validator for ${method}`);
 }
 function validateTurnResult(method: 'submit' | 'enqueue' | 'interrupt' | 'interrupt_and_submit', result: Record<string, unknown>, params: Record<string, unknown>): void {
   const success = method === 'enqueue' ? 'queued' : method === 'interrupt' ? 'interrupted' : 'started';

@@ -362,8 +362,59 @@ const CONFIG_METHODS: [&str; 9] = [
     "sessions.info",
 ];
 
+/// The session, usage, skills and room methods, in route-table order.
+const FAMILY_METHODS: [&str; 30] = [
+    "sessions.list",
+    "sessions.rename",
+    "sessions.delete",
+    "sessions.stop",
+    "usage.query",
+    "skills.list",
+    "skills.get",
+    "skills.read_file",
+    "skills.install",
+    "skills.remove",
+    "skills.create",
+    "skills.update",
+    "room.list",
+    "room.open",
+    "room.attach",
+    "room.close",
+    "room.send",
+    "room.interrupt",
+    "room.control",
+    "room.status",
+    "room.history",
+    "room.shelf.list",
+    "room.item",
+    "room.trajectory",
+    "room.reports",
+    "room.spend",
+    "room.team.get",
+    "room.models.set",
+    "room.avatars.upsert",
+    "room.avatars.remove",
+];
+
+/// Room methods allowed in ROOM(live) and ROOM(closed).
+const ROOM_SCOPED: [&str; 8] = [
+    "room.close",
+    "room.status",
+    "room.history",
+    "room.shelf.list",
+    "room.item",
+    "room.trajectory",
+    "room.reports",
+    "room.spend",
+];
+
 fn all_methods() -> Vec<&'static str> {
-    V1_METHODS.iter().chain(CONFIG_METHODS.iter()).copied().collect()
+    V1_METHODS
+        .iter()
+        .chain(CONFIG_METHODS.iter())
+        .chain(FAMILY_METHODS.iter())
+        .copied()
+        .collect()
 }
 
 /// What a call of `method` in `state` must give: `None` when the route lets
@@ -381,6 +432,47 @@ fn expected_gate(
             "already_bound",
             vec!["unbound"],
         )),
+        "room.open" | "room.attach"
+            if unbound || state == BindingState::RoomClosed =>
+        {
+            None
+        }
+        "room.open" | "room.attach" => Some((
+            "invalid_state",
+            "session already bound".into(),
+            "already_bound",
+            vec!["unbound", "room_closed"],
+        )),
+        "room.send" | "room.interrupt" | "room.control" => match state {
+            BindingState::RoomLive => None,
+            BindingState::RoomClosed => Some((
+                "invalid_state",
+                "the room connection is closed".into(),
+                "room_closed",
+                vec!["room_live"],
+            )),
+            _ => Some((
+                "invalid_state",
+                format!(
+                    "{method} requires binding room_live; this adapter is {}",
+                    state.name()
+                ),
+                "wrong_binding",
+                vec!["room_live"],
+            )),
+        },
+        _ if ROOM_SCOPED.contains(&method) => match state {
+            BindingState::RoomLive | BindingState::RoomClosed => None,
+            _ => Some((
+                "invalid_state",
+                format!(
+                    "{method} requires binding room_live or room_closed; this adapter is {}",
+                    state.name()
+                ),
+                "wrong_binding",
+                vec!["room_live", "room_closed"],
+            )),
+        },
         "configure" | "detach" => None,
         // Host config methods run in every binding; session scope is refused
         // by the handler.
@@ -388,6 +480,9 @@ fn expected_gate(
         | "config.providers.delete"
         | "config.models.delete"
         | "config.roles.unassign" => None,
+        // Host families run in every binding; team methods refuse
+        // `target:"room"` outside a room binding in the handler.
+        _ if FAMILY_METHODS.contains(&method) => None,
         _ if state == BindingState::Coding => None,
         _ if !V1_METHODS.contains(&method) => Some((
             "invalid_state",
@@ -495,7 +590,7 @@ fn refusals_for_families_without_methods_yet() {
 async fn unknown_method_stays_unsupported_without_new_keys() {
     let (events, _) = watch::channel(None);
     let mut adapter = Adapter::new(events);
-    for method in ["sessions.list", "nope", ""] {
+    for method in ["sessions.nope", "nope", ""] {
         let r = Request {
             id: method.into(),
             method: method.into(),
@@ -761,15 +856,69 @@ fn golden_hello() {
             "diagnostics": [],
             "capabilities": V1_METHODS,
             "methods": all_methods(),
-            "features": ["errors.reason", "state.session_info", "config.lock"],
-            "events": ["state", "output_append", "turn"],
+            "features": [
+                "errors.reason",
+                "state.session_info",
+                "config.lock",
+                "create.name",
+                "bindings.room",
+                "events.room",
+                "room.template"
+            ],
+            "events": [
+                "state",
+                "output_append",
+                "turn",
+                "room.line",
+                "room.delta",
+                "room.status",
+                "room.notice",
+                "room.closed",
+                "room.gap"
+            ],
             "limits": {
                 "frame_bytes": 41943040,
                 "request_ids": 65536,
                 "text_bytes": 2097152,
                 "attachments": {"count": 16, "pasted_bytes": 2097152, "total_bytes": 33554432},
+                "list": {
+                    "sessions": 500,
+                    "rooms": 500,
+                    "skills": 1000,
+                    "usage_groups": 500,
+                    "usage_buckets": 1000,
+                    "shelf_rows": 500,
+                    "reports": 100,
+                    "history_lines": 200,
+                    "trajectory_goals": 200,
+                    "trajectory_nodes": 2000,
+                    "trajectory_edges": 8000
+                },
+                "room": {
+                    "ring_lines": 8000,
+                    "ring_bytes": 67108864,
+                    "page_bytes": 8388608,
+                    "event_text_bytes": 1048576,
+                    "status_text_bytes": 262144,
+                    "item_bytes": 16777216,
+                    "tail_lines": 200
+                },
+                "skills": {
+                    "inline_zip_bytes": 29360128,
+                    "zip_bytes": 67108864,
+                    "entry_bytes": 2097152,
+                    "companion_bytes": 8388608,
+                    "files": 1000,
+                    "depth": 16,
+                    "name_bytes": 64
+                },
                 "config": {"lock_wait_ms": 3000},
-                "time": {"ipc_ms": 15000}
+                "time": {
+                    "ipc_ms": 15000,
+                    "room_start_ms": 30000,
+                    "usage_query_ms": 2000,
+                    "session_stop_ms": 8000
+                }
             }
         })
     );

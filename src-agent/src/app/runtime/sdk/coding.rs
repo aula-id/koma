@@ -40,8 +40,12 @@ async fn sessions_info(r: Request, adapter: &mut Adapter) -> Result<Value, RpcEr
 /// `create` and `resume`. Runs only while unbound; the route table refuses
 /// both once a binding is held.
 async fn bind(r: Request, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let mut name = None;
     let (id, cwd, resume, policy, model, external) = if r.method == "create" {
         let p: Create = params(r.params)?;
+        if let Some(value) = &p.name {
+            name = Some(super::host::sessions::session_name(Some(value))?);
+        }
         let path = std::path::PathBuf::from(&p.cwd);
         if !path.is_absolute() || !path.is_dir() {
             return Err(RpcError::new(
@@ -145,10 +149,20 @@ async fn bind(r: Request, adapter: &mut Adapter) -> Result<Value, RpcError> {
             return Err(RpcError::unknown("daemon did not apply requested model"));
         }
     }
+    let warning = match &name {
+        Some(name) => {
+            let secrets = super::host::config::daemon_secrets(adapter).await;
+            super::host::sessions::name_created(&mut c, name, secrets.as_deref()).await?
+        }
+        None => None,
+    };
     let state = c.state().await?;
     c.ready = true;
     c.publish();
-    let result = state_result(&c, state);
+    let mut result = state_result(&c, state);
+    if let Some(warning) = warning {
+        result["warnings"] = json!([warning]);
+    }
     adapter.binding = Binding::Coding(Box::new(c));
     Ok(result)
 }

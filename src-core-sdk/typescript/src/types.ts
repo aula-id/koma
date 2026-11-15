@@ -3,13 +3,18 @@ export const METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'inter
 export type V1Method = typeof METHODS[number];
 export const CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set'] as const;
 export type ConfigMethod = typeof CONFIG_METHODS[number];
-export type Method = V1Method | ConfigMethod | 'sessions.info';
+export const SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop'] as const;
+export const USAGE_METHODS = ['usage.query'] as const;
+export const SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create', 'skills.update'] as const;
+export const ROOM_METHODS = ['room.list', 'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control', 'room.status', 'room.history', 'room.shelf.list', 'room.item', 'room.trajectory', 'room.reports', 'room.spend', 'room.team.get', 'room.models.set', 'room.avatars.upsert', 'room.avatars.remove'] as const;
+export type Method = V1Method | ConfigMethod | typeof SESSION_METHODS[number] | typeof USAGE_METHODS[number] | typeof SKILL_METHODS[number] | typeof ROOM_METHODS[number];
 /** Unknown values of an open enum-like string are kept verbatim; treat them as "other". */
 export type Open<T extends string> = T | (string & {});
 export interface Policy { plan: 'allow' | 'forbid'; approval: 'default' | 'reject' }
 export type Attachment = { kind: 'image_file'; path: string } | { kind: 'pasted_text'; text: string; name?: string | null };
 export interface Input { text: string; attachments?: Attachment[] }
-export interface CreateOptions { cwd: string; model_id?: string; policy?: Policy; external_approvals?: boolean }
+/** `name` needs the adapter feature `create.name`; it is trimmed and must be 1 to 200 characters without control characters. */
+export interface CreateOptions { cwd: string; model_id?: string; policy?: Policy; external_approvals?: boolean; name?: string }
 export type ModelRoleName = 'main' | 'awareness' | 'safeguard' | 'compactor' | 'planner';
 export interface ProviderInput { name: string; endpoint: string; api_type: 'openai' | 'anthropic'; api_key?: string }
 export interface ModelAssignment { provider: string; model_id: string; route?: string }
@@ -37,8 +42,10 @@ export type StateEvent = { type: 'event'; event: 'state'; seq: number; state: St
 export type OutputAppendEvent = { type: 'event'; event: 'output_append'; seq: number; revision: number; offset: number; text: string };
 export type TurnEvent = { type: 'event'; event: 'turn'; seq: number; revision: number; turn: Turn | null };
 export type Event = StateEvent | OutputAppendEvent | TurnEvent;
+/** Events of the ROOM binding are declared with the room types below (`RoomEvent`). */
 export interface HelloLimits {
   frame_bytes?: number; request_ids?: number; text_bytes?: number;
+  skills?: { inline_zip_bytes?: number; zip_bytes?: number };
   attachments?: { count?: number; pasted_bytes?: number; total_bytes?: number };
   config?: { lock_wait_ms?: number };
   time?: { ipc_ms?: number };
@@ -149,3 +156,172 @@ export interface RoleUnassignResult extends MutationResult { changed: boolean; p
 export interface EffortOptions { state: Open<'ready' | 'loading' | 'unsupported'>; options: string[]; selected: string; note: string | null; main_model_uuid: string | null }
 export interface EffortResult { effort: string; main_model_uuid: string | null; superseded: boolean; session_info?: SessionInfo }
 export type LimitsResult = Limits & { session_info?: SessionInfo };
+
+/** A warning an adapter attaches to a result, for example `rename_failed` on `create`. */
+export interface Warning { code: string; message: string }
+
+export interface SessionRow {
+  session_id: string; name: string | null; workdir: string | null; kind: Open<'coding' | 'room'>;
+  created_at: number | null; updated_at: number | null; live: boolean; working: boolean | null; locked: boolean; bound: boolean;
+  parent_session_id: string | null; room_session_id: string | null; room_live: boolean;
+}
+export interface SessionsListParams { kind?: 'coding' | 'room' | 'all'; live?: boolean; limit?: number; cursor?: string }
+export interface SessionsListResult { sessions: SessionRow[]; next_cursor: string | null }
+export interface SessionRenameParams { session_id: string; name: string }
+export interface SessionRenameResult { session: SessionRow }
+export interface SessionDeleteResult { deleted: true; kind: Open<'coding' | 'room'>; orphaned_room_session_id: string | null }
+export interface SessionStopResult { stopped: true; was_live: boolean }
+
+export type UsageGroupBy = 'none' | 'model' | 'role' | 'session';
+export type UsageBucketSize = 'none' | 'hour' | 'day' | 'week';
+export interface UsageQueryParams {
+  from_at?: number; to_at?: number; session_id?: string; workdir?: string; group_by?: UsageGroupBy; bucket?: UsageBucketSize;
+  tz_offset_minutes?: number; limit?: number;
+}
+export interface UsageTotals { calls: number; tokens_in: number; tokens_cached: number; tokens_out: number; cost: number }
+export interface UsageGroup extends UsageTotals {
+  key: string; label: string | null; role_kind?: Open<'main' | 'sub'>; agent?: string | null; kind?: Open<'coding' | 'room'> | null; deleted?: boolean;
+}
+export interface UsageBucket extends UsageTotals { start_at: number }
+export interface UsageResult {
+  from_at: number; to_at: number; ledger: Open<'ok' | 'missing'>; totals: UsageTotals;
+  groups?: UsageGroup[]; groups_truncated?: boolean; buckets?: UsageBucket[];
+}
+
+export type SkillScope = Open<'computer' | 'project' | 'external'>;
+/** `extra-root:<n>` carries the configured root's index. */
+export type SkillTier = Open<'global' | 'claude' | 'project-agent' | 'project-agents'>;
+export interface SkillRow {
+  name: string; scope: SkillScope; tier: SkillTier; description: string; triggers: string[]; triggers_truncated: boolean;
+  tags: string[]; tags_truncated: boolean; pinned: boolean; editable: boolean; generation: string; path: string;
+  effective: boolean; shadowed_by: SkillTier | null;
+}
+export interface SkillDetail extends SkillRow {
+  instruction: string; declared_tools: string[]; declared_tools_truncated: boolean; companion_files: string[];
+  companion_files_truncated: boolean; structured_save_supported: boolean; raw: string | null;
+}
+export interface SkillsListParams {
+  scope?: 'computer' | 'project' | 'external' | 'all'; tier?: string; workdir?: string; include_diagnostics?: boolean; limit?: number; cursor?: string;
+}
+export interface SkillsListResult {
+  project_workdir: string | null; skills: SkillRow[]; diagnostics: { path: string; error: string }[]; diagnostics_truncated: boolean; next_cursor: string | null;
+}
+export interface SkillAddress { tier?: string; workdir?: string; name: string }
+export interface SkillGetParams extends SkillAddress { include_raw?: boolean }
+export interface SkillReadFileParams extends SkillAddress { path: string; generation?: string }
+export interface SkillFileResult { path: string; text: string; bytes: number }
+export interface SkillCreateParams {
+  scope: 'computer' | 'project'; workdir?: string; name: string; description: string; instruction: string; triggers?: string[]; allowed_tools?: string[];
+}
+export interface SkillPatch { name?: string; description?: string; triggers?: string[]; allowed_tools?: string[]; instruction?: string }
+export interface SkillUpdateParams { tier: string; workdir?: string; name: string; generation?: string; patch: SkillPatch }
+/** Exactly one of `data_b64` and `path` (an absolute file on the adapter host). */
+export interface SkillInstallParams { scope: 'computer' | 'project'; workdir?: string; name?: string; data_b64?: string; path?: string }
+export interface SkillRemoveParams { tier: string; workdir?: string; name: string; generation?: string }
+export interface SkillWriteResult { skill: SkillDetail; propagation: Propagation }
+export interface SkillUpdateResult extends SkillWriteResult { renamed: boolean }
+export interface SkillRemoveResult { removed: true; now_effective: SkillRow | null; propagation: Propagation }
+
+export type LineKind = Open<'chief' | 'lane_chat' | 'visible' | 'user' | 'shell' | 'reasoning' | 'tool_call' | 'tool_result' | 'other'>;
+export interface RoomInfo {
+  session_id: string; parent_session_id: string | null; parent_name: string | null; name: string | null; workdir: string | null;
+  live: boolean; locked: boolean; bound: boolean; created_at: number | null; updated_at: number | null;
+}
+export interface RoomLine {
+  line_seq: number; kind: LineKind; author: string; display: string | null; alias: string | null; lane: Open<'chat' | 'work'> | null;
+  audience: Open<'user' | 'team'> | null; text: string | null; call_id: string | null; tool: string | null; args: string | null;
+  ok: boolean | null; result: string | null; replay: boolean; origin: Open<'room' | 'adapter_echo'>; received_at_ms: number; truncated: boolean;
+}
+export interface LaneStatus {
+  avatar: string; display: string; alias: string; role: string; lane: Open<'chat' | 'work'> | null;
+  phase: Open<'running' | 'idle' | 'paused' | 'submitted' | 'done' | 'failed'>; task: string; started_at_ms: number;
+  last_event_at_ms: number; steps: number; last_tool: string; error: string;
+}
+export interface TimelineEvent { at_ms: number; avatar: string; marker: string; label: string }
+export interface RoomCounts { open: number; verified: number; returned: number; reports: number }
+export interface RoomStatus {
+  session_id: string; live: boolean; fresh: boolean; age_ms: number | null; now_at_ms: number; counts: RoomCounts;
+  counts_basis: Open<'first_400_items' | 'disk_scan'>; paused: string[]; paused_truncated: boolean; lanes: LaneStatus[]; lanes_truncated: boolean;
+  events: TimelineEvent[]; digest: string; timeline: string; trajectory_outline: string; shelf_fingerprint: string; truncated: boolean;
+}
+export interface AttachResult {
+  room: RoomInfo; started: boolean; daemon: { version: string | null; features: string[]; template_revision: string | null };
+  epoch: string; history: { first_line_seq: number | null; last_line_seq: number | null; count: number; replayed: number };
+  tail: RoomLine[]; status: RoomStatus | null; roster: string[]; roster_truncated: boolean;
+}
+export interface RoomsListParams { parent_session_id?: string; live?: boolean; limit?: number; cursor?: string }
+export interface RoomsListResult { rooms: RoomInfo[]; next_cursor: string | null }
+export interface RoomOpenParams { parent_session_id: string; tail?: number; wait_ms?: number }
+export interface RoomAttachParams { session_id: string; tail?: number; wait_ms?: number }
+export interface RoomCloseParams { stop?: boolean }
+export interface RoomCloseResult { closed: true; stopped: boolean }
+/** `shell` sends the text as a `!` command and `to` addresses one avatar. `shell` cannot be combined with `to` or attachments. */
+export interface RoomSendParams { text: string; to?: string; shell?: boolean; attachments?: Attachment[] }
+export interface RoomSendResult { sent: true; acked: boolean; inserts: string[]; echo_line_seq: number }
+export interface RoomControlParams { action: 'pause' | 'resume' | 'stop' | 'redirect'; avatar: string; note?: string }
+/** `epoch` defaults to the room's current epoch. At most one of the two bounds. */
+export interface RoomHistoryParams { epoch?: string; after_line_seq?: number; before_line_seq?: number; limit?: number; kinds?: string[]; author?: string }
+export interface RoomHistoryResult {
+  epoch: string; first_line_seq: number | null; last_line_seq: number | null; lines: RoomLine[]; has_more_before: boolean; has_more_after: boolean;
+}
+export interface ShelfListParams { prefix?: string; limit?: number; cursor?: string }
+export interface ShelfRow { key: string; revision: number; updated_at: number; kind: string; title: string; status: string }
+export interface ShelfItem extends ShelfRow { content: string; json: Record<string, unknown> | null; truncated: boolean }
+export interface ShelfListResult { rows: ShelfRow[]; total: number; next_cursor: string | null; fingerprint: string }
+export interface GoalParams { goal?: string }
+export interface GoalNode {
+  id: string; label: string; kind: string; status: string | null; severity: string | null; note: string | null;
+  resource_key: string | null; revision: number | null; rank: number; row: number;
+}
+export interface Goal {
+  goal_key: string; counts: RoomCounts; columns: number; rows: number; nodes: GoalNode[]; nodes_truncated: boolean;
+  edges: { from: string; to: string; rel: string | null }[]; edges_truncated: boolean;
+}
+export interface TrajectoryResult { goals: Goal[]; goals_truncated: boolean }
+export interface ReportsParams { include_markdown?: boolean; limit?: number; cursor?: string }
+export interface Report {
+  key: string; revision: number; updated_at: number; title: string; audience: string; severity_summary: string; go_no_go: string;
+  finding_keys: string[]; finding_keys_truncated: boolean; markdown: string | null;
+}
+export interface ReportsResult { reports: Report[]; next_cursor: string | null }
+export interface SpendEntry { calls: number; prompt_tokens: number; completion_tokens: number; cost: number }
+export interface GoalSpend { goal_key: string; total: SpendEntry; by_avatar: (SpendEntry & { avatar: string })[]; by_avatar_truncated: boolean }
+export interface SpendResult {
+  goals: GoalSpend[]; goals_truncated: boolean;
+  ledger: { ledger: Open<'ok' | 'missing'>; totals: UsageTotals; by_avatar: { avatar: string; totals: UsageTotals }[]; by_avatar_truncated: boolean };
+}
+
+export type TeamTarget = 'template' | 'room';
+export type Origin = Open<'base' | 'template' | 'session' | 'role' | 'default'>;
+export interface Field<T> { value: T | null; origin: Origin }
+export interface LaneView { lane: Open<'chat' | 'work'>; provider_uuid: Field<string>; model: Field<string>; effort: Field<string>; model_label: string | null; resolves: boolean }
+export interface AvatarView {
+  id: string; role: string; defined_in: Open<'base' | 'template' | 'session'>; removable: boolean; display: Field<string>; display_effective: string;
+  alias: Field<string>; alias_effective: string; lanes: LaneView[];
+}
+export interface RoleLaneView { provider_uuid: string | null; model: string | null; effort: string | null }
+export interface RoleView { id: string; display: string; shelf_allow: string[]; skills_allow: string[] | null; chat: RoleLaneView; work: RoleLaneView; defined_in: Open<'base' | 'template' | 'session'> }
+export interface ModelChoice { id: string; name: string; model_id: string; provider_name: string | null; provider_uuid: string | null }
+export interface Team {
+  target: Open<TeamTarget>; revision: string; layer_present: boolean; template_revision: string; template_pending_restart: boolean;
+  avatars: AvatarView[]; avatars_truncated: boolean; roles: RoleView[]; roles_truncated: boolean;
+  choices: ModelChoice[]; choices_truncated: boolean; choices_source: Open<'room_daemon' | 'config'>;
+  warnings: { layer: Open<'template' | 'session'>; path: string; message: string }[]; warnings_truncated: boolean;
+}
+export interface TeamGetParams { target?: TeamTarget }
+/** At least one of `model` and `effort`; `null` clears the lane unit in the target layer. */
+export interface TeamModelParams { target: TeamTarget; avatar: string; lane: 'chat' | 'work'; model?: string | null; effort?: string | null; if_revision?: string }
+export interface TeamAvatarUpsertParams { target: TeamTarget; id: string; role?: string; display?: string | null; alias?: string | null; if_revision?: string }
+export interface TeamAvatarRemoveParams { target: TeamTarget; id: string; if_revision?: string }
+export interface TeamWriteResult { team: Team; applies: Open<'live' | 'next_reload' | 'next_start'>; propagation: Propagation }
+export interface TeamAvatarRemoveResult extends TeamWriteResult { reverted_to: Open<'base' | 'template'> | null }
+
+/** Events of the ROOM binding. Every one carries the room's `epoch`. Lines and status the client recovers from `room.history` carry `recovered: true`. */
+export type RoomLineEvent = { type: 'event'; event: 'room.line'; seq: number; epoch: string; line: RoomLine; recovered?: boolean };
+export type RoomDeltaEvent = { type: 'event'; event: 'room.delta'; seq: number; epoch: string; author: string; lane: Open<'chat' | 'work'>; kind: Open<'text' | 'reasoning'>; text: string };
+export type RoomStatusEvent = { type: 'event'; event: 'room.status'; seq: number; epoch: string; status: RoomStatus; recovered?: boolean };
+export type RoomNoticeEvent = { type: 'event'; event: 'room.notice'; seq: number; epoch: string; code: Open<'room' | 'stalled' | 'recovered' | 'layer_warnings'>; text: string };
+export type RoomClosedEvent = { type: 'event'; event: 'room.closed'; seq: number; epoch: string; session_id: string; reason: Open<'taken_over' | 'daemon_exit' | 'stream_error'> };
+export type RoomGapEvent = { type: 'event'; event: 'room.gap'; seq: number; epoch: string; after_line_seq: number; dropped_lines: number; dropped_deltas: number };
+export type RoomEvent = RoomLineEvent | RoomDeltaEvent | RoomStatusEvent | RoomNoticeEvent | RoomClosedEvent | RoomGapEvent;
+export const ROOM_EVENTS = ['room.line', 'room.delta', 'room.status', 'room.notice', 'room.closed', 'room.gap'] as const;

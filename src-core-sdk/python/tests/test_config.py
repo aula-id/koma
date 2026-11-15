@@ -38,11 +38,13 @@ class ConfigConformance(unittest.IsolatedAsyncioTestCase):
         self.assertIn('config.get', hello.methods)
         self.assertIn('sessions.info', hello.methods)
         self.assertIn('errors.reason', hello.features)
-        self.assertEqual(hello.events, ('state', 'output_append', 'turn'))
+        self.assertEqual(hello.events[:3], ('state', 'output_append', 'turn'))
+        self.assertIn('room.gap', hello.events)
         self.assertEqual(hello.limits['request_ids'], 65536)
         self.assertEqual(hello.request_ids, 65536)
         self.assertTrue(hello.supports('config.limits.set'))
-        self.assertFalse(hello.supports('room.send'))
+        self.assertTrue(hello.supports('room.send'))
+        self.assertTrue(hello.has_feature('create.name'))
         self.assertEqual(len(hello.capabilities), 10)
 
     async def test_host_config_view_is_typed_and_redacted(self):

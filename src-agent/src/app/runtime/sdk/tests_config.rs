@@ -625,7 +625,8 @@ fn a_session_info_change_emits_no_event_and_bumps_no_revision() {
     assert_eq!(info.name, "renamed");
     assert_eq!(info.routes[0].origin, "session");
     assert_eq!(info.limits.effective_window, Some(131072));
-    assert!(info.usage.is_none());
+    // Usage is reported from the snapshot but changes neither state nor events.
+    assert!(info.usage.is_some());
 }
 
 #[test]

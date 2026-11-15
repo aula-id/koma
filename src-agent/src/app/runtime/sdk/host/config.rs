@@ -1011,6 +1011,24 @@ impl DaemonText {
     }
 }
 
+/// The configured secret values that daemon text is scrubbed of, or `None`
+/// when `config.json` cannot be read, in which case the text is withheld.
+pub async fn daemon_secrets(adapter: &mut Adapter) -> Option<Vec<String>> {
+    read_config(adapter)
+        .await
+        .ok()
+        .map(|loaded| redact::secret_values(&loaded.config))
+}
+
+/// Daemon error text for a new method's result, scrubbed of `secrets`, or
+/// withheld when they could not be read.
+pub fn daemon_text(message: &str, secrets: Option<&[String]>) -> String {
+    match secrets {
+        Some(secrets) => DaemonText::scrubbed(message, secrets).0,
+        None => "the daemon reported an error".to_string(),
+    }
+}
+
 /// A daemon `Error` before anything of ours was in effect, or a fatal
 /// connection failure.
 fn refused_or_fatal(error: RpcError, secrets: &[String]) -> RpcError {

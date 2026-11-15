@@ -73,7 +73,7 @@ try {
 } finally { await host.close(); }
 ```
 
-`host` has `configure`, `getConfig`, `deleteProvider`, `deleteModel` and `unassignRole`. Params and results use the wire names from the contract (`provider_uuid`, `if_revision`, `dry_run`, ...). The view never contains a key or token: providers report `has_key` and `key_state`, OAuth connections `has_token`, and endpoints come back with userinfo, query and fragment removed (`endpoint_redacted:true`). Do not feed a redacted endpoint back into `configure`. See `examples/config.ts`.
+`host` has `configure`, `getConfig`, `deleteProvider`, `deleteModel` and `unassignRole`, and the calls of the sections below. Params and results use the wire names from the contract (`provider_uuid`, `if_revision`, `dry_run`, ...). The view never contains a key or token: providers report `has_key` and `key_state`, OAuth connections `has_token`, and endpoints come back with userinfo, query and fragment removed (`endpoint_redacted:true`). Do not feed a redacted endpoint back into `configure`. See `examples/config.ts`.
 
 ## Session settings and session_info
 
@@ -94,9 +94,76 @@ console.log(session.requestsRemaining);
 
 A session's adapter accepts a fixed number of requests (`requestsRemaining` counts down). Before it reaches zero, close the client and `resume` the session from a new one; the next request past the limit ends the adapter.
 
+## Sessions
+
+The calls below work on a `Host`, and on a `Session` or `Room` handle too (they are available in every binding).
+
+```ts
+const host = client.host();
+const page = await host.listSessions({ kind: 'all', limit: 100 });   // newest first; pass next_cursor back as cursor
+await host.renameSession({ session_id, name: 'Nightly' });
+await host.stopSession({ session_id });                              // disconnects every client of that daemon
+await host.deleteSession({ session_id });
+```
+
+Listings never write lock files. `renameSession` of another live coding session fails with `reason: 'live'`; rename it from an adapter bound to it, or stop it first. `deleteSession` refuses the session this adapter holds (`bound_self`), a live one (`live`) and a locked one (`session_locked`). A failure after the removal started is a `DeliveryUnknownError` with `reason: 'partial_delete'` and `written: true`; repeating the call is valid. `stopSession` of an id that is not running answers `was_live: false`.
+
+`create({ cwd, name })` names the session. It needs the adapter feature `create.name`; against an adapter without it the call fails locally with `unsupported_feature` before anything is sent. The name is trimmed and must be 1 to 200 characters without control characters. If the rename fails the session still exists, `session.warnings` holds `rename_failed`, and `session.sessionInfo.name` is the session id. See `examples/sessions.ts`.
+
+## Usage
+
+```ts
+const report = await host.queryUsage({ from_at, to_at, group_by: 'model', bucket: 'day' });
+console.log(report.ledger, report.totals.cost, report.groups, report.buckets);
+```
+
+Defaults are the last 30 days, no groups and no buckets. `ledger` is `'missing'` when nothing was recorded. A window over 400 days or more than 1000 buckets fails with `reason: 'range_too_large'`; a query that runs past its 2 s deadline with `reason: 'query_timeout'`. Only the Main model and sub-agents are recorded; room lanes are recorded under the room's session id. Poll no more often than every 30 s: a reader can make a concurrent insert of the daemon's ledger fail. See `examples/usage.ts`.
+
+## Skills
+
+```ts
+const list = await host.listSkills({ scope: 'all', workdir: '/absolute/project', include_diagnostics: true });
+const detail = await host.getSkill({ tier: 'global', name: 'code-review', include_raw: true });
+const file = await host.readSkillFile({ tier: 'global', name: 'code-review', path: 'notes/checklist.md' });
+const made = await host.createSkill({ scope: 'computer', name: 'my-skill', description: '...', instruction: '...' });
+await host.updateSkill({ tier: 'global', name: 'my-skill', generation: made.skill.generation, patch: { description: 'new' } });
+await host.installSkillZip(zipBytes, { scope: 'project', workdir: '/absolute/project' });
+await host.removeSkill({ tier: 'global', name: 'my-skill' });
+```
+
+An existing skill is addressed by `(tier, name)`: `global`, `claude`, `project-agent`, `project-agents` or `extra-root:<n>`. New skills take `scope` `'computer'` or `'project'`. `claude` and extra-root tiers are read only (`reason: 'read_only'`). Pass the `generation` you read to `updateSkill` and `removeSkill`; a change in between fails with `reason: 'stale'`. Project tiers need a `workdir` on an unbound adapter (`workdir_required`); a session or room uses its own.
+
+`installSkillZip(bytes, params)` checks the size against `limits.skills.inline_zip_bytes` (28 MiB) before it encodes, and throws `invalid_input` with `reason: 'too_large'` without sending anything. For a larger zip put the file on the adapter's host and call `installSkill({ scope, path: '/absolute/skill.zip' })`; `installSkill` also takes `data_b64`, exactly one of the two. Results carry `propagation.skills`: `next_rebuild` (running coding sessions pick the change up at their next system-prompt rebuild) or `room_restart` (a room's catalogue is frozen at start). See `examples/skills.ts`.
+
+## Rooms
+
+```ts
+const rooms = await host.listRooms({ live: true });
+const room = await client.roomOpen({ parent_session_id });   // starts the room when needed
+// or: await client.roomAttach({ session_id: roomSessionId }); // a room that is already running
+console.log(room.epoch, room.attachResult.tail, room.attachResult.roster);
+
+await room.send({ text: 'check the login page', to: 'scout' });  // shell: true sends "!" + text
+for await (const event of room.events()) {
+  if (event.event === 'room.line') console.log(event.line.author, event.line.text);
+  else if (event.event === 'room.closed') console.log(event.reason);   // taken_over | daemon_exit | stream_error
+}
+await room.close();   // sends room.close (stop: true also stops the room's daemon) and releases the adapter
+```
+
+A `Room` owns one adapter, like a `Session`. Methods: `send`, `interrupt`, `control({ action, avatar, note? })`, `status`, `history`, `shelf`, `item`, `trajectory`, `reports`, `spend`, `team`, `setModel`, `upsertAvatar`, `removeAvatar`, `reattach`, `events`, `close`, plus `epoch`, `sessionId`, `attachResult` and `requestsRemaining`. Reads come from disk and keep working after the live view ended. `send` is never retried: a lost reply throws `DeliveryUnknownError`. A message with attachments needs a room that supports it (`peer_unsupported` otherwise).
+
+**Events.** `room.events()` yields typed room events (`room.line`, `room.delta`, `room.status`, `room.notice`, `room.gap`, `room.closed`) of the current epoch only. Line numbers (`line_seq`) belong to an epoch and are never compared with the envelope `seq`. Lines already seen are not repeated. After `room.gap`, a hole in the event sequence, or a client-side `event_overflow`, the iterator reads the missed lines back with `room.history` and yields them as `room.line` events with `recovered: true`, then the current status as `room.status` with `recovered: true`. It never calls `state`. Page older lines yourself with `room.history({ before_line_seq })`; the ring holds what the daemon replayed (at most 2000 lines) plus later lines.
+
+**One live view.** A room has exactly one live subscriber. `roomOpen`, `roomAttach` and `room.reattach()` take it over, and whoever had it loses its stream without a frame (the terminal shows that the connection closed). The adapter then reports `room.closed` with `reason: 'taken_over'`, the iterator ends, and nothing re-attaches by itself, so two clients never take the room from each other in a loop. Call `reattach()` to take the view back; it starts a new epoch and replaces the line buffer. After `daemon_exit`, start the room again with `roomOpen`. Socket writes (`send`, `interrupt`, `control`) on a closed view fail with `reason: 'room_closed'`.
+
+**Team.** `room.team()` shows the avatars and roles of the room (roles are read only), `room.setModel`, `upsertAvatar` and `removeAvatar` write the room's own layer (`target: 'room'`, the default on a `Room`); pass `target: 'template'` for the template layer. `host.getTeam()`, `host.setTeamModel(...)`, `host.upsertTeamAvatar(...)` and `host.removeTeamAvatar(...)` work on the template (`~/.koma/room`) without a room; a template change applies to rooms started afterwards (`applies: 'next_start'`). A write to a live room applies at the next turn when the room supports reloading (`applies: 'live'`); otherwise the file is written and taken at the next reload (`next_reload`). Pass `if_revision` from `Team.revision` to guard against concurrent edits.
+
+Like a session adapter, a room adapter accepts a fixed number of requests; watch `room.requestsRemaining` and, before it reaches zero, `roomAttach` from a new client (the old one then sees `taken_over` and is closed by `room.close()`). See `examples/room.ts`.
+
 ## Errors from newer adapters
 
-With feature `errors.reason`, `SdkError` may carry `reason` (branch on it, never on the message), `binding` and `allowed` (on a call made in the wrong binding), `written` (`true` when an `unknown` outcome committed bytes) and `detail`. A mutation whose outcome is unknown throws `DeliveryUnknownError`, as before; config deletes, `unassignRole`, `clearMainPin`, `setEffort` and `setLimits` count as mutations, a delete with `dry_run:true` does not.
+With feature `errors.reason`, `SdkError` may carry `reason` (branch on it, never on the message), `binding` and `allowed` (on a call made in the wrong binding), `written` (`true` when an `unknown` outcome committed bytes) and `detail`. A mutation whose outcome is unknown throws `DeliveryUnknownError`, as before; config deletes, `unassignRole`, `clearMainPin`, `setEffort`, `setLimits`, session rename/delete/stop, skill writes, `room.send` and team writes count as mutations, a delete with `dry_run:true` does not.
 
 ```ts
 try { await host.deleteProvider({ provider_uuid, if_revision }); }
@@ -107,7 +174,7 @@ catch (e) {
 }
 ```
 
-Enum-like strings added after v1 (`reason`, `binding`, `key_state`, `origin`, `propagation` values, effort `state`, ...) are open: the client passes unknown values through unchanged, typed as `string`, and callers treat an unknown value as "other". The v1 enums (message `role`, `gate.kind`, `turn.state`, `disposition`, policy) and the five model roles stay closed and still fail validation on an unknown value.
+Enum-like strings added after v1 (`reason`, `binding`, `key_state`, `origin`, `propagation` values, effort `state`, session, skill and room `kind`/`tier`/`scope`, room line `kind`, lane `phase`, notice `code`, close `reason`, ...) are open: the client passes unknown values through unchanged, typed as `string`, and callers treat an unknown value as "other". The v1 enums (message `role`, `gate.kind`, `turn.state`, `disposition`, policy) and the five model roles stay closed and still fail validation on an unknown value.
 
 ## Maintainers
 

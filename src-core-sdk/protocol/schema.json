@@ -304,6 +304,11 @@
                 },
                 "external_approvals": {
                   "type": "boolean"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
                 }
               },
               "required": [
@@ -1061,6 +1066,1291 @@
             "method",
             "params"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "coding",
+                    "room",
+                    "all"
+                  ]
+                },
+                "live": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.rename"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "required": [
+                "session_id",
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.delete"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.stop"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "usage.query"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "from_at": {
+                  "type": "integer"
+                },
+                "to_at": {
+                  "type": "integer"
+                },
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "group_by": {
+                  "enum": [
+                    "none",
+                    "model",
+                    "role",
+                    "session"
+                  ]
+                },
+                "bucket": {
+                  "enum": [
+                    "none",
+                    "hour",
+                    "day",
+                    "week"
+                  ]
+                },
+                "tz_offset_minutes": {
+                  "type": "integer",
+                  "minimum": -720,
+                  "maximum": 840
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "computer",
+                    "project",
+                    "external",
+                    "all"
+                  ]
+                },
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "include_diagnostics": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "include_raw": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.read_file"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "name",
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.create"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "computer",
+                    "project"
+                  ]
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "instruction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2097152
+                },
+                "triggers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "maxItems": 32
+                },
+                "allowed_tools": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "maxItems": 64
+                }
+              },
+              "required": [
+                "scope",
+                "name",
+                "description",
+                "instruction"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.update"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "patch": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    },
+                    "triggers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "maxItems": 32
+                    },
+                    "allowed_tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "maxItems": 64
+                    },
+                    "instruction": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2097152
+                    }
+                  },
+                  "required": [],
+                  "minProperties": 1
+                }
+              },
+              "required": [
+                "tier",
+                "name",
+                "patch"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.install"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "computer",
+                    "project"
+                  ]
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                },
+                "data_b64": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 39146840
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "skills.remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "tier": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workdir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "tier",
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "parent_session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "live": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.open"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "parent_session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tail": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 30000
+                }
+              },
+              "required": [
+                "parent_session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.attach"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tail": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "wait_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 15000
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.close"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "stop": {
+                  "type": "boolean"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.send"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "shell": {
+                  "type": "boolean"
+                },
+                "attachments": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "$ref": "#/$defs/attachment"
+                  }
+                }
+              },
+              "required": [
+                "text"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.interrupt"
+            },
+            "params": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.control"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "enum": [
+                    "pause",
+                    "resume",
+                    "stop",
+                    "redirect"
+                  ]
+                },
+                "avatar": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "note": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                }
+              },
+              "required": [
+                "action",
+                "avatar"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.status"
+            },
+            "params": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.history"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "epoch": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "after_line_seq": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "before_line_seq": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200
+                },
+                "kinds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "author": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "epoch"
+              ],
+              "not": {
+                "required": [
+                  "after_line_seq",
+                  "before_line_seq"
+                ]
+              }
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.shelf.list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "prefix": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.item"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "required": [
+                "key"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.trajectory"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "goal": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.reports"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "include_markdown": {
+                  "type": "boolean"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.spend"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "goal": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.team.get"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "enum": [
+                    "template",
+                    "room"
+                  ]
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.models.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "enum": [
+                    "template",
+                    "room"
+                  ]
+                },
+                "avatar": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "lane": {
+                  "enum": [
+                    "chat",
+                    "work"
+                  ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "effort": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "target",
+                "avatar",
+                "lane"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "model"
+                  ]
+                },
+                {
+                  "required": [
+                    "effort"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.avatars.upsert"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "enum": [
+                    "template",
+                    "room"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 48,
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,47}$"
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "display": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "alias": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 3,
+                  "pattern": "^[A-Za-z0-9]+$"
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "target",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "room.avatars.remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "enum": [
+                    "template",
+                    "room"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 48,
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,47}$"
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "target",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
         }
       ]
     },
@@ -1456,6 +2746,149 @@
               },
               "required": []
             },
+            "list": {
+              "type": "object",
+              "properties": {
+                "sessions": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "rooms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "skills": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "usage_groups": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "usage_buckets": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "shelf_rows": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "reports": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "history_lines": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "trajectory_goals": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "trajectory_nodes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "trajectory_edges": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            },
+            "room": {
+              "type": "object",
+              "properties": {
+                "ring_lines": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "ring_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "page_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "event_text_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "status_text_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "item_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "tail_lines": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            },
+            "skills": {
+              "type": "object",
+              "properties": {
+                "inline_zip_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "zip_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entry_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "companion_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "files": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "name_bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": []
+            },
             "config": {
               "type": "object",
               "properties": {
@@ -1471,6 +2904,21 @@
               "type": "object",
               "properties": {
                 "ipc_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "room_start_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "usage_query_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "session_stop_ms": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 9007199254740991
@@ -1977,6 +3425,14 @@
         "rooms": {
           "type": "string",
           "minLength": 1
+        },
+        "skills": {
+          "type": "string",
+          "minLength": 1
+        },
+        "room": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": []
@@ -2210,6 +3666,2289 @@
         "effective_window"
       ]
     },
+    "session_row": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workdir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "working": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "bound": {
+          "type": "boolean"
+        },
+        "parent_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_live": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_id",
+        "name",
+        "workdir",
+        "kind",
+        "created_at",
+        "updated_at",
+        "live",
+        "working",
+        "locked",
+        "bound",
+        "parent_session_id",
+        "room_session_id",
+        "room_live"
+      ]
+    },
+    "sessions_list_result": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/session_row"
+          },
+          "maxItems": 500
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessions",
+        "next_cursor"
+      ]
+    },
+    "session_rename_result": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/session_row"
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "session_delete_result": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "const": true
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "orphaned_room_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "deleted",
+        "kind",
+        "orphaned_room_session_id"
+      ]
+    },
+    "session_stop_result": {
+      "type": "object",
+      "properties": {
+        "stopped": {
+          "const": true
+        },
+        "was_live": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stopped",
+        "was_live"
+      ]
+    },
+    "usage_totals": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_in": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_cached": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_out": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cost": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "calls",
+        "tokens_in",
+        "tokens_cached",
+        "tokens_out",
+        "cost"
+      ]
+    },
+    "usage_group": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_in": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_cached": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_out": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "calls",
+        "tokens_in",
+        "tokens_cached",
+        "tokens_out",
+        "cost",
+        "key",
+        "label"
+      ]
+    },
+    "usage_bucket": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_in": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_cached": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tokens_out": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "start_at": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "tokens_in",
+        "tokens_cached",
+        "tokens_out",
+        "cost",
+        "start_at"
+      ]
+    },
+    "usage_result": {
+      "type": "object",
+      "properties": {
+        "from_at": {
+          "type": "integer"
+        },
+        "to_at": {
+          "type": "integer"
+        },
+        "ledger": {
+          "type": "string",
+          "minLength": 1
+        },
+        "totals": {
+          "$ref": "#/$defs/usage_totals"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/usage_group"
+          },
+          "maxItems": 500
+        },
+        "groups_truncated": {
+          "type": "boolean"
+        },
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/usage_bucket"
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "from_at",
+        "to_at",
+        "ledger",
+        "totals"
+      ]
+    },
+    "skill_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "triggers_truncated": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "tags_truncated": {
+          "type": "boolean"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string"
+        },
+        "effective": {
+          "type": "boolean"
+        },
+        "shadowed_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "scope",
+        "tier",
+        "description",
+        "triggers",
+        "triggers_truncated",
+        "tags",
+        "tags_truncated",
+        "pinned",
+        "editable",
+        "generation",
+        "path",
+        "effective",
+        "shadowed_by"
+      ]
+    },
+    "skill_detail": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "triggers_truncated": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "tags_truncated": {
+          "type": "boolean"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string"
+        },
+        "effective": {
+          "type": "boolean"
+        },
+        "shadowed_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "declared_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "declared_tools_truncated": {
+          "type": "boolean"
+        },
+        "companion_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000
+        },
+        "companion_files_truncated": {
+          "type": "boolean"
+        },
+        "structured_save_supported": {
+          "type": "boolean"
+        },
+        "raw": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "scope",
+        "tier",
+        "description",
+        "triggers",
+        "triggers_truncated",
+        "tags",
+        "tags_truncated",
+        "pinned",
+        "editable",
+        "generation",
+        "path",
+        "effective",
+        "shadowed_by",
+        "instruction",
+        "declared_tools",
+        "declared_tools_truncated",
+        "companion_files",
+        "companion_files_truncated",
+        "structured_save_supported",
+        "raw"
+      ]
+    },
+    "skills_list_result": {
+      "type": "object",
+      "properties": {
+        "project_workdir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skill_row"
+          },
+          "maxItems": 1000
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "error"
+            ]
+          },
+          "maxItems": 200
+        },
+        "diagnostics_truncated": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_workdir",
+        "skills",
+        "diagnostics",
+        "diagnostics_truncated",
+        "next_cursor"
+      ]
+    },
+    "skill_file_result": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "path",
+        "text",
+        "bytes"
+      ]
+    },
+    "skill_write_result": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "$ref": "#/$defs/skill_detail"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        }
+      },
+      "required": [
+        "skill",
+        "propagation"
+      ]
+    },
+    "skill_update_result": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "$ref": "#/$defs/skill_detail"
+        },
+        "renamed": {
+          "type": "boolean"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        }
+      },
+      "required": [
+        "skill",
+        "renamed",
+        "propagation"
+      ]
+    },
+    "skill_remove_result": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "const": true
+        },
+        "now_effective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/skill_row"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        }
+      },
+      "required": [
+        "removed",
+        "now_effective",
+        "propagation"
+      ]
+    },
+    "room_info": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workdir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "bound": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "parent_session_id",
+        "parent_name",
+        "name",
+        "workdir",
+        "live",
+        "locked",
+        "bound",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "room_line": {
+      "type": "object",
+      "properties": {
+        "line_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audience": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "args": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replay": {
+          "type": "boolean"
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "received_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "line_seq",
+        "kind",
+        "author",
+        "display",
+        "alias",
+        "lane",
+        "audience",
+        "text",
+        "call_id",
+        "tool",
+        "args",
+        "ok",
+        "result",
+        "replay",
+        "origin",
+        "received_at_ms",
+        "truncated"
+      ]
+    },
+    "lane_status": {
+      "type": "object",
+      "properties": {
+        "avatar": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display": {
+          "type": "string"
+        },
+        "alias": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "lane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "type": "string"
+        },
+        "started_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "last_event_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "last_tool": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "avatar",
+        "display",
+        "alias",
+        "role",
+        "lane",
+        "phase",
+        "task",
+        "started_at_ms",
+        "last_event_at_ms",
+        "steps",
+        "last_tool",
+        "error"
+      ]
+    },
+    "timeline_event": {
+      "type": "object",
+      "properties": {
+        "at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "avatar": {
+          "type": "string"
+        },
+        "marker": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at_ms",
+        "avatar",
+        "marker",
+        "label"
+      ]
+    },
+    "room_status": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "fresh": {
+          "type": "boolean"
+        },
+        "age_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "now_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "open": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "verified": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "returned": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "reports": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "open",
+            "verified",
+            "returned",
+            "reports"
+          ]
+        },
+        "counts_basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "paused": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64
+        },
+        "paused_truncated": {
+          "type": "boolean"
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lane_status"
+          },
+          "maxItems": 128
+        },
+        "lanes_truncated": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/timeline_event"
+          },
+          "maxItems": 60
+        },
+        "digest": {
+          "type": "string"
+        },
+        "timeline": {
+          "type": "string"
+        },
+        "trajectory_outline": {
+          "type": "string"
+        },
+        "shelf_fingerprint": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_id",
+        "live",
+        "fresh",
+        "age_ms",
+        "now_at_ms",
+        "counts",
+        "counts_basis",
+        "paused",
+        "paused_truncated",
+        "lanes",
+        "lanes_truncated",
+        "events",
+        "digest",
+        "timeline",
+        "trajectory_outline",
+        "shelf_fingerprint",
+        "truncated"
+      ]
+    },
+    "attach_result": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "$ref": "#/$defs/room_info"
+        },
+        "started": {
+          "type": "boolean"
+        },
+        "daemon": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "features": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64
+            },
+            "template_revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "features",
+            "template_revision"
+          ]
+        },
+        "epoch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "history": {
+          "type": "object",
+          "properties": {
+            "first_line_seq": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "last_line_seq": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "replayed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "first_line_seq",
+            "last_line_seq",
+            "count",
+            "replayed"
+          ]
+        },
+        "tail": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/room_line"
+          },
+          "maxItems": 200
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/room_status"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roster": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 64
+        },
+        "roster_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "room",
+        "started",
+        "daemon",
+        "epoch",
+        "history",
+        "tail",
+        "status",
+        "roster",
+        "roster_truncated"
+      ]
+    },
+    "room_list_result": {
+      "type": "object",
+      "properties": {
+        "rooms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/room_info"
+          },
+          "maxItems": 500
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rooms",
+        "next_cursor"
+      ]
+    },
+    "room_close_result": {
+      "type": "object",
+      "properties": {
+        "closed": {
+          "const": true
+        },
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "closed",
+        "stopped"
+      ]
+    },
+    "room_send_result": {
+      "type": "object",
+      "properties": {
+        "sent": {
+          "const": true
+        },
+        "acked": {
+          "type": "boolean"
+        },
+        "inserts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16
+        },
+        "echo_line_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "sent",
+        "acked",
+        "inserts",
+        "echo_line_seq"
+      ]
+    },
+    "room_sent_result": {
+      "type": "object",
+      "properties": {
+        "sent": {
+          "const": true
+        }
+      },
+      "required": [
+        "sent"
+      ]
+    },
+    "room_history_result": {
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "first_line_seq": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_line_seq": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/room_line"
+          },
+          "maxItems": 200
+        },
+        "has_more_before": {
+          "type": "boolean"
+        },
+        "has_more_after": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "epoch",
+        "first_line_seq",
+        "last_line_seq",
+        "lines",
+        "has_more_before",
+        "has_more_after"
+      ]
+    },
+    "shelf_row": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 101
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "revision",
+        "updated_at",
+        "kind",
+        "title",
+        "status"
+      ]
+    },
+    "shelf_item": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 101
+        },
+        "status": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "json": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "revision",
+        "updated_at",
+        "kind",
+        "title",
+        "status",
+        "content",
+        "json",
+        "truncated"
+      ]
+    },
+    "shelf_list_result": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/shelf_row"
+          },
+          "maxItems": 500
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows",
+        "total",
+        "next_cursor",
+        "fingerprint"
+      ]
+    },
+    "goal_node": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rank": {
+          "type": "integer"
+        },
+        "row": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "status",
+        "severity",
+        "note",
+        "resource_key",
+        "revision",
+        "rank",
+        "row"
+      ]
+    },
+    "goal": {
+      "type": "object",
+      "properties": {
+        "goal_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "open": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "verified": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "returned": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "reports": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "open",
+            "verified",
+            "returned",
+            "reports"
+          ]
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/goal_node"
+          },
+          "maxItems": 2000
+        },
+        "nodes_truncated": {
+          "type": "boolean"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rel": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "rel"
+            ]
+          },
+          "maxItems": 8000
+        },
+        "edges_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "goal_key",
+        "counts",
+        "columns",
+        "rows",
+        "nodes",
+        "nodes_truncated",
+        "edges",
+        "edges_truncated"
+      ]
+    },
+    "trajectory_result": {
+      "type": "object",
+      "properties": {
+        "goals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/goal"
+          },
+          "maxItems": 200
+        },
+        "goals_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "goals",
+        "goals_truncated"
+      ]
+    },
+    "report": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "updated_at": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "severity_summary": {
+          "type": "string"
+        },
+        "go_no_go": {
+          "type": "string"
+        },
+        "finding_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000
+        },
+        "finding_keys_truncated": {
+          "type": "boolean"
+        },
+        "markdown": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "revision",
+        "updated_at",
+        "title",
+        "audience",
+        "severity_summary",
+        "go_no_go",
+        "finding_keys",
+        "finding_keys_truncated",
+        "markdown"
+      ]
+    },
+    "reports_result": {
+      "type": "object",
+      "properties": {
+        "reports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/report"
+          },
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "reports",
+        "next_cursor"
+      ]
+    },
+    "spend_entry": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cost": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "calls",
+        "prompt_tokens",
+        "completion_tokens",
+        "cost"
+      ]
+    },
+    "goal_spend": {
+      "type": "object",
+      "properties": {
+        "goal_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "total": {
+          "$ref": "#/$defs/spend_entry"
+        },
+        "by_avatar": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "avatar": {
+                "type": "string",
+                "minLength": 1
+              },
+              "calls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "prompt_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "completion_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cost": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "avatar",
+              "calls",
+              "prompt_tokens",
+              "completion_tokens",
+              "cost"
+            ]
+          },
+          "maxItems": 64
+        },
+        "by_avatar_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "goal_key",
+        "total",
+        "by_avatar",
+        "by_avatar_truncated"
+      ]
+    },
+    "spend_result": {
+      "type": "object",
+      "properties": {
+        "goals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/goal_spend"
+          },
+          "maxItems": 200
+        },
+        "goals_truncated": {
+          "type": "boolean"
+        },
+        "ledger": {
+          "type": "object",
+          "properties": {
+            "ledger": {
+              "type": "string",
+              "minLength": 1
+            },
+            "totals": {
+              "$ref": "#/$defs/usage_totals"
+            },
+            "by_avatar": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "avatar": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "totals": {
+                    "$ref": "#/$defs/usage_totals"
+                  }
+                },
+                "required": [
+                  "avatar",
+                  "totals"
+                ]
+              },
+              "maxItems": 64
+            },
+            "by_avatar_truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ledger",
+            "totals",
+            "by_avatar",
+            "by_avatar_truncated"
+          ]
+        }
+      },
+      "required": [
+        "goals",
+        "goals_truncated",
+        "ledger"
+      ]
+    },
+    "lane_view": {
+      "type": "object",
+      "properties": {
+        "lane": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_uuid": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "origin"
+          ]
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "origin"
+          ]
+        },
+        "effort": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "origin"
+          ]
+        },
+        "model_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resolves": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "lane",
+        "provider_uuid",
+        "model",
+        "effort",
+        "model_label",
+        "resolves"
+      ]
+    },
+    "avatar_view": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defined_in": {
+          "type": "string",
+          "minLength": 1
+        },
+        "removable": {
+          "type": "boolean"
+        },
+        "display": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "origin"
+          ]
+        },
+        "display_effective": {
+          "type": "string"
+        },
+        "alias": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "value",
+            "origin"
+          ]
+        },
+        "alias_effective": {
+          "type": "string"
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lane_view"
+          },
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "defined_in",
+        "removable",
+        "display",
+        "display_effective",
+        "alias",
+        "alias_effective",
+        "lanes"
+      ]
+    },
+    "role_view": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display": {
+          "type": "string"
+        },
+        "shelf_allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills_allow": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chat": {
+          "type": "object",
+          "properties": {
+            "provider_uuid": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "provider_uuid",
+            "model",
+            "effort"
+          ]
+        },
+        "work": {
+          "type": "object",
+          "properties": {
+            "provider_uuid": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "provider_uuid",
+            "model",
+            "effort"
+          ]
+        },
+        "defined_in": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "display",
+        "shelf_allow",
+        "skills_allow",
+        "chat",
+        "work",
+        "defined_in"
+      ]
+    },
+    "team": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{16}|absent)$"
+        },
+        "layer_present": {
+          "type": "boolean"
+        },
+        "template_revision": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{16}|absent)$"
+        },
+        "template_pending_restart": {
+          "type": "boolean"
+        },
+        "avatars": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/avatar_view"
+          },
+          "maxItems": 128
+        },
+        "avatars_truncated": {
+          "type": "boolean"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/role_view"
+          },
+          "maxItems": 64
+        },
+        "roles_truncated": {
+          "type": "boolean"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "model_id": {
+                "type": "string"
+              },
+              "provider_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider_uuid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "model_id",
+              "provider_name",
+              "provider_uuid"
+            ]
+          },
+          "maxItems": 2000
+        },
+        "choices_truncated": {
+          "type": "boolean"
+        },
+        "choices_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "layer": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "layer",
+              "path",
+              "message"
+            ]
+          },
+          "maxItems": 100
+        },
+        "warnings_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target",
+        "revision",
+        "layer_present",
+        "template_revision",
+        "template_pending_restart",
+        "avatars",
+        "avatars_truncated",
+        "roles",
+        "roles_truncated",
+        "choices",
+        "choices_truncated",
+        "choices_source",
+        "warnings",
+        "warnings_truncated"
+      ]
+    },
+    "team_write_result": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "$ref": "#/$defs/team"
+        },
+        "applies": {
+          "type": "string",
+          "minLength": 1
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        }
+      },
+      "required": [
+        "team",
+        "applies",
+        "propagation"
+      ]
+    },
+    "avatar_remove_result": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "$ref": "#/$defs/team"
+        },
+        "applies": {
+          "type": "string",
+          "minLength": 1
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "reverted_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "team",
+        "applies",
+        "propagation",
+        "reverted_to"
+      ]
+    },
     "response": {
       "oneOf": [
         {
@@ -2232,6 +5971,26 @@
                     },
                     "session_info": {
                       "$ref": "#/$defs/session_info"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ]
+                      },
+                      "maxItems": 8
                     }
                   },
                   "required": [
@@ -2300,6 +6059,84 @@
                   "required": [
                     "session_info"
                   ]
+                },
+                {
+                  "$ref": "#/$defs/sessions_list_result"
+                },
+                {
+                  "$ref": "#/$defs/session_rename_result"
+                },
+                {
+                  "$ref": "#/$defs/session_delete_result"
+                },
+                {
+                  "$ref": "#/$defs/session_stop_result"
+                },
+                {
+                  "$ref": "#/$defs/usage_result"
+                },
+                {
+                  "$ref": "#/$defs/skills_list_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_detail"
+                },
+                {
+                  "$ref": "#/$defs/skill_file_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_write_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_update_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_remove_result"
+                },
+                {
+                  "$ref": "#/$defs/room_list_result"
+                },
+                {
+                  "$ref": "#/$defs/attach_result"
+                },
+                {
+                  "$ref": "#/$defs/room_close_result"
+                },
+                {
+                  "$ref": "#/$defs/room_send_result"
+                },
+                {
+                  "$ref": "#/$defs/room_sent_result"
+                },
+                {
+                  "$ref": "#/$defs/room_status"
+                },
+                {
+                  "$ref": "#/$defs/room_history_result"
+                },
+                {
+                  "$ref": "#/$defs/shelf_list_result"
+                },
+                {
+                  "$ref": "#/$defs/shelf_item"
+                },
+                {
+                  "$ref": "#/$defs/trajectory_result"
+                },
+                {
+                  "$ref": "#/$defs/reports_result"
+                },
+                {
+                  "$ref": "#/$defs/spend_result"
+                },
+                {
+                  "$ref": "#/$defs/team"
+                },
+                {
+                  "$ref": "#/$defs/team_write_result"
+                },
+                {
+                  "$ref": "#/$defs/avatar_remove_result"
                 }
               ]
             }
@@ -2447,6 +6284,226 @@
             "seq",
             "revision",
             "turn"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.line"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "line": {
+              "$ref": "#/$defs/room_line"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "line"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.delta"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1
+            },
+            "lane": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "author",
+            "lane",
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.status"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "$ref": "#/$defs/room_status"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.notice"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "code",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.closed"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "session_id",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "const": "room.gap"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "epoch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "after_line_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "dropped_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "dropped_deltas": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "event",
+            "seq",
+            "epoch",
+            "after_line_seq",
+            "dropped_lines",
+            "dropped_deltas"
           ]
         }
       ]

@@ -1,5 +1,6 @@
 //! Selected-session reducer. A sequence gap invalidates deltas until a full snapshot.
 use super::dto::{DaemonInfo, Limits, SessionInfo};
+use super::host::usage::SessionUsage;
 use super::protocol::{Approval, Gate, Message, PendingApproval, Plan, Policy, State, Turn};
 use crate::app::resolve::RoleResolution;
 use crate::ipc::proto::{DaemonEvent, DaemonFrame, SessionSnapshot, StateDelta, TurnState};
@@ -31,6 +32,8 @@ pub struct Tracked {
     pub context_model_alias: String,
     pub effective_window: Option<u64>,
     pub daemon: DaemonInfo,
+    /// Spend of the session as its latest snapshot reported it.
+    pub usage: Option<SessionUsage>,
     /// The daemon's in-memory catalogue from the latest snapshot: provider
     /// uuids with names, and model uuids. Never any key.
     pub providers: Vec<(String, String)>,
@@ -55,6 +58,7 @@ impl Tracked {
             self.routes = s.model_routes.clone();
         }
         self.effective_window = s.context_usage.as_ref().map(|u| u.effective_window);
+        self.usage = Some(SessionUsage::from_snapshot(s));
         self.observe();
     }
 
@@ -265,7 +269,10 @@ impl Reconcile {
             effort: public_effort(&info.effort),
             routes: super::host::redact::role_routes(&info.routes, lookup),
             limits: info.limits(),
-            usage: None,
+            usage: info
+                .usage
+                .as_ref()
+                .and_then(|u| serde_json::to_value(u).ok()),
             daemon: info.daemon.clone(),
             observed_at_ms: info.observed_at_ms,
         }

@@ -35,10 +35,9 @@ class WrongBinding(unittest.IsolatedAsyncioTestCase):
         e = ctx.exception
         self.assertEqual(e.message, 'config.effort.get requires binding coding; this adapter is unbound')
         self.assertEqual((e.reason, e.binding, e.allowed), ('wrong_binding', 'unbound', ('coding',)))
-        # Room methods are not implemented, so their names are unknown.
         with self.assertRaises(RemoteError) as ctx:
             await self.raw(c, 'room.status')
-        self.assertEqual((ctx.exception.code, ctx.exception.reason), ('unsupported_method', None))
+        self.assertEqual(ctx.exception.allowed, ('room_live', 'room_closed'))
 
     async def test_coding_errors(self):
         s = await self.client().create('/fake/work')
@@ -66,6 +65,15 @@ class WrongBinding(unittest.IsolatedAsyncioTestCase):
         host = c.host()
         self.addAsyncCleanup(host.close)
         self.assertEqual((await host.config_get()).file.value, 'missing')
+
+    async def test_room_closed_socket_write(self):
+        c = self.client('--binding', 'room_closed')
+        with self.assertRaises(RemoteError) as ctx:
+            await self.raw(c, 'room.send', {'text': 'hi'}, mutation=True)
+        e = ctx.exception
+        self.assertNotIsInstance(e, DeliveryUnknown)
+        self.assertEqual((e.code, e.reason, e.binding, e.allowed),
+                         ('invalid_state', 'room_closed', 'room_closed', ('room_live',)))
 
 
 if __name__ == '__main__':

@@ -59,6 +59,10 @@ class Hello:
         """Gate on `methods`; an adapter without them implements exactly `capabilities`."""
         return method in (self.methods if self.methods else self.capabilities)
 
+    def has_feature(self, feature: str) -> bool:
+        """Features are static per adapter binary; an older adapter has none."""
+        return feature in self.features
+
     @property
     def request_ids(self) -> int:
         """Requests one adapter process accepts; the next one is fatal."""
@@ -246,6 +250,18 @@ def _count(d: dict[str, Any], key: str) -> int:
         raise ValueError(f"invalid {key}")
     return value
 
+def _optional_count(d: dict[str, Any], key: str) -> int | None:
+    return None if d[key] is None else _count(d, key)
+
+def _optional_flag(d: dict[str, Any], key: str) -> bool | None:
+    return None if d[key] is None else _flag(d, key)
+
+def _number(d: dict[str, Any], key: str) -> float:
+    value = d[key]
+    if type(value) not in (int, float) or value < 0:
+        raise ValueError(f"invalid {key}")
+    return float(value)
+
 def _texts(value: Any, what: str, most: int | None = None) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ValueError(f"{what} must be a list of strings")
@@ -336,6 +352,10 @@ class PropagationStatus(_OpenEnum):
     NOT_NEEDED = "not_needed"
     DONE_BY_DAEMON = "done_by_daemon"
     NEXT_START = "next_start"
+    NEXT_REBUILD = "next_rebuild"
+    ROOM_RESTART = "room_restart"
+    NOT_SUPPORTED = "not_supported"
+    NOT_LIVE = "not_live"
     OTHER = "other"
 
 def _open(kind: type[Any], d: dict[str, Any], key: str) -> Any:
@@ -552,16 +572,21 @@ def _optional_session_info(d: dict[str, Any]) -> SessionInfo | None:
 
 @dataclass(frozen=True)
 class Propagation:
-    """What happened after a committed write. Absent keys are `None`; none of them is an error."""
+    """What happened after a committed write. Absent keys are `None`; none of them is an error.
+
+    `skills` is set by skill writes and `room` by team writes.
+    """
     bound: PropagationStatus | None = None
     broadcast: PropagationStatus | None = None
     rebind: PropagationStatus | None = None
     rooms: PropagationStatus | None = None
+    skills: PropagationStatus | None = None
+    room: PropagationStatus | None = None
     @classmethod
     def from_wire(cls, value: Any) -> Propagation:
         d = _object(value, "propagation")
         return cls(*(None if key not in d else _open(PropagationStatus, d, key)
-                     for key in ("bound", "broadcast", "rebind", "rooms")))
+                     for key in ("bound", "broadcast", "rebind", "rooms", "skills", "room")))
 
 @dataclass(frozen=True)
 class ProviderRemoval:
@@ -652,3 +677,292 @@ class EffortResult:
         d = _object(value, "effort result")
         return cls(_text(d, "effort", nonempty=True), _optional_text(d, "main_model_uuid"),
                    _flag(d, "superseded"), _optional_session_info(d))
+
+
+# Sessions
+
+class SessionKind(_OpenEnum):
+    CODING = "coding"
+    ROOM = "room"
+    OTHER = "other"
+
+@dataclass(frozen=True)
+class CreateWarning:
+    """A `create` that succeeded but could not finish a step, for example `rename_failed`."""
+    code: str
+    message: str
+    @classmethod
+    def from_wire(cls, value: Any) -> CreateWarning:
+        d = _object(value, "warning")
+        return cls(_text(d, "code", nonempty=True), _text(d, "message"))
+
+def _create_warnings(d: dict[str, Any]) -> tuple[CreateWarning, ...]:
+    return tuple(CreateWarning.from_wire(w) for w in _items(d.get("warnings", []), "warnings", 8))
+
+@dataclass(frozen=True)
+class SessionRow:
+    """`working` is `None` for rooms; `bound` means the adapter you asked holds the session."""
+    session_id: str
+    name: str | None
+    workdir: str | None
+    kind: SessionKind
+    created_at: int | None
+    updated_at: int | None
+    live: bool
+    working: bool | None
+    locked: bool
+    bound: bool
+    parent_session_id: str | None
+    room_session_id: str | None
+    room_live: bool
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionRow:
+        d = _object(value, "session")
+        return cls(_text(d, "session_id", nonempty=True), _optional_text(d, "name"), _optional_text(d, "workdir"),
+                   _open(SessionKind, d, "kind"), _optional_count(d, "created_at"), _optional_count(d, "updated_at"),
+                   _flag(d, "live"), _optional_flag(d, "working"), _flag(d, "locked"), _flag(d, "bound"),
+                   _optional_text(d, "parent_session_id"), _optional_text(d, "room_session_id"),
+                   _flag(d, "room_live"))
+
+@dataclass(frozen=True)
+class SessionPage:
+    sessions: tuple[SessionRow, ...]
+    next_cursor: str | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionPage:
+        d = _object(value, "result")
+        return cls(tuple(SessionRow.from_wire(r) for r in _items(d["sessions"], "sessions", 500)),
+                   _optional_text(d, "next_cursor"))
+
+@dataclass(frozen=True)
+class SessionRenameResult:
+    session: SessionRow
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionRenameResult:
+        return cls(SessionRow.from_wire(_object(value, "result")["session"]))
+
+@dataclass(frozen=True)
+class SessionDeleteResult:
+    """`orphaned_room_session_id` names a room whose parent was just deleted; it is not removed."""
+    deleted: bool
+    kind: SessionKind
+    orphaned_room_session_id: str | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionDeleteResult:
+        d = _object(value, "result")
+        if d["deleted"] is not True:
+            raise ValueError("delete not acknowledged")
+        return cls(True, _open(SessionKind, d, "kind"), _optional_text(d, "orphaned_room_session_id"))
+
+@dataclass(frozen=True)
+class SessionStopResult:
+    stopped: bool
+    was_live: bool
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionStopResult:
+        d = _object(value, "result")
+        if d["stopped"] is not True:
+            raise ValueError("stop not acknowledged")
+        return cls(True, _flag(d, "was_live"))
+
+# Usage
+
+class LedgerState(_OpenEnum):
+    OK = "ok"
+    MISSING = "missing"
+    OTHER = "other"
+
+class UsageRoleKind(_OpenEnum):
+    MAIN = "main"
+    SUB = "sub"
+    OTHER = "other"
+
+@dataclass(frozen=True)
+class UsageTotals:
+    """`tokens_in` is the per-call prompt size summed over calls."""
+    calls: int
+    tokens_in: int
+    tokens_cached: int
+    tokens_out: int
+    cost: float
+    @classmethod
+    def from_wire(cls, value: Any) -> UsageTotals:
+        d = _object(value, "usage totals")
+        return cls(*(_count(d, k) for k in ("calls", "tokens_in", "tokens_cached", "tokens_out")), _number(d, "cost"))
+
+@dataclass(frozen=True)
+class UsageGroup(UsageTotals):
+    """`key` is a model id, a raw role (`main`, `sub:<agent>`) or a session id, by `group_by`."""
+    key: str
+    label: str | None
+    role_kind: UsageRoleKind | None = None
+    agent: str | None = None
+    kind: SessionKind | None = None
+    deleted: bool | None = None
+    @classmethod
+    def from_wire(cls, value: Any) -> UsageGroup:
+        d = _object(value, "usage group")
+        t = UsageTotals.from_wire(d)
+        return cls(t.calls, t.tokens_in, t.tokens_cached, t.tokens_out, t.cost,
+                   _text(d, "key", nonempty=True), _optional_text(d, "label"),
+                   _open(UsageRoleKind, d, "role_kind") if "role_kind" in d else None,
+                   _optional_text(d, "agent") if "agent" in d else None,
+                   _optional_open(SessionKind, d, "kind") if "kind" in d else None,
+                   _flag(d, "deleted") if "deleted" in d else None)
+
+@dataclass(frozen=True)
+class UsageBucket(UsageTotals):
+    start_at: int
+    @classmethod
+    def from_wire(cls, value: Any) -> UsageBucket:
+        d = _object(value, "usage bucket")
+        t = UsageTotals.from_wire(d)
+        return cls(t.calls, t.tokens_in, t.tokens_cached, t.tokens_out, t.cost, _count(d, "start_at"))
+
+@dataclass(frozen=True)
+class UsageReport:
+    """`groups` is set when `group_by` was given, `buckets` when `bucket` was; otherwise `None`.
+
+    A `ledger` of `missing` means no usage was ever recorded; it is not an error.
+    """
+    from_at: int
+    to_at: int
+    ledger: LedgerState
+    totals: UsageTotals
+    groups: tuple[UsageGroup, ...] | None
+    groups_truncated: bool
+    buckets: tuple[UsageBucket, ...] | None
+    @classmethod
+    def from_wire(cls, value: Any) -> UsageReport:
+        d = _object(value, "usage result")
+        return cls(_count(d, "from_at"), _count(d, "to_at"), _open(LedgerState, d, "ledger"),
+                   UsageTotals.from_wire(d["totals"]),
+                   tuple(UsageGroup.from_wire(g) for g in _items(d["groups"], "groups", 500)) if "groups" in d else None,
+                   _flag(d, "groups_truncated") if "groups_truncated" in d else False,
+                   tuple(UsageBucket.from_wire(b) for b in _items(d["buckets"], "buckets", 1000))
+                   if "buckets" in d else None)
+
+# Skills
+
+class SkillScope(_OpenEnum):
+    COMPUTER = "computer"
+    PROJECT = "project"
+    EXTERNAL = "external"
+    OTHER = "other"
+
+def _skill_row_args(d: dict[str, Any]) -> tuple[Any, ...]:
+    return (_text(d, "name", nonempty=True), _open(SkillScope, d, "scope"), _text(d, "tier", nonempty=True),
+            _text(d, "description"), _texts(d["triggers"], "triggers", 64), _flag(d, "triggers_truncated"),
+            _texts(d["tags"], "tags", 64), _flag(d, "tags_truncated"), _flag(d, "pinned"), _flag(d, "editable"),
+            _text(d, "generation"), _text(d, "path"), _flag(d, "effective"), _optional_text(d, "shadowed_by"))
+
+@dataclass(frozen=True)
+class SkillRow:
+    """`(tier, name)` addresses a skill; `generation` is the optimistic token for writes.
+
+    `tier` is `global`, `claude`, `project-agent`, `project-agents` or `extra-root:<n>`; `path` is for display.
+    """
+    name: str
+    scope: SkillScope
+    tier: str
+    description: str
+    triggers: tuple[str, ...]
+    triggers_truncated: bool
+    tags: tuple[str, ...]
+    tags_truncated: bool
+    pinned: bool
+    editable: bool
+    generation: str
+    path: str
+    effective: bool
+    shadowed_by: str | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillRow:
+        return cls(*_skill_row_args(_object(value, "skill")))
+
+@dataclass(frozen=True)
+class SkillDetail(SkillRow):
+    """`raw` is `None` unless `include_raw` was asked for, and always `None` in write results."""
+    instruction: str
+    declared_tools: tuple[str, ...]
+    declared_tools_truncated: bool
+    companion_files: tuple[str, ...]
+    companion_files_truncated: bool
+    structured_save_supported: bool
+    raw: str | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillDetail:
+        d = _object(value, "skill")
+        return cls(*_skill_row_args(d), _text(d, "instruction"), _texts(d["declared_tools"], "declared_tools", 64),
+                   _flag(d, "declared_tools_truncated"), _texts(d["companion_files"], "companion_files", 1000),
+                   _flag(d, "companion_files_truncated"), _flag(d, "structured_save_supported"),
+                   _optional_text(d, "raw"))
+
+@dataclass(frozen=True)
+class SkillDiagnostic:
+    path: str
+    error: str
+
+@dataclass(frozen=True)
+class SkillPage:
+    """`project_workdir` is the canonical workdir the project tiers were read from, if any."""
+    project_workdir: str | None
+    skills: tuple[SkillRow, ...]
+    diagnostics: tuple[SkillDiagnostic, ...]
+    diagnostics_truncated: bool
+    next_cursor: str | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillPage:
+        d = _object(value, "result")
+        diagnostics = []
+        for item in _items(d["diagnostics"], "diagnostics", 200):
+            item = _object(item, "diagnostic")
+            diagnostics.append(SkillDiagnostic(_text(item, "path"), _text(item, "error")))
+        return cls(_optional_text(d, "project_workdir"),
+                   tuple(SkillRow.from_wire(r) for r in _items(d["skills"], "skills", 1000)),
+                   tuple(diagnostics), _flag(d, "diagnostics_truncated"), _optional_text(d, "next_cursor"))
+
+@dataclass(frozen=True)
+class SkillFile:
+    path: str
+    text: str
+    bytes: int
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillFile:
+        d = _object(value, "result")
+        return cls(_text(d, "path", nonempty=True), _text(d, "text"), _count(d, "bytes"))
+
+@dataclass(frozen=True)
+class SkillWriteResult:
+    """`propagation.skills` is `next_rebuild` (a running session sees the change at its next system-prompt
+    rebuild) or `room_restart` (a room reads its skills when it starts)."""
+    skill: SkillDetail
+    propagation: Propagation
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillWriteResult:
+        d = _object(value, "result")
+        return cls(SkillDetail.from_wire(d["skill"]), Propagation.from_wire(d["propagation"]))
+
+@dataclass(frozen=True)
+class SkillUpdateResult:
+    skill: SkillDetail
+    renamed: bool
+    propagation: Propagation
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillUpdateResult:
+        d = _object(value, "result")
+        return cls(SkillDetail.from_wire(d["skill"]), _flag(d, "renamed"), Propagation.from_wire(d["propagation"]))
+
+@dataclass(frozen=True)
+class SkillRemoveResult:
+    """`now_effective` is the skill that wins by name after the removal, if one is left."""
+    removed: bool
+    now_effective: SkillRow | None
+    propagation: Propagation
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillRemoveResult:
+        d = _object(value, "result")
+        if d["removed"] is not True:
+            raise ValueError("remove not acknowledged")
+        return cls(True, None if d["now_effective"] is None else SkillRow.from_wire(d["now_effective"]),
+                   Propagation.from_wire(d["propagation"]))
