@@ -55,6 +55,19 @@ pub struct RegRowFull {
     pub updated_at: i64,
 }
 
+/// One registry row with every column, `created_at` included, as listed across
+/// all working directories by [`list_all_full`].
+#[allow(dead_code)] // listed for session overviews outside the TUI picker
+#[derive(Debug, Clone)]
+pub struct RegRowFullCreated {
+    pub uuid: String,
+    pub pwd_hash: String,
+    pub name: String,
+    pub workdir: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// Open the registry DB and ensure its schema. Centralises the path join so
 /// every entry point hits the same file + schema.
 fn open() -> Result<Connection> {
@@ -169,6 +182,38 @@ pub fn list_all() -> Result<Vec<RegRow>> {
     Ok(out)
 }
 
+/// Every session across ALL working directories with all of its columns,
+/// most-recently updated first (ties broken by UUID). Read-only: it writes no
+/// row and touches no timestamp.
+#[allow(dead_code)] // listed for session overviews outside the TUI picker
+pub fn list_all_full() -> Result<Vec<RegRowFullCreated>> {
+    list_all_full_in(&open()?)
+}
+
+/// [`list_all_full`] against an already-open registry connection.
+#[allow(dead_code)] // reached through `list_all_full`
+fn list_all_full_in(conn: &Connection) -> Result<Vec<RegRowFullCreated>> {
+    let mut stmt = conn.prepare(
+        "SELECT uuid, pwd_hash, name, workdir, created_at, updated_at FROM sessions
+         ORDER BY updated_at DESC, uuid ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(RegRowFullCreated {
+            uuid: r.get(0)?,
+            pwd_hash: r.get(1)?,
+            name: r.get(2)?,
+            workdir: r.get(3)?,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 /// Fetch a single session by UUID, or `None` if no such row exists.
 pub fn get(uuid: &str) -> Result<Option<RegRowFull>> {
     let conn = open()?;
@@ -200,4 +245,49 @@ pub fn delete_by_uuid(uuid: &str) -> Result<()> {
         rusqlite::params![uuid],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn insert(conn: &Connection, uuid: &str, created_at: i64, updated_at: i64) {
+        conn.execute(
+            "INSERT INTO sessions (uuid, pwd_hash, name, workdir, created_at, updated_at)
+             VALUES (?1, 'hash', ?2, '/work', ?3, ?4)",
+            rusqlite::params![uuid, format!("name-{uuid}"), created_at, updated_at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_all_full_selects_created_at_and_orders_by_update() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        insert(&conn, "b", 100, 300);
+        insert(&conn, "a", 150, 300);
+        insert(&conn, "c", 50, 400);
+
+        let rows = list_all_full_in(&conn).unwrap();
+        let got: Vec<(&str, i64, i64)> = rows
+            .iter()
+            .map(|r| (r.uuid.as_str(), r.created_at, r.updated_at))
+            .collect();
+        assert_eq!(got, vec![("c", 50, 400), ("a", 150, 300), ("b", 100, 300)]);
+        assert_eq!(rows[1].name, "name-a");
+        assert_eq!(rows[1].pwd_hash, "hash");
+        assert_eq!(rows[1].workdir, "/work");
+    }
+
+    #[test]
+    fn list_all_full_writes_nothing() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        insert(&conn, "a", 10, 20);
+        let before = conn.total_changes();
+        list_all_full_in(&conn).unwrap();
+        assert_eq!(conn.total_changes(), before);
+        let rows = list_all_full_in(&conn).unwrap();
+        assert_eq!((rows[0].created_at, rows[0].updated_at), (10, 20));
+    }
 }

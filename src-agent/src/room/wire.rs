@@ -35,7 +35,34 @@ pub enum RoomClient {
     /// empty id returns the lane to the session default.
     SetModel { avatar: String, lane: String, model: String },
     Quit,
+    /// A whole message with its attachments, answered by [`RoomAck::SdkAck`]
+    /// with the same `id`. The attachments are composed for this message alone;
+    /// nothing staged by [`RoomClient::Paste`] is used or emptied.
+    SdkUser {
+        id: String,
+        text: String,
+        #[serde(default)]
+        attachments: Vec<SdkAttachment>,
+    },
+    /// Re-read the room's registry files, answered by [`RoomAck::SdkAck`]
+    /// with the registry version and its load warnings.
+    SdkReload { id: String },
 }
+
+/// One attachment of an [`RoomClient::SdkUser`] message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SdkAttachment {
+    /// An image file, by absolute path. The daemon copies it into the room.
+    ImageFile { path: String },
+    /// Pasted text: long or multi-line text is kept on disk as a chip, short
+    /// text goes into the message inline.
+    PastedText { text: String },
+}
+
+/// The frames this daemon understands beyond the terminal's, as listed in
+/// [`RoomServer::Hello`].
+pub const SDK_FEATURES: &[&str] = &["sdk_user", "sdk_reload"];
 
 /// A model registered in the coding agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +92,17 @@ pub enum RoomServer {
         /// and the recent Chief, lane and visible lines.
         #[serde(default)]
         replayed: usize,
+        /// The optional frames this daemon understands ([`SDK_FEATURES`]).
+        /// Older daemons send none.
+        #[serde(default)]
+        features: Vec<String>,
+        /// The daemon's build fingerprint. Empty from older daemons.
+        #[serde(default)]
+        version: String,
+        /// The revision of the template layer the room read at start, or
+        /// `None` when it was started without one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template_revision: Option<String>,
     },
     /// What a paste turned into: text for the draft at the caret.
     Pasted { insert: String },
@@ -115,6 +153,60 @@ pub enum RoomServer {
     Closed,
 }
 
+/// The answer to [`RoomClient::SdkUser`] and [`RoomClient::SdkReload`], sent
+/// only to the client that asked: `{"sdk_ack":{...}}`. It is a type of its own,
+/// not a [`RoomServer`] variant, so it can never be kept as history, replayed or
+/// written to the room log, and a client that never sends those frames never
+/// receives one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomAck {
+    SdkAck {
+        id: String,
+        ok: bool,
+        /// A short machine-readable reason when `ok` is false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// What each attachment became in the message, in order: a marker
+        /// such as `[Image #3]`, or a short paste's own text.
+        #[serde(default)]
+        inserts: Vec<String>,
+        /// The registry version after a reload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<u64>,
+        /// The registry's load warnings after a reload.
+        #[serde(default)]
+        warnings: Vec<String>,
+    },
+}
+
+impl RoomAck {
+    /// A delivered [`RoomClient::SdkUser`]: what each attachment became.
+    pub fn sent(id: String, inserts: Vec<String>) -> Self {
+        RoomAck::SdkAck { id, ok: true, code: None, error: None, inserts, version: None, warnings: Vec::new() }
+    }
+
+    /// A refused request: nothing was delivered or changed.
+    pub fn refused(id: String, code: String, error: String) -> Self {
+        RoomAck::SdkAck {
+            id,
+            ok: false,
+            code: Some(code),
+            error: Some(error),
+            inserts: Vec::new(),
+            version: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// A finished [`RoomClient::SdkReload`].
+    pub fn reloaded(id: String, version: u64, warnings: Vec<String>) -> Self {
+        RoomAck::SdkAck { id, ok: true, code: None, error: None, inserts: Vec::new(), version: Some(version), warnings }
+    }
+}
+
 /// A control line, in the same shape the actor already applies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -137,8 +229,16 @@ impl From<RoomControl> for ControlCommand {
 }
 
 impl RoomServer {
-    pub fn hello(replayed: usize) -> Self {
-        RoomServer::Hello { kind: "secure".into(), replayed }
+    /// The handshake: how many history frames follow, the optional frames
+    /// this daemon understands, its build and its template revision.
+    pub fn hello(replayed: usize, version: String, template_revision: Option<String>) -> Self {
+        RoomServer::Hello {
+            kind: "secure".into(),
+            replayed,
+            features: SDK_FEATURES.iter().map(|f| f.to_string()).collect(),
+            version,
+            template_revision,
+        }
     }
 
     /// True for the lines a late client should still see: what the Chief and the

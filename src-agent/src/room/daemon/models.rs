@@ -86,6 +86,19 @@ impl ModelBook {
         rows
     }
 
+    /// Re-read the registry files so the next lane turn uses them, and return
+    /// the registry version and the warnings of that load. A running turn keeps
+    /// its snapshot.
+    pub fn reload_registry(&self) -> (u64, Vec<String>) {
+        self.registry.reload();
+        (self.registry.current().version, self.registry.report().warnings)
+    }
+
+    /// The revision of the template layer the room read at start.
+    pub fn template_revision(&self) -> Option<String> {
+        self.registry.template_revision()
+    }
+
     /// Point one lane at a registered model, or back at the session default when
     /// `choice` is empty. The new file is checked before it is written, and the
     /// old one is put back when the reloaded room does not show the change.

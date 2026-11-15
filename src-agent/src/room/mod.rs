@@ -29,3 +29,30 @@ pub mod work;
 pub fn room_db_path(session_dir: &std::path::Path) -> std::path::PathBuf {
     session_dir.join("room.sqlite")
 }
+
+/// The session id of the secure room opened from coding session `parent`: the
+/// UUID v5 (OID namespace) of `"secure-room:" + parent`, in simple (no-hyphen)
+/// form. The terminal derives the same id in `roomSessionId` (`src-term/src/paths.ts`),
+/// so a room started from either side lands in the same session.
+pub fn room_session_id(parent: &str) -> String {
+    let name = format!("secure-room:{parent}");
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, name.as_bytes())
+        .simple()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::room_session_id;
+
+    /// Values computed by `roomSessionId` in `src-term/src/paths.ts`; both sides
+    /// must keep producing them.
+    #[test]
+    fn room_session_id_matches_terminal_derivation() {
+        assert_eq!(
+            room_session_id("0123456789abcdef0123456789abcdef"),
+            "1cd5bb4cb5e553e58e48d7af38d06b6e"
+        );
+        assert_eq!(room_session_id("parent"), "1cfeabde529a5e938c6323c4b9cd866b");
+    }
+}
