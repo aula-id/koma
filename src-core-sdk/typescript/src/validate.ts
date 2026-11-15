@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { SdkError, type ConfigureOptions, type Method, type ModelRoleName, type Policy, type Input } from './types.js';
+import { SdkError, type ConfigureOptions, type ErrorDetails, type Hello, type Method, type ModelRoleName, type Policy, type Input, type V1Method } from './types.js';
 export function object(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SdkError('protocol', 'Expected object');
 }
@@ -23,13 +23,35 @@ export function validateState(x: unknown): void {
   if (!Array.isArray(x.messages)) throw new SdkError('protocol', 'Expected messages array');
   for (const m of x.messages) { object(m); member(m.role, ['system', 'user', 'assistant', 'tool']); string(m.content); }
 }
-export function validateHello(x: Record<string, unknown>, required: readonly Method[]): void {
+function names(x: unknown, what: string): x is string[] {
+  if (!Array.isArray(x) || !x.every(c => typeof c === 'string') || new Set(x).size !== x.length) throw new SdkError('protocol', `Invalid ${what}`);
+  return true;
+}
+/** Validates the hello frame and returns it with `methods`, `features`, `events` and `limits` filled in for an older adapter. */
+export function validateHello(x: Record<string, unknown>, required: readonly V1Method[]): Hello {
   if (x.type !== 'hello' || x.protocol !== 1) throw new SdkError('incompatible_protocol', 'First frame must be a protocol 1 hello');
   object(x.binary); string(x.binary.path, true); string(x.binary.version, true);
   if (!Array.isArray(x.diagnostics) || !x.diagnostics.every(d => typeof d === 'string')) throw new SdkError('protocol', 'Invalid diagnostics');
-  if (!Array.isArray(x.capabilities) || !x.capabilities.every(c => typeof c === 'string') || new Set(x.capabilities).size !== x.capabilities.length) throw new SdkError('protocol', 'Invalid capabilities');
+  names(x.capabilities, 'capabilities');
   const missing = required.filter(m => !(x.capabilities as unknown[]).includes(m));
   if (missing.length) throw new SdkError('incompatible_capabilities', `Missing required capabilities: ${missing.join(', ')}`);
+  for (const key of ['methods', 'features', 'events'] as const) if (x[key] !== undefined) names(x[key], key);
+  if (x.limits !== undefined) object(x.limits);
+  return { ...x, methods: x.methods ?? [], features: x.features ?? [], events: x.events ?? [], limits: x.limits ?? {} } as unknown as Hello;
+}
+/** Methods an adapter implements: `methods`, or `capabilities` for an older adapter without it. */
+export function implementedMethods(hello: Hello): readonly string[] {
+  return hello.methods.length ? hello.methods : hello.capabilities;
+}
+/** Reads the optional error keys; a present key of the wrong type is a protocol error. */
+export function errorDetails(x: Record<string, unknown>): ErrorDetails {
+  const out: ErrorDetails = {};
+  if (x.reason !== undefined) { string(x.reason, true); out.reason = x.reason; }
+  if (x.binding !== undefined) { string(x.binding, true); out.binding = x.binding; }
+  if (x.allowed !== undefined && names(x.allowed, 'allowed')) out.allowed = [...x.allowed];
+  if (x.written !== undefined) { bool(x.written); out.written = x.written as boolean; }
+  if (x.detail !== undefined) { object(x.detail); out.detail = x.detail; }
+  return out;
 }
 export function validateEvent(x: Record<string, unknown>): void {
   if (x.event === 'state') { validateState(x.state); bool(x.resynced); return; }
@@ -100,12 +122,109 @@ function validateConfigure(result: Record<string, unknown>): void {
     if ('api_key' in spec || 'key' in spec) throw new SdkError('protocol', 'Configure result must not include a key');
   }
 }
+function int(x: unknown): void { if (!Number.isSafeInteger(x) || (x as number) < 0) throw new SdkError('protocol', 'Expected non-negative integer'); }
+function nullableInt(x: unknown): void { if (x !== null) int(x); }
+function strings(x: unknown, nonempty = false): void {
+  if (!Array.isArray(x)) throw new SdkError('protocol', 'Expected array');
+  for (const item of x) string(item, nonempty);
+}
+function list(x: unknown, item: (v: unknown) => void): void {
+  if (!Array.isArray(x)) throw new SdkError('protocol', 'Expected array');
+  x.forEach(item);
+}
+// Enum-like strings added after v1 are open: any string passes. PublicRole stays closed.
+function role(x: unknown): void { member(x, ROLES); }
+function noSecret(x: Record<string, unknown>, keys: readonly string[]): void {
+  if (keys.some(k => k in x)) throw new SdkError('protocol', 'Result must not include a secret value');
+}
+function validateRoute(x: unknown): void {
+  object(x); role(x.role); string(x.origin, true);
+  for (const k of ['model_uuid', 'source_uuid', 'configured_model', 'provider_uuid', 'provider_name', 'effective_model', 'reason']) nullableString(x[k]);
+}
+export function validateConfigView(x: unknown): void {
+  object(x); string(x.revision, true); string(x.file, true); string(x.view, true);
+  list(x.providers, p => {
+    object(p); noSecret(p, ['api_key', 'key']);
+    string(p.provider_uuid, true); string(p.name); string(p.api_type, true); string(p.endpoint);
+    bool(p.endpoint_redacted); bool(p.managed); bool(p.has_key); string(p.key_state, true); int(p.model_count);
+  });
+  list(x.oauth, o => {
+    object(o); noSecret(o, ['token', 'access_token', 'refresh_token', 'id_token']);
+    string(o.oauth_uuid, true); string(o.name); string(o.provider); bool(o.has_token); int(o.expires_at);
+  });
+  list(x.models, m => {
+    object(m); string(m.model_uuid, true); string(m.name); string(m.model_id); string(m.provider_uuid);
+    string(m.provider_kind, true); nullableString(m.provider_name); nullableString(m.route);
+    list(m.roles, role); bool(m.other_roles); nullableString(m.source_uuid);
+  });
+  bool(x.providers_truncated); bool(x.oauth_truncated); bool(x.models_truncated);
+  list(x.roles, validateRoute); nullableString(x.main_fallback);
+}
+function validateLimits(x: unknown): void {
+  object(x); int(x.max_output_tokens); int(x.context_window_limit); string(x.context_model_alias); nullableInt(x.effective_window);
+}
+export function validateSessionInfo(x: unknown): void {
+  object(x); string(x.name); string(x.effort, true); list(x.routes, validateRoute); validateLimits(x.limits);
+  if (x.usage !== null) {
+    const u = x.usage; object(u);
+    int(u.last_prompt_tokens); int(u.last_cached_tokens); int(u.output_tokens_total);
+    if (typeof u.cost_total !== 'number' || !Number.isFinite(u.cost_total) || u.cost_total < 0) throw new SdkError('protocol', 'Invalid cost_total');
+    if (u.context !== null) {
+      const c = u.context; object(c);
+      int(c.prompt_tokens); int(c.effective_window); bool(c.estimated); nullableInt(c.cached_tokens); bool(c.drss_active);
+    }
+  }
+  object(x.daemon); string(x.daemon.version); int(x.daemon.ipc_protocol); strings(x.daemon.capabilities, true);
+  int(x.observed_at_ms);
+}
+function optionalInfo(x: Record<string, unknown>): void { if (x.session_info !== undefined) validateSessionInfo(x.session_info); }
+function validatePropagation(x: unknown): void {
+  object(x);
+  for (const value of Object.values(x)) string(value, true);
+}
+function validateMutation(x: Record<string, unknown>, view: unknown): void {
+  validateConfigView(x.config); validatePropagation(x.propagation); optionalInfo(x);
+  if ((x.config as Record<string, unknown>).view !== view) throw new SdkError('protocol', 'Config view does not match the call');
+}
+function validateDelete(x: Record<string, unknown>, params: Record<string, unknown>, key: 'provider_uuid' | 'model_uuid'): void {
+  bool(x.dry_run);
+  if (x.dry_run !== (params.dry_run === true)) throw new SdkError('protocol', 'dry_run does not match the call');
+  object(x.removed);
+  if (x.removed[key] !== params[key]) throw new SdkError('protocol', 'Deleted entry does not match the call');
+  if (key === 'provider_uuid') strings(x.removed.models_removed, true);
+  else list(x.removed.roles_released, role);
+  bool(x.removed.main_reset);
+  validateMutation(x, 'global');
+}
 export function validateResult(method: Method, result: unknown, params: Record<string, unknown>): void {
   object(result);
   if (method === 'configure') { validateConfigure(result); return; }
-  if (method === 'create' || method === 'resume' || method === 'state') { validateState(result.state); return; }
+  if (method === 'create' || method === 'resume' || method === 'state') { validateState(result.state); optionalInfo(result); return; }
   if (method === 'detach') { if (result.detached !== true) throw new SdkError('protocol', 'Invalid detach result'); return; }
   if (method === 'approve') { bool(result.approved); if (result.approved !== params.approve) throw new SdkError('protocol', 'Approval decision mismatch'); return; }
+  if (method === 'config.get') {
+    validateConfigView(result);
+    if (params.view !== undefined && result.view !== params.view) throw new SdkError('protocol', 'Config view does not match the call');
+    return;
+  }
+  if (method === 'config.providers.delete') { validateDelete(result, params, 'provider_uuid'); return; }
+  if (method === 'config.models.delete') { validateDelete(result, params, 'model_uuid'); return; }
+  if (method === 'config.roles.unassign') {
+    bool(result.changed); nullableString(result.previous_model_uuid);
+    validateMutation(result, params.scope ?? 'global'); return;
+  }
+  if (method === 'config.effort.get') {
+    string(result.state, true); strings(result.options); string(result.selected, true);
+    nullableString(result.note); nullableString(result.main_model_uuid); return;
+  }
+  if (method === 'config.effort.set') {
+    string(result.effort, true); nullableString(result.main_model_uuid); bool(result.superseded); optionalInfo(result); return;
+  }
+  if (method === 'config.limits.get' || method === 'config.limits.set') { validateLimits(result); optionalInfo(result); return; }
+  if (method === 'sessions.info') { validateSessionInfo(result.session_info); return; }
+  validateTurnResult(method, result, params);
+}
+function validateTurnResult(method: 'submit' | 'enqueue' | 'interrupt' | 'interrupt_and_submit', result: Record<string, unknown>, params: Record<string, unknown>): void {
   const success = method === 'enqueue' ? 'queued' : method === 'interrupt' ? 'interrupted' : 'started';
   member(result.disposition, [success, 'rejected']); nullableString(result.turn_id);
   if (result.disposition === 'rejected') { object(result.reason); string(result.reason.code, true); string(result.reason.message); }

@@ -45,6 +45,70 @@ Requests accept `{signal,timeoutMs}`. Cancelling a local await does not interrup
 `waitTurn` reports final observation, not goal success; a newer hidden turn raises `TurnReplacedError`, timeout raises an observation/timeout error. `finished` only means execution ended normally.
 `detach`, `close` and stopping event iteration never stop/delete the daemon session. Use explicit targeted interruption when intended.
 
+## Discovery and gating
+
+`probe()` returns hello with `capabilities` (always the ten v1 methods) plus `methods`, `features`, `events` and `limits`. An older adapter sends none of the four; the client then fills in `[]`, `[]`, `[]` and `{}`. `requiredCapabilities` still accepts only the v1 names.
+
+Gate new calls with `supports(method)` on a `Host` or `Session`. It reads `methods`, or `capabilities` when `methods` is absent. A call the adapter does not implement fails locally with `unsupported_method` (`not_sent`) and is never written.
+
+```ts
+const host = client.host();
+if (await host.supports('config.get')) console.log(await host.getConfig());
+```
+
+## Host: calls without a session
+
+`client.host()` returns a handle for calls that need no session. It starts an unbound adapter on first use. Because that adapter holds no state, the handle replaces it once `HOST_RECYCLE_AFTER` (60,000) requests have been sent, before the adapter's per-process limit (`limits.request_ids`, 65,536), and after the adapter failed. In-flight requests finish on the old adapter. A failed call is never retried. Close the handle with `host.close()`; `client.close()` closes it too.
+
+```ts
+const host = client.host();
+try {
+  const view = await host.getConfig();                    // ConfigView, view "global"
+  const preview = await host.deleteProvider({ provider_uuid: 'prov-1', if_revision: view.revision, dry_run: true });
+  console.log(preview.removed.models_removed);            // nothing written
+  const done = await host.deleteProvider({ provider_uuid: 'prov-1', if_revision: view.revision });
+  console.log(done.config.revision, done.propagation);
+  await host.deleteModel({ model_uuid: 'model-1' });
+  await host.unassignRole({ role: 'planner' });           // global scope; changed:false when nobody held it
+} finally { await host.close(); }
+```
+
+`host` has `configure`, `getConfig`, `deleteProvider`, `deleteModel` and `unassignRole`. Params and results use the wire names from the contract (`provider_uuid`, `if_revision`, `dry_run`, ...). The view never contains a key or token: providers report `has_key` and `key_state`, OAuth connections `has_token`, and endpoints come back with userinfo, query and fragment removed (`endpoint_redacted:true`). Do not feed a redacted endpoint back into `configure`. See `examples/config.ts`.
+
+## Session settings and session_info
+
+A session handle has the same config calls (in a session `getConfig()` defaults to the session view; deletes go through the session's daemon) plus the calls that need a running session. `unassignRole` is global scope unless `scope` is given, on a session as on `host`; `clearMainPin()` drops only the session's own Main pin:
+
+```ts
+const session = await client.create({ cwd: '/absolute/workspace' });
+console.log(session.sessionInfo);                          // name, effort, routes, limits, daemon, observed_at_ms
+const effort = await session.getEffort({ wait_ms: 3000 }); // state "ready" | "loading" | "unsupported"
+if (effort.options.includes('high')) await session.setEffort({ effort: 'high', if_main_model: effort.main_model_uuid });
+await session.setLimits({ max_output_tokens: 4096 });      // 0 means auto
+console.log(await session.getLimits(), (await session.info()).limits);
+await session.clearMainPin();                              // clears this session's Main pin; effort resets
+console.log(session.requestsRemaining);
+```
+
+`session_info` travels beside `state` in `create`, `resume` and `state` results and in session config results. It changes without a state revision and without an event. The session keeps the one with the highest `observed_at_ms`, whatever the state revision. Call `info()` (or `getState()`) for fresh values. `sessionInfo` is `null` with an older adapter.
+
+A session's adapter accepts a fixed number of requests (`requestsRemaining` counts down). Before it reaches zero, close the client and `resume` the session from a new one; the next request past the limit ends the adapter.
+
+## Errors from newer adapters
+
+With feature `errors.reason`, `SdkError` may carry `reason` (branch on it, never on the message), `binding` and `allowed` (on a call made in the wrong binding), `written` (`true` when an `unknown` outcome committed bytes) and `detail`. A mutation whose outcome is unknown throws `DeliveryUnknownError`, as before; config deletes, `unassignRole`, `clearMainPin`, `setEffort` and `setLimits` count as mutations, a delete with `dry_run:true` does not.
+
+```ts
+try { await host.deleteProvider({ provider_uuid, if_revision }); }
+catch (e) {
+  if (e instanceof SdkError && e.reason === 'stale') { /* read again, then decide */ }
+  else if (e instanceof DeliveryUnknownError && e.written) { /* committed but unverified: read back */ }
+  else throw e;
+}
+```
+
+Enum-like strings added after v1 (`reason`, `binding`, `key_state`, `origin`, `propagation` values, effort `state`, ...) are open: the client passes unknown values through unchanged, typed as `string`, and callers treat an unknown value as "other". The v1 enums (message `role`, `gate.kind`, `turn.state`, `disposition`, policy) and the five model roles stay closed and still fail validation on an unknown value.
+
 ## Maintainers
 
 ```sh
