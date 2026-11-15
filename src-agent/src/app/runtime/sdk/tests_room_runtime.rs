@@ -1157,6 +1157,44 @@ async fn open_pre_checks_refuse_before_any_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_home_without_a_registry_has_no_rooms_and_creates_nothing() {
+    let home = TempDir::new();
+    for data in [home.0.join("no-data-dir"), home.0.join("empty")] {
+        if data.ends_with("empty") {
+            std::fs::create_dir_all(&data).unwrap();
+        }
+        let mut rig = rig(HashMap::new(), Vec::new());
+        let spawned = Arc::new(AtomicBool::new(false));
+        let hook = spawned.clone();
+        rig.adapter.room_env.ensure_running = Arc::new(move |_, _, _, _| {
+            hook.store(true, Ordering::SeqCst);
+            Ok(true)
+        });
+        let registry = data.join("session.sqlite");
+        rig.adapter.room_env.sessions =
+            Arc::new(move || crate::model::session_registry::list_all_full_at(&registry));
+        let listed = rig.call("room.list", json!({})).await.unwrap();
+        assert_eq!(listed, json!({"rooms": [], "next_cursor": null}));
+        let error = rig
+            .call("room.open", json!({"parent_session_id": PARENT}))
+            .await
+            .unwrap_err();
+        assert_eq!(reason(&error), Some("not_found"));
+        let error = rig
+            .call("room.attach", json!({"session_id": ROOM_ID, "wait_ms": 0}))
+            .await
+            .unwrap_err();
+        assert_eq!(reason(&error), Some("not_running"));
+        assert!(!spawned.load(Ordering::SeqCst));
+        if data.ends_with("empty") {
+            assert_eq!(std::fs::read_dir(&data).unwrap().count(), 0);
+        } else {
+            assert!(!data.exists());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_room_that_does_not_start_reports_a_scrubbed_log_tail() {
     let mut rig = rig(HashMap::new(), vec![row(PARENT, "/work")]);
     let log = rig.config_dir.join("start.log");

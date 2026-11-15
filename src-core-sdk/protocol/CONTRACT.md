@@ -827,6 +827,7 @@ Shapes used here are defined under Session info and Config methods.
   shows the name it has now.
 * Listing never deletes anything: it removes no session, socket or pid file,
   so it is safe to poll, including while a daemon is starting.
+* A koma home with no sessions yet lists none; it is not an error.
 * Errors: `out_of_range`, `bad_cursor`, `sqlite_busy`, `io_error`.
 * Idempotency: read.
 

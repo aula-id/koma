@@ -55,6 +55,8 @@ struct Fake {
     set_names: Mutex<Vec<(String, String)>>,
     deletes: Mutex<Vec<PathBuf>>,
     stops: Mutex<Vec<String>>,
+    /// When set, rows come from the registry file at this path instead.
+    registry: Option<PathBuf>,
 }
 
 impl Fake {
@@ -72,6 +74,7 @@ impl Fake {
             set_names: Mutex::new(Vec::new()),
             deletes: Mutex::new(Vec::new()),
             stops: Mutex::new(Vec::new()),
+            registry: None,
         }
     }
 
@@ -120,6 +123,9 @@ impl Fake {
 
 impl SessionHost for Fake {
     fn rows(&self) -> anyhow::Result<Vec<RegRowFullCreated>> {
+        if let Some(path) = &self.registry {
+            return crate::model::session_registry::list_all_full_at(path);
+        }
         Ok(self.rows.lock().unwrap().clone())
     }
     fn probe(&self) -> Vec<SessionStatus> {
@@ -475,6 +481,50 @@ async fn rename_of_an_unknown_or_malformed_id_is_not_found() {
         );
     }
     assert!(fake.set_names.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_home_without_a_registry_lists_nothing_and_lookups_are_not_found() {
+    let base = TempDir::new();
+    for home in [base.0.join("no-data-dir"), base.0.join("empty")] {
+        if home.ends_with("empty") {
+            std::fs::create_dir_all(&home).unwrap();
+        }
+        let mut fake = Fake::new();
+        fake.registry = Some(home.join("session.sqlite"));
+        let fake = Arc::new(fake);
+        let mut adapter = unbound();
+        let listed = list(&fake, &mut adapter, json!({})).await.unwrap();
+        assert_eq!(listed, json!({"sessions": [], "next_cursor": null}));
+        let error = rename(
+            &fake,
+            &mut adapter,
+            json!({"session_id":CODING_A, "name":"x"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (error.code, reason(&error)),
+            ("not_found", Some("not_found"))
+        );
+        let error = delete(&fake, &mut adapter, CODING_A).await.unwrap_err();
+        assert_eq!(
+            (error.code, reason(&error)),
+            ("not_found", Some("not_found"))
+        );
+        let stopped = stop(&fake, &mut adapter, CODING_A).await.unwrap();
+        assert_eq!(stopped["was_live"], false);
+        assert!(fake.set_names.lock().unwrap().is_empty());
+        let created: Vec<_> = std::fs::read_dir(&base.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let empty_exists = home.ends_with("empty");
+        assert_eq!(created.len(), usize::from(empty_exists), "{created:?}");
+        if empty_exists {
+            assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+        }
+    }
 }
 
 #[tokio::test]
