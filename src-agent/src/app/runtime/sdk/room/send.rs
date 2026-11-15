@@ -138,25 +138,26 @@ async fn send(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
             .map_err(|e| RpcError::new("internal", e.to_string()))??;
     }
     let room = bound_room_mut(adapter)?;
-    let (acked, inserts) = if room.has_feature("sdk_user") {
+    // The echo keeps the room's own text for this line: the message and what
+    // each attachment became. It is numbered where the room puts the line,
+    // before any reply to it.
+    let (acked, inserts, echo_line_seq) = if room.has_feature("sdk_user") {
         sdk_user(room, &outgoing).await?
     } else if !outgoing.attachments.is_empty() {
         return Err(peer_unsupported(
             "this room cannot take attachments; send text only",
         ));
     } else {
+        if !room.is_live() {
+            return Err(super::room_closed());
+        }
+        let echo_line_seq = room.core.echo(&outgoing.text);
         room.write(&RoomClient::User {
             text: outgoing.text.clone(),
         })
         .await?;
-        (false, Vec::new())
+        (false, Vec::new(), echo_line_seq)
     };
-    // The room keeps the same text for this line: the message and what each
-    // attachment became.
-    let echo_line_seq = room.core.echo(&crate::room::daemon::stage::with_inserts(
-        &outgoing.text,
-        &inserts,
-    ));
     let value = json!({
         "sent": true,
         "acked": acked,
@@ -166,17 +167,33 @@ async fn send(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
     Ok(room.scrub(value).await)
 }
 
+/// The inserts of an accepting `sdk_ack`, at most [`MAX_INSERTS`].
+pub fn ack_inserts(ack: &Value) -> Vec<String> {
+    ack.get("inserts")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .take(MAX_INSERTS)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn sdk_user(
     room: &mut RoomBinding,
     outgoing: &Outgoing,
-) -> Result<(bool, Vec<String>), RpcError> {
+) -> Result<(bool, Vec<String>, u64), RpcError> {
     let id = uuid::Uuid::new_v4().to_string();
     let message = RoomClient::SdkUser {
         id: id.clone(),
         text: outgoing.text.clone(),
         attachments: outgoing.attachments.clone(),
     };
-    let ack = room.request(Want::Ack(id), &message, BUDGET).await?;
+    let ack = room
+        .request_with_echo(Want::Ack(id), Some(outgoing.text.clone()), &message, BUDGET)
+        .await?;
     let ack = room.scrub(ack).await;
     if ack.get("ok").and_then(Value::as_bool) != Some(true) {
         let error = ack
@@ -189,18 +206,13 @@ async fn sdk_user(
         }
         return Err(refused);
     }
-    let inserts = ack
-        .get("inserts")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(Value::as_str)
-                .take(MAX_INSERTS)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok((true, inserts))
+    let Some(echo_line_seq) = ack.get("echo_line_seq").and_then(Value::as_u64) else {
+        return Err(RpcError::new(
+            "internal",
+            "the send's echo line was not kept",
+        ));
+    };
+    Ok((true, ack_inserts(&ack), echo_line_seq))
 }
 
 async fn interrupt(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {

@@ -13,7 +13,8 @@ export const DEFAULT_REQUEST_IDS = 65_536;
 const mutations = new Set<Method>(['create', 'resume', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure',
   'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.effort.set', 'config.limits.set',
   'sessions.rename', 'sessions.delete', 'sessions.stop', 'skills.install', 'skills.remove', 'skills.create', 'skills.update',
-  'room.send', 'room.models.set', 'room.avatars.upsert', 'room.avatars.remove']);
+  'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control',
+  'room.models.set', 'room.avatars.upsert', 'room.avatars.remove']);
 /** A delete with `dry_run:true` writes nothing, so a lost reply to it is not a lost mutation. */
 function isMutation(method: Method, params: Record<string, unknown>): boolean {
   if ((method === 'config.providers.delete' || method === 'config.models.delete') && params.dry_run === true) return false;

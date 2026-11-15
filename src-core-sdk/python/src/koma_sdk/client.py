@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
-import re
 from dataclasses import replace
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
@@ -12,7 +10,8 @@ from typing import Any
 from ._transport import Transport
 from .errors import (DeliveryUnknown, IncompatibleAdapter, ProtocolError, RemoteError,
                      RequestTimeout, TransportError)
-from .room import _OMIT, Room, attach_params, avatars_remove_params, avatars_upsert_params, models_set_params
+from .room import (_OMIT, HostCalls, Room, _display_name, _id_param, attach_params, avatars_remove_params,
+                   avatars_upsert_params, inline_zip, models_set_params)
 from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseResult, HistoryPage, RoomClosedEvent, RoomPage,
                          RoomSpend, RoomStatus, SendResult, SentResult, ReportPage, ShelfItem, ShelfPage, Team,
                          TeamWriteResult, Trajectory, decode_room_event)
@@ -111,12 +110,6 @@ def _validate_configure(result: dict[str, Any]) -> None:
             raise ValueError("configure model")
 
 
-def _id_param(name: str, value: str) -> str:
-    if not isinstance(value, str) or not 1 <= len(value) <= 64:
-        raise ValueError(f"{name} must be a string of 1 to 64 characters")
-    return value
-
-
 def _delete_params(key: str, uuid: str, if_revision: str | None, dry_run: bool) -> dict[str, Any]:
     params: dict[str, Any] = {key: _id_param(key, uuid)}
     if if_revision is not None:
@@ -128,123 +121,11 @@ def _delete_params(key: str, uuid: str, if_revision: str | None, dry_run: bool) 
     return params
 
 
-def _text_param(name: str, value: object, most: int, *, by_bytes: bool = False) -> str:
-    if not isinstance(value, str) or not value or (len(value.encode("utf-8")) if by_bytes else len(value)) > most:
-        raise ValueError(f"{name} must be a nonempty string of at most {most} {'bytes' if by_bytes else 'characters'}")
-    return value
-
-
-def _required_tier(tier: object) -> str:
-    if not isinstance(tier, str) or not tier:
-        raise ValueError("tier is required to change an existing skill")
-    return tier
-
-
-def _skill_patch(patch: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(patch, Mapping) or not patch:
-        raise ValueError("patch must be a nonempty mapping")
-    unknown = set(patch) - {"name", "description", "triggers", "allowed_tools", "instruction"}
-    if unknown:
-        raise ValueError(f"unknown patch fields: {', '.join(sorted(unknown))}")
-    out: dict[str, Any] = {}
-    if "name" in patch:
-        out["name"] = _skill_name(patch["name"], rule=True)
-    if "description" in patch:
-        out["description"] = _text_param("description", patch["description"], 2000)
-    if "instruction" in patch:
-        out["instruction"] = _text_param("instruction", patch["instruction"], 2 * 1024 * 1024, by_bytes=True)
-    if "triggers" in patch:
-        out["triggers"] = _skill_text_list("triggers", patch["triggers"], 32, 200)
-    if "allowed_tools" in patch:
-        out["allowed_tools"] = _skill_text_list("allowed_tools", patch["allowed_tools"], 64, 100)
-    return out
-
-
 def _role_param(role: PublicRole | str) -> str:
     try:
         return PublicRole(role).value
     except ValueError:
         raise ValueError(f"role must be one of {', '.join(_ROLES)}") from None
-
-
-INLINE_ZIP_BYTES = 29_360_128
-_SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-_NEW_SKILL_SCOPES = ("computer", "project")
-_USAGE_GROUPS = ("none", "model", "role", "session")
-_USAGE_BUCKETS = ("none", "hour", "day", "week")
-
-
-def _display_name(name: object) -> str:
-    """A session name as the adapter validates it: trimmed, 1 to 200 characters, no control characters."""
-    if not isinstance(name, str):
-        raise ValueError("name must be a string")
-    name = name.strip()
-    if not 1 <= len(name) <= 200:
-        raise ValueError("name must be 1 to 200 characters")
-    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in name):
-        raise ValueError("name must not contain control characters")
-    return name
-
-
-def _int_in(name: str, value: object, low: int, high: int) -> int:
-    if type(value) is not int or not low <= value <= high:
-        raise ValueError(f"{name} must be an integer from {low} to {high}")
-    return value
-
-
-def _list_params(params: dict[str, Any], limit: int | None, cursor: str | None, most: int) -> dict[str, Any]:
-    if limit is not None:
-        params["limit"] = _int_in("limit", limit, 1, most)
-    if cursor is not None:
-        if not isinstance(cursor, str) or not 1 <= len(cursor) <= 4096:
-            raise ValueError("cursor must be a string from a previous page")
-        params["cursor"] = cursor
-    return params
-
-
-def _absolute(name: str, value: object) -> str:
-    if not isinstance(value, str) or not os.path.isabs(value):
-        raise ValueError(f"{name} must be an absolute path")
-    return value
-
-
-def _skill_name(name: object, *, rule: bool) -> str:
-    """`rule=True` applies the stricter name rule for new skills; existing on-disk names are addressed as they are."""
-    if not isinstance(name, str) or not 1 <= len(name.encode("utf-8")) <= 64:
-        raise ValueError("skill name must be 1 to 64 bytes")
-    if rule and (not _SKILL_NAME.match(name) or name in ("skill", "readme")):
-        raise ValueError("skill name must be lowercase letters, digits and single hyphens, and not skill or readme")
-    return name
-
-
-def _skill_text_list(name: str, value: object, most: int, longest: int) -> list[str]:
-    if (not isinstance(value, (list, tuple)) or len(value) > most
-            or not all(isinstance(v, str) and 1 <= len(v) <= longest for v in value)):
-        raise ValueError(f"{name} must be a list of at most {most} strings of 1 to {longest} characters")
-    return list(value)
-
-
-def _skill_address(params: dict[str, Any], tier: str | None, workdir: str | None) -> dict[str, Any]:
-    if tier is not None:
-        if not isinstance(tier, str) or not tier:
-            raise ValueError("tier must be a string")
-        params["tier"] = tier
-    if workdir is not None:
-        params["workdir"] = _absolute("workdir", workdir)
-    return params
-
-
-def inline_zip(data: bytes | bytearray | memoryview, *, max_bytes: int = INLINE_ZIP_BYTES) -> str:
-    """Base64 text for `Host.skills_install(data_b64=...)`, refusing a zip over the inline cap before encoding.
-
-    The cap is `hello.limits["skills"]["inline_zip_bytes"]` (28 MiB); `Host.skills_install(data=...)` applies
-    the adapter's own. A larger zip goes by `path=`, which the adapter opens itself (up to 64 MiB).
-    """
-    if not isinstance(data, (bytes, bytearray, memoryview)):
-        raise ValueError("zip data must be bytes")
-    if len(data) > max_bytes:
-        raise ValueError(f"zip is {len(data)} bytes; the inline limit is {max_bytes}. Install it by path instead")
-    return base64.b64encode(bytes(data)).decode("ascii")
 
 
 class ObservationUnavailable(TransportError):
@@ -624,7 +505,7 @@ class Client:
         self._sessions.clear()
 
 
-class Host:
+class Host(HostCalls):
     """Calls that need no session (config reads, global config writes) on an unbound adapter.
 
     The adapter is started on the first call and replaced transparently before its request-id
@@ -717,187 +598,6 @@ class Host:
         return RoleUnassignResult.from_wire(
             await self._call("config.roles.unassign", _unassign_params(role, if_revision), mutation=True))
 
-    async def sessions_list(self, *, kind: str = "all", live: bool | None = None, limit: int | None = None,
-                            cursor: str | None = None) -> SessionPage:
-        """Sessions, newest first. `kind` is `coding`, `room` or `all`. Pass `next_cursor` back to page on."""
-        if kind not in ("coding", "room", "all"):
-            raise ValueError("kind must be 'coding', 'room' or 'all'")
-        params: dict[str, Any] = {"kind": kind}
-        if live is not None:
-            if type(live) is not bool:
-                raise ValueError("live must be a boolean")
-            params["live"] = live
-        return SessionPage.from_wire(await self._call("sessions.list", _list_params(params, limit, cursor, 500),
-                                                      mutation=False))
-
-    async def sessions_rename(self, session_id: str, name: str) -> SessionRenameResult:
-        """Rename a room or a session that is not live. Another live coding session is refused (`reason == "live"`)."""
-        params = {"session_id": _id_param("session_id", session_id), "name": _display_name(name)}
-        return SessionRenameResult.from_wire(await self._call("sessions.rename", params, mutation=True))
-
-    async def sessions_delete(self, session_id: str) -> SessionDeleteResult:
-        """Delete a session that is neither live nor locked. Usage rows and a child room are kept."""
-        return SessionDeleteResult.from_wire(await self._call(
-            "sessions.delete", {"session_id": _id_param("session_id", session_id)}, mutation=True))
-
-    async def sessions_stop(self, session_id: str) -> SessionStopResult:
-        """Stop a session's daemon. Every client of it is disconnected; a parked approval is lost."""
-        return SessionStopResult.from_wire(await self._call(
-            "sessions.stop", {"session_id": _id_param("session_id", session_id)}, mutation=True))
-
-    async def usage_query(self, *, from_at: int | None = None, to_at: int | None = None,
-                          session_id: str | None = None, workdir: str | None = None, group_by: str = "none",
-                          bucket: str = "none", tz_offset_minutes: int | None = None,
-                          limit: int | None = None) -> UsageReport:
-        """Usage over `[from_at, to_at)` in unix seconds (default: the last 30 days), optionally grouped or bucketed.
-
-        Poll no more often than a screen needs: a query holds a read lock on the ledger while it runs.
-        """
-        params: dict[str, Any] = {}
-        for key, value in (("from_at", from_at), ("to_at", to_at)):
-            if value is not None:
-                params[key] = _int_in(key, value, 0, 9007199254740991)
-        if from_at is not None and to_at is not None and to_at <= from_at:
-            raise ValueError("to_at must be greater than from_at")
-        if session_id is not None:
-            params["session_id"] = _id_param("session_id", session_id)
-        if workdir is not None:
-            params["workdir"] = _absolute("workdir", workdir)
-        if group_by not in _USAGE_GROUPS or bucket not in _USAGE_BUCKETS:
-            raise ValueError("group_by is none, model, role or session; bucket is none, hour, day or week")
-        if group_by != "none":
-            params["group_by"] = group_by
-        if bucket != "none":
-            params["bucket"] = bucket
-        if tz_offset_minutes is not None:
-            params["tz_offset_minutes"] = _int_in("tz_offset_minutes", tz_offset_minutes, -720, 840)
-        if limit is not None:
-            params["limit"] = _int_in("limit", limit, 1, 500)
-        return UsageReport.from_wire(await self._call("usage.query", params, mutation=False))
-
-    async def skills_list(self, *, scope: str = "all", tier: str | None = None, workdir: str | None = None,
-                          include_diagnostics: bool = False, limit: int | None = None,
-                          cursor: str | None = None) -> SkillPage:
-        """Skills of every tier, shadowed ones included (`effective` tells the winner). Project tiers need `workdir`."""
-        if scope not in ("computer", "project", "external", "all"):
-            raise ValueError("scope must be 'computer', 'project', 'external' or 'all'")
-        params = _skill_address({"scope": scope}, tier, workdir)
-        if type(include_diagnostics) is not bool:
-            raise ValueError("include_diagnostics must be a boolean")
-        if include_diagnostics:
-            params["include_diagnostics"] = True
-        return SkillPage.from_wire(await self._call("skills.list", _list_params(params, limit, cursor, 1000),
-                                                    mutation=False))
-
-    async def skills_get(self, name: str, *, tier: str | None = None, workdir: str | None = None,
-                         include_raw: bool = False) -> SkillDetail:
-        """One skill. Without `tier` the effective one for `name`. `include_raw` adds the file verbatim."""
-        params = _skill_address({"name": _skill_name(name, rule=False)}, tier, workdir)
-        if type(include_raw) is not bool:
-            raise ValueError("include_raw must be a boolean")
-        if include_raw:
-            params["include_raw"] = True
-        return SkillDetail.from_wire(await self._call("skills.get", params, mutation=False))
-
-    async def skills_read_file(self, name: str, path: str, *, tier: str | None = None, workdir: str | None = None,
-                               generation: str | None = None) -> SkillFile:
-        """A UTF-8 companion file of a skill, by its path relative to the skill (up to 2 MiB)."""
-        params = _skill_address({"name": _skill_name(name, rule=False)}, tier, workdir)
-        if not isinstance(path, str) or not path:
-            raise ValueError("path must be a relative file path")
-        params["path"] = path
-        if generation is not None:
-            params["generation"] = _id_param("generation", generation)
-        return SkillFile.from_wire(await self._call("skills.read_file", params, mutation=False))
-
-    async def skills_create(self, *, scope: str, name: str, description: str, instruction: str,
-                            workdir: str | None = None, triggers: Sequence[str] | None = None,
-                            allowed_tools: Sequence[str] | None = None) -> SkillWriteResult:
-        """Create a skill in the `computer` (`~/.koma/skills`) or `project` (`.agents/skills`) scope."""
-        if scope not in _NEW_SKILL_SCOPES:
-            raise ValueError("scope must be 'computer' or 'project'")
-        params = _skill_address({"scope": scope, "name": _skill_name(name, rule=True)}, None, workdir)
-        params["description"] = _text_param("description", description, 2000)
-        params["instruction"] = _text_param("instruction", instruction, 2 * 1024 * 1024, by_bytes=True)
-        if triggers is not None:
-            params["triggers"] = _skill_text_list("triggers", triggers, 32, 200)
-        if allowed_tools is not None:
-            params["allowed_tools"] = _skill_text_list("allowed_tools", allowed_tools, 64, 100)
-        return SkillWriteResult.from_wire(await self._call("skills.create", params, mutation=True))
-
-    async def skills_update(self, *, tier: str, name: str, patch: Mapping[str, Any], workdir: str | None = None,
-                            generation: str | None = None) -> SkillUpdateResult:
-        """Change fields of a skill (`name`, `description`, `triggers`, `allowed_tools`, `instruction`).
-
-        Pass the `generation` you read; a skill that changed since is refused (`reason == "stale"`).
-        """
-        params = _skill_address({"name": _skill_name(name, rule=False)}, _required_tier(tier), workdir)
-        if generation is not None:
-            params["generation"] = _id_param("generation", generation)
-        params["patch"] = _skill_patch(patch)
-        return SkillUpdateResult.from_wire(await self._call("skills.update", params, mutation=True))
-
-    async def skills_install(self, *, scope: str, workdir: str | None = None, name: str | None = None,
-                             data: bytes | None = None, path: str | None = None) -> SkillWriteResult:
-        """Install a skill from zip `data` (sent inline, up to the adapter's cap) or an absolute zip `path` on the host."""
-        if scope not in _NEW_SKILL_SCOPES:
-            raise ValueError("scope must be 'computer' or 'project'")
-        if (data is None) == (path is None):
-            raise ValueError("give exactly one of data and path")
-        params = _skill_address({"scope": scope}, None, workdir)
-        if name is not None:
-            params["name"] = _skill_name(name, rule=True)
-        if data is not None:
-            skills = self.hello.limits.get("skills") if self.hello is not None else None
-            cap = skills.get("inline_zip_bytes") if isinstance(skills, dict) else None
-            params["data_b64"] = inline_zip(data, max_bytes=cap if type(cap) is int and cap > 0 else INLINE_ZIP_BYTES)
-        else:
-            params["path"] = _absolute("path", path)
-        return SkillWriteResult.from_wire(await self._call("skills.install", params, mutation=True))
-
-    async def skills_remove(self, *, tier: str, name: str, workdir: str | None = None,
-                            generation: str | None = None) -> SkillRemoveResult:
-        params = _skill_address({"name": _skill_name(name, rule=False)}, _required_tier(tier), workdir)
-        if generation is not None:
-            params["generation"] = _id_param("generation", generation)
-        return SkillRemoveResult.from_wire(await self._call("skills.remove", params, mutation=True))
-
-    async def room_list(self, *, parent_session_id: str | None = None, live: bool | None = None,
-                        limit: int | None = None, cursor: str | None = None) -> RoomPage:
-        """Rooms, newest first; `parent_session_id` selects the room of one coding session."""
-        params: dict[str, Any] = {}
-        if parent_session_id is not None:
-            params["parent_session_id"] = _id_param("parent_session_id", parent_session_id)
-        if live is not None:
-            if type(live) is not bool:
-                raise ValueError("live must be a boolean")
-            params["live"] = live
-        return RoomPage.from_wire(await self._call("room.list", _list_params(params, limit, cursor, 500),
-                                                   mutation=False))
-
-    async def room_team_get(self) -> Team:
-        """The template team (`~/.koma/room/`) every new room starts from."""
-        return Team.from_wire(await self._call("room.team.get", {"target": "template"}, mutation=False,
-                                               feature="room.template"))
-
-    async def room_models_set(self, avatar: str, lane: str, *, model: Any = _OMIT, effort: Any = _OMIT,
-                              if_revision: str | None = None) -> TeamWriteResult:
-        """Set an avatar lane's model and/or effort in the template. It applies to rooms started afterwards."""
-        params = models_set_params("template", avatar, lane, model, effort, if_revision)
-        return TeamWriteResult.from_wire(await self._call("room.models.set", params, mutation=True,
-                                                          feature="room.template"))
-
-    async def room_avatars_upsert(self, avatar_id: str, *, role: Any = _OMIT, display: Any = _OMIT,
-                                  alias: Any = _OMIT, if_revision: str | None = None) -> TeamWriteResult:
-        params = avatars_upsert_params("template", avatar_id, role, display, alias, if_revision)
-        return TeamWriteResult.from_wire(await self._call("room.avatars.upsert", params, mutation=True,
-                                                          feature="room.template"))
-
-    async def room_avatars_remove(self, avatar_id: str, *, if_revision: str | None = None) -> AvatarRemoveResult:
-        params = avatars_remove_params("template", avatar_id, if_revision)
-        return AvatarRemoveResult.from_wire(await self._call("room.avatars.remove", params, mutation=True,
-                                                             feature="room.template"))
-
     async def close(self) -> None:
         async with self._lock:
             t, self._transport = self._transport, None
@@ -910,7 +610,7 @@ class Host:
 _ANY_MAIN: Any = object()
 
 
-class Session:
+class Session(HostCalls):
     def __init__(self, client: Client, transport: _Wire, hello: Hello, *, external_approvals: bool):
         self._client, self._transport, self.hello = client, transport, hello
         self._state: State | None = None
@@ -945,6 +645,12 @@ class Session:
     def session_info(self) -> SessionInfo | None:
         """The newest `SessionInfo` seen, or None when the adapter does not send it."""
         return self._info
+
+    async def _call(self, method: str, params: dict[str, Any], *, mutation: bool,
+                    feature: str | None = None) -> dict[str, Any]:
+        if feature is not None and not self.hello.has_feature(feature):
+            raise IncompatibleAdapter(f"adapter lacks feature {feature}")
+        return await self._request(method, params, mutation=mutation)
 
     async def _request(self, method: str, params: dict[str, Any], *, mutation: bool) -> dict[str, Any]:
         if not self.hello.supports(method):

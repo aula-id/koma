@@ -51,7 +51,7 @@ struct Fake {
     stop_kills: bool,
     stop_delay: Duration,
     /// `delete` drops the row but fails before removing the dir.
-    fail_delete: bool,
+    fail_delete: std::sync::atomic::AtomicBool,
     set_names: Mutex<Vec<(String, String)>>,
     deletes: Mutex<Vec<PathBuf>>,
     stops: Mutex<Vec<String>>,
@@ -68,7 +68,7 @@ impl Fake {
             alive_calls: AtomicUsize::new(0),
             stop_kills: true,
             stop_delay: Duration::ZERO,
-            fail_delete: false,
+            fail_delete: std::sync::atomic::AtomicBool::new(false),
             set_names: Mutex::new(Vec::new()),
             deletes: Mutex::new(Vec::new()),
             stops: Mutex::new(Vec::new()),
@@ -152,11 +152,14 @@ impl SessionHost for Fake {
         self.deletes.lock().unwrap().push(dir.to_path_buf());
         let id = dir.file_name().unwrap().to_str().unwrap().to_string();
         self.rows.lock().unwrap().retain(|row| row.uuid != id);
-        if self.fail_delete {
+        if self.fail_delete.load(Ordering::SeqCst) {
             anyhow::bail!("disk went away");
         }
         std::fs::remove_dir_all(dir)?;
         Ok(())
+    }
+    fn buckets(&self) -> anyhow::Result<Vec<String>> {
+        super::host::sessions::bucket_names(&self.root.0.join("sessions"))
     }
     fn stop(&self, id: &str) -> bool {
         self.stops.lock().unwrap().push(id.into());
@@ -712,10 +715,9 @@ async fn delete_re_probes_liveness_right_before_removing() {
 
 #[tokio::test]
 async fn delete_failing_midway_is_an_honest_partial_delete() {
-    let mut fake = Fake::new();
-    fake.fail_delete = true;
-    let fake = Arc::new(fake);
-    fake.add(CODING_A, 100);
+    let fake = Arc::new(Fake::new());
+    fake.fail_delete.store(true, Ordering::SeqCst);
+    let dir = fake.add(CODING_A, 100);
     let mut adapter = unbound();
     let error = delete(&fake, &mut adapter, CODING_A).await.unwrap_err();
     assert_eq!(
@@ -726,6 +728,15 @@ async fn delete_failing_midway_is_an_honest_partial_delete() {
     assert_eq!(error.extra().and_then(|e| e.written), Some(true));
     // In-process work: the process stays.
     assert!(!error.ends_process(false));
+
+    // The row went first; a retry finds the directory and finishes.
+    assert!(dir.exists());
+    fake.fail_delete.store(false, Ordering::SeqCst);
+    let done = delete(&fake, &mut adapter, CODING_A).await.unwrap();
+    assert_eq!(done["deleted"], true);
+    assert!(!dir.exists());
+    let again = delete(&fake, &mut adapter, CODING_A).await.unwrap_err();
+    assert_eq!(again.code, "not_found");
 }
 
 #[tokio::test]

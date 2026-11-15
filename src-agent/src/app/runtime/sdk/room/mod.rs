@@ -189,7 +189,6 @@ impl Drop for RoomBinding {
     }
 }
 
-#[allow(dead_code)] // The accessors the room reads and team methods build on.
 impl RoomBinding {
     pub fn state(&self) -> BindingState {
         if self.core.live() {
@@ -238,11 +237,6 @@ impl RoomBinding {
     /// session overlay). `reload()` it after writing a layer.
     pub fn registry(&self) -> Option<Arc<RegistryHandle>> {
         self.core.registry.clone()
-    }
-
-    /// The room daemon's optional frames, as its `hello` listed them.
-    pub fn features(&self) -> &[String] {
-        &self.hello.features
     }
 
     pub fn has_feature(&self, name: &str) -> bool {
@@ -304,13 +298,25 @@ impl RoomBinding {
         message: &RoomClient,
         wait: Duration,
     ) -> Result<Value, RpcError> {
+        self.request_with_echo(want, None, message, wait).await
+    }
+
+    /// [`RoomBinding::request`] for a send: an accepting answer puts `echo`
+    /// in the ring at its place in the stream (see [`Pending::echo`]).
+    pub async fn request_with_echo(
+        &mut self,
+        want: Want,
+        echo: Option<String>,
+        message: &RoomClient,
+        wait: Duration,
+    ) -> Result<Value, RpcError> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         {
             let mut state = self.core.lock();
             if !state.live {
                 return Err(room_closed());
             }
-            state.pending = Some(Pending { want, reply });
+            state.pending = Some(Pending { want, reply, echo });
         }
         self.write(message).await?;
         match tokio::time::timeout(wait, answer).await {

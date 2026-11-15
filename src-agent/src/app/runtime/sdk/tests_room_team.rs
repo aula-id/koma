@@ -110,6 +110,9 @@ struct Script {
     features: Vec<String>,
     /// The next this many `sdk_reload`s report a warning about this avatar.
     reject: Option<(String, usize)>,
+    /// Each `sdk_reload` leaves this config.json unreadable, as another
+    /// writer could right after a team write is committed.
+    corrupt_config: Option<PathBuf>,
 }
 
 impl Default for Script {
@@ -117,6 +120,7 @@ impl Default for Script {
         Self {
             features: vec!["sdk_user".into(), "sdk_reload".into()],
             reject: None,
+            corrupt_config: None,
         }
     }
 }
@@ -284,6 +288,9 @@ async fn serve(
                                     warnings.push(format!("avatars.toml: avatar '{avatar}' uses unknown role 'ghost'; ignored"));
                                 }
                             }
+                            if let Some(path) = &script.corrupt_config {
+                                std::fs::write(path, b"{not json").unwrap();
+                            }
                         }
                         let ack = json!({"sdk_ack": {"id": id, "ok": true, "version": version, "warnings": warnings}});
                         write_value(&mut write, &ack).await?;
@@ -411,7 +418,7 @@ impl Rig {
             &mut self.adapter,
         )
         .await;
-        self.adapter.queue.response_written();
+        crate::app::runtime::sdk::events::release_after_response(&self.adapter.queue);
         let text = match &result {
             Ok(value) => value.to_string(),
             Err(e) => serde_json::to_string(e).unwrap(),
@@ -795,6 +802,41 @@ async fn a_live_room_with_reload_takes_the_write_live_and_keeps_the_display() {
     assert_eq!(added["applies"], "live");
     let roster = rig.adapter.binding.room().unwrap().roster().to_vec();
     assert!(roster.iter().any(|a| a == "red-mobile"), "{roster:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_adapter_registry_view_follows_a_live_team_write() {
+    let mut rig = rig();
+    let _fake = rig.start(Script::default());
+    rig.attach().await;
+    let registry = rig.adapter.binding.room().unwrap().registry().unwrap();
+    assert!(!registry.current().avatars.contains_key("red-mobile"));
+    rig.ok(
+        "room.avatars.upsert",
+        json!({"target": "room", "id": "red-mobile", "role": "red", "display": "Red Mobile", "alias": "RM"}),
+    )
+    .await;
+    let current = registry.current();
+    let added = current.avatars.get("red-mobile").expect("the new avatar is in the view");
+    assert_eq!(added.display.as_deref(), Some("Red Mobile"));
+    assert_eq!(added.alias.as_deref(), Some("RM"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_committed_write_keeps_its_result_when_the_config_turns_unreadable() {
+    let mut rig = rig();
+    let _fake = rig.start(Script {
+        corrupt_config: Some(rig.dir.0.join("c").join("config.json")),
+        ..Script::default()
+    });
+    rig.attach().await;
+    let written = rig
+        .ok("room.avatars.upsert", json!({"target": "room", "id": "red-mobile", "role": "red"}))
+        .await;
+    assert_eq!(written["applies"], "live");
+    assert!(avatar(&written["team"], "red-mobile").is_object());
+    let text = std::fs::read_to_string(rig.session().join("avatars.toml")).unwrap();
+    assert!(text.contains("red-mobile"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

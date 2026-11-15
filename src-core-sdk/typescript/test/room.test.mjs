@@ -17,7 +17,7 @@ test('room open and attach bind a room with its attach result', async () => {
     assert.deepEqual(room.attachResult.history, { first_line_seq: 1, last_line_seq: 10, count: 10, replayed: 10 });
     assert.ok(room.attachResult.roster.includes('scout')); assert.ok(room.requestsRemaining > 0);
     await assert.rejects(c.roomOpen({ parent_session_id: 'sess-coding-c' }), e => e instanceof SdkError && e.reason === 'no_main_route');
-    await assert.rejects(c.roomOpen({ parent_session_id: 'sess-nostart' }), e => e.reason === 'room_start_failed' && e.delivery === 'unknown' && e.detail.log_tail !== undefined);
+    await assert.rejects(c.roomOpen({ parent_session_id: 'sess-nostart' }), e => e instanceof DeliveryUnknownError && e.reason === 'room_start_failed' && e.delivery === 'unknown' && e.detail.log_tail !== undefined);
     await assert.rejects(c.roomAttach({ session_id: 'sess-coding-b' }), e => e.reason === 'not_found' || e.reason === 'not_running');
     const started = await c.roomOpen({ parent_session_id: 'sess-coding-b' });
     assert.equal(started.attachResult.started, true); assert.equal(started.attachResult.daemon.template_revision, null);
@@ -68,6 +68,10 @@ test('room.send forms: shell, attachments, old room, refusals, closed binding', 
     assert.equal(closed.reason, 'stream_error');
     await assert.rejects(room.send({ text: 'again' }), e => e.reason === 'room_closed' && e.binding === 'room_closed');
     assert.equal((await room.status()).live, false);
+    const before = room.epoch;
+    const reopened = await room.reopen();
+    assert.equal(reopened.room.session_id, room.sessionId); assert.notEqual(room.epoch, before);
+    assert.equal((await room.status()).live, true);
     await room.close();
     const old = await c.roomOpen({ parent_session_id: 'sess-coding-b' });
     assert.equal((await old.send({ text: 'plain' })).acked, false);

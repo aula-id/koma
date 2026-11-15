@@ -14,7 +14,7 @@
 //! over the old one and reads it back. A live room that can reload is told to,
 //! and the change is checked in its answer; when the room does not take it, the
 //! old bytes are put back.
-use super::{bound_room, object, out_of_range, RoomEnv};
+use super::{bound_room, object, out_of_range, RoomBinding, RoomEnv};
 use crate::app::runtime::sdk::binding::{refusal, Binding, BindingState, Family};
 use crate::app::runtime::sdk::host::config::ConfigStore;
 use crate::app::runtime::sdk::host::lock::{self, ConfigLock};
@@ -783,6 +783,23 @@ fn view(
 /// answer; without one the choices come from the config.
 fn read_view(scope: &Scope, live: Option<&Value>) -> Result<Team, RpcError> {
     let inputs = Inputs::read(scope)?;
+    Ok(view_of(scope, &inputs, live))
+}
+
+/// The view after a committed write. The write stands even when config.json
+/// cannot be read at this point, so the view is then built from the layers
+/// with no configured models rather than reporting the write as not done.
+fn read_view_after_commit(scope: &Scope, live: Option<&Value>) -> Team {
+    let inputs = Inputs::read(scope).unwrap_or_else(|_| Inputs {
+        config: AppConfig::default(),
+        settings: scope.parent_settings(),
+        template: Layer::read(scope.template_dir.as_deref()),
+        session: scope.overlay.as_deref().map(|dir| Layer::read(Some(dir))),
+    });
+    view_of(scope, &inputs, live)
+}
+
+fn view_of(scope: &Scope, inputs: &Inputs, live: Option<&Value>) -> Team {
     let (choices, source) = match live {
         Some(models) => (
             daemon_choices(models, &inputs.config, &inputs.settings),
@@ -790,7 +807,7 @@ fn read_view(scope: &Scope, live: Option<&Value>) -> Result<Team, RpcError> {
         ),
         None => (config_choices(&inputs.config, &inputs.settings), "config"),
     };
-    Ok(view(scope, &inputs, choices, source))
+    view(scope, inputs, choices, source)
 }
 
 /// The bound live room's `models` answer for a room target, or `None`. A
@@ -1539,13 +1556,21 @@ async fn team_write(
     };
     let (applies, room) = match target {
         Target::Template => ("next_start", "not_live"),
-        Target::Room => apply_room(adapter, &committed, edit.avatar()).await?,
+        Target::Room => {
+            let applied = apply_room(adapter, &committed, edit.avatar()).await;
+            // The adapter's own registry view names the lines it reads, so it
+            // follows the room's layer after the write or the restore.
+            if let Some(registry) = adapter.binding.room().and_then(RoomBinding::registry) {
+                let _ = off_thread(move || Ok(registry.reload())).await;
+            }
+            applied?
+        }
     };
     let reverted_to = committed.reverted_to;
     // A lost stream on the way leaves the view to the config's choices.
     let models = models.filter(|_| room != "failed");
     let team = adapter
-        .blocking(move || read_view(&scope, models.as_ref()))
+        .blocking(move || Ok(read_view_after_commit(&scope, models.as_ref())))
         .await;
     drop(committed);
     let result = TeamWrite {

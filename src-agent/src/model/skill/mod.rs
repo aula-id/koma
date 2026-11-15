@@ -39,3 +39,4 @@ pub use persistence::{
     install_owned_skill_zip, update_owned_skill, OwnedSkillTarget, SkillEdit,
 };
 pub use registry::{valid_extra_skill_roots, SkillRegistry, PINNED_MAX};
+pub(crate) use registry::{load_root, load_root_with_diagnostics, SkippedSkill};

@@ -105,6 +105,20 @@ class SessionsConformance(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([w.code for w in session.warnings], ['rename_failed'])
             self.assertEqual(session.session_info.name, session.session_id)
 
+    async def test_a_session_and_a_room_make_host_calls_on_their_own_adapter(self):
+        c = self.client()
+        async with await c.create('/fake/work') as session:
+            page = await session.sessions_list(kind='coding')
+            self.assertIn(session.session_id, [r.session_id for r in page.sessions])
+            self.assertIsNotNone(await session.usage_query())
+            self.assertIsNotNone(await session.room_list())
+        async with await self.client('room').room_open('sess-coding-a') as room:
+            rooms = await room.room_list()
+            self.assertIn(room.session_id, [r.session_id for r in rooms.rooms])
+            self.assertIsInstance(await room.sessions_list(), SessionPage)
+        with self.assertRaises(ValueError):
+            await self.client().host().sessions_rename('sess-coding-b', 'a\n')
+
     async def test_create_name_needs_the_feature(self):
         c = self.client('legacy_hello')
         async with await c.create('/fake/work') as session:

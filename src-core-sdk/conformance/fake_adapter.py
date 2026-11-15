@@ -663,14 +663,15 @@ def session_sort(r):
     return (-(r['updated'] or 0), r['id'])
 
 def checked_name(rid, value, field='name'):
-    """The trimmed name, or an error frame."""
+    """The trimmed name, or an error frame. Control characters are refused
+    before trimming, as the adapter does."""
     if not isinstance(value, str):
-        return invalid(rid, 'out_of_range', field + ' must be a string')
-    value = value.strip()
+        return invalid(rid, 'invalid_name', field + ' must be a string')
     if CONTROL.search(value):
-        return invalid(rid, 'invalid_name', field + ' holds control characters')
+        return invalid(rid, 'invalid_name', field + ' must not contain control characters')
+    value = value.strip()
     if not 1 <= len(value) <= 200:
-        return invalid(rid, 'out_of_range', field + ' must be 1 to 200 characters')
+        return invalid(rid, 'invalid_name', field + ' must be 1 to 200 characters after trimming')
     return value
 
 def sessions_list(rid, params):
@@ -826,6 +827,9 @@ def usage_query(rid, params):
         if key in params and not is_int(params[key]):
             return invalid(rid, 'out_of_range', key + ' must be an integer')
     from_at, to_at = params.get('from_at', NOW - 30 * DAY), params.get('to_at', NOW)
+    for key, at in (('to_at', to_at), ('from_at', from_at)):
+        if not 0 <= at <= 253402300799:
+            return invalid(rid, 'out_of_range', key + ' must be between 0 and 253402300799')
     if 'session_id' in params and not is_id(params['session_id']):
         return invalid(rid, 'out_of_range', 'session_id must be a string of 1 to 64 characters')
     if 'workdir' in params and not is_abs(params['workdir']):
@@ -975,7 +979,7 @@ def skills_workdir(rid, params):
             return None, invalid(rid, 'out_of_range', 'workdir must be an absolute path')
         canon = value.rstrip('/') or '/'
         if canon not in KNOWN_WORKDIRS and not (binding == 'coding' and canon == session['state']['cwd']):
-            return None, failure(rid, 'not_found', 'not_found', 'no directory ' + value)
+            return None, invalid(rid, 'out_of_range', 'workdir must be an absolute existing directory')
         return canon, None
     if binding == 'coding':
         return session['state']['cwd'].rstrip('/') or '/', None
@@ -992,36 +996,34 @@ def need_workdir(rid, workdir, tier=None, scope=None):
 def check_tier(rid, params, required):
     tier = params.get('tier')
     if tier is None:
-        return (None, invalid(rid, 'missing_params', 'tier is required')) if required else (None, None)
+        return (None, invalid(rid, 'out_of_range', 'tier is required')) if required else (None, None)
     if not isinstance(tier, str) or not TIER_RE.match(tier):
         return None, invalid(rid, 'out_of_range', 'tier is not a known tier')
     return tier, None
 
 def check_skill_name(rid, name, strict):
-    if not isinstance(name, str) or not name:
-        return invalid(rid, 'missing_params', 'name is required')
+    if not isinstance(name, str) or not name.strip() or CONTROL.search(name.strip()):
+        return invalid(rid, 'invalid_name', 'name must be a nonempty name without control characters')
     if strict and (not SKILL_NAME.match(name) or len(name.encode()) > 64 or name in ('skill', 'readme')):
         return invalid(rid, 'invalid_name', 'name must be lowercase words joined by hyphens, at most 64 bytes')
     return None
 
-def locate_skill(rid, params, tier_required):
-    """(tier, record, workdir, error)."""
-    tier, error = check_tier(rid, params, tier_required)
-    if error:
-        return (None,) * 3 + (error,)
-    error = check_skill_name(rid, params.get('name'), False)
-    if error:
-        return (None,) * 3 + (error,)
-    workdir, error = skills_workdir(rid, params)
-    error = error or need_workdir(rid, workdir, tier)
-    if error:
-        return (None,) * 3 + (error,)
-    name = params['name']
+def find_skill(rid, tier, name, workdir):
+    """(tier, record, error): the skill of (tier, name), or the winner of name."""
     tier = tier or winner_tier(workdir, name)
     rec = tier_store(tier, workdir, create=False).get(name) if tier else None
     if rec is None:
-        return None, None, workdir, failure(rid, 'not_found', 'not_found', 'no skill ' + name)
-    return tier, rec, workdir, None
+        return None, None, failure(rid, 'not_found', 'not_found', 'no skill ' + name)
+    return tier, rec, None
+
+def read_only(rid, tier):
+    return failure(rid, 'invalid_state', 'read_only', 'tier %s is read only' % tier)
+
+def check_generation_param(rid, params):
+    value = params.get('generation')
+    if 'generation' in params and (not isinstance(value, str) or not value):
+        return invalid(rid, 'out_of_range', 'generation must be a nonempty string')
+    return None
 
 def check_generation(rid, params, rec):
     if 'generation' in params and params['generation'] != skill_generation(rec):
@@ -1051,21 +1053,40 @@ def skills_list(rid, params):
                               diagnostics=diagnostics, diagnostics_truncated=False, next_cursor=cursor))
 
 def skills_get(rid, params):
+    # The adapter's order: workdir, tier, name, flags, then the tier's workdir need.
+    workdir, error = skills_workdir(rid, params)
+    if error:
+        return error
+    tier, error = check_tier(rid, params, False)
+    error = error or check_skill_name(rid, params.get('name'), False)
+    if error:
+        return error
     if 'include_raw' in params and not isinstance(params['include_raw'], bool):
         return invalid(rid, 'out_of_range', 'include_raw must be a boolean')
-    tier, rec, workdir, error = locate_skill(rid, params, False)
+    error = need_workdir(rid, workdir, tier)
+    if error:
+        return error
+    tier, rec, error = find_skill(rid, tier, params['name'].strip(), workdir)
     return error or response(rid, skill_detail(tier, rec, workdir, params.get('include_raw', False)))
 
 def skills_read_file(rid, params):
-    path = params.get('path')
-    if not isinstance(path, str) or not path:
-        return invalid(rid, 'missing_params', 'path is required')
-    tier, rec, workdir, error = locate_skill(rid, params, False)
+    workdir, error = skills_workdir(rid, params)
     if error:
         return error
-    if path.startswith('/') or '..' in path.split('/') or is_abs(path):
+    tier, error = check_tier(rid, params, False)
+    error = error or check_skill_name(rid, params.get('name'), False)
+    if error:
+        return error
+    path = params.get('path')
+    if not isinstance(path, str) or not path:
+        return invalid(rid, 'out_of_range', 'path is required')
+    if path.startswith('/') or '..' in path.split('/') or is_abs(path) or CONTROL.search(path):
         return invalid(rid, 'out_of_range', 'path must be relative and inside the skill')
-    error = check_generation(rid, params, rec)
+    error = check_generation_param(rid, params) or need_workdir(rid, workdir, tier)
+    if error:
+        return error
+    tier, rec, error = find_skill(rid, tier, params['name'].strip(), workdir)
+    error = error or check_generation(rid, params, rec)
     if error:
         return error
     if path not in rec['companions']:
@@ -1101,12 +1122,14 @@ def check_skill_fields(rid, params):
 
 def new_skill_target(rid, params):
     """(tier, workdir, error) for skills.create and skills.install."""
+    workdir, error = skills_workdir(rid, params)
+    if error:
+        return None, None, error
     scope = params.get('scope')
     if scope not in ('computer', 'project'):
         return None, None, invalid(rid, 'out_of_range', 'scope must be computer or project')
-    workdir, error = skills_workdir(rid, params)
     tier = 'global' if scope == 'computer' else 'project-agents'
-    return tier, workdir, error or need_workdir(rid, workdir, tier)
+    return tier, workdir, need_workdir(rid, workdir, tier)
 
 def skills_create(rid, params):
     tier, workdir, error = new_skill_target(rid, params)
@@ -1115,7 +1138,7 @@ def skills_create(rid, params):
     error = check_skill_name(rid, params.get('name'), True)
     for key in ('description', 'instruction'):
         if key not in params and not error:
-            error = invalid(rid, 'missing_params', key + ' is required')
+            error = invalid(rid, 'out_of_range', key + ' is required')
     error = error or check_skill_fields(rid, params)
     if error:
         return error
@@ -1127,21 +1150,37 @@ def skills_create(rid, params):
     store[rec['name']] = rec
     return response(rid, dict(skill=skill_detail(tier, rec, workdir), propagation=skills_propagation()))
 
-def skills_update(rid, params):
-    patch = params.get('patch')
-    if not isinstance(patch, dict) or not patch:
-        return invalid(rid, 'missing_params', 'patch must name at least one field')
-    tier, rec, workdir, error = locate_skill(rid, params, True)
+def address_writable(rid, params):
+    """(tier, workdir, error) of an update or remove: workdir, tier, read-only,
+    the tier's workdir need, then name and generation, in the adapter's order."""
+    workdir, error = skills_workdir(rid, params)
     if error:
-        return error
+        return None, None, error
+    tier, error = check_tier(rid, params, True)
+    if error:
+        return None, None, error
     if tier_scope(tier) == 'external':
-        return failure(rid, 'invalid_state', 'read_only', 'tier %s is read only' % tier)
-    error = check_generation(rid, params, rec)
+        return None, None, read_only(rid, tier)
+    error = (need_workdir(rid, workdir, tier) or check_skill_name(rid, params.get('name'), False)
+             or check_generation_param(rid, params))
+    return tier, workdir, error
+
+def skills_update(rid, params):
+    tier, workdir, error = address_writable(rid, params)
     if error:
         return error
+    patch = params.get('patch')
+    if 'patch' not in params or patch == {}:
+        return invalid(rid, 'missing_params', 'patch must change at least one field')
+    if not isinstance(patch, dict):
+        return invalid(rid, 'out_of_range', 'patch must be an object')
     if 'name' in patch:
         error = check_skill_name(rid, patch['name'], True)
     error = error or check_skill_fields(rid, patch)
+    if error:
+        return error
+    tier, rec, error = find_skill(rid, tier, params['name'].strip(), workdir)
+    error = error or check_generation(rid, params, rec)
     if error:
         return error
     if rec['unsafe']:
@@ -1159,12 +1198,11 @@ def skills_update(rid, params):
                               propagation=skills_propagation()))
 
 def skills_remove(rid, params):
-    tier, rec, workdir, error = locate_skill(rid, params, True)
+    tier, workdir, error = address_writable(rid, params)
     if error:
         return error
-    if tier_scope(tier) == 'external':
-        return failure(rid, 'invalid_state', 'read_only', 'tier %s is read only' % tier)
-    error = check_generation(rid, params, rec)
+    tier, rec, error = find_skill(rid, tier, params['name'].strip(), workdir)
+    error = error or check_generation(rid, params, rec)
     if error:
         return error
     del tier_store(tier, workdir)[rec['name']]
@@ -1892,6 +1930,9 @@ def models_set(rid, params):
     avatar, lane = params.get('avatar'), params.get('lane')
     if not isinstance(avatar, str) or lane not in ('chat', 'work'):
         return invalid(rid, 'out_of_range', 'avatar must be a string and lane chat or work')
+    model = params.get('model')
+    if 'model' in params and model is not None and (not isinstance(model, str) or not model):
+        return invalid(rid, 'out_of_range', 'model must be a choice id or null')
     if 'model' not in params and 'effort' not in params:
         return invalid(rid, 'missing_params', 'give model or effort')
     effort = params.get('effort')

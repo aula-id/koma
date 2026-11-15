@@ -373,7 +373,7 @@ class Conformance(unittest.TestCase):
         self.assertEqual(replies['2']['result']['session_info']['name'], 'Renamed')
         _, replies = self.replies('sessions', [call(1, 'create', name='x' * 201), call(2, 'create', name='a\x01'),
                                                call(3, 'create', name='fail-rename')])
-        self.assertReason(replies['1'], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['1'], 'invalid_request', 'invalid_name')
         self.assertReason(replies['2'], 'invalid_request', 'invalid_name')
         created = replies['3']['result']
         self.assertEqual(created['warnings'][0]['code'], 'rename_failed')
@@ -449,7 +449,7 @@ class Conformance(unittest.TestCase):
         self.assertReason(replies['2'], 'invalid_state', 'live')
         self.assertEqual(replies['3']['result']['session']['name'], 'Room new')
         self.assertReason(replies['4'], 'not_found', 'not_found')
-        self.assertReason(replies['5'], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['5'], 'invalid_request', 'invalid_name')
         self.assertReason(replies['6'], 'invalid_request', 'invalid_name')
         self.assertReason(replies['7'], 'unavailable', 'sqlite_busy')
         self.assertReason(replies['8'], 'invalid_state', 'live')
@@ -589,7 +589,7 @@ class Conformance(unittest.TestCase):
                                                cursor=page['next_cursor'])])
         self.assertEqual(len(more['1']['result']['skills']), 5)
         self.assertReason(replies['8'], 'invalid_request', 'out_of_range')
-        self.assertReason(replies['9'], 'not_found', 'not_found')
+        self.assertReason(replies['9'], 'invalid_request', 'out_of_range')
         self.assertReason(replies['10'], 'invalid_request', 'out_of_range')
         self.assertReason(replies['11'], 'invalid_request', 'out_of_range')
         self.assertEqual([s['name'] for s in replies['12']['result']['skills']],
@@ -615,13 +615,39 @@ class Conformance(unittest.TestCase):
         self.assertReason(replies['4'], 'not_found', 'not_found')
         self.assertFalse(replies['5']['result']['structured_save_supported'])
         self.assertEqual(replies['6']['result']['tier'], 'claude')
-        self.assertReason(replies['7'], 'invalid_request', 'missing_params')
+        self.assertReason(replies['7'], 'invalid_request', 'invalid_name')
         self.assertEqual(replies['8']['result'], dict(path='notes/checklist.md', text='check names\ncheck tests\n',
                                                       bytes=24))
         self.assertReason(replies['9'], 'invalid_request', 'binary')
         self.assertReason(replies['10'], 'not_found', 'not_found')
         self.assertReason(replies['11'], 'invalid_request', 'out_of_range')
         self.assertReason(replies['12'], 'invalid_state', 'stale')
+
+    def test_validation_matches_the_adapter(self):
+        # The reasons and the order of checks the real adapter gives.
+        _, replies = self.replies('skills', [
+            call(1, 'sessions.rename', session_id='sess-coding-b', name='x' * 201),
+            call(2, 'sessions.rename', session_id='sess-coding-b', name=7),
+            call(3, 'sessions.rename', session_id='sess-nope', name='a\n'),
+            call(4, 'usage.query', from_at=-1),
+            call(5, 'usage.query', to_at=999999999999),
+            call(6, 'skills.update', name='x', patch={'description': 'd'}),
+            call(7, 'skills.remove', name='x'),
+            call(8, 'skills.read_file', name='code-review'),
+            call(9, 'skills.update', tier='claude', name='claude-helper', patch={'description': 'd'}),
+            call(10, 'skills.remove', tier='claude', name='claude-helper'),
+            call(11, 'skills.read_file', name='no-such-skill', path='../x'),
+            call(12, 'skills.update', tier='global', name='no-such-skill', patch={'name': 'Bad'}),
+            call(13, 'skills.install', scope='computer'),
+            call(14, 'skills.create', scope='computer', name='fine', instruction='b')])
+        expected = {
+            '1': 'invalid_name', '2': 'invalid_name', '3': 'invalid_name', '4': 'out_of_range',
+            '5': 'out_of_range', '6': 'out_of_range', '7': 'out_of_range', '8': 'out_of_range',
+            '11': 'out_of_range', '12': 'invalid_name', '13': 'conflicting_params', '14': 'out_of_range'}
+        for rid, reason in expected.items():
+            self.assertReason(replies[rid], 'invalid_request', reason)
+        self.assertReason(replies['9'], 'invalid_state', 'read_only')
+        self.assertReason(replies['10'], 'invalid_state', 'read_only')
 
     def test_skills_writes(self):
         package = io.BytesIO()
@@ -677,10 +703,10 @@ class Conformance(unittest.TestCase):
         self.assertReason(replies['4'], 'invalid_request', 'invalid_name')
         self.assertReason(replies['5'], 'invalid_request', 'workdir_required')
         self.assertEqual(replies['6']['result']['skill']['tier'], 'project-agents')
-        self.assertReason(replies['7'], 'invalid_request', 'missing_params')
+        self.assertReason(replies['7'], 'invalid_request', 'out_of_range')
         self.assertReason(replies['8'], 'invalid_request', 'out_of_range')
         generation = replies['9']['result']['generation']
-        self.assertReason(replies['10'], 'invalid_request', 'missing_params')
+        self.assertReason(replies['10'], 'invalid_request', 'out_of_range')
         self.assertReason(replies['11'], 'invalid_request', 'missing_params')
         self.assertReason(replies['12'], 'invalid_state', 'stale')
         renamed = replies['13']['result']
@@ -987,7 +1013,8 @@ class Conformance(unittest.TestCase):
             call(26, 'room.models.set', target='template', avatar='recon', lane='work', model='model-bare'),
             call(27, 'room.avatars.remove', target='template', id='recon'),
             call(28, 'room.team.get', target='room'), call(29, 'room.avatars.upsert', id='x', role='scout'),
-            call(30, 'room.team.get', target='elsewhere')])
+            call(30, 'room.team.get', target='elsewhere'),
+            call(31, 'room.models.set', target='room', avatar='scout', lane='chat', model='')])
         team = replies['2']['result']
         self.assertEqual((team['target'], team['choices_source'], team['template_pending_restart']),
                          ('room', 'room_daemon', False))
@@ -1021,6 +1048,7 @@ class Conformance(unittest.TestCase):
         self.assertReason(replies['8'], 'not_found', 'unknown_avatar')
         self.assertReason(replies['9'], 'invalid_request', 'missing_params')
         self.assertReason(replies['10'], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['31'], 'invalid_request', 'out_of_range')
         cleared = next(a for a in replies['11']['result']['team']['avatars'] if a['id'] == 'scout')['lanes'][0]
         self.assertEqual((cleared['model']['origin'], cleared['effort']), ('role', dict(value=None, origin='default')))
         self.assertReason(replies['12'], 'invalid_state', 'stale')
