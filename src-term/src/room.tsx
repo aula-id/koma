@@ -545,7 +545,7 @@ function Piece({ item, theme, syntaxStyle }: { item: Item; theme: Theme; syntaxS
   if (item.kind === "tool") {
     const call = { id: item.id, type: "function", function: { name: item.name, arguments: item.args } }
     const result = item.result ? { role: "tool", content: item.result.text, tool_call_id: item.id } : undefined
-    return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} digest={toolDigest(item.name, item.args)} />
+    return <ToolCard call={call} result={result} theme={theme} syntaxStyle={syntaxStyle} digest={toolDigest(item.name, item.args)} failed={item.result?.ok === false} />
   }
   return <MarkdownBody content={item.streaming ? item.text : prettyText(item.text)} syntaxStyle={syntaxStyle} fg={theme.fg} bg={theme.bg} streaming={item.streaming} />
 }

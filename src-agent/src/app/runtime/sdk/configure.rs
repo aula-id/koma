@@ -55,6 +55,13 @@ pub(crate) fn reply(config: &AppConfig, params: &Value) -> Result<Value, String>
     describe(config, &parse(params, false)?)
 }
 
+/// Validate `params` without a catalogue. The adapter runs this before it
+/// forwards a call to a live session, so the daemon's own parser, which may be
+/// from an older binary, never sees a call this one rejects.
+pub(crate) fn check(params: &Value) -> Result<(), String> {
+    parse(params, false).map(|_| ())
+}
+
 struct ProviderIn {
     name: String,
     endpoint: String,
@@ -396,11 +403,8 @@ fn parse_role(name: &str) -> Option<ModelRole> {
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
         "planner" => ModelRole::Planner,
-        "cyber-red" | "cyber_red" => ModelRole::CyberRed,
-        "cyber-blue" | "cyber_blue" => ModelRole::CyberBlue,
-        "cyber-research" | "cyber_research" | "cyber-researcher" | "cyber_researcher" => {
-            ModelRole::CyberResearch
-        }
+        // Only the five public roles are writable. Other stored roles still
+        // display through `role_name`.
         _ => return None,
     })
 }

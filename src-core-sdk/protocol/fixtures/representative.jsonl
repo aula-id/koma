@@ -1,4 +1,4 @@
-{"type":"hello","protocol":1,"binary":{"path":"/usr/local/bin/koma","version":"1.0.0"},"diagnostics":[],"capabilities":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","detach"]}
+{"type":"hello","protocol":1,"binary":{"path":"/usr/local/bin/koma","version":"1.0.0"},"diagnostics":[],"capabilities":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach"]}
 {"id":"c1","method":"create","params":{"cwd":"/workspace","policy":{"plan":"forbid","approval":"reject"}}}
 {"type":"response","id":"c1","result":{"state":{"session_id":"session-1","cwd":"/workspace","model_id":"provider/model","policy":{"plan":"forbid","approval":"reject"},"turn":null,"working":false,"awaiting_approval":false,"approval_reason":null,"pending_count":0,"messages":[],"streaming":null,"revision":1,"external_approvals":false,"pending_approval":null,"gate":null}}}
 {"id":"s1","method":"submit","params":{"text":"Inspect this","attachments":[{"kind":"image_file","path":"/workspace/chart.png"},{"kind":"pasted_text","text":"context\ntext","name":"notes"}]}}
@@ -10,3 +10,7 @@
 {"type":"response","id":"r1","result":{"disposition":"rejected","turn_id":null,"interrupted_turn_id":"turn-1","reason":{"code":"internal","message":"Replacement failed after interrupt"}}}
 {"id":"s2","method":"submit","params":{"text":"Try next task"}}
 {"type":"response","id":"s2","error":{"code":"unavailable","message":"Connection lost after dispatch","delivery":"unknown"}}
+{"id":"g1","method":"configure","params":{"providers":[{"name":"local","endpoint":"http://127.0.0.1:8080/v1","api_type":"openai","api_key":null}]}}
+{"type":"response","id":"g1","result":{"providers":[{"name":"local","uuid":"provider-1"}],"models":{}}}
+{"id":"g2","method":"configure","params":{"models":{"cyber-red":{"provider":"local","model_id":"provider/model"}}}}
+{"type":"response","id":"g2","error":{"code":"invalid_request","message":"unknown model role 'cyber-red'","delivery":"not_sent"}}

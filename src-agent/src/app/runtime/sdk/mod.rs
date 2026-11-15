@@ -391,6 +391,7 @@ async fn configure_call(
     params: Value,
     conn: &mut Option<Connection>,
 ) -> Result<Value, RpcError> {
+    configure::check(&params).map_err(|message| RpcError::new("invalid_request", message))?;
     if let Some(connection) = conn.as_mut() {
         connection.configure(params).await
     } else {

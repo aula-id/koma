@@ -622,3 +622,76 @@ fn an_overlay_can_narrow_the_skills_a_role_sees_but_not_widen_them() {
     let handle = overlaid(&tmp);
     assert_eq!(handle.current().role("red").expect("red").skills_allow, ["pentest-*", "web-*"]);
 }
+
+#[test]
+fn a_lane_choice_keeps_the_base_display_and_alias() {
+    let tmp = Tmp::new("avatar-keep-base");
+    let book = crate::room::daemon::models::test_book(tmp.path());
+    book.set("red-web", "work", "m2").expect("set");
+    let overlay = || RegistryHandle::with_overlay(tmp.path().join("room")).expect("load");
+    let handle = overlay();
+    assert!(handle.report().warnings.is_empty(), "{:?}", handle.report().warnings);
+    let reg = handle.current();
+    assert_eq!(reg.display_of("red-web"), "Lab Red Web");
+    assert_eq!(reg.alias_of("red-web"), "LW");
+    assert_eq!(reg.lane_model("red-web", LaneKind::Work).model.as_deref(), Some("m2"));
+
+    // A reset leaves a bare entry, which keeps the base as well.
+    book.set("red-web", "work", "").expect("reset");
+    let reg = overlay().current();
+    assert_eq!(reg.display_of("red-web"), "Lab Red Web");
+    assert_eq!(reg.alias_of("red-web"), "LW");
+    assert_eq!(reg.lane_model("red-web", LaneKind::Work), LaneModel::default());
+}
+
+#[test]
+fn an_overlay_display_and_alias_still_win() {
+    let tmp = Tmp::new("avatar-restyle");
+    tmp.write(
+        "avatars.toml",
+        "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\ndisplay = \"Front Door\"\n[[avatar]]\nid = \"red-api\"\nrole = \"red\"\nalias = \"ap\"\n",
+    );
+    let reg = overlaid(&tmp).current();
+    assert_eq!(reg.display_of("red-web"), "Front Door");
+    assert_eq!(reg.alias_of("red-web"), "LW", "the alias comes from below");
+    assert_eq!(reg.alias_of("red-api"), "AP");
+    let embedded = RegistryHandle::embedded().expect("load").current();
+    assert_eq!(reg.display_of("red-api"), embedded.display_of("red-api"));
+}
+
+#[test]
+fn a_lane_is_one_unit_across_layers() {
+    let lower = LaneModel {
+        provider: Some("p-low".into()),
+        model: Some("m-low".into()),
+        effort: Some("high".into()),
+    };
+    let layered = |body: &str| {
+        let mut reg = (*RegistryHandle::embedded().expect("load").current()).clone();
+        if let Some(a) = reg.avatars.get_mut("red-web") {
+            a.work = lower.clone();
+        }
+        let mut warnings = Vec::new();
+        let tree = source::Tree::from([("avatars.toml".to_string(), format!("[[avatar]]\nid = \"red-web\"\nrole = \"red\"\n{body}"))]);
+        let parsed = load::parse(&tree, &mut warnings);
+        load::apply_overlay(&mut reg, parsed, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        reg.avatars.get("red-web").map(|a| a.work.clone()).expect("red-web")
+    };
+    let lane = |provider: Option<&str>, model: Option<&str>, effort: Option<&str>| LaneModel {
+        provider: provider.map(String::from),
+        model: model.map(String::from),
+        effort: effort.map(String::from),
+    };
+    // A bare model never pairs with the provider or effort from below.
+    assert_eq!(layered("[avatar.work]\nmodel = \"m-up\"\n"), lane(None, Some("m-up"), None));
+    assert_eq!(
+        layered("[avatar.work]\nprovider = \"p-up\"\nmodel = \"m-up\"\neffort = \"low\"\n"),
+        lane(Some("p-up"), Some("m-up"), Some("low"))
+    );
+    // An effort alone keeps the model from below.
+    assert_eq!(layered("[avatar.work]\neffort = \"low\"\n"), lane(Some("p-low"), Some("m-low"), Some("low")));
+    // An absent or empty lane keeps the lane from below.
+    assert_eq!(layered(""), lower);
+    assert_eq!(layered("[avatar.work]\n"), lower);
+}

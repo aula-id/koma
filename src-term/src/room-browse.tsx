@@ -126,8 +126,9 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
       else if ((name === "return" || name === "enter" || name === "right") && links[pick]) follow(links[pick]!.to)
       return
     }
+    if (graphOn && name === "escape") { setMode("tree"); return }
     if (name === "escape" || name === "q") { onBack(); return }
-    if (view === "trajectory" && name === "g" && goal && layout) {
+    if (view === "trajectory" && name === "g" && !graphOn && goal && layout) {
       // Start the graph at what the tree had selected.
       const node = selected.startsWith("node:") ? selected.split(":").slice(2).join(":") : null
       const sel = node && layout.boxes.some((b) => b.id === node) ? node : readingOrder(layout)[0]?.id ?? null
@@ -198,7 +199,7 @@ export function BrowseScreen({ view, theme, syntaxStyle, data, item, onOpenItem,
   const hint = detail
     ? (links.length ? "↑↓ choose a link · enter follows it · pgup/pgdn scroll · esc goes back" : "pgup/pgdn scroll · esc goes back")
     : graphOn
-      ? "←→↑↓ or wheel scroll (shift+wheel across) · tab next node · enter opens · [ ] goal · t tree · esc"
+      ? "←→↑↓ or wheel scroll (shift+wheel across) · tab next node · enter opens · [ ] goal · t tree · esc tree"
       : view === "trajectory"
         ? "↑↓ pgup/pgdn wheel move · enter opens · space or ←→ folds · g graph · click the arrow to fold, the line to open · esc closes"
         : "↑↓ pgup/pgdn wheel move · → or enter opens · ← closes · click folds or opens · esc closes"

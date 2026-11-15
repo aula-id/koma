@@ -16,7 +16,7 @@ First stdout frame MUST be `type:"hello"`, before reading any request. No client
 `protocol` is the integer 1, `binary` identifies the running Koma executable
 (path and version), `diagnostics` is an array of non-secret human-readable strings,
 and `capabilities` lists supported method names. Unsupported methods fail with
-`unsupported_method`; never silently emulate atomic methods. All nine methods
+`unsupported_method`; never silently emulate atomic methods. All ten methods
 are defined by v1; a particular adapter may advertise a subset. Clients reject
 unsupported protocol versions before sending requests.
 
@@ -85,6 +85,8 @@ immediate submit result. On resume the current/latest turn can already be final.
   after session binding and requested policy have succeeded.
 * `resume`: `{session_id, policy?, external_approvals?}`. Preserve persisted policy if omitted;
   explicit policy is installed before success. Return `{state}`.
+  `resume` on a secure-room session id is unsupported and unsafe: room sessions
+  are not coding sessions.
 * `state`: `{}` -> `{state}`.
 * `submit`: `{text,attachments?}`. Start only if idle; busy is rejected, never
   silently queued. Return TurnResult with disposition started or rejected.
@@ -118,10 +120,12 @@ immediate submit result. On resume the current/latest turn can already be final.
   its uuid; omitting `api_key` (or JSON null) keeps the stored key, and an empty
   key is `invalid_request`. Extension-owned names are rejected. `models` maps
   `main`, `awareness`, `safeguard`, `compactor`, and `planner` to
-  `{provider, model_id, route?}`. The first call on an empty catalogue must
-  include `models.main`. A later call, including one on a live session, may name
-  any subset. Unmentioned roles stay. The same provider and model id share one
-  catalogue entry. Return `{providers:[{name,uuid}], models:{role:{uuid,model_id,provider}}}`
+  `{provider, model_id, route?}`. These five are the only role keys; any other
+  key (including `cyber-*`) fails `invalid_request` with `not_sent`. The first
+  call on an empty catalogue must include `models.main`. A later call, including
+  one on a live session, may name any subset. Unmentioned roles stay. The same
+  provider and model id share one catalogue entry.
+  Return `{providers:[{name,uuid}], models:{role:{uuid,model_id,provider}}}`
   for what this call changed. The result, events, and errors never include an API
   key. Before a session, the call writes `config.json` and does not start a
   daemon. On a live session the running catalogue updates and the next turn uses
