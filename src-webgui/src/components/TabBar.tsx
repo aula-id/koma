@@ -95,6 +95,8 @@ function tabVisual(
       return { Icon: Settings, label: 'Settings', title: 'Settings' }
     case 'help':
       return { Icon: CircleHelp, label: 'Help', title: 'Help' }
+    case 'welcome':
+      return { Icon: tab.which === 'diagram' ? Shapes : Frame, label: 'Welcome', title: tab.which === 'diagram' ? 'Diagram welcome' : 'Design welcome' }
     case 'notifications':
       return { Icon: Bell, label: 'Notifications', title: 'Notifications' }
     case 'tutorial':

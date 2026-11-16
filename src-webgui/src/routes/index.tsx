@@ -366,6 +366,7 @@ function RootLayout() {
     if (r.activateChat) st.activateTab('chat')
     setActiveView(r.view)
     setSidebarOpen(r.sidebarOpen)
+    if (r.view !== activeView && (r.view === 'diagram' || r.view === 'design')) st.maybeOpenWelcomeTab(r.view)
   }
 
   // Drag the divider between the sidebar and the terminal to resize. Tracks the
@@ -549,6 +550,7 @@ const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ 
 
 const DiagramTab = lazy(() => import('../components/DiagramTab').then((m) => ({ default: m.DiagramTab })))
 const DesignTab = lazy(() => import('../components/DesignTab').then((m) => ({ default: m.DesignTab })))
+const WelcomeTab = lazy(() => import('../components/WelcomeTab'))
 
 function DiffFallback() {
   return (
@@ -618,6 +620,8 @@ function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visibl
         <DiagramTab tab={tab} />
       ) : tab.kind === 'design' ? (
         <DesignTab tab={tab} />
+      ) : tab.kind === 'welcome' ? (
+        <WelcomeTab which={tab.which} />
       ) : null}
     </Suspense>
   )
