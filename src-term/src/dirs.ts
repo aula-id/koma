@@ -19,9 +19,9 @@ export function addDirArgument(input: string): string | null {
  * here; the reader drops it when it is not a folder.
  */
 export function directoryToList(arg: string, cwd: string, home = homedir()): string | null {
-  if (arg === "~" || arg === "~/") return home
+  if (arg === "~" || arg === "~/" || arg === "~\\") return home
   if (arg.startsWith("~")) {
-    if (!arg.startsWith("~/")) return null
+    if (!/^~[\\/]/.test(arg)) return null
     return resolve(join(home, arg.slice(2)))
   }
   return resolve(cwd || ".", arg)
@@ -33,7 +33,7 @@ export function directoryToList(arg: string, cwd: string, home = homedir()): str
  * whose names start with `U`, so the guide stays up while typing.
  */
 export async function guideFolders(arg: string, cwd: string, home = homedir()): Promise<string[] | null> {
-  if (arg.startsWith("~") && arg !== "~" && !arg.startsWith("~/")) return null
+  if (arg.startsWith("~") && arg !== "~" && !/^~[\\/]/.test(arg)) return null
   const full = directoryToList(arg, cwd, home)
   if (full && await isDirectory(full)) return listChildFolders(full, "")
   const slash = Math.max(arg.lastIndexOf("/"), arg.lastIndexOf("\\"))

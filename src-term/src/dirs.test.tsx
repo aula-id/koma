@@ -24,6 +24,8 @@ test("the adddir guide reads the path and lists that directory", () => {
   expect(directoryToList("~/Project", work, home)).toBe(join(home, "Project"))
   expect(directoryToList("~/", work, home)).toBe(home)
   expect(directoryToList("~", work, home)).toBe(home)
+  expect(directoryToList("~\\Project", work, home)).toBe(join(home, "Project"))
+  expect(directoryToList("~\\", work, home)).toBe(home)
   expect(directoryToList("~other", work, home)).toBeNull()
   expect(directoryToList("./", work, home)).toBe(work)
   expect(directoryToList("src", work, home)).toBe(join(work, "src"))
