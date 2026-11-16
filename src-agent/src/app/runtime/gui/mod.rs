@@ -521,7 +521,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // thread only — `run_gui` never leaves the main thread before this point).
     #[cfg(target_os = "macos")]
     {
-        use muda::{Menu, PredefinedMenuItem, Submenu};
+        use muda::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
 
         let menu_bar = Menu::new();
 
@@ -529,7 +529,20 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // Quit item is enough (`Cmd+Q` otherwise has nowhere to route either).
         let app_menu = Submenu::new("koma", true);
         let _ = menu_bar.append(&app_menu);
-        let _ = app_menu.append(&PredefinedMenuItem::quit(None));
+        let _ = app_menu.append_items(&[
+            &PredefinedMenuItem::about(
+                Some("About koma"),
+                Some(AboutMetadata {
+                    name: Some("koma".into()),
+                    version: Some(env!("CARGO_PKG_VERSION").into()),
+                    short_version: Some(crate::app::version::short_sha(env!("KOMA_GIT_SHA"))),
+                    copyright: Some("Licensed under Apache-2.0".into()),
+                    ..Default::default()
+                }),
+            ),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::quit(None),
+        ]);
 
         let edit_menu = Submenu::new("Edit", true);
         let _ = menu_bar.append(&edit_menu);
@@ -649,9 +662,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // Palette now rides `Snapshot.palette` (pushed live), so only the platform
         // hint the React chrome reads at boot is injected here.
         .with_initialization_script(format!(
-            "window.__komaOS='{}';window.__komaOpaque={};",
+            "window.__komaOS='{}';window.__komaOpaque={};window.__komaBuild={};",
             std::env::consts::OS,
-            !transparent
+            !transparent,
+            crate::app::version::build_info_json()
         ))
         .with_url("koma://localhost/index.html")
         .with_navigation_handler(|url| allow_webview_navigation(&url))

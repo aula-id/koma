@@ -177,6 +177,75 @@ fn is_preview(version: &str) -> bool {
     canonical_version(version).contains('-')
 }
 
+/// "preview" for a pre-release version (contains '-'), else "stable".
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn channel(version: &str) -> &'static str {
+    if is_preview(version) {
+        "preview"
+    } else {
+        "stable"
+    }
+}
+
+/// First 7 hex chars of a stamped commit, or "unknown".
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn short_sha(sha: &str) -> String {
+    let sha = sha.trim();
+    match sha.get(..7) {
+        Some(head) if sha.bytes().all(|byte| byte.is_ascii_hexdigit()) => head.to_ascii_lowercase(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// UTC "YYYY-MM-DD" for a unix-seconds string; None when not a number.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn format_build_date(epoch: &str) -> Option<String> {
+    let secs: i64 = epoch.trim().parse().ok().filter(|secs| *secs >= 0)?;
+    // Civil-from-days (Howard Hinnant), days counted from 0000-03-01.
+    let z = secs / 86_400 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Pure assembly so tests can pass any inputs.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn build_info_json_from(
+    version: &str,
+    sha: &str,
+    target: &str,
+    epoch: &str,
+    os: &str,
+) -> String {
+    serde_json::json!({
+        "version": version,
+        "channel": channel(version),
+        "sha": short_sha(sha),
+        "target": target,
+        "os": os,
+        "buildDate": format_build_date(epoch),
+    })
+    .to_string()
+}
+
+/// Compile-time facts of THIS binary, as JSON for `window.__komaBuild`.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn build_info_json() -> String {
+    build_info_json_from(
+        env!("CARGO_PKG_VERSION"),
+        env!("KOMA_GIT_SHA"),
+        env!("KOMA_TERM_TARGET"),
+        env!("KOMA_BUILD_EPOCH"),
+        std::env::consts::OS,
+    )
+}
+
 fn canonical_version(raw: &str) -> String {
     let trimmed = raw.trim();
     trimmed.strip_prefix('v').unwrap_or(trimmed).to_string()
@@ -361,6 +430,78 @@ pub fn spawn_check_on_reentry(tx: tokio::sync::mpsc::UnboundedSender<VersionInfo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_date_formats_utc_days() {
+        assert_eq!(format_build_date("0").as_deref(), Some("1970-01-01"));
+        assert_eq!(
+            format_build_date("951782400").as_deref(),
+            Some("2000-02-29")
+        );
+        assert_eq!(
+            format_build_date("1709164800").as_deref(),
+            Some("2024-02-29")
+        );
+        assert_eq!(
+            format_build_date("1767225599").as_deref(),
+            Some("2025-12-31")
+        );
+        assert_eq!(
+            format_build_date("1767225600").as_deref(),
+            Some("2026-01-01")
+        );
+        for bad in ["abc", "", "-5", "unknown"] {
+            assert_eq!(format_build_date(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn short_sha_takes_seven_hex_or_unknown() {
+        assert_eq!(
+            short_sha("ABCDEF0123456789abcdef0123456789abcdef01"),
+            "abcdef0"
+        );
+        assert_eq!(short_sha("unknown"), "unknown");
+        assert_eq!(short_sha(""), "unknown");
+        assert_eq!(short_sha("ZZZZZZZZ"), "unknown");
+    }
+
+    #[test]
+    fn channel_follows_prerelease_suffix() {
+        assert_eq!(channel("0.4.15"), "stable");
+        assert_eq!(channel("0.4.15-preview.2"), "preview");
+        assert_eq!(channel("v0.4.15"), "stable");
+    }
+
+    #[test]
+    fn build_info_json_assembles_fields() {
+        let raw = build_info_json_from(
+            "0.4.15",
+            "unknown",
+            "x86_64-pc-windows-msvc",
+            "unknown",
+            "windows",
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["sha"], "unknown");
+        assert_eq!(v["target"], "x86_64-pc-windows-msvc");
+        assert_eq!(v["os"], "windows");
+        assert_eq!(v["channel"], "stable");
+        assert!(v["buildDate"].is_null());
+
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let raw = build_info_json_from(
+            "0.4.15-preview.1",
+            sha,
+            "aarch64-apple-darwin",
+            "1767225600",
+            "macos",
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["buildDate"], "2026-01-01");
+        assert_eq!(v["sha"], "0123456");
+        assert_eq!(v["channel"], "preview");
+    }
 
     fn release(tag: &str, prerelease: bool) -> GhRelease {
         GhRelease {

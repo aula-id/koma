@@ -74,6 +74,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Stamp build date
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - name: Stamp the release version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -167,6 +171,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Stamp build date
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
       - name: Stamp the release version
         if: startsWith(github.ref, 'refs/tags/v')

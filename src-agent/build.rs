@@ -2,6 +2,7 @@ use std::process::Command;
 
 fn main() {
     embed_git_sha();
+    embed_build_epoch();
     println!("cargo:rerun-if-changed=../src-misc/help");
     println!("cargo:rerun-if-changed=../src-misc/room");
     prepare_terminal();
@@ -169,6 +170,21 @@ fn embed_git_sha() {
         .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=KOMA_GIT_SHA={sha}");
+}
+
+/// Reproducible build timestamp: honours SOURCE_DATE_EPOCH, never the clock.
+fn embed_build_epoch() {
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    let epoch = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 12
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=KOMA_BUILD_EPOCH={epoch}");
 }
 
 fn prepare_terminal() {
