@@ -19,7 +19,6 @@ import {
   GitGraph,
   Maximize2,
   FolderGit2,
-  RefreshCw,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BranchSwitcher } from '../BranchSwitcher'
