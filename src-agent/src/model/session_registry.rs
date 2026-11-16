@@ -93,6 +93,7 @@ fn open_existing_at(path: &Path) -> Result<Option<Connection>> {
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let has_table = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
@@ -267,7 +268,23 @@ fn list_all_full_in(conn: &Connection) -> Result<Vec<RegRowFullCreated>> {
 
 /// Fetch a single session by UUID, or `None` if no such row exists.
 pub fn get(uuid: &str) -> Result<Option<RegRowFull>> {
-    let conn = open()?;
+    get_in(&open()?, uuid)
+}
+
+/// [`get`] without creating the registry, its directory or its schema.
+pub fn get_existing(uuid: &str) -> Result<Option<RegRowFull>> {
+    get_existing_at(&registry_path()?, uuid)
+}
+
+/// [`get_existing`] against an explicit registry path.
+fn get_existing_at(path: &Path, uuid: &str) -> Result<Option<RegRowFull>> {
+    match open_existing_at(path)? {
+        Some(conn) => get_in(&conn, uuid),
+        None => Ok(None),
+    }
+}
+
+fn get_in(conn: &Connection, uuid: &str) -> Result<Option<RegRowFull>> {
     let row = conn
         .query_row(
             "SELECT uuid, pwd_hash, name, workdir, updated_at FROM sessions
@@ -344,6 +361,30 @@ mod tests {
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("koma-registry-{tag}-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn get_existing_missing_dir_returns_none_and_creates_nothing() {
+        let dir = scratch("get-nodir");
+        let path = dir.join("session.sqlite");
+        assert!(get_existing_at(&path, "a").unwrap().is_none());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn get_existing_returns_row_without_writing() {
+        let dir = scratch("get-row");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            ensure_schema(&conn).unwrap();
+            insert(&conn, "a", 1, 2);
+        }
+        let row = get_existing_at(&path, "a").unwrap().unwrap();
+        assert_eq!(row.uuid, "a");
+        assert!(get_existing_at(&path, "zzz").unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
