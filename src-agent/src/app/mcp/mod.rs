@@ -85,6 +85,7 @@ mod activation_tests;
 mod expand;
 #[cfg(test)]
 mod expand_tests;
+pub(crate) mod project;
 mod proxy;
 mod resolve;
 #[cfg(test)]

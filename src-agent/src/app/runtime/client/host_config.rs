@@ -325,6 +325,19 @@ fn apply_global_config_req(
             });
             true
         }
+        ClientRequest::ImportMcpJson { text } => {
+            use crate::app::mcp::project;
+            match project::parse_servers_json(text, None) {
+                Ok(parsed) => {
+                    let mut warnings = parsed.warnings;
+                    project::import_into(&mut cfg.mcp_servers, parsed.servers, &mut warnings) > 0
+                }
+                Err(e) => {
+                    crate::model::store::append_global_error_log("mcp", &format!("import: {e}"));
+                    false
+                }
+            }
+        }
         ClientRequest::DeleteMcpServer { uuid } => {
             cfg.remove_mcp_server_by_uuid(uuid);
             true

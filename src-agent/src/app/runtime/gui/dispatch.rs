@@ -288,6 +288,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 },
             );
         }
+        GuiReq::ImportMcpJson { text } => {
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::ImportMcpJson { text });
+        }
         GuiReq::DeleteMcpServer { uuid } => {
             forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteMcpServer { uuid });
         }

@@ -292,6 +292,10 @@ pub(super) enum GuiReq {
         env: String,
         url: String,
     },
+    /// Import MCP servers from pasted JSON (McpPanel "Import JSON").
+    ImportMcpJson {
+        text: String,
+    },
     /// Remove an MCP server by uuid (McpPanel arm-delete).
     DeleteMcpServer {
         uuid: String,

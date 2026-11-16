@@ -663,6 +663,11 @@ impl DaemonHub {
                 );
             }
 
+            // GUI MCP import: parse pasted JSON, upsert by name, persist + reconnect.
+            ClientRequest::ImportMcpJson { text } => {
+                self.import_mcp_json(idx, state, handle, text);
+            }
+
             // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
             ClientRequest::DeleteMcpServer { uuid } => {
                 self.delete_mcp_server(idx, state, handle, uuid);

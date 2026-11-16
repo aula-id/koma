@@ -307,6 +307,12 @@ pub enum ClientRequest {
         env: String,
         url: String,
     },
+    /// Import MCP servers from pasted JSON (Claude Code, Cursor or VS Code shape, or a
+    /// bare README fragment): parsed with `app::mcp::project::parse_servers_json`,
+    /// upserted into the user config by name, persisted, and live-reconnected.
+    ImportMcpJson {
+        text: String,
+    },
     /// Remove the MCP server with `uuid`, persist, and live-reconnect the manager.
     DeleteMcpServer {
         uuid: String,

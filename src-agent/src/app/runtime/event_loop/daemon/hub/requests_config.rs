@@ -16,6 +16,36 @@ use crate::ipc::proto::DaemonEvent;
 use super::core::DaemonHub;
 
 impl DaemonHub {
+    // GUI MCP import: parse pasted JSON, upsert by name, persist + live-reconnect, and
+    // toast the count plus any parse warnings.
+    pub(super) fn import_mcp_json(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        text: String,
+    ) {
+        use crate::app::mcp::project;
+        let parsed = match project::parse_servers_json(&text, None) {
+            Ok(p) => p,
+            Err(e) => return self.ack_or_error(idx, Err(anyhow::anyhow!(e))),
+        };
+        let mut warnings = parsed.warnings;
+        let applied = project::import_into(
+            &mut state.rest.config.mcp_servers,
+            parsed.servers,
+            &mut warnings,
+        );
+        let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
+        if result.is_ok() {
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(project::import_summary(applied, &warnings));
+        }
+        self.ack_or_error(idx, result);
+    }
+
     // GUI MCP CRUD (McpPanel). Build an `McpServerEntry` from the panel's form
     // (mapping the single-line args/env STRING forms into the daemon's array/pair
     // forms via the SAME `parse_args`/`parse_env` the TUI editor uses), upsert it
