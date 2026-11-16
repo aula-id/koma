@@ -3,6 +3,9 @@
 //! (shared by the host and the daemon, unlike the temp dir) and the install then reads the
 //! finished file, so a package is bounded by [`MAX_SKILL_ZIP_BYTES`] and not by one IPC frame.
 
+// Chunk staging is only driven by the GUI host; the pure helpers are still built (and tested) everywhere.
+#![cfg_attr(not(feature = "gui"), allow(dead_code))]
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

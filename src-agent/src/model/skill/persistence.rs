@@ -1338,7 +1338,7 @@ mod tests {
 
     #[test]
     fn install_and_duplicate_limits_stay_split() {
-        assert!(MAX_SKILL_UNPACKED_BYTES >= MAX_SKILL_ZIP_BYTES);
+        const { assert!(MAX_SKILL_UNPACKED_BYTES >= MAX_SKILL_ZIP_BYTES) };
         assert_eq!(MAX_DUPLICATE_TOTAL_BYTES, 64 * 1024 * 1024);
     }
 
