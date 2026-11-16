@@ -6,6 +6,7 @@ import { KomaSelect } from './KomaSelect'
 import { useKoma } from '../store/koma'
 import { codingRequest, workspaceKey, type CodingTask, type CodingTaskRun, type WorkspaceRef } from '../lib/coding-service'
 import { BrailleSpinner } from './BrailleSpinner'
+import { PanelActions, panelButton, panelIconButton, panelSelect, baseName } from './PanelChrome'
 
 const CodingTaskTerminal = lazy(() => import('./CodingTaskTerminal'))
 
@@ -13,7 +14,6 @@ type Group = 'run' | 'build' | 'test'
 type Definitions = { tasks: CodingTask[]; fingerprint: string }
 type Chunk = { seq: number; stream: string; text: string }
 type Output = { problems?: TaskProblem[]; chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
-const button = 'flex h-6 items-center justify-center gap-1 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40 disabled:pointer-events-none'
 const live = (run?: CodingTaskRun) => run?.status === 'queued' || run?.status === 'running' || run?.status === 'stopping'
 const message = (e: unknown) => String(e instanceof Error ? e.message : e)
 
@@ -186,38 +186,38 @@ export function CodingTasks({ visible: open }: { visible: boolean }) {
       else if (gen === generation.current) setError('Switch to this host to edit its task configuration.')
     } catch (e) { if (gen === generation.current) setError(message(e)) }
   }
+  const taskTitle = task ? `${task.command} ${(task.args ?? []).map(arg => JSON.stringify(arg)).join(' ')} · cwd: ${task.cwd ?? '.'} · saved files` : undefined
   return <section aria-label="Project tasks" className="flex min-h-0 flex-1 flex-col overflow-auto text-[11px] text-koma-fg">
-    <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border px-2">
-      <KomaSelect className="h-6 w-full min-w-0 bg-koma-panel2 pl-2 text-[11px]" aria-label="Task workspace" value={scope} onChange={e => {
+    <PanelActions>
+      <button className={panelIconButton} title="Refresh tasks from disk" aria-label="Refresh tasks" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={12} /></button>
+      <button className={panelIconButton} title="Open task configuration" aria-label="Open task configuration" disabled={!workspace || currentHost !== workspace.hostId} onClick={() => void editConfig()}><FileCog size={12} /></button>
+    </PanelActions>
+    <div className="flex flex-none flex-wrap items-center gap-2 border-b border-koma-border px-2 py-1">
+      <KomaSelect className={`${panelSelect} flex-1 basis-40`} aria-label="Task workspace" value={scope} onChange={e => {
         generation.current++
         setWorkspace(workspaces.find(w => workspaceKey(w) === e.target.value) ?? null)
       }}>
         {!workspace && <option value="">Choose a workspace</option>}
-        {workspaces.map(w => <option key={workspaceKey(w)} value={workspaceKey(w)}>{w.hostId} · {w.root}</option>)}
+        {workspaces.map(w => <option key={workspaceKey(w)} value={workspaceKey(w)} title={w.root}>{w.hostId} · {baseName(w.root)}</option>)}
       </KomaSelect>
-      <button className={button} title="Refresh tasks from disk" aria-label="Refresh tasks" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={12} /></button>
-      <button className={button} title="Open task configuration" aria-label="Open task configuration" disabled={!workspace || currentHost !== workspace.hostId} onClick={() => void editConfig()}><FileCog size={12} /></button>
-    </div>
-    <div className="flex flex-none items-center gap-1 border-b border-koma-border px-2 py-1">
-      {(['run', 'build', 'test'] as const).map(value => <button key={value} aria-pressed={value === group} onClick={() => setGroup(value)} className={`${button} ${value === group ? 'bg-koma-hover text-koma-fg' : ''}`}>{value[0].toUpperCase() + value.slice(1)}</button>)}
-      <KomaSelect className="h-6 w-full min-w-0 flex-1 bg-koma-panel2 pl-2 text-[11px]" aria-label="Task" value={task?.id ?? ''} onChange={e => setTaskId(e.target.value)}>
+      <div className="flex items-center gap-1">
+        {(['run', 'build', 'test'] as const).map(value => <button key={value} aria-pressed={value === group} onClick={() => setGroup(value)} className={`${panelButton} ${value === group ? 'bg-koma-hover text-koma-fg' : ''}`}>{value[0].toUpperCase() + value.slice(1)}</button>)}
+      </div>
+      <KomaSelect className={`${panelSelect} flex-1 basis-40`} aria-label="Task" title={taskTitle} value={task?.id ?? ''} onChange={e => setTaskId(e.target.value)}>
         {!task && <option value="">{definitions ? 'No tasks configured' : configError ? 'Configuration unavailable' : 'Loading tasks…'}</option>}
         {choices.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
       </KomaSelect>
-      <button className={button} disabled={!task || busy || runs.some(r => r.taskId === task.id && (live(r) || !r.outputComplete))} onClick={() => void act('start')} title="Run task using saved files">{busy ? <BrailleSpinner size={12} /> : <Play size={12} />}Run</button>
+      <button className={panelButton} disabled={!task || busy || runs.some(r => r.taskId === task.id && (live(r) || !r.outputComplete))} onClick={() => void act('start')} title="Run task using saved files">{busy ? <BrailleSpinner size={12} /> : <Play size={12} />}Run</button>
     </div>
-    {task && <div className="flex-none truncate border-b border-koma-border px-3 py-1 font-mono text-[10px] text-koma-dim" title={JSON.stringify({ command: task.command, args: task.args, cwd: task.cwd, env: Object.keys(task.env ?? {}), timeoutMs: task.timeoutMs })}>
-      {task.command} {(task.args ?? []).map(arg => JSON.stringify(arg)).join(' ')} · cwd: {task.cwd ?? '.'} · saved files
-    </div>}
     {(configError || error || pollError || outputError) && <div role="alert" className="max-h-16 flex-none overflow-auto border-b border-koma-border px-3 py-1 text-koma-error">{[configError, error, pollError, outputError].filter(Boolean).join(' · ')}</div>}
-    {definitions && !choices.length && <div className="flex-none px-3 py-2 text-koma-dim">Add a {group} task to .koma/coding.json using the configuration button.</div>}
-    <div className="flex flex-none items-center gap-2 border-b border-koma-border px-2 py-1">
-      <KomaSelect className="h-6 w-full min-w-0 flex-1 bg-koma-panel2 pl-2 text-[11px]" aria-label="Task run output" title={run ? `${run.command} ${run.args.map(arg => JSON.stringify(arg)).join(' ')} · cwd: ${run.cwd}` : undefined} value={runId} onChange={e => setRunId(e.target.value)}>
+    {definitions && !choices.length && <div className="flex-none px-3 py-1 text-koma-dim">Add a {group} task to .koma/coding.json using the configuration button.</div>}
+    <div className="flex flex-none flex-wrap items-center gap-2 border-b border-koma-border px-2 py-1">
+      <KomaSelect className={`${panelSelect} flex-1 basis-40`} aria-label="Task run output" title={run ? `${run.command} ${run.args.map(arg => JSON.stringify(arg)).join(' ')} · cwd: ${run.cwd}` : undefined} value={runId} onChange={e => setRunId(e.target.value)}>
         {!runs.length && <option value="">No runs in this workspace</option>}
         {[...runs].reverse().map(r => <option key={r.id} value={r.id}>{r.label} · {r.status}{r.exitCode !== null ? ` (${r.exitCode})` : ''} · {new Date(r.started).toLocaleTimeString()}</option>)}
       </KomaSelect>
       {!run?.interactive && <label className="flex items-center gap-1 text-koma-dim"><input type="checkbox" className="accent-koma-accent" checked={follow} onChange={e => setFollow(e.target.checked)} />Follow</label>}
-      <button className={button} disabled={!live(run) || busy || run?.status === 'stopping'} title="Stop task and its subprocesses" onClick={() => void act('stop')}><Square size={11} />Stop</button>
+      <button className={panelButton} disabled={!live(run) || busy || run?.status === 'stopping'} title="Stop task and its subprocesses" onClick={() => void act('stop')}><Square size={11} />Stop</button>
     </div>
     {run?.error && <div className="flex-none px-3 py-1 text-koma-error">{run.error}</div>}
     {truncated && <div className="flex-none px-3 text-koma-dim">Earlier output was discarded. Showing retained output.</div>}
@@ -226,7 +226,7 @@ export function CodingTasks({ visible: open }: { visible: boolean }) {
       if ((useKoma.getState().remoteState.hostId ?? 'local') !== workspace.hostId) { setError('Switch to this host to open task source locations.'); return }
       useKoma.getState().openDiagnostic(new URL(pathToUri(`${workspace.root}/${run.cwd}`, p.path)).toString(), p.line - 1, p.column - 1)
     }}>{p.path}:{p.line}:{p.column} · {p.message}</button>)}</details>}
-    {run?.interactive && workspace ? <Suspense fallback={<div className="p-3 text-koma-dim">Loading terminal…</div>}><CodingTaskTerminal key={`${scope}:${runId}`} workspace={workspace} runId={runId} chunks={visibleChunks} running={run.status === 'running'} onError={setError} /></Suspense> : <pre ref={output} tabIndex={0} aria-label="Task output" className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] select-text" onScroll={() => {
+    {run?.interactive && workspace ? <Suspense fallback={<div className="p-3 text-koma-dim">Loading terminal…</div>}><CodingTaskTerminal key={`${scope}:${runId}`} workspace={workspace} runId={runId} chunks={visibleChunks} running={run.status === 'running'} onError={setError} /></Suspense> : <pre ref={output} tabIndex={0} aria-label="Task output" className="min-h-[96px] flex-1 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] select-text" onScroll={() => {
       const node = output.current
       if (node && node.scrollHeight - node.scrollTop - node.clientHeight > 40) setFollow(false)
     }}>{visibleChunks.length ? visibleChunks.map(c => <span key={c.seq} className={c.stream === 'stderr' ? 'text-koma-warn' : c.stream === 'system' ? 'text-koma-dim' : ''}>{c.text}</span>) : <span className="text-koma-dim">{live(run) ? 'Waiting for output…' : 'No output'}</span>}</pre>}

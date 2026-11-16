@@ -1,7 +1,8 @@
 // Content for the shared bottom panel.
-import { AlertCircle, CheckCircle2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Server } from 'lucide-react'
 import { useKoma, type LspRuntimeServer } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
+import { PanelBody, PanelEmpty } from './PanelChrome'
 
 function PhaseIcon({ phase }: { phase: string }) {
   if (phase === 'error') return <AlertCircle size={12} className="flex-none text-koma-error" />
@@ -35,14 +36,14 @@ export function LspDrawer() {
   )
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto font-mono text-[11px]">
+    <PanelBody className="font-mono text-[11px]">
       {servers.length === 0 && installRows.length === 0 ? (
-        <div className="px-3 py-4 text-koma-dim">No language servers running</div>
+        <PanelEmpty icon={<Server size={16} />}>No language servers running</PanelEmpty>
       ) : (
-        <ul className="divide-y divide-koma-border/60">
+        <ul>
           {installRows.map((p) => (
-            <li key={`install:${p.id}`} className="flex items-start gap-2 px-3 py-1.5">
-              <BrailleSpinner size={12} className="mt-0.5 flex-none text-koma-accent" />
+            <li key={`install:${p.id}`} className="flex h-[22px] items-center gap-2 px-3">
+              <BrailleSpinner size={12} className="flex-none text-koma-accent" />
               <span className="min-w-0 flex-1 truncate text-koma-fg">
                 <span className="text-koma-accent">{p.id}</span>
                 <span className="mx-1.5 text-koma-dim">·</span>
@@ -53,10 +54,8 @@ export function LspDrawer() {
             </li>
           ))}
           {servers.map((s) => (
-            <li key={s.id} className="flex items-start gap-2 px-3 py-1.5">
-              <span className="mt-0.5">
-                <PhaseIcon phase={s.phase} />
-              </span>
+            <li key={s.id} className="flex h-[22px] items-center gap-2 px-3">
+              <PhaseIcon phase={s.phase} />
               <span className="min-w-0 flex-1 truncate text-koma-fg">
                 <span className="text-koma-accent">{s.name}</span>
                 {s.root ? (
@@ -82,6 +81,6 @@ export function LspDrawer() {
           ))}
         </ul>
       )}
-    </div>
+    </PanelBody>
   )
 }

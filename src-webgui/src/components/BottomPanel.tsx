@@ -1,11 +1,12 @@
 import { pagePoint } from '../lib/uiScale'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, X } from 'lucide-react'
+import { Maximize2, Minimize2, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { CodingTasks } from './CodingTasks'
 import { CodingPacks } from './CodingPacks'
 import { LspDrawer } from './LspDrawer'
 import { ProblemsDrawer } from './ProblemsDrawer'
+import { PanelActionsSlot, panelIconButton } from './PanelChrome'
 
 const HEIGHT_KEY = 'koma.bottom-panel.height'
 const DEFAULT_HEIGHT = 280
@@ -34,13 +35,15 @@ export function BottomPanel() {
   const [height, setHeight] = useState(savedHeight)
   const [maximum, setMaximum] = useState(600)
   const [resizing, setResizing] = useState(false)
+  const [maximized, setMaximized] = useState(false)
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null)
   const panel = useRef<HTMLElement>(null)
   const buttons = useRef<Partial<Record<NonNullable<typeof tab>, HTMLButtonElement | null>>>({})
   const drag = useRef<{ y: number; height: number } | null>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   const minimum = Math.min(160, maximum)
-  const actualHeight = Math.min(maximum, Math.max(minimum, height))
+  const actualHeight = maximized ? maximum : Math.min(maximum, Math.max(minimum, height))
   const clamp = (value: number) => Math.min(maximum, Math.max(minimum, value))
 
   useLayoutEffect(() => {
@@ -91,11 +94,12 @@ export function BottomPanel() {
     <div role="separator" tabIndex={0} aria-label="Resize workspace panel" aria-orientation="horizontal"
       aria-controls="workspace-bottom-panel" aria-valuemin={minimum} aria-valuemax={maximum} aria-valuenow={actualHeight}
       className="absolute -top-[3px] z-30 h-[5px] w-full touch-none cursor-ns-resize hover:bg-koma-grip focus-visible:bg-koma-grip focus-visible:outline-none"
-      onDoubleClick={() => setHeight(clamp(DEFAULT_HEIGHT))}
+      onDoubleClick={() => { setMaximized(false); setHeight(clamp(DEFAULT_HEIGHT)) }}
       onPointerDown={event => {
         if (event.button !== 0) return
         event.preventDefault()
         drag.current = { y: event.clientY, height: actualHeight }
+        setMaximized(false)
         event.currentTarget.setPointerCapture(event.pointerId)
         setResizing(true)
       }}
@@ -110,10 +114,10 @@ export function BottomPanel() {
         const delta = event.shiftKey ? 50 : 20
         const next = event.key === 'ArrowUp' ? actualHeight + delta : event.key === 'ArrowDown' ? actualHeight - delta
           : event.key === 'Home' ? minimum : event.key === 'End' ? maximum : null
-        if (next !== null) { event.preventDefault(); setHeight(clamp(next)) }
+        if (next !== null) { event.preventDefault(); setMaximized(false); setHeight(clamp(next)) }
       }} />
-    <div className="flex h-8 min-w-0 flex-none items-center border-b border-koma-border px-2">
-      <div role="tablist" aria-label="Workspace panel tabs" className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto">
+    <div className="flex h-[35px] min-w-0 flex-none items-center border-b border-koma-border px-2">
+      <div role="tablist" aria-label="Workspace panel tabs" className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((item, index) => <button key={item.id} ref={node => { buttons.current[item.id] = node }}
           type="button" role="tab" id={`workspace-tab-${item.id}`} aria-controls={`workspace-panel-${item.id}`}
           aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1}
@@ -124,17 +128,19 @@ export function BottomPanel() {
                 : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null
             if (next !== null) { event.preventDefault(); setTab(tabs[next].id); buttons.current[tabs[next].id]?.focus() }
           }}
-          className={`flex flex-none items-center gap-1.5 border-b-2 px-2 text-[11px] uppercase tracking-wide outline-none focus-visible:bg-koma-hover ${tab === item.id ? 'border-koma-accent text-koma-fg' : 'border-transparent text-koma-dim hover:text-koma-fg'}`}>
+          className={`flex flex-none items-center gap-1.5 -mb-px border-b px-2.5 text-[11px] uppercase tracking-wide outline-none focus-visible:bg-koma-hover ${tab === item.id ? 'border-koma-accent text-koma-fg' : 'border-transparent text-koma-dim hover:text-koma-fg'}`}>
           {item.label}
-          {item.id === 'problems' && <span className="text-[10px] tabular-nums text-koma-dim">{count}</span>}
-          {item.id === 'lsp' && <span className="text-[10px] tabular-nums text-koma-dim">{servers.length}</span>}
+          {item.id === 'problems' && <span className="min-w-4 rounded-full bg-koma-hover px-1 text-center text-[10px] tabular-nums text-koma-dim">{count}</span>}
+          {item.id === 'lsp' && <span className="min-w-4 rounded-full bg-koma-hover px-1 text-center text-[10px] tabular-nums text-koma-dim">{servers.length}</span>}
         </button>)}
       </div>
-      <button type="button" aria-label="Collapse workspace panel" title="Collapse panel"
-        onClick={close} className="ml-1 flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"><ChevronDown size={14} /></button>
+      <div ref={setActionsSlot} className="ml-1 flex flex-none items-center gap-1" />
+      <button type="button" aria-label={maximized ? 'Restore workspace panel' : 'Maximize workspace panel'} title={maximized ? 'Restore panel size' : 'Maximize panel'}
+        onClick={() => setMaximized(v => !v)} className={`ml-1 ${panelIconButton}`}>{maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}</button>
       <button type="button" aria-label="Close workspace panel" title="Close panel (tasks keep running)"
-        onClick={close} className="flex h-6 w-6 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"><X size={13} /></button>
+        onClick={close} className={panelIconButton}><X size={13} /></button>
     </div>
+    <PanelActionsSlot.Provider value={actionsSlot}>
     {tabs.map(item => <div key={item.id} role="tabpanel" id={`workspace-panel-${item.id}`} aria-labelledby={`workspace-tab-${item.id}`} tabIndex={tab === item.id ? 0 : -1}
       className={`${tab === item.id ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col overflow-hidden`}>
       {item.id === 'tasks' ? <CodingTasks visible={tab === 'tasks'} />
@@ -142,5 +148,6 @@ export function BottomPanel() {
         : item.id === 'lsp' ? <LspDrawer />
         : <ProblemsDrawer />}
     </div>)}
+    </PanelActionsSlot.Provider>
   </section>
 }

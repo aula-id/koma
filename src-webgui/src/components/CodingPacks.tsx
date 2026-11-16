@@ -6,6 +6,7 @@ import { codingRequest, workspaceKey, type WorkspaceRef, type CodingTaskRun } fr
 import { invalidateCodingConfig } from '../lib/coding-config'
 import { showCodingTasks } from './CodingTasks'
 import { BrailleSpinner } from './BrailleSpinner'
+import { PanelActions, panelButton as button, panelIconButton, panelSelect as selectClass, baseName } from './PanelChrome'
 
 type Chunk = { seq: number; stream: string; text: string }
 type TaskOutput = { chunks: Chunk[]; next: number; truncated: boolean; more: boolean }
@@ -29,10 +30,6 @@ type Pack = {
 type Status = { packs: Pack[]; fingerprint: string; platform: string }
 type Plan = { id: string; label: string; commands: { command: string; args: string[] }[]; notes: string }
 
-/** Match CodingTasks tool chrome (BottomPanel design signature). */
-const button =
-  'flex h-6 items-center justify-center gap-1 rounded px-1.5 text-koma-dim hover:bg-koma-hover hover:text-koma-fg disabled:opacity-40 disabled:pointer-events-none'
-const selectClass = 'h-6 w-full min-w-0 bg-koma-panel2 pl-2 text-[11px]'
 const message = (e: unknown) => String(e instanceof Error ? e.message : e)
 
 /** Click/keyboard help, kept in flow so narrow docks never clip it. */
@@ -324,10 +321,31 @@ export function CodingPacks({ visible: open }: { visible: boolean }) {
 
   return (
     <section aria-label="Language packs" className="flex min-h-0 flex-1 flex-col overflow-hidden text-[11px] text-koma-fg">
-      {/* Row 1 — workspace scope (Tasks signature) */}
-      <div className="flex h-8 flex-none items-center gap-2 border-b border-koma-border px-2">
+      <PanelActions>
+        <button
+          type="button"
+          className={panelIconButton}
+          title="Refresh installed components"
+          aria-label="Refresh language packs"
+          disabled={busy}
+          onClick={() => setRefresh(n => n + 1)}
+        >
+          <RefreshCw size={12} />
+        </button>
+        <button
+          type="button"
+          className={panelIconButton}
+          title="Open coding configuration"
+          aria-label="Open coding configuration"
+          disabled={!workspace || currentHost !== workspace.hostId}
+          onClick={() => void editConfig()}
+        >
+          <FileCog size={12} />
+        </button>
+      </PanelActions>
+      <div className="flex flex-none flex-wrap items-center gap-2 border-b border-koma-border px-2 py-1">
         <KomaSelect
-          className={selectClass}
+          className={`${selectClass} flex-1 basis-40`}
           aria-label="Language pack workspace"
           value={scope}
           disabled={busy}
@@ -338,34 +356,11 @@ export function CodingPacks({ visible: open }: { visible: boolean }) {
         >
           {!workspace && <option value="">Choose a workspace</option>}
           {workspaces.map(w => (
-            <option key={workspaceKey(w)} value={workspaceKey(w)}>
-              {w.hostId} · {w.root}
+            <option key={workspaceKey(w)} value={workspaceKey(w)} title={w.root}>
+              {w.hostId} · {baseName(w.root)}
             </option>
           ))}
         </KomaSelect>
-        <button
-          type="button"
-          className={button}
-          title="Refresh installed components"
-          aria-label="Refresh language packs"
-          disabled={busy}
-          onClick={() => setRefresh(n => n + 1)}
-        >
-          <RefreshCw size={12} />
-        </button>
-        <button
-          type="button"
-          className={button}
-          title="Open coding configuration"
-          aria-label="Open coding configuration"
-          disabled={!workspace || currentHost !== workspace.hostId}
-          onClick={() => void editConfig()}
-        >
-          <FileCog size={12} />
-        </button>
-      </div>
-
-      <div className="flex flex-none flex-wrap items-center gap-3 border-b border-koma-border px-3 py-2">
         <Package size={12} className="flex-none text-koma-dim" />
         <div className="w-40 min-w-0 max-w-full flex-none">
           <KomaSelect
@@ -391,8 +386,8 @@ export function CodingPacks({ visible: open }: { visible: boolean }) {
       </div>
 
       {/* One scroll owner: tools stay reachable, content never shrinks to zero. */}
-      <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
-        <div className="mx-auto w-full max-w-3xl space-y-4">
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+        <div className="w-full max-w-3xl space-y-4">
           {(loadError || error) && (
             <div role="alert" className="text-koma-error">{[loadError, error].filter(Boolean).join(' · ')}</div>
           )}
@@ -414,7 +409,7 @@ export function CodingPacks({ visible: open }: { visible: boolean }) {
                   <input id="coding-executable" list="coding-environments" value={executable}
                     onChange={e => setExecutable(e.target.value)} disabled={busy}
                     placeholder="Automatic"
-                    className="h-7 min-w-0 flex-1 rounded border border-koma-border bg-koma-panel2 px-2 text-[11px] text-koma-fg" />
+                    className="h-6 min-w-0 flex-1 rounded border border-koma-border bg-koma-panel2 px-2 text-[11px] text-koma-fg" />
                   <datalist id="coding-environments">{pack.candidates.map(v => <option key={v} value={v} />)}</datalist>
                   <button type="button" className={`${button} border border-koma-border`} disabled={busy || !data}
                     onClick={() => void act('select')}>Apply</button>
