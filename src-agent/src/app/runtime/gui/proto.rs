@@ -475,7 +475,11 @@ pub(super) enum GuiReq {
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Same routing as `GitStatus` — host-local, never the
     /// daemon. Reply lands as a `RepoList` push.
-    GitRepos,
+    GitRepos {
+        /// Bypass the discovery cache (the picker's rescan button).
+        #[serde(default)]
+        force: bool,
+    },
     /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
     /// (an absolute toplevel path from a prior `RepoList`). Routed to the host-relay
     /// thread via `HostCtl::SetActiveRepo`, same reasoning as `SetGitKey` — the reply

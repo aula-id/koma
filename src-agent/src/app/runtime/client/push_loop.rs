@@ -947,7 +947,7 @@ pub(super) fn push_loop(
                 | Ok(ctl @ super::HostCtl::GitStashPop)
                 | Ok(ctl @ super::HostCtl::GitStashList)
                 | Ok(ctl @ super::HostCtl::GitBranchList { .. })
-                | Ok(ctl @ super::HostCtl::GitRepos)
+                | Ok(ctl @ super::HostCtl::GitRepos { .. })
                 | Ok(ctl @ super::HostCtl::SetActiveRepo { .. })
                 | Ok(ctl @ super::HostCtl::GitCheckout { .. })
                 | Ok(ctl @ super::HostCtl::GitCreateBranch { .. })
@@ -1082,10 +1082,11 @@ pub(super) fn push_loop(
                                     request_id,
                                 );
                             }
-                            super::HostCtl::GitRepos => {
+                            super::HostCtl::GitRepos { force } => {
                                 git_host::spawn_git_repos_attached(
                                     repo_list_tx.clone(),
                                     current_owned.clone(),
+                                    force,
                                 );
                             }
                             super::HostCtl::SetActiveRepo { root } => {
@@ -2287,7 +2288,7 @@ fn push_remote_git_unavailable(ctl: &super::HostCtl, push: &dyn Fn(String)) {
                 },
             );
         }
-        super::HostCtl::GitRepos => {
+        super::HostCtl::GitRepos { .. } => {
             push_repo_list(
                 push,
                 super::git_repos::RepoListResult {

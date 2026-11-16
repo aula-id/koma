@@ -426,7 +426,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitBranchList { request_id } => dispatch_git::git_branch_list(&ctx.ctl, request_id),
         // Source Control multi-repo picker (discover + set-active). Same host-local
         // routing as `GitBranchList`/`SetGitKey` above.
-        GuiReq::GitRepos => dispatch_git::git_repos(&ctx.ctl),
+        GuiReq::GitRepos { force } => dispatch_git::git_repos(&ctx.ctl, force),
         GuiReq::SetActiveRepo { root } => dispatch_git::set_active_repo(&ctx.ctl, root),
         GuiReq::GitCheckout { ref_name, root } => {
             dispatch_git::git_checkout(&ctx.ctl, ref_name, root)

@@ -14,34 +14,67 @@
 //! - [`resolve_repo_root`] is the HOT path (every git op). It validates the cached
 //!   active root with a single `.git` existence check and returns — O(1) after the
 //!   first touch. Only a missing/invalidated active triggers a discovery.
-//! - [`discover_repos`] is the EXPENSIVE path (filesystem walks). It runs on
-//!   first-touch and whenever the picker is opened (a `GitRepos` request), off a
-//!   worker thread — NEVER inline on a control loop.
+//! - [`discover_repos`] is the EXPENSIVE path (a bounded filesystem scan, cached
+//!   per session for [`REPOS_TTL`]). It runs on first-touch and whenever the picker
+//!   is opened (a `GitRepos` request), off a worker thread — NEVER inline on a
+//!   control loop.
 //! - [`set_active_repo`]/[`active_repo`] are the in-memory registry (GUI-only,
 //!   fine to lose on restart), keyed by session id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-/// Safety cap on discovered repos — a pathological container (thousands of nested
-/// checkouts) must not balloon the picker or the wire payload. Silently truncated
-/// past this for the MVP.
-const MAX_REPOS: usize = 50;
+/// Safety cap on discovered repos, so a pathological tree cannot balloon the picker
+/// or the wire payload. Silently truncated past this.
+const MAX_REPOS: usize = 200;
+/// Directory levels scanned below a workdir (`a/b/c/d/e` is found, `a/b/c/d/e/f` is not).
+const MAX_SCAN_DEPTH: usize = 5;
+/// Directories read per workdir.
+const MAX_SCAN_ENTRIES: usize = 20_000;
+/// Wall-clock budget for one discovery, shared by all workdirs.
+const SCAN_BUDGET: Duration = Duration::from_millis(750);
+/// How long a session's discovery result is reused.
+const REPOS_TTL: Duration = Duration::from_secs(30);
+/// Heavy directories never scanned (compared case-insensitively). Dot-directories
+/// are skipped separately.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "Pods",
+    "$RECYCLE.BIN",
+    "System Volume Information",
+];
 
-/// Depth cap for the sub-repo subtree walk — a safety net so an accidentally-huge
-/// container tree can't run the walker unbounded (gitignore/.dockerignore pruning
-/// plus the stop-descend-on-repo rule already keep it small in practice).
-const MAX_WALK_DEPTH: usize = 8;
+/// What kind of checkout a discovered repo is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RepoKind {
+    #[default]
+    Repo,
+    Worktree,
+    Submodule,
+}
 
 /// One discovered repository, serialized to the webview for the picker. `root` is
-/// the absolute repo toplevel (a `git rev-parse --show-toplevel`, or a discovered
-/// `.git`-bearing dir); `name` is its last path component, the picker's label.
+/// the absolute repo toplevel; `name` is its last path component; `rel` is the path
+/// relative to the workdir it was found under ('/'-separated, "." for the workdir's
+/// own repo). `rel` and `kind` default so lists from older peers still decode.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RepoInfo {
     pub root: String,
     pub name: String,
+    #[serde(default)]
+    pub rel: String,
+    #[serde(default)]
+    pub kind: RepoKind,
 }
 
 /// The result of a host-side [`discover_repos`] + current-active lookup, pushed to
@@ -64,6 +97,16 @@ pub(crate) struct RepoListResult {
 /// e.into_inner())`), same as [`super::git`]'s `GIT_LOCK`: a panicked holder must
 /// not permanently brick repo resolution.
 static ACTIVE_REPO: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
+
+type RepoCache = HashMap<String, (Instant, Vec<RepoInfo>)>;
+
+/// Discovery results per session id, reused for [`REPOS_TTL`].
+static REPO_CACHE: Mutex<Option<RepoCache>> = Mutex::new(None);
+
+fn cache_get(map: &RepoCache, key: &str, now: Instant, ttl: Duration) -> Option<Vec<RepoInfo>> {
+    let (at, repos) = map.get(key)?;
+    (now.saturating_duration_since(*at) < ttl).then(|| repos.clone())
+}
 
 /// Assign `session`'s active repo to `root`. No-op when there's no session (the
 /// StartScreen case — nothing to key on).
@@ -125,8 +168,8 @@ pub(crate) fn active_repo(session: Option<&str>) -> Option<PathBuf> {
 /// Resolve the repo root every git op targets (the [`super::git::repo_root_for`]
 /// body). CHEAP after first touch: a valid cached active root is validated with a
 /// single `.git` existence check (no subprocess) and returned. Only a missing or
-/// vanished active triggers a [`discover_repos`] walk, whose first result becomes
-/// the new active. `None` when no repo can be found at all (no session, no
+/// vanished active triggers a [`discover_repos`] scan, whose first result (the first
+/// workdir's own repo when it has one) becomes the new active. `None` when no repo can be found at all (no session, no
 /// workdirs, or none contain/hold a repo).
 pub(crate) fn resolve_repo_root(session: Option<&str>) -> Option<PathBuf> {
     if let Some(active) = active_repo(session) {
@@ -146,72 +189,104 @@ pub(crate) fn resolve_repo_root(session: Option<&str>) -> Option<PathBuf> {
 }
 
 /// Discover every git repo reachable from `session`'s configured workdirs — the
-/// EXPENSIVE path (filesystem walks), for the picker + first-touch resolution.
+/// EXPENSIVE path, for the picker + first-touch resolution. Cached per session for
+/// [`REPOS_TTL`]; see [`discover_repos_fresh`] to bypass the cache.
 ///
-/// Per workdir: probe whether the workdir itself is inside a repo (`git rev-parse
-/// --show-toplevel`, the same probe [`super::git::repo_root_for`] used); if so it's
-/// a normal single-project open — record that one toplevel and DON'T scan children
-/// (they belong to that repo). Otherwise the workdir is a bare container — walk its
-/// subtree (respecting `.gitignore` by default + `.dockerignore`, no symlink
-/// following, depth-capped) recording every `.git`-bearing dir and STOPPING descent
-/// at each (a repo's inner tree holds no separate repos we care about). Walk errors
-/// are skipped silently.
-///
-/// The combined candidates are canonicalized to absolute paths, deduped (a repo
-/// reachable from two workdirs appears once), nesting-filtered (a root inside
-/// another discovered root is dropped — top-most wins), capped at [`MAX_REPOS`],
-/// and returned sorted by `name` (case-insensitive) for a stable picker order.
+/// Each workdir's own repo (the `git rev-parse --show-toplevel` probe) comes first,
+/// in workdir order. Every repo nested below a workdir follows, sorted by relative
+/// path. The nested scan ignores `.gitignore`, so checkouts a parent repo ignores
+/// are found; see [`scan_nested`] for its bounds.
 pub(crate) fn discover_repos(session: Option<&str>) -> Vec<RepoInfo> {
-    let dirs = match session.and_then(super::diff::session_workdirs_for) {
+    discover_cached(session, false)
+}
+
+/// [`discover_repos`] that always rescans and refills the cache.
+pub(crate) fn discover_repos_fresh(session: Option<&str>) -> Vec<RepoInfo> {
+    discover_cached(session, true)
+}
+
+fn discover_cached(session: Option<&str>, force: bool) -> Vec<RepoInfo> {
+    let Some(session) = session else {
+        return Vec::new();
+    };
+    let dirs = match super::diff::session_workdirs_for(session) {
         Some(d) if !d.is_empty() => d,
         _ => return Vec::new(),
     };
-
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for workdir in &dirs {
-        match workdir_toplevel(workdir) {
-            // Workdir is itself inside a repo — one entry, no child scan.
-            Some(top) => candidates.push(top),
-            // Bare container — scan for sub-repos.
-            None => scan_subrepos(workdir, &mut candidates),
+    if !force {
+        let guard = REPO_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = guard
+            .as_ref()
+            .and_then(|m| cache_get(m, session, Instant::now(), REPOS_TTL))
+        {
+            return hit;
         }
     }
+    let repos = discover_repos_uncached(&dirs);
+    REPO_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(session.to_string(), (Instant::now(), repos.clone()));
+    repos
+}
 
-    // Canonicalize (resolve symlinks + absolutize) so a repo reachable via two
-    // workdirs — or a symlinked path — dedups to one entry. Fall back to the raw
-    // path if canonicalize fails (path vanished mid-walk — rare).
-    let mut roots: Vec<PathBuf> = candidates
-        .into_iter()
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
-        .collect();
-    roots.sort();
-    roots.dedup();
-
-    // Drop any root nested INSIDE another discovered root (keep the top-most).
-    // Sorted ascending, an ancestor always precedes its descendants, so a root is
-    // kept only when no already-kept root is a path-prefix of it.
-    let mut kept: Vec<PathBuf> = Vec::new();
-    for r in roots {
-        if !kept.iter().any(|k| r.starts_with(k)) {
-            kept.push(r);
+fn discover_repos_uncached(dirs: &[PathBuf]) -> Vec<RepoInfo> {
+    let deadline = Instant::now() + SCAN_BUDGET;
+    let mut primary: Vec<(PathBuf, String)> = Vec::new();
+    for workdir in dirs {
+        if let Some(top) = workdir_toplevel(workdir) {
+            let same = match (std::fs::canonicalize(&top), std::fs::canonicalize(workdir)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => top == *workdir,
+            };
+            let rel = if same {
+                ".".to_string()
+            } else {
+                rel_label(workdir, &top)
+            };
+            primary.push((top, rel));
         }
     }
-    kept.truncate(MAX_REPOS);
+    let mut nested: Vec<(PathBuf, String)> = Vec::new();
+    for workdir in dirs {
+        let mut found = Vec::new();
+        scan_nested(
+            workdir,
+            deadline,
+            MAX_SCAN_DEPTH,
+            MAX_SCAN_ENTRIES,
+            MAX_REPOS,
+            &mut found,
+        );
+        nested.extend(found.into_iter().map(|p| {
+            let rel = rel_label(workdir, &p);
+            (p, rel)
+        }));
+    }
+    nested.sort_by_key(|(_, rel)| rel.to_lowercase());
 
-    let mut infos: Vec<RepoInfo> = kept
-        .into_iter()
-        .map(|p| {
-            let name = p
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            RepoInfo {
-                root: p.to_string_lossy().into_owned(),
-                name,
-            }
-        })
-        .collect();
-    infos.sort_by_key(|a| a.name.to_lowercase());
+    // Canonicalize so a repo reachable via two workdirs or a symlink dedups to one
+    // entry; the first occurrence wins, which keeps the primary entries first.
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut infos: Vec<RepoInfo> = Vec::new();
+    for (p, rel) in primary.into_iter().chain(nested) {
+        let p = std::fs::canonicalize(&p).unwrap_or(p);
+        if !seen.insert(p.clone()) {
+            continue;
+        }
+        let name = p
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        infos.push(RepoInfo {
+            root: display_path(&p),
+            name,
+            rel,
+            kind: classify_repo(&p),
+        });
+    }
+    infos.truncate(MAX_REPOS);
     infos
 }
 
@@ -232,43 +307,125 @@ fn workdir_toplevel(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Walk `container`'s subtree, appending every discovered repo root (a dir holding
-/// a `.git` entry) to `out` and STOPPING descent at each. Respects `.gitignore`
-/// (the `ignore` crate default) plus `.dockerignore`, never follows symlinks
-/// (default — avoids loops), and is depth-capped ([`MAX_WALK_DEPTH`]) as a safety
-/// net. `filter_entry` returning `false` both records the repo (via a captured
-/// `Arc<Mutex<..>>`, poison-safe) and prunes its subtree; the walk is driven by
-/// consuming the iterator, whose `DirEntry`s are otherwise unused. Unreadable dirs
-/// / walk errors are skipped silently (`.flatten()`).
-fn scan_subrepos(container: &Path, out: &mut Vec<PathBuf>) {
-    let found: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = found.clone();
-    // Crate default `hidden(true)` skips dot-directories (e.g. `.local/`), so repos
-    // nested inside one are NOT discovered here — intentional, matches VSCode-ish
-    // behavior; not a bug to fix.
-    let walker = ignore::WalkBuilder::new(container)
-        // Treat `.dockerignore` as an extra ignore file, on top of the default
-        // `.gitignore` handling — a container often carries both.
-        .add_custom_ignore_filename(".dockerignore")
-        .max_depth(Some(MAX_WALK_DEPTH))
-        .filter_entry(move |dent| {
-            if dent.file_type().is_some_and(|t| t.is_dir()) {
-                let p = dent.path();
-                // `.git` may be a dir OR a gitdir file (linked worktree) —
-                // `.exists()` covers both.
-                if p.join(".git").exists() {
-                    sink.lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push(p.to_path_buf());
-                    return false; // record repo root, stop descending into it
-                }
+/// Walk `root`'s subtree iteratively, appending every directory holding a `.git`
+/// entry (dir or gitdir file) to `out`. `root` itself is never recorded. The walk
+/// descends into repos too and ignores `.gitignore`, never follows symlinks, skips
+/// dot-directories and [`SKIP_DIRS`], and stops at `deadline`, after `max_entries`
+/// directories, or once `out` holds `max_repos`. `max_depth` counts directory
+/// levels below `root`. Unreadable directories are skipped.
+fn scan_nested(
+    root: &Path,
+    deadline: Instant,
+    max_depth: usize,
+    max_entries: usize,
+    max_repos: usize,
+    out: &mut Vec<PathBuf>,
+) {
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if Instant::now() > deadline || visited >= max_entries || out.len() >= max_repos {
+            return;
+        }
+        visited += 1;
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
             }
-            true
-        })
-        .build();
-    // Drive the walk (filter_entry side-effects do the recording); entries unused.
-    for _ in walker.flatten() {}
-
-    let repos = std::mem::take(&mut *found.lock().unwrap_or_else(|e| e.into_inner()));
-    out.extend(repos);
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            let child = entry.path();
+            if child.join(".git").exists() {
+                if out.len() >= max_repos {
+                    return;
+                }
+                out.push(child.clone());
+            }
+            if depth + 1 < max_depth {
+                stack.push((child, depth + 1));
+            }
+        }
+    }
 }
+
+/// Classify a `gitdir: <path>` pointer file: a path through `worktrees/` is a linked
+/// worktree (checked first, since a submodule's worktree also passes through
+/// `modules/`), through `modules/` a submodule, anything else a plain repo.
+fn classify_gitdir_text(text: &str) -> RepoKind {
+    let text = text.replace('\\', "/");
+    let Some(path) = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:")) else {
+        return RepoKind::Repo;
+    };
+    if path.contains("/worktrees/") {
+        RepoKind::Worktree
+    } else if path.contains("/modules/") {
+        RepoKind::Submodule
+    } else {
+        RepoKind::Repo
+    }
+}
+
+fn classify_repo(dir: &Path) -> RepoKind {
+    let git = dir.join(".git");
+    if git.is_file() {
+        std::fs::read_to_string(git)
+            .map(|t| classify_gitdir_text(&t))
+            .unwrap_or_default()
+    } else {
+        RepoKind::Repo
+    }
+}
+
+/// `root` relative to `workdir`, '/'-separated; "." when equal; the root's own name
+/// when it is not below the workdir (a toplevel above it).
+fn rel_label(workdir: &Path, root: &Path) -> String {
+    match root.strip_prefix(workdir) {
+        Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
+        Ok(rel) => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
+}
+
+/// Drop a Windows verbatim prefix: `\\?\UNC\srv\share` -> `\\srv\share`,
+/// `\\?\C:\x` -> `C:\x`. Anything else is returned unchanged.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn strip_verbatim_prefix(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// The string form of a repo root sent to the webview and compared back by the
+/// store. `canonicalize` yields verbatim `\\?\` paths on Windows; strip them so
+/// every consumer sees the same plain form.
+fn display_path(p: &Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        strip_verbatim_prefix(&s)
+    }
+    #[cfg(not(windows))]
+    {
+        s
+    }
+}
+
+#[cfg(test)]
+#[path = "git_repos_test.rs"]
+mod tests;
