@@ -83,7 +83,7 @@ pub(super) fn git_branch_list(ctl: &Sender<HostCtl>, request_id: Option<u64>) {
 }
 
 /// `GuiReq::GitRepos` (multi-repo picker).
-pub(super) fn git_repos(ctl: &Sender<HostCtl>) {
+pub(super) fn git_repos(ctl: &Sender<HostCtl>, force: bool) {
     let _ = ctl.send(HostCtl::GitRepos { force });
 }
 
