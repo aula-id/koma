@@ -172,7 +172,7 @@ export default function UploadSkillTab() {
               <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">Package requirements</summary>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-koma-fg opacity-45">
                 <li>Maximum 1,000 files and folder depth 16.</li>
-                                <li>Maximum 2 MiB for SKILL.md.</li>
+                <li>Maximum 2 MiB for SKILL.md.</li>
                 <li>Maximum 256 MiB compressed and 256 MiB uncompressed total.</li>
                 <li>No symlinks, special files, path traversal, collisions, or malformed SKILL.md.</li>
               </ul>
