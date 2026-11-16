@@ -347,6 +347,16 @@ pub enum ClientRequest {
     GetMcpStatus {
         request_id: String,
     },
+    /// Restart ONE MCP server (user or project scope) by uuid; the others keep running.
+    RestartMcpServer {
+        uuid: String,
+    },
+    /// Approve (or revoke) a project `.mcp.json` server by uuid for the foreground
+    /// session's workspace. Only an approved server is started.
+    ApproveMcpProjectServer {
+        uuid: String,
+        approved: bool,
+    },
     /// Upsert a provider (Connector ProviderForm). `uuid` is `None` for a new provider
     /// (minted OpenAI-compatible) or `Some` to edit by uuid (preserving its wire type).
     SetProvider {

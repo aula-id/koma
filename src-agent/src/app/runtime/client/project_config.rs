@@ -17,7 +17,8 @@
 
 use super::push_loop::PushState;
 use super::push_proto::{
-    PushEnvelope, PushMcpServer, PushModel, PushPalette, PushPaletteInfo, PushProvider,
+    PushEnvelope, PushMcpProject, PushMcpServer, PushModel, PushPalette, PushPaletteInfo,
+    PushProvider,
 };
 
 /// Resolve a ratatui [`Color`] to a `#rrggbb` string, mirroring the fallbacks the
@@ -57,6 +58,7 @@ pub(super) struct ConfigProjection {
     session_models: Vec<crate::model::app_config::ModelEntry>,
     main_configured: Option<bool>,
     mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+    mcp_project: Option<crate::ipc::proto::McpProjectSnapshot>,
     oauth_conn_uuids: Vec<String>,
     palette: PushPalette,
     palette_name: String,
@@ -81,6 +83,7 @@ impl ConfigProjection {
             session_models: g.session_models.clone(),
             main_configured: g.main_configured,
             mcp_servers: g.mcp_servers.clone(),
+            mcp_project: g.mcp_project.clone(),
             oauth_conn_uuids: g.oauth_conn_uuids.clone(),
             palette: palette_from_global(g),
             palette_name: g.palette.clone(),
@@ -112,6 +115,7 @@ impl ConfigProjection {
                 .is_some_and(|r| r.is_usable() && r.is_routable()),
             ),
             mcp_servers: cfg.mcp_servers.clone(),
+            mcp_project: None,
             oauth_conn_uuids: cfg.oauth_conns.iter().map(|c| c.uuid.clone()).collect(),
             palette: push_palette_from_config(cfg),
             palette_name: cfg.palette.clone(),
@@ -327,38 +331,66 @@ pub(super) fn push_config(
         })
         .map(|m| m.uuid.clone());
 
-    let mcp: Vec<PushMcpServer> = cfg
+    let push_mcp = |s: &crate::model::app_config::McpServerEntry,
+                    scope: &'static str,
+                    approval: Option<&'static str>,
+                    overridden: bool| PushMcpServer {
+        id: s.uuid.clone(),
+        name: s.name.clone(),
+        enabled: s.enabled,
+        transport: match s.transport {
+            McpTransport::Stdio => "stdio",
+            McpTransport::Http => "http",
+        },
+        command: s.command.clone(),
+        args: s.args.join(" "),
+        env: s
+            .env
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        url: s.url.clone(),
+        argv: s.args.clone(),
+        env_pairs: s.env.clone(),
+        headers: crate::app::mode::mcp::mask_headers(&s.headers),
+        cwd: s.cwd.clone().unwrap_or_default(),
+        startup_timeout_ms: s.startup_timeout_ms,
+        tool_timeout_ms: s.tool_timeout_ms,
+        allowed_tools: s.allowed_tools.clone(),
+        disabled_tools: s.disabled_tools.clone(),
+        tool_count: cfg.mcp_status.get(&s.uuid).copied().unwrap_or(0),
+        error: cfg.mcp_errors.get(&s.uuid).cloned(),
+        scope,
+        approval,
+        overridden,
+    };
+    let approved_project_names: Vec<String> = cfg
+        .mcp_project
+        .iter()
+        .flat_map(|p| p.servers.iter())
+        .filter(|r| r.approval == "approved" && r.entry.enabled)
+        .map(|r| crate::app::mcp::sanitize_name(&r.entry.name))
+        .collect();
+    let mut mcp: Vec<PushMcpServer> = cfg
         .mcp_servers
         .iter()
-        .map(|s| PushMcpServer {
-            id: s.uuid.clone(),
-            name: s.name.clone(),
-            enabled: s.enabled,
-            transport: match s.transport {
-                McpTransport::Stdio => "stdio",
-                McpTransport::Http => "http",
-            },
-            command: s.command.clone(),
-            args: s.args.join(" "),
-            env: s
-                .env
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            url: s.url.clone(),
-            argv: s.args.clone(),
-            env_pairs: s.env.clone(),
-            headers: crate::app::mode::mcp::mask_headers(&s.headers),
-            cwd: s.cwd.clone().unwrap_or_default(),
-            startup_timeout_ms: s.startup_timeout_ms,
-            tool_timeout_ms: s.tool_timeout_ms,
-            allowed_tools: s.allowed_tools.clone(),
-            disabled_tools: s.disabled_tools.clone(),
-            tool_count: cfg.mcp_status.get(&s.uuid).copied().unwrap_or(0),
-            error: cfg.mcp_errors.get(&s.uuid).cloned(),
+        .map(|s| {
+            let overridden =
+                approved_project_names.contains(&crate::app::mcp::sanitize_name(&s.name));
+            push_mcp(s, "user", None, overridden)
         })
         .collect();
+    if let Some(project) = &cfg.mcp_project {
+        mcp.extend(project.servers.iter().map(|r| {
+            let approval = match r.approval.as_str() {
+                "approved" => "approved",
+                "changed" => "changed",
+                _ => "pending",
+            };
+            push_mcp(&r.entry, "project", Some(approval), false)
+        }));
+    }
 
     // FIRST-RUN: no usable Main route = a global OR local model that (a) holds the Main
     // role AND (b) is bound to a provider OR an OAuth connection that actually exists.
@@ -419,6 +451,10 @@ pub(super) fn push_config(
         palettes,
         theme: cfg.palette_name.clone(),
         needs_onboarding,
+        mcp_project: cfg.mcp_project.as_ref().map(|p| PushMcpProject {
+            file: p.file.clone(),
+            error: p.error.clone(),
+        }),
     };
     if let Ok(json) = serde_json::to_string(&env) {
         if last.config_json.as_deref() != Some(json.as_str()) {
@@ -448,6 +484,7 @@ mod tests {
             session_models,
             main_configured: Some(true),
             mcp_servers: vec![],
+            mcp_project: None,
             oauth_conn_uuids: vec![],
             palette: PushPalette {
                 bg: "#000000".into(),
@@ -538,5 +575,45 @@ mod tests {
             crate::app::mode::mcp::HEADER_KEEP
         );
         assert_eq!(v["mcp"][0]["argv"][0], "a b");
+    }
+
+    fn mcp_rows(approval: &str) -> Vec<serde_json::Value> {
+        use crate::model::app_config::McpServerEntry;
+        let entry = |uuid: &str, name: &str, enabled: bool| McpServerEntry {
+            uuid: uuid.into(),
+            name: name.into(),
+            enabled,
+            ..Default::default()
+        };
+        let mut cfg = projection(vec![], vec![]);
+        cfg.mcp_servers = vec![entry("u1", "Fs", true), entry("u2", "other", true)];
+        cfg.mcp_project = Some(crate::ipc::proto::McpProjectSnapshot {
+            file: "/p/.mcp.json".into(),
+            error: None,
+            servers: vec![crate::ipc::proto::McpProjectServerSnapshot {
+                entry: entry("p1", "fs", approval == "approved"),
+                approval: approval.into(),
+            }],
+        });
+        let mut last = PushState::new();
+        let json = std::cell::RefCell::new(String::new());
+        push_config(Some(&cfg), &|s| *json.borrow_mut() = s, &mut last);
+        let v: serde_json::Value = serde_json::from_str(&json.borrow()).unwrap();
+        assert_eq!(v["mcpProject"]["file"], "/p/.mcp.json");
+        v["mcp"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn project_rows_carry_scope_and_approval_and_override_user_rows_only_when_approved() {
+        let rows = mcp_rows("approved");
+        assert_eq!(rows[2]["scope"], "project");
+        assert_eq!(rows[2]["approval"], "approved");
+        assert_eq!(rows[0]["scope"], "user");
+        assert_eq!(rows[0]["overridden"], true);
+        assert!(rows[1].get("overridden").is_none());
+
+        let rows = mcp_rows("pending");
+        assert_eq!(rows[2]["approval"], "pending");
+        assert!(rows[0].get("overridden").is_none());
     }
 }

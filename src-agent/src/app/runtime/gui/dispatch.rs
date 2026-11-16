@@ -310,6 +310,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        GuiReq::RestartMcpServer { uuid } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::RestartMcpServer { uuid });
+                }
+            }
+        }
+        GuiReq::ApproveMcpProjectServer { uuid, approved } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ApproveMcpProjectServer { uuid, approved });
+                }
+            }
+        }
         GuiReq::SetProvider {
             uuid,
             name,

@@ -80,6 +80,74 @@ impl DaemonHub {
         self.ack_or_error(idx, result);
     }
 
+    // GUI MCP per-server restart: a user server on the base manager, or a project server
+    // on the overlay. Runs on a thread because a Proxy manager blocks on socket IO.
+    pub(super) fn restart_mcp_server(&mut self, idx: usize, state: &mut AppState, uuid: String) {
+        let Some(mgr) = state.rest.mcp_manager.clone() else {
+            return self.ack_or_error(idx, Err(anyhow::anyhow!("MCP is not running")));
+        };
+        if let Some(entry) = state
+            .rest
+            .config
+            .mcp_servers
+            .iter()
+            .find(|s| s.uuid == uuid)
+            .cloned()
+        {
+            std::thread::spawn(move || mgr.restart_server(&entry));
+            return self.ack_or_error(idx, Ok(()));
+        }
+        let project = state
+            .rest
+            .mcp_project
+            .as_ref()
+            .and_then(|l| l.rows.iter().find(|r| r.entry.uuid == uuid))
+            .map(|r| r.entry.clone());
+        match project {
+            Some(entry) => {
+                std::thread::spawn(move || mgr.restart_project_server(&entry));
+                self.ack_or_error(idx, Ok(()));
+            }
+            None => self.ack_or_error(idx, Err(anyhow::anyhow!("no such MCP server"))),
+        }
+    }
+
+    // Approve or revoke a project `.mcp.json` server: record its current fingerprint under
+    // the workspace root, persist, tell other sessions, and re-apply the overlay here.
+    pub(super) fn approve_mcp_project_server(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        uuid: String,
+        approved: bool,
+    ) {
+        let Some(row) = state.rest.mcp_project.as_ref().and_then(|l| {
+            l.rows.iter().find(|r| r.entry.uuid == uuid).map(|r| {
+                (
+                    l.root_key.clone(),
+                    r.entry.name.clone(),
+                    r.fingerprint.clone(),
+                )
+            })
+        }) else {
+            return self.ack_or_error(idx, Err(anyhow::anyhow!("no such project MCP server")));
+        };
+        let (root, name, fingerprint) = row;
+        let approvals = &mut state.rest.config.mcp_project_approvals;
+        approvals.retain(|a| !(a.root == root && a.name == name));
+        if approved {
+            approvals.push(crate::model::app_config::McpProjectApproval {
+                root,
+                name,
+                fingerprint,
+            });
+        }
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
+        crate::app::runtime::actions::refresh_project_mcp(state, handle);
+        self.ack_or_error(idx, result);
+    }
+
     // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
     pub(super) fn delete_mcp_server(
         &mut self,

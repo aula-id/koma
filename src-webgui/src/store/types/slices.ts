@@ -7,7 +7,7 @@ import type { InstalledExt, InstalledExtDetail, StoreDetail, StoreItem } from '.
 import type { OAuthConn, OAuthPhase, OAuthProviderEntry } from './oauth'
 import type { AttachmentEntry, BashJobEntry, BootstrapState, FileChangeEntry, HubCookingEntry, HubHistoryEntry, LoadPhase, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry, ToastEntry } from './session'
 import type { Tab } from './tabs'
-import type { McpServer, Model, Provider } from '../../types/config'
+import type { McpProject, McpServer, Model, Provider } from '../../types/config'
 
 // ---- Store shape --------------------------------------------------------
 
@@ -90,6 +90,7 @@ export type HubSlice = {
 // accumulated.
 export type ConfigSlice = {
   mcp: McpServer[]
+  mcpProject?: McpProject
   providers: Provider[]
   models: Model[]
   // True once the first authoritative Config push has landed. The pre-session

@@ -124,3 +124,139 @@ fn import_into_replaces_skips_and_mints() {
     assert!(!list[2].uuid.is_empty());
     assert_eq!(warnings.len(), 1);
 }
+
+fn approval(root: &str, name: &str, fp: &str) -> McpProjectApproval {
+    McpProjectApproval {
+        root: root.into(),
+        name: name.into(),
+        fingerprint: fp.into(),
+    }
+}
+
+const FILE: &str = r#"{"mcpServers":{
+    "fs":{"command":"npx","args":["-y","srv"]},
+    "rel":{"command":"x","cwd":"sub"},
+    "var":{"command":"x","cwd":"${HOME}/p"},
+    "web":{"type":"http","url":"https://x/mcp"}}}"#;
+
+fn layer(approvals: &[McpProjectApproval]) -> ProjectLayer {
+    layer_from_text(Path::new("/proj"), "/proj", FILE, approvals)
+}
+
+#[test]
+fn project_uuid_is_stable_and_root_dependent() {
+    assert_eq!(project_uuid("/a", "fs"), project_uuid("/a", "fs"));
+    assert_ne!(project_uuid("/a", "fs"), project_uuid("/b", "fs"));
+    assert_ne!(project_uuid("/a", "fs"), project_uuid("/a", "web"));
+}
+
+#[test]
+fn fingerprint_tracks_what_runs_only() {
+    let base = McpServerEntry {
+        command: "npx".into(),
+        args: vec!["a".into()],
+        ..Default::default()
+    };
+    let mut changed = base.clone();
+    changed.args.push("b".into());
+    assert_ne!(fingerprint(&base), fingerprint(&changed));
+    let mut renamed = base.clone();
+    renamed.name = "other".into();
+    renamed.enabled = true;
+    renamed.uuid = "x".into();
+    renamed.tool_timeout_ms = Some(5);
+    assert_eq!(fingerprint(&base), fingerprint(&renamed));
+}
+
+#[test]
+fn rows_start_pending_and_disabled() {
+    let l = layer(&[]);
+    assert_eq!(l.rows.len(), 4);
+    assert!(l
+        .rows
+        .iter()
+        .all(|r| r.approval == Approval::Pending && !r.entry.enabled));
+    assert!(l.active().is_empty());
+    assert!(l.hidden_prefixes().is_empty());
+}
+
+#[test]
+fn approval_enables_and_an_edit_marks_changed() {
+    let fp = layer(&[])
+        .rows
+        .iter()
+        .find(|r| r.entry.name == "fs")
+        .unwrap()
+        .fingerprint
+        .clone();
+    let ok = layer(&[approval("/proj", "fs", &fp)]);
+    let fs = ok.rows.iter().find(|r| r.entry.name == "fs").unwrap();
+    assert_eq!(fs.approval, Approval::Approved);
+    assert!(fs.entry.enabled);
+    assert_eq!(ok.active().len(), 1);
+    assert_eq!(ok.hidden_prefixes(), vec!["mcp__fs__".to_string()]);
+    assert!(ok.overrides("FS"));
+    assert!(!ok.overrides("web"));
+
+    let stale = layer(&[approval("/proj", "fs", "old")]);
+    let fs = stale.rows.iter().find(|r| r.entry.name == "fs").unwrap();
+    assert_eq!(fs.approval, Approval::Changed);
+    assert!(!fs.entry.enabled);
+    let other_root = layer(&[approval("/elsewhere", "fs", &fp)]);
+    assert!(other_root.active().is_empty());
+}
+
+#[test]
+fn stdio_cwd_defaults_to_root() {
+    let l = layer(&[]);
+    let cwd = |n: &str| {
+        l.rows
+            .iter()
+            .find(|r| r.entry.name == n)
+            .unwrap()
+            .entry
+            .cwd
+            .clone()
+    };
+    assert_eq!(cwd("fs").as_deref(), Some("/proj"));
+    assert_eq!(cwd("rel").as_deref(), Some("/proj/sub"));
+    assert_eq!(cwd("var").as_deref(), Some("${HOME}/p"));
+    assert_eq!(cwd("web"), None);
+}
+
+#[test]
+fn invalid_json_sets_error_and_no_rows() {
+    let l = layer_from_text(Path::new("/p"), "/p", "{nope", &[]);
+    assert!(l.error.is_some());
+    assert!(l.rows.is_empty());
+    assert!(l.snapshot().error.is_some());
+}
+
+#[test]
+fn load_reads_file_and_rejects_oversize() {
+    let dir = std::env::temp_dir().join(format!("koma-mcp-proj-{}", new_uuid()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(load_project_layer(&dir, &[]).is_none());
+    std::fs::write(dir.join(".mcp.json"), FILE).unwrap();
+    let l = load_project_layer(&dir, &[]).unwrap();
+    assert_eq!(l.rows.len(), 4);
+    assert!(l.error.is_none());
+    std::fs::write(dir.join(".mcp.json"), vec![b' '; 1024 * 1024 + 1]).unwrap();
+    let big = load_project_layer(&dir, &[]).unwrap();
+    assert!(big.error.unwrap().contains("1 MiB"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn load_rejects_a_file_outside_the_root() {
+    let base = std::env::temp_dir().join(format!("koma-mcp-link-{}", new_uuid()));
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(base.join("real.json"), FILE).unwrap();
+    std::os::unix::fs::symlink(base.join("real.json"), root.join(".mcp.json")).unwrap();
+    let l = load_project_layer(&root, &[]).unwrap();
+    assert!(l.error.unwrap().contains("outside"));
+    assert!(l.rows.is_empty());
+    std::fs::remove_dir_all(&base).unwrap();
+}

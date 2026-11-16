@@ -327,6 +327,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             .map(|s| s.settings.session_models.clone())
             .unwrap_or_default(),
         mcp_servers: state.rest.config.mcp_servers.clone(),
+        mcp_project: state.rest.mcp_project.as_ref().map(|l| l.snapshot()),
         oauth_conn_uuids: state
             .rest
             .config

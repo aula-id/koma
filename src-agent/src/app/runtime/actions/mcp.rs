@@ -156,6 +156,38 @@ fn ensure_mcp_manager(state: &mut AppState, handle: &tokio::runtime::Handle) {
     });
 }
 
+/// Re-read `<session workdir>/.mcp.json` and apply it to the MCP manager. Builds an empty
+/// LOCAL base manager when the session has approved project servers but no user servers
+/// (no global daemon is spawned for a project-only session).
+pub(in crate::app::runtime) fn refresh_project_mcp(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+) {
+    let layer = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.workdir())
+        .and_then(|root| {
+            crate::app::mcp::project::load_project_layer(
+                &root,
+                &state.rest.config.mcp_project_approvals,
+            )
+        });
+    let (active, hidden) = match &layer {
+        Some(l) => (l.active(), l.hidden_prefixes()),
+        None => (Vec::new(), Vec::new()),
+    };
+    if !active.is_empty() && state.rest.mcp_manager.is_none() {
+        state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(handle, &[]));
+    }
+    if let Some(mgr) = state.rest.mcp_manager.as_ref() {
+        mgr.set_project_servers(active, hidden);
+    }
+    state.rest.mcp_project = layer;
+}
+
 /// Persist `config.json` and LIVE-reconnect the MCP manager from the just-saved server
 /// set — the MODE-INDEPENDENT core of [`persist_and_finish`], callable by the GUI config
 /// setters (the `SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer` daemon handlers), which
@@ -176,6 +208,7 @@ pub(in crate::app::runtime) fn save_and_reload_mcp(
             mgr.reconnect(&servers);
         });
     }
+    refresh_project_mcp(state, handle);
     Ok(())
 }
 

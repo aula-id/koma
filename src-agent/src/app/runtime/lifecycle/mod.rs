@@ -840,6 +840,9 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
         });
     }
 
+    // Project `.mcp.json` servers: only approved ones run, in a private overlay.
+    super::actions::refresh_project_mcp(&mut state, &handle);
+
     // The final MCP manager may replace the inert one used during session warmup.
     // Register active extension tools into this manager (including proxy-local tools).
     let idx = state.rest.foreground;

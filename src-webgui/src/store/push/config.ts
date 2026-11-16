@@ -16,6 +16,7 @@ export function pushConfig(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         set((s) => ({
           config: {
             mcp: env.mcp,
+            mcpProject: env.mcpProject,
             providers: env.providers,
             models: env.models,
             loaded: true,

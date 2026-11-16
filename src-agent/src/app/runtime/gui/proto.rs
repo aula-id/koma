@@ -314,6 +314,15 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    /// Restart one MCP server by uuid (McpPanel row Restart button).
+    RestartMcpServer {
+        uuid: String,
+    },
+    /// Approve or revoke a project `.mcp.json` server by uuid.
+    ApproveMcpProjectServer {
+        uuid: String,
+        approved: bool,
+    },
     /// Upsert a provider (Connector ProviderForm). `uuid` is absent for a new provider.
     SetProvider {
         #[serde(default)]

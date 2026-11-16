@@ -15,6 +15,7 @@ const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 // reflect back, rather than mutating local state optimistically.
 export function McpPanel() {
   const servers = useKoma((s) => s.config.mcp)
+  const project = useKoma((s) => s.config.mcpProject)
   const req = useKoma((s) => s.req)
   const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus)
   const [draft, setDraft] = useState<McpDraft | null>(null)
@@ -58,6 +59,15 @@ export function McpPanel() {
     req({ r: 'EnableMcpServer', uuid: id, enabled })
   }
 
+  const restart = (id: string) => {
+    req({ r: 'RestartMcpServer', uuid: id })
+    setTimeout(refreshMcpStatus, 1500)
+  }
+  const approve = (id: string, approved: boolean) => {
+    req({ r: 'ApproveMcpProjectServer', uuid: id, approved })
+    setTimeout(refreshMcpStatus, 1500)
+  }
+
   return (
     <div className="relative h-full overflow-hidden">
       <AnimatePresence initial={false}>
@@ -96,6 +106,7 @@ export function McpPanel() {
           >
             <McpListView
               servers={servers}
+              project={project}
               armed={armed}
               onAdd={openAdd}
               onImport={() => setImporting(true)}
@@ -104,6 +115,8 @@ export function McpPanel() {
               onDisarm={() => setArmed(null)}
               onConfirm={remove}
               onToggleEnable={toggleEnable}
+              onRestart={restart}
+              onApprove={approve}
             />
           </motion.div>
         )}

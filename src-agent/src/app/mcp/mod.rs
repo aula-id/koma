@@ -276,6 +276,17 @@ struct Snapshot {
     /// can show why a green-dot server has no tools.
     errors: HashMap<String, String>,
     generation: u64,
+    /// Per-server restart counter: a connect that started before a
+    /// [`McpManager::restart_server`] for that server finds a different value and is
+    /// discarded, exactly like a stale `generation`.
+    server_epoch: HashMap<String, u64>,
+}
+
+impl Snapshot {
+    /// Whether a connect result captured at (`generation`, `epoch`) may still be stored.
+    fn connect_is_current(&self, uuid: &str, generation: u64, epoch: u64) -> bool {
+        self.generation == generation && self.server_epoch.get(uuid).copied().unwrap_or(0) == epoch
+    }
 }
 
 /// How long the [`McpBackend::Proxy`] waits for the global MCP daemon to answer a
@@ -303,6 +314,8 @@ enum McpBackend {
     /// answer WITHOUT a socket round-trip; `execute_blocking`/`server_status` do a
     /// fresh connect-per-call.
     Proxy {
+        /// Runtime for the project overlay's local manager.
+        handle: tokio::runtime::Handle,
         sock: PathBuf,
         cache: Mutex<(Vec<ToolDef>, Vec<String>)>,
         /// Last-known per-server error strings from the Status endpoint, cached
@@ -379,6 +392,55 @@ pub struct McpManager {
     /// even when ordinary MCP servers use the global proxy.
     ext_manager: Mutex<Option<Arc<crate::app::ext::ExtHostManager>>>,
     proxy_extension_tools: Mutex<Vec<DiscoveredTool>>,
+    /// Project `.mcp.json` servers, run by a private LOCAL manager (the global daemon
+    /// serves one user set for every session, so project servers never go there).
+    project: Mutex<Option<ProjectOverlay>>,
+    /// Tool-name prefixes of base servers a project server overrides in this session.
+    hidden_prefixes: Mutex<Vec<String>>,
+}
+
+/// The project-scope servers and the manager that runs them.
+struct ProjectOverlay {
+    servers: Vec<McpServerEntry>,
+    manager: Arc<McpManager>,
+}
+
+/// The sanitized `<server>` segment of a tool name (`mcp__<segment>__<tool>`).
+pub(crate) fn sanitize_name(name: &str) -> String {
+    util::sanitize_server_name(name)
+}
+
+impl McpManager {
+    fn overlay(&self) -> Option<Arc<McpManager>> {
+        self.project
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|o| Arc::clone(&o.manager))
+    }
+
+    fn is_hidden(&self, tool_name: &str) -> bool {
+        self.hidden_prefixes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .any(|prefix| tool_name.starts_with(prefix.as_str()))
+    }
+
+    /// Drop base tools a project server overrides, then add the project servers' tools.
+    fn merge_overlay(
+        &self,
+        mut defs: Vec<ToolDef>,
+        mut names: Vec<String>,
+    ) -> (Vec<ToolDef>, Vec<String>) {
+        defs.retain(|d| !self.is_hidden(&d.function.name));
+        names.retain(|n| !self.is_hidden(n));
+        if let Some(overlay) = self.overlay() {
+            defs.extend(overlay.tool_defs());
+            names.extend(overlay.tool_names());
+        }
+        (defs, names)
+    }
 }
 
 impl McpManager {
@@ -386,6 +448,11 @@ impl McpManager {
     /// `tools` array. Empty when nothing has connected yet (or no servers are
     /// configured), so the advertise path pays nothing.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
+        let defs = self.base_tool_defs();
+        self.merge_overlay(defs, Vec::new()).0
+    }
+
+    fn base_tool_defs(&self) -> Vec<ToolDef> {
         match &self.backend {
             McpBackend::Local { snapshot, .. } => {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
@@ -413,6 +480,11 @@ impl McpManager {
     /// (the stream filter keeps only tools whose name is in the advertise set, so
     /// the MCP names must be appended there or they would be dropped).
     pub fn tool_names(&self) -> Vec<String> {
+        let names = self.base_tool_names();
+        self.merge_overlay(Vec::new(), names).1
+    }
+
+    fn base_tool_names(&self) -> Vec<String> {
         match &self.backend {
             McpBackend::Local { snapshot, .. } => {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
@@ -452,7 +524,12 @@ impl McpManager {
     ///   later-added/removed server is eventually reflected; a non-empty result there
     ///   clears the confirmed-empty marker.
     pub fn advertise_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
-        self.with_proxy_extension_tools(self.advertise_servers_cached())
+        let (defs, names) = self.with_proxy_extension_tools(self.advertise_servers_cached());
+        match &self.backend {
+            // Local already serves the merged live lists through `tool_defs`/`tool_names`.
+            McpBackend::Local { .. } => (defs, names),
+            McpBackend::Proxy { .. } => self.merge_overlay(defs, names),
+        }
     }
 
     fn with_proxy_extension_tools(
@@ -614,6 +691,14 @@ impl McpManager {
     /// flattened `tools` list, tallied by `server_uuid`. Best-effort + cheap: it
     /// just locks the snapshot and walks two small collections.
     pub fn server_status(&self) -> std::collections::HashMap<String, usize> {
+        let mut status = self.base_server_status();
+        if let Some(overlay) = self.overlay() {
+            status.extend(overlay.server_status());
+        }
+        status
+    }
+
+    fn base_server_status(&self) -> std::collections::HashMap<String, usize> {
         match &self.backend {
             McpBackend::Local { snapshot, .. } => {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
@@ -771,17 +856,30 @@ impl McpManager {
             }
         }
 
-        self.status_cache
+        let mut status = self
+            .status_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .1
-            .clone()
+            .clone();
+        if let Some(overlay) = self.overlay() {
+            status.extend(overlay.server_status());
+        }
+        status
     }
 
     /// Per-server error strings, keyed by server uuid. Only populated for servers
     /// whose `spawn_connect` task failed. Read by the GUI to show a human-readable
     /// failure reason next to a connected-but-failing server.
     pub fn server_errors(&self) -> std::collections::HashMap<String, String> {
+        let mut errors = self.base_server_errors();
+        if let Some(overlay) = self.overlay() {
+            errors.extend(overlay.server_errors());
+        }
+        errors
+    }
+
+    fn base_server_errors(&self) -> std::collections::HashMap<String, String> {
         match &self.backend {
             McpBackend::Local { snapshot, .. } => {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
@@ -817,6 +915,11 @@ impl McpManager {
         namespaced_name: &str,
         args: &serde_json::Value,
     ) -> Result<String, String> {
+        if let Some(overlay) = self.overlay() {
+            if overlay.tool_names().iter().any(|n| n == namespaced_name) {
+                return overlay.execute_blocking(namespaced_name, args);
+            }
+        }
         let extension_tool = self
             .proxy_extension_tools
             .lock()

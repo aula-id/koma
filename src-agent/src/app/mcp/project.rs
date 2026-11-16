@@ -4,7 +4,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::app_config::{new_uuid, McpServerEntry, McpTransport};
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+use crate::ipc::proto::{McpProjectServerSnapshot, McpProjectSnapshot};
+use crate::model::app_config::{new_uuid, McpProjectApproval, McpServerEntry, McpTransport};
+
+use super::util::sanitize_server_name;
 
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -185,6 +192,213 @@ pub(crate) fn import_into(
         }
     }
     applied
+}
+
+/// Whether the user allowed a project server to run, as of the file's current content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Approval {
+    Approved,
+    Pending,
+    Changed,
+}
+
+impl Approval {
+    pub(crate) fn token(self) -> &'static str {
+        match self {
+            Approval::Approved => "approved",
+            Approval::Pending => "pending",
+            Approval::Changed => "changed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectRow {
+    pub entry: McpServerEntry,
+    pub approval: Approval,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectLayer {
+    pub file: PathBuf,
+    pub root_key: String,
+    pub error: Option<String>,
+    pub rows: Vec<ProjectRow>,
+}
+
+/// Largest `.mcp.json` read, the same cap `.koma/coding.json` uses.
+const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// A v5 uuid from root + name, so a project server keeps one id across reloads.
+pub(crate) fn project_uuid(root_key: &str, name: &str) -> String {
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!("koma-mcp-project:{root_key}:{name}").as_bytes(),
+    )
+    .to_string()
+}
+
+/// sha256 hex over everything that decides what runs: transport, command, args, env,
+/// url, headers and cwd. Not the name, the enabled flag or the timeouts and tool lists.
+pub(crate) fn fingerprint(e: &McpServerEntry) -> String {
+    #[derive(serde::Serialize)]
+    struct Runs<'a> {
+        transport: &'static str,
+        command: &'a str,
+        args: &'a [String],
+        env: &'a [(String, String)],
+        url: &'a str,
+        headers: &'a [(String, String)],
+        cwd: Option<&'a str>,
+    }
+    let runs = Runs {
+        transport: match e.transport {
+            McpTransport::Stdio => "stdio",
+            McpTransport::Http => "http",
+        },
+        command: &e.command,
+        args: &e.args,
+        env: &e.env,
+        url: &e.url,
+        headers: &e.headers,
+        cwd: e.cwd.as_deref(),
+    };
+    let bytes = serde_json::to_vec(&runs).unwrap_or_default();
+    format!("{:x}", Sha256::digest(&bytes))
+}
+
+/// Build the layer from the file text. Every server gets a stable uuid, a stdio server
+/// runs in the project root unless it names a cwd, and it is only `enabled` once its
+/// fingerprint matches an approval for the same root and name.
+pub(crate) fn layer_from_text(
+    root: &Path,
+    root_key: &str,
+    text: &str,
+    approvals: &[McpProjectApproval],
+) -> ProjectLayer {
+    let mut layer = ProjectLayer {
+        file: root.join(".mcp.json"),
+        root_key: root_key.to_string(),
+        error: None,
+        rows: Vec::new(),
+    };
+    let parsed = match parse_servers_json(text, None) {
+        Ok(p) => p,
+        Err(e) => {
+            layer.error = Some(e);
+            return layer;
+        }
+    };
+    for mut entry in parsed.servers {
+        let fingerprint = fingerprint(&entry);
+        let approval = match approvals
+            .iter()
+            .find(|a| a.root == root_key && a.name == entry.name)
+        {
+            Some(a) if a.fingerprint == fingerprint => Approval::Approved,
+            Some(_) => Approval::Changed,
+            None => Approval::Pending,
+        };
+        entry.uuid = project_uuid(root_key, &entry.name);
+        if entry.transport == McpTransport::Stdio {
+            entry.cwd = Some(match entry.cwd.take() {
+                Some(c) if c.starts_with("${") || Path::new(&c).is_absolute() => c,
+                Some(c) => root.join(c).to_string_lossy().into_owned(),
+                None => root.to_string_lossy().into_owned(),
+            });
+        }
+        entry.enabled = entry.enabled && approval == Approval::Approved;
+        layer.rows.push(ProjectRow {
+            entry,
+            approval,
+            fingerprint,
+        });
+    }
+    layer
+}
+
+/// `None` when `<root>/.mcp.json` does not exist. A file that resolves outside the root
+/// (a symlink) or is larger than 1 MiB yields a layer carrying only an error.
+pub(crate) fn load_project_layer(
+    root: &Path,
+    approvals: &[McpProjectApproval],
+) -> Option<ProjectLayer> {
+    let file = root.join(".mcp.json");
+    if !file.exists() {
+        return None;
+    }
+    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root_key = root_real.to_string_lossy().into_owned();
+    let failed = |error: String| ProjectLayer {
+        file: file.clone(),
+        root_key: root_key.clone(),
+        error: Some(error),
+        rows: Vec::new(),
+    };
+    let actual = match file.canonicalize() {
+        Ok(p) => p,
+        Err(e) => return Some(failed(format!("cannot read .mcp.json: {e}"))),
+    };
+    if !actual.starts_with(&root_real) {
+        return Some(failed(
+            ".mcp.json is outside the project folder".to_string(),
+        ));
+    }
+    match actual.metadata() {
+        Ok(m) if m.len() > MAX_FILE_BYTES => {
+            return Some(failed(".mcp.json is larger than 1 MiB".to_string()))
+        }
+        Ok(_) => {}
+        Err(e) => return Some(failed(format!("cannot read .mcp.json: {e}"))),
+    }
+    match std::fs::read_to_string(&actual) {
+        Ok(text) => Some(layer_from_text(root, &root_key, &text, approvals)),
+        Err(e) => Some(failed(format!("cannot read .mcp.json: {e}"))),
+    }
+}
+
+impl ProjectLayer {
+    /// The servers that may run now (approved and enabled).
+    pub(crate) fn active(&self) -> Vec<McpServerEntry> {
+        self.rows
+            .iter()
+            .filter(|r| r.entry.enabled)
+            .map(|r| r.entry.clone())
+            .collect()
+    }
+
+    /// Tool-name prefixes of the user servers a project server shadows in this session.
+    pub(crate) fn hidden_prefixes(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter(|r| r.entry.enabled)
+            .map(|r| format!("mcp__{}__", sanitize_server_name(&r.entry.name)))
+            .collect()
+    }
+
+    /// Whether an active project server overrides the user server called `user_name`.
+    pub(crate) fn overrides(&self, user_name: &str) -> bool {
+        let wanted = sanitize_server_name(user_name);
+        self.rows
+            .iter()
+            .any(|r| r.entry.enabled && sanitize_server_name(&r.entry.name) == wanted)
+    }
+
+    pub(crate) fn snapshot(&self) -> McpProjectSnapshot {
+        McpProjectSnapshot {
+            file: self.file.to_string_lossy().into_owned(),
+            error: self.error.clone(),
+            servers: self
+                .rows
+                .iter()
+                .map(|r| McpProjectServerSnapshot {
+                    entry: r.entry.clone(),
+                    approval: r.approval.token().to_string(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The toast text for a finished import: the count plus every warning.

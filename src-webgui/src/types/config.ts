@@ -37,7 +37,15 @@ export type McpServer = {
   toolTimeoutMs?: number
   allowedTools?: string[]
   disabledTools?: string[]
+  /** 'project' rows come from the workspace `.mcp.json`; absent or 'user' = config.json. */
+  scope?: 'user' | 'project'
+  /** Project rows only. Anything but 'approved' is not started. */
+  approval?: 'approved' | 'pending' | 'changed'
+  /** A user row shadowed by an approved project server of the same name. */
+  overridden?: boolean
 }
+
+export type McpProject = { file: string; error?: string }
 
 // `hasKey` is a presence flag, NOT the key itself — the daemon never sends the
 // plaintext API key to the webview (devtools are enabled; it'd be DOM/console

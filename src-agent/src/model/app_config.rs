@@ -612,6 +612,16 @@ pub struct McpServerEntry {
     pub ext_id: Option<String>,
 }
 
+/// A project `.mcp.json` server the user allowed to run, for one workspace root.
+/// `fingerprint` covers what runs (transport, command, args, env, url, headers, cwd), so
+/// an edited file needs a fresh approval.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpProjectApproval {
+    pub root: String,
+    pub name: String,
+    pub fingerprint: String,
+}
+
 /// Whether an installed extension is exposed to every session or selected locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -748,6 +758,9 @@ pub struct AppConfig {
     /// load with an empty vec, so behaviour is unchanged until a server is added.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
+    /// Project `.mcp.json` servers the user approved, per workspace root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_project_approvals: Vec<McpProjectApproval>,
     /// OAuth-authenticated connections (Codex / Kilo Code). Empty by default;
     /// old config files (no such key) load with an empty vec.
     #[serde(default)]
@@ -810,6 +823,7 @@ impl Default for AppConfig {
             providers: Vec::new(),
             models: Vec::new(),
             mcp_servers: Vec::new(),
+            mcp_project_approvals: Vec::new(),
             oauth_conns: Vec::new(),
             // Mint a stable install id even on the missing/corrupt-config fallback
             // path, so the koma-free `X-Koma` header is never empty; it is

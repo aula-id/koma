@@ -446,6 +446,7 @@ impl DaemonHub {
             }
             ClientRequest::ReloadGlobalCatalogue => {
                 crate::app::runtime::actions::apply_global_catalogue_reload(state);
+                crate::app::runtime::actions::refresh_project_mcp(state, handle);
                 self.send_to(idx, DaemonEvent::Ack);
             }
             req => {
@@ -678,6 +679,14 @@ impl DaemonHub {
             // GUI MCP enable toggle: set the `enabled` flag by uuid, persist + reconnect.
             ClientRequest::EnableMcpServer { uuid, enabled } => {
                 self.enable_mcp_server(idx, state, handle, uuid, enabled);
+            }
+
+            // Per-server MCP restart and project `.mcp.json` approval.
+            ClientRequest::RestartMcpServer { uuid } => {
+                self.restart_mcp_server(idx, state, uuid);
+            }
+            ClientRequest::ApproveMcpProjectServer { uuid, approved } => {
+                self.approve_mcp_project_server(idx, state, handle, uuid, approved);
             }
 
             // GUI provider CRUD (Connector ProviderForm). Upsert by uuid via the
@@ -1169,8 +1178,16 @@ impl DaemonHub {
             }
         };
 
+        let project = state
+            .rest
+            .mcp_project
+            .as_ref()
+            .map(|l| l.rows.iter().map(|r| &r.entry))
+            .into_iter()
+            .flatten();
         let servers: Vec<crate::ipc::proto::McpStatusServer> = configured
             .iter()
+            .chain(project)
             .map(|srv| {
                 let tool_count = status_map.get(&srv.uuid).copied().unwrap_or(0);
                 let connected = status_map.contains_key(&srv.uuid);

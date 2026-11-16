@@ -154,6 +154,7 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         main_configured: None,
         session_models: Vec::new(),
         mcp_servers: Vec::new(),
+        mcp_project: None,
         oauth_conn_uuids: Vec::new(),
         // Non-default sub-agent viewer + `$` panel state so the round-trip proves
         // these stage-3 global flags survive serialize -> deserialize.

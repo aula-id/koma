@@ -589,6 +589,22 @@ pub(super) struct PushMcpServer {
     /// `None` = connected (or still connecting). Shown as an amber/red indicator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) error: Option<String>,
+    /// `"user"` (config.json) or `"project"` (the workspace `.mcp.json`).
+    pub(super) scope: &'static str,
+    /// Project rows only: `approved`, `pending` or `changed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approval: Option<&'static str>,
+    /// A user row that an approved project server of the same name shadows in this session.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) overridden: bool,
+}
+
+/// The project `.mcp.json` header info in a [`PushEnvelope::Config`].
+#[derive(serde::Serialize)]
+pub(super) struct PushMcpProject {
+    pub(super) file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) error: Option<String>,
 }
 
 /// One MCP server row in a [`PushEnvelope::McpStatus`] reply — live connection status
