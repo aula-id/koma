@@ -138,8 +138,8 @@ export function gitActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'refre
     set(() => ({ branchesLoading: true, branchesRequestId: requestId }))
     get().req({ r: 'GitBranchList', requestId })
   },
-  refreshRepos: () => {
-    get().req({ r: 'GitRepos' })
+  refreshRepos: (force) => {
+    get().req(force ? { r: 'GitRepos', force: true } : { r: 'GitRepos' })
   },
   setActiveRepo: (root) => {
     set((s) => ({

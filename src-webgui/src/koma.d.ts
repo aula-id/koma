@@ -562,7 +562,7 @@ declare global {
     // host-side — works regardless of attach state. Reply lands as the
     // BranchList push envelope.
     | { r: 'GitBranchList'; requestId?: number | null }
-    | { r: 'GitRepos' }
+    | { r: 'GitRepos'; force?: boolean }
     | { r: 'SetActiveRepo'; root: string }
     // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     // only, never `--force`): switch (or detach onto) `ref` — a branch name or

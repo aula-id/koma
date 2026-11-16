@@ -65,9 +65,10 @@ export type BranchInfo = {
 
 // One repo entry in a RepoList reply — host `RepoEntry` (multi-repo support,
 // `rename_all = "camelCase"`). `root` is the repo's absolute workdir root
-// (also the `SetActiveRepo` request's `root` value); `name` is its display
-// label (basename) for the repo picker.
-export type RepoEntry = { root: string; name: string }
+// (also the `SetActiveRepo` request's `root` value); `name` is its basename;
+// `rel` is the path relative to the workspace ("." for the workspace repo) and
+// `kind` marks worktrees/submodules. `rel`/`kind` are absent from older hosts.
+export type RepoEntry = { root: string; name: string; rel?: string; kind?: 'repo' | 'worktree' | 'submodule' }
 
 // One stash entry in a StashList reply — host `StashEntry` (git_stash.rs,
 // `rename_all = "camelCase"`) — GK4c. `index` is the `stash@{N}` slot number
