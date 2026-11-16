@@ -38,6 +38,7 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use crate::remote::auth::SshAuth;
 use crate::remote::ssh;
 use crate::remote::RemoteTarget;
+use crate::tool::winpath::{self, ShellKind};
 
 use super::push_proto::{push_terminal_exit, push_terminal_output};
 
@@ -52,12 +53,10 @@ const POSIX_DISCOVERY: &str = r#"{
 done"#;
 
 pub(crate) fn shell_args(shell: &str) -> &'static [&'static str] {
-    let name = shell
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(shell)
-        .to_ascii_lowercase();
-    match name.trim_end_matches(".exe") {
+    if winpath::shell_kind(shell) == ShellKind::WslBash {
+        return &[];
+    }
+    match winpath::shell_stem(shell).as_str() {
         "cmd" => &[],
         "powershell" | "pwsh" => &["-NoLogo", "-NoExit"],
         "nu" => &["--login", "--interactive"],
@@ -84,15 +83,36 @@ fn executable(path: &std::path::Path) -> bool {
     }
 }
 
+/// Dedupe key for a shell executable. On Windows a Git Bash is keyed by its
+/// install (`bin\bash.exe` and `usr\bin\bash.exe` are one shell) and the rest by
+/// a case-folded normalised path.
+fn shell_dedupe_key(path: &str, windows: bool) -> String {
+    if !windows {
+        return path.to_string();
+    }
+    if winpath::shell_kind(path) == ShellKind::Bash {
+        return winpath::win_key(&winpath::git_bash_usr_bin_str(path));
+    }
+    winpath::win_key(path)
+}
+
+/// Whether two shell paths name the same executable as the picker sees it.
+fn same_shell_for(a: &str, b: &str, windows: bool) -> bool {
+    if windows {
+        winpath::win_key(a) == winpath::win_key(b)
+    } else {
+        a == b
+    }
+}
+
 fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     paths
         .into_iter()
         .filter(|p| executable(p))
         .filter_map(|p| {
-            let key = std::fs::canonicalize(&p).ok()?;
-            #[cfg(windows)]
-            let key = key.to_string_lossy().to_lowercase();
+            let key = winpath::canonical(&p).ok()?;
+            let key = shell_dedupe_key(&key.to_string_lossy(), cfg!(windows));
             if seen.insert(key) {
                 Some(p)
             } else {
@@ -127,26 +147,36 @@ fn local_shells() -> anyhow::Result<Vec<String>> {
             paths.push(bash);
         }
         if let Ok(shell) = std::env::var("COMSPEC") {
-            paths.push(PathBuf::from(shell));
+            paths.push(PathBuf::from(winpath::win_normalize(&shell)));
         }
         if let Ok(root) = std::env::var("SystemRoot") {
-            paths.push(PathBuf::from(&root).join("System32/WindowsPowerShell/v1.0/powershell.exe"));
-            paths.push(PathBuf::from(root).join("System32/cmd.exe"));
+            paths.push(PathBuf::from(winpath::win_join(
+                &root,
+                r"System32\WindowsPowerShell\v1.0\powershell.exe",
+            )));
+            paths.push(PathBuf::from(winpath::win_join(&root, r"System32\cmd.exe")));
         }
         for variable in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
             if let Ok(root) = std::env::var(variable) {
-                let root = PathBuf::from(root);
-                paths.push(root.join("Git/bin/bash.exe"));
-                paths.push(root.join("Programs/Git/bin/bash.exe"));
-                if let Ok(versions) = std::fs::read_dir(root.join("PowerShell")) {
+                paths.push(PathBuf::from(winpath::win_join(&root, r"Git\bin\bash.exe")));
+                paths.push(PathBuf::from(winpath::win_join(
+                    &root,
+                    r"Programs\Git\bin\bash.exe",
+                )));
+                if let Ok(versions) = std::fs::read_dir(winpath::win_join(&root, "PowerShell")) {
                     paths.extend(versions.flatten().map(|v| v.path().join("pwsh.exe")));
                 }
-                paths.push(root.join("Microsoft/WindowsApps/pwsh.exe"));
+                paths.push(PathBuf::from(winpath::win_join(
+                    &root,
+                    r"Microsoft\WindowsApps\pwsh.exe",
+                )));
             }
         }
     }
+    // A bare `bash.exe` on PATH is usually the WSL launcher in System32; the
+    // real Git Bash comes from find_git_bash above.
     #[cfg(windows)]
-    let names = ["bash.exe", "pwsh.exe", "powershell.exe", "cmd.exe"];
+    let names = ["pwsh.exe", "powershell.exe", "cmd.exe"];
     #[cfg(not(windows))]
     let names = ["bash", "zsh", "fish", "sh", "dash", "ksh", "nu", "pwsh"];
     if let Some(path) = std::env::var_os("PATH") {
@@ -157,21 +187,27 @@ fn local_shells() -> anyhow::Result<Vec<String>> {
     Ok(unique_paths(paths)
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| winpath::shell_kind(p) != ShellKind::WslBash)
         .collect())
 }
 
-fn shell_label(path: &str) -> String {
-    match path
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
-        .trim_end_matches(".exe")
-    {
-        "powershell" => "Windows PowerShell".into(),
-        "pwsh" => "PowerShell".into(),
-        #[cfg(windows)]
-        "bash" => "Git Bash".into(),
-        name => name.to_string(),
+/// Picker label. `windows` is true only for a shell on a Windows host, where
+/// `bash.exe` outside System32 is Git Bash.
+fn shell_label_for(path: &str, windows: bool) -> String {
+    match winpath::shell_kind(path) {
+        ShellKind::WindowsPowerShell => "Windows PowerShell".into(),
+        ShellKind::Pwsh => "PowerShell".into(),
+        ShellKind::Bash if windows => "Git Bash".into(),
+        ShellKind::WslBash => "WSL Bash".into(),
+        _ => {
+            let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+            match name.len().checked_sub(4).and_then(|n| name.get(n..)) {
+                Some(ext) if ext.eq_ignore_ascii_case(".exe") => {
+                    name.get(..name.len() - 4).unwrap_or(name).to_string()
+                }
+                _ => name.to_string(),
+            }
+        }
     }
 }
 
@@ -181,6 +217,7 @@ pub(super) fn discover_async(
     context: String,
     remote: Option<(RemoteTarget, Option<String>)>,
 ) {
+    let windows = cfg!(windows) && remote.is_none();
     std::thread::spawn(move || {
         let result = match remote {
             Some((target, password)) => (|| -> anyhow::Result<Vec<String>> {
@@ -200,16 +237,20 @@ pub(super) fn discover_async(
             let error = match result {
                 Ok(paths) => {
                     for path in paths {
-                        if !seen.insert(path.clone()) {
+                        if !seen.insert(shell_dedupe_key(&path, windows)) {
                             continue;
                         }
                         let id = mgr
                             .shells
                             .iter()
-                            .find(|(_, (host, executable))| host == &context && executable == &path)
+                            .find(|(_, (host, executable))| {
+                                host == &context && same_shell_for(executable, &path, windows)
+                            })
                             .map(|(id, _)| id.clone())
                             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                        shells.push(serde_json::json!({"id": id, "label": shell_label(&path)}));
+                        shells.push(
+                            serde_json::json!({"id": id, "label": shell_label_for(&path, windows)}),
+                        );
                         mgr.shells.insert(id, (context.clone(), path));
                     }
                     None
@@ -352,7 +393,7 @@ impl TerminalManager {
         #[cfg(windows)]
         let mut args = args;
         #[cfg(windows)]
-        if shell_label(&shell) == "Git Bash" {
+        if winpath::shell_kind(&shell) == ShellKind::Bash {
             // Every discovered Git Bash gets the same MSYS environment, including
             // alternate installations selected from PATH or standard locations.
             let bash = PathBuf::from(&shell);
@@ -544,6 +585,60 @@ mod tests {
         assert_eq!(shell_args("powershell.exe"), ["-NoLogo", "-NoExit"]);
         assert!(shell_args("cmd.exe").is_empty());
         assert!(shell_args("/usr/bin/custom-shell").is_empty());
+    }
+
+    #[test]
+    fn shell_labels_tell_git_bash_from_wsl_bash() {
+        let git = r"C:\Program Files\Git\bin\bash.exe";
+        assert_eq!(shell_label_for(git, true), "Git Bash");
+        assert_eq!(shell_label_for(r"C:\x\BASH.EXE", true), "Git Bash");
+        assert_eq!(
+            shell_label_for(r"C:\Windows\System32\bash.exe", true),
+            "WSL Bash"
+        );
+        assert_eq!(shell_label_for("/bin/bash", false), "bash");
+        assert_eq!(shell_label_for("/usr/bin/zsh", true), "zsh");
+        assert_eq!(
+            shell_label_for(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                true
+            ),
+            "Windows PowerShell"
+        );
+        assert_eq!(
+            shell_label_for(r"C:\PowerShell\7\pwsh.exe", true),
+            "PowerShell"
+        );
+        assert_eq!(shell_label_for(r"C:\Windows\System32\CMD.EXE", true), "CMD");
+    }
+
+    #[test]
+    fn windows_shell_args_ignore_case_and_skip_wsl() {
+        assert_eq!(shell_args("C:\\x\\BASH.EXE"), ["-l", "-i"]);
+        assert!(shell_args(r"C:\Windows\System32\bash.exe").is_empty());
+    }
+
+    #[test]
+    fn same_shell_and_dedupe_keys_fold_windows_spellings() {
+        assert!(same_shell_for(
+            "C:/Git/bin/bash.exe",
+            "c:\\git\\bin\\bash.exe",
+            true
+        ));
+        assert!(!same_shell_for(
+            "C:/Git/bin/bash.exe",
+            "c:\\git\\bin\\bash.exe",
+            false
+        ));
+        assert_eq!(
+            shell_dedupe_key(r"C:\Git\bin\bash.exe", true),
+            shell_dedupe_key(r"C:\Git\usr\bin\bash.exe", true)
+        );
+        assert_ne!(
+            shell_dedupe_key(r"C:\Git\bin\bash.exe", true),
+            shell_dedupe_key(r"C:\Other\bin\bash.exe", true)
+        );
+        assert_eq!(shell_dedupe_key("/bin/bash", false), "/bin/bash");
     }
 
     #[cfg(unix)]

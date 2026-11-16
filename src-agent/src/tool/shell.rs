@@ -115,136 +115,188 @@ pub(crate) fn os_shell_command(command: &str) -> Command {
     cmd
 }
 
-/// Cached result of [`find_git_bash`] — the discovery probes below (spawning
-/// `git`, shelling out to `reg query`, stat-ing known install paths) are cheap
-/// but not free, and every `bash`/`!`-shortcut/tool call funnels through
-/// [`os_shell_command`], so this is looked up once per process.
+/// Last [`find_git_bash`] outcome. A found bash is kept (and re-checked on disk
+/// each call); a miss is only trusted for [`GIT_BASH_RETRY`] so installing Git
+/// while koma runs does not need a restart.
 #[cfg(windows)]
-static GIT_BASH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static GIT_BASH: std::sync::Mutex<Option<(std::time::Instant, Option<PathBuf>)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(windows)]
+static GIT_BASH_DIAGNOSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+const GIT_BASH_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Locate a Git-for-Windows `bash.exe`, trying (in order):
 ///
-/// 1. `git --exec-path` — spawns `git.exe` off `%PATH%`; its stdout looks like
-///    `<git-root>/mingw64/libexec/git-core`, so we walk up three parents to
+/// 1. `git --exec-path` — spawns `git.exe` off the host `%PATH%`; its stdout looks like
+///    `<git-root>/mingw64/libexec/git-core`, so we drop three components to
 ///    `<git-root>` and check `<git-root>\bin\bash.exe` then `<git-root>\usr\bin\bash.exe`.
-/// 2. The registry key `HKLM\SOFTWARE\GitForWindows` value `InstallPath`,
-///    read via a `reg query` subprocess (not a registry crate — this is the
-///    only lookup that needs one, so a subprocess is cheaper than a new dep).
-///    Output is parsed defensively (line containing `REG_SZ`, value after it).
-/// 3. Known install locations: `C:\Program Files\Git\bin\bash.exe`,
-///    `C:\Program Files (x86)\Git\bin\bash.exe`,
-///    `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`.
+/// 2. The registry key `SOFTWARE\GitForWindows` value `InstallPath` under HKLM,
+///    HKCU and HKLM\WOW6432Node, read via `reg query` (not a registry crate).
+/// 3. Known install locations: `%ProgramFiles%`, `%ProgramFiles(x86)%`,
+///    `%ProgramW6432%` `\Git` and `%LOCALAPPDATA%\Programs\Git`.
 /// 4. The MSI fallback next to this executable: `<exe_dir>\shell\usr\bin\bash.exe`
 ///    (then `<exe_dir>\shell\bin\bash.exe`). System Git wins when it is installed.
 ///
 /// Deliberately NEVER resolves a bare `bash` off `%PATH%` — on stock Windows
-/// `C:\Windows\System32\bash.exe` is the WSL launcher, not a real shell (it
-/// either drops into a Linux subsystem with a different filesystem view or
-/// errors if WSL isn't installed); silently running commands through it would
-/// be actively wrong. Every candidate above is resolved to a real Git-for-Windows
-/// bash.exe by construction, so that trap is avoided entirely.
+/// `C:\Windows\System32\bash.exe` is the WSL launcher, not a real shell.
+///
+/// The result is normalised with `winpath::win_normalize` so every consumer
+/// sees one spelling. When nothing is found, the outcome of each probe is
+/// written once to `error.log`.
 #[cfg(windows)]
 pub(crate) fn find_git_bash() -> Option<PathBuf> {
-    GIT_BASH
-        .get_or_init(|| {
-            find_git_bash_via_exec_path()
-                .or_else(find_git_bash_via_registry)
-                .or_else(find_git_bash_via_known_paths)
-                .or_else(find_git_bash_via_install_dir)
-        })
-        .clone()
+    let mut cache = GIT_BASH.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, found)) = cache.as_ref() {
+        match found {
+            Some(p) if p.is_file() => return Some(p.clone()),
+            None if at.elapsed() < GIT_BASH_RETRY => return None,
+            _ => {}
+        }
+    }
+    let mut trace = Vec::new();
+    let found = find_git_bash_via_exec_path(&mut trace)
+        .or_else(|| find_git_bash_via_registry(&mut trace))
+        .or_else(|| find_git_bash_via_known_paths(&mut trace))
+        .or_else(|| find_git_bash_via_install_dir(&mut trace))
+        .map(|p| PathBuf::from(super::winpath::win_normalize(&p.to_string_lossy())));
+    if found.is_none() && !GIT_BASH_DIAGNOSED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        crate::model::store::append_global_error_log(
+            "shell",
+            &format!("Git Bash not found; probes: {}", trace.join("; ")),
+        );
+    }
+    *cache = Some((std::time::Instant::now(), found.clone()));
+    found
 }
 
 /// Check the two locations a Git-for-Windows root can hold `bash.exe`:
 /// `<root>\bin\bash.exe` (a shim) and `<root>\usr\bin\bash.exe` (the real MSYS2
-/// bash). Returns the first that actually exists on disk.
+/// bash). Returns the first that exists on disk and records each try.
 #[cfg(windows)]
-fn bash_candidates(git_root: &Path) -> Option<PathBuf> {
-    for rel in ["bin\\bash.exe", "usr\\bin\\bash.exe"] {
-        let candidate = git_root.join(rel);
-        if candidate.is_file() {
-            return Some(candidate);
+fn bash_candidates(git_root: &str, trace: &mut Vec<String>) -> Option<PathBuf> {
+    for candidate in super::winpath::git_bash_candidates(git_root) {
+        let found = Path::new(&candidate).is_file();
+        trace.push(format!(
+            "{candidate}: {}",
+            if found { "found" } else { "missing" }
+        ));
+        if found {
+            return Some(PathBuf::from(candidate));
         }
     }
     None
 }
 
-/// Strategy 1: ask `git` itself where it lives via `git --exec-path`, whose
-/// stdout is `<git-root>/mingw64/libexec/git-core` (or `mingw32` on a 32-bit
-/// install) — walk up three parents to `<git-root>`.
+/// Strategy 1: ask `git` itself where it lives via `git --exec-path`.
 #[cfg(windows)]
-fn find_git_bash_via_exec_path() -> Option<PathBuf> {
+fn find_git_bash_via_exec_path(trace: &mut Vec<String>) -> Option<PathBuf> {
     let mut cmd = Command::new("git");
-    cmd.arg("--exec-path");
+    cmd.arg("--exec-path")
+        .env("PATH", crate::coding::environment::host_path());
     no_console_window(&mut cmd);
-    let output = cmd.output().ok()?;
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            trace.push(format!("git --exec-path: {e}"));
+            return None;
+        }
+    };
+    let exec_path = String::from_utf8_lossy(&output.stdout);
+    trace.push(format!(
+        "git --exec-path: status {} output '{}'",
+        output.status,
+        exec_path.trim()
+    ));
     if !output.status.success() {
         return None;
     }
-    let exec_path = String::from_utf8_lossy(&output.stdout);
-    let exec_path = exec_path.trim();
-    if exec_path.is_empty() {
-        return None;
-    }
-    // <exec_path> = <git-root>/<mingw64-or-32>/libexec/git-core
-    let git_root = Path::new(exec_path).parent()?.parent()?.parent()?;
-    bash_candidates(git_root)
+    let root = super::winpath::git_root_from_exec_path(&exec_path)?;
+    bash_candidates(&root, trace)
 }
 
-/// Strategy 2: the machine-wide install marker Git for Windows writes to the
-/// registry. Shelled out via `reg query` (not a registry crate — this is the
-/// only spot that needs one) and parsed defensively: scan every line for
-/// `REG_SZ` and take whatever follows it as the install path.
+/// Strategy 2: the install marker Git for Windows writes to the registry, read
+/// with `reg query` from every hive/view a per-user or 32-bit install may use.
 #[cfg(windows)]
-fn find_git_bash_via_registry() -> Option<PathBuf> {
-    let mut cmd = Command::new("reg");
-    cmd.args(["query", r"HKLM\SOFTWARE\GitForWindows", "/v", "InstallPath"]);
-    no_console_window(&mut cmd);
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if let Some(idx) = line.find("REG_SZ") {
-            let value = line[idx + "REG_SZ".len()..].trim();
-            if !value.is_empty() {
-                if let Some(bash) = bash_candidates(Path::new(value)) {
+fn find_git_bash_via_registry(trace: &mut Vec<String>) -> Option<PathBuf> {
+    for key in [
+        r"HKLM\SOFTWARE\GitForWindows",
+        r"HKCU\SOFTWARE\GitForWindows",
+        r"HKLM\SOFTWARE\WOW6432Node\GitForWindows",
+    ] {
+        let mut cmd = Command::new("reg");
+        cmd.args(["query", key, "/v", "InstallPath"]);
+        no_console_window(&mut cmd);
+        let output = match cmd.output() {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                trace.push(format!("reg {key}: status {}", o.status));
+                continue;
+            }
+            Err(e) => {
+                trace.push(format!("reg {key}: {e}"));
+                continue;
+            }
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        match super::winpath::parse_reg_sz(&text) {
+            Some(root) => {
+                trace.push(format!("reg {key}: InstallPath {root}"));
+                if let Some(bash) = bash_candidates(&root, trace) {
                     return Some(bash);
                 }
             }
+            None => trace.push(format!("reg {key}: no InstallPath value")),
         }
     }
     None
 }
 
 /// Strategy 3: fixed locations Git for Windows commonly installs to, checked
-/// last as a plain existence probe (no subprocess involved).
+/// as a plain existence probe (no subprocess involved).
 #[cfg(windows)]
-fn find_git_bash_via_known_paths() -> Option<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
-        PathBuf::from(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+fn find_git_bash_via_known_paths(trace: &mut Vec<String>) -> Option<PathBuf> {
+    use super::winpath::{win_join, win_key};
+    let mut roots = vec![
+        r"C:\Program Files\Git".to_string(),
+        r"C:\Program Files (x86)\Git".to_string(),
     ];
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        candidates.push(Path::new(&local_app_data).join(r"Programs\Git\bin\bash.exe"));
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Ok(base) = std::env::var(var) {
+            roots.push(win_join(&base, "Git"));
+        }
     }
-    candidates.into_iter().find(|p| p.is_file())
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        roots.push(win_join(&base, r"Programs\Git"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|r| seen.insert(win_key(r)));
+    roots.iter().find_map(|root| bash_candidates(root, trace))
 }
 
 /// Strategy 4: shell runtime shipped beside `koma.exe` (`INSTALLDIR\shell`).
 #[cfg(windows)]
-fn find_git_bash_via_install_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+fn find_git_bash_via_install_dir(trace: &mut Vec<String>) -> Option<PathBuf> {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            trace.push(format!("current_exe: {e}"));
+            return None;
+        }
+    };
     let parent = exe.parent()?;
-    bash_candidates(&parent.join("shell"))
+    let root = super::winpath::win_join(&parent.to_string_lossy(), "shell");
+    bash_candidates(&root, trace)
 }
 
 /// `usr\bin` that holds `grep` / `ls` / `sed` for this `bash.exe`.
 ///
 /// `<root>\usr\bin\bash.exe` returns that directory. `<root>\bin\bash.exe` (the
 /// Git for Windows shim) returns `<root>\usr\bin`.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(crate) fn git_bash_usr_bin(bash: &Path) -> PathBuf {
     if let Some(parent) = bash.parent() {
         if file_name_eq(parent, "bin") {
@@ -260,7 +312,7 @@ pub(crate) fn git_bash_usr_bin(bash: &Path) -> PathBuf {
     PathBuf::from("usr").join("bin")
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn file_name_eq(path: &Path, expect: &str) -> bool {
     path.file_name()
         .map(|name| name.to_string_lossy().eq_ignore_ascii_case(expect))
@@ -271,7 +323,9 @@ fn file_name_eq(path: &Path, expect: &str) -> bool {
 #[cfg(windows)]
 pub(crate) fn git_bash_env(bash: &Path) -> Vec<(String, String)> {
     let mut vars = Vec::with_capacity(2);
-    let usr_bin = git_bash_usr_bin(bash);
+    let usr_bin = PathBuf::from(super::winpath::git_bash_usr_bin_str(
+        &bash.to_string_lossy(),
+    ));
     if usr_bin.is_dir() {
         let old = crate::coding::environment::host_path();
         if let Ok(joined) =
