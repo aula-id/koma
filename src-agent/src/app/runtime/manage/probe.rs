@@ -9,7 +9,7 @@
 //! resolving unchanged. `probe_status` has no external caller today, so no
 //! re-export is needed for it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::ipc::frame::FrameReader;
@@ -98,22 +98,7 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
         Err(_) => return Vec::new(),
     };
 
-    let mut out = Vec::new();
-    let mut any_failed = false;
-    for (_id, path, alive) in &socks {
-        // Skip sockets the cheap connect-probe already shows as dead (saves a Status
-        // round-trip), and mark them for the sweep below.
-        if !alive {
-            any_failed = true;
-            continue;
-        }
-        match probe_status(path) {
-            Some(status) => out.push(status),
-            // Accepted the connect but failed to answer Status (wedged / mid-shutdown):
-            // exclude it and let the stale-sweep re-decide its fate by a fresh connect.
-            None => any_failed = true,
-        }
-    }
+    let (out, any_failed) = probe_listed(&socks);
 
     // Clean up any dead/stale sockets we ran into. `sweep_stale_files` re-probes each
     // socket's liveness itself and never touches a live daemon, so it is safe even
@@ -123,6 +108,46 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
     }
 
     out
+}
+
+/// Discover every live session-daemon exactly like [`list_live_sessions`], but never
+/// clean up: no socket and no pidfile is removed, whatever the probes find.
+///
+/// The cleanup is left out because it also removes every pidfile that has no socket
+/// beside it, and a daemon that is still starting writes its pidfile before it binds
+/// its socket. A caller that polls (a dashboard refreshing every few seconds) would
+/// otherwise delete a starting daemon's pidfile, and a later stop would have no PID to
+/// signal. Dead and wedged daemons are left out of the result and their files stay for
+/// `koma daemon clean` or the next [`list_live_sessions`].
+#[allow(dead_code)] // read by session listings that must not change the run dir
+pub fn probe_live_sessions() -> Vec<SessionStatus> {
+    match super::list_session_sockets() {
+        Ok(socks) => probe_listed(&socks).0,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The probe loop shared by [`list_live_sessions`] and [`probe_live_sessions`]: `Status`
+/// replies from every socket in `socks`, plus whether any socket was dead or failed to
+/// answer. Touches no file.
+fn probe_listed(socks: &[(String, PathBuf, bool)]) -> (Vec<SessionStatus>, bool) {
+    let mut out = Vec::new();
+    let mut any_failed = false;
+    for (_id, path, alive) in socks {
+        // Skip sockets the cheap connect-probe already shows as dead (saves a Status
+        // round-trip), and mark them as failed.
+        if !alive {
+            any_failed = true;
+            continue;
+        }
+        match probe_status(path) {
+            Some(status) => out.push(status),
+            // Accepted the connect but failed to answer Status (wedged / mid-shutdown):
+            // exclude it and report the failure so a sweeping caller re-decides its fate.
+            None => any_failed = true,
+        }
+    }
+    (out, any_failed)
 }
 
 /// FIRE-AND-FORGET fan-out of a [`ClientRequest::UnloadExtension`] to EVERY live
@@ -174,6 +199,15 @@ pub fn broadcast_unload_extension(ext_id: &str) {
     }
 }
 
+/// How a fan-out went: `reached` daemons were written the frame, `failed` live
+/// daemons could not be (no socket path, refused connect, or a failed write).
+/// Delivery is fire-and-forget, so `reached` means written, not acknowledged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BroadcastReport {
+    pub reached: usize,
+    pub failed: usize,
+}
+
 /// FIRE-AND-FORGET fan-out of a [`ClientRequest::ReloadGlobalCatalogue`] to
 /// every live session-daemon — the config-change broadcast that makes OTHER
 /// daemons re-read `~/.koma/config.json` + global agents from disk so their
@@ -182,33 +216,53 @@ pub fn broadcast_unload_extension(ext_id: &str) {
 /// Best-effort throughout, identical contract to [`broadcast_unload_extension`]:
 /// connect → write one frame → drop. Called on a background OS thread by
 /// [`super::save_config_and_broadcast`] so the saving daemon's event loop
-/// never blocks on peer connects.
+/// never blocks on peer connects. Callers that need the outcome use
+/// [`broadcast_reload_global_catalogue_report`], which sends the same frames.
 pub fn broadcast_reload_global_catalogue() {
+    let _ = broadcast_reload_global_catalogue_report();
+}
+
+/// [`broadcast_reload_global_catalogue`] that also counts the daemons it
+/// reached and the ones it could not. Failures are logged exactly as before.
+pub fn broadcast_reload_global_catalogue_report() -> BroadcastReport {
+    let targets = list_live_sessions().into_iter().map(|status| {
+        let sock = store::daemon_sock_path(&status.session_id);
+        (status.session_id, sock)
+    });
+    send_reload_to(targets, &mut |body| {
+        store::append_global_error_log("config-reload", &body)
+    })
+}
+
+/// Write one [`ClientRequest::ReloadGlobalCatalogue`] frame to each target,
+/// passing every failure's log line to `log`. Split from the session sweep so
+/// the counting can be exercised against sockets a test controls.
+fn send_reload_to(
+    targets: impl IntoIterator<Item = (String, anyhow::Result<PathBuf>)>,
+    log: &mut dyn FnMut(String),
+) -> BroadcastReport {
     let req = ClientRequest::ReloadGlobalCatalogue;
-    for status in list_live_sessions() {
-        let sock = match store::daemon_sock_path(&status.session_id) {
+    let mut report = BroadcastReport::default();
+    for (session_id, sock) in targets {
+        let sock = match sock {
             Ok(p) => p,
             Err(e) => {
-                store::append_global_error_log(
-                    "config-reload",
-                    &format!(
-                        "reload fan-out: no socket path for session {}: {e}",
-                        status.session_id
-                    ),
-                );
+                report.failed += 1;
+                log(format!(
+                    "reload fan-out: no socket path for session {session_id}: {e}"
+                ));
                 continue;
             }
         };
-        if let Err(e) = send_unload_frame(&sock, &req) {
-            store::append_global_error_log(
-                "config-reload",
-                &format!(
-                    "reload fan-out to session {} failed: {e}",
-                    status.session_id
-                ),
-            );
+        match send_unload_frame(&sock, &req) {
+            Ok(()) => report.reached += 1,
+            Err(e) => {
+                report.failed += 1;
+                log(format!("reload fan-out to session {session_id} failed: {e}"));
+            }
         }
     }
+    report
 }
 
 /// Search preferences need no catalogue or modal rebuild.
@@ -311,4 +365,170 @@ pub fn spawn_into_session(
         std::io::ErrorKind::InvalidData,
         "no spawn ack within frame cap",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::frame::{read_frame, FrameReader};
+
+    fn unique() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    }
+
+    /// A socket path nobody listens on, kept short for the unix path limit.
+    fn sock_path(tag: &str) -> PathBuf {
+        let nanos = unique();
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("koma-bc-{tag}-{nanos}"));
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            dir.join("d.sock")
+        }
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"\\.\pipe\koma-bc-{tag}-{nanos}"))
+        }
+    }
+
+    fn cleanup(sock: &Path) {
+        #[cfg(unix)]
+        if let Some(dir) = sock.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        #[cfg(windows)]
+        let _ = sock;
+    }
+
+    #[test]
+    fn a_refused_socket_and_a_missing_path_count_as_failed() {
+        let refused = sock_path("refused");
+        let targets = vec![
+            ("refused".to_string(), Ok(refused.clone())),
+            ("pathless".to_string(), Err(anyhow::anyhow!("no run dir"))),
+        ];
+        let mut lines = Vec::new();
+        let report = send_reload_to(targets, &mut |line| lines.push(line));
+        cleanup(&refused);
+
+        assert_eq!(
+            report,
+            BroadcastReport {
+                reached: 0,
+                failed: 2
+            }
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("reload fan-out to session refused failed: "));
+        assert_eq!(
+            lines[1],
+            "reload fan-out: no socket path for session pathless: no run dir"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_socket_is_reached_with_one_reload_frame() {
+        let live = sock_path("live");
+        let refused = sock_path("dead");
+        let listener = crate::ipc::server::bind(&live).expect("bind");
+        let server = tokio::spawn(async move {
+            let mut conn = crate::ipc::server::accept(&listener).await.expect("accept");
+            let mut reader = FrameReader::new();
+            read_frame(&mut conn, &mut reader).await.expect("read frame")
+        });
+
+        let targets = vec![
+            ("live".to_string(), Ok(live.clone())),
+            ("dead".to_string(), Ok(refused.clone())),
+        ];
+        let report = tokio::task::spawn_blocking(move || {
+            let mut lines = Vec::new();
+            let report = send_reload_to(targets, &mut |line| lines.push(line));
+            (report, lines)
+        })
+        .await
+        .expect("join fan-out");
+        let frame = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("frame within timeout")
+            .expect("join server");
+        cleanup(&live);
+        cleanup(&refused);
+
+        let (report, lines) = report;
+        assert_eq!(
+            report,
+            BroadcastReport {
+                reached: 1,
+                failed: 1
+            }
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            frame,
+            serde_json::to_vec(&ClientRequest::ReloadGlobalCatalogue).expect("encode")
+        );
+    }
+
+    /// A fresh directory under the OS temp root, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "koma-probe-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A socket path nothing listens on: a bound-then-dropped unix socket file, or on
+    /// Windows a plain file whose path no pipe server owns.
+    fn dead_socket(dir: &Path, id: &str) -> PathBuf {
+        let path = dir.join(format!("{id}.sock"));
+        #[cfg(unix)]
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        #[cfg(windows)]
+        std::fs::write(&path, b"").unwrap();
+        path
+    }
+
+    #[test]
+    fn probe_listed_removes_no_socket_or_pidfile() {
+        let tmp = TempDir::new("keep");
+        let dead = dead_socket(&tmp.0, "dead");
+        let dead_pid = tmp.0.join("dead.pid");
+        let orphan_pid = tmp.0.join("starting.pid");
+        std::fs::write(&dead_pid, "1").unwrap();
+        std::fs::write(&orphan_pid, "1").unwrap();
+
+        // Once as the cheap connect-probe reports it, once as a socket that accepted
+        // the connect check but then fails the Status probe.
+        let socks = vec![
+            ("dead".to_string(), dead.clone(), false),
+            ("dead".to_string(), dead.clone(), true),
+        ];
+        let (live, any_failed) = probe_listed(&socks);
+
+        assert!(live.is_empty());
+        assert!(any_failed);
+        assert!(dead.exists(), "dead socket was removed");
+        assert!(dead_pid.exists(), "pidfile of a dead socket was removed");
+        assert!(orphan_pid.exists(), "orphan pidfile was removed");
+    }
 }

@@ -71,9 +71,14 @@ pub use oauth::ensure_oauth_daemon_running;
 // `broadcast_unload_extension` is the extension-uninstall in-memory fan-out (step 3),
 // called by both uninstall paths to unload the extension from every OTHER live daemon.
 pub use probe::{
-    broadcast_reload_global_catalogue, broadcast_reload_web_search, broadcast_unload_extension,
-    list_live_sessions, spawn_into_session, SpawnIntoReply,
+    broadcast_reload_global_catalogue, broadcast_reload_global_catalogue_report,
+    broadcast_reload_web_search, broadcast_unload_extension, list_live_sessions,
+    spawn_into_session, BroadcastReport, SpawnIntoReply,
 };
+// `probe_live_sessions` is the non-sweeping listing for readers that must leave the run
+// dir as they found it.
+#[allow(unused_imports)] // no caller outside this module yet
+pub use probe::probe_live_sessions;
 
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -477,6 +482,223 @@ fn spawn_and_wait_until_alive(
     }
 }
 
+// ─── secure-room daemon spawn ────────────────────────────────────────────────
+
+/// Environment variable that names the coding session a room daemon was opened from.
+/// The room daemon reads it at start to inherit that session's settings.
+const ROOM_PARENT_ENV: &str = "KOMA_ROOM_PARENT";
+
+/// Whether `id` has the room session id form: 32 lowercase hex characters, as
+/// [`crate::room::room_session_id`] derives it. Anything else could name a path
+/// outside `run/`.
+fn is_room_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Path of the start log a spawned room daemon writes its stderr to:
+/// `run/<room_id>.start.log`. Rewritten on every spawn, so after a failed start it
+/// holds only that attempt's output. A `room_id` that is not a room session id is an
+/// `Err`.
+#[allow(dead_code)] // public entry for callers that read the log after a failed start
+pub fn room_start_log_path(room_id: &str) -> Result<std::path::PathBuf> {
+    if !is_room_id(room_id) {
+        return Err(anyhow!("not a room session id: {room_id:?}"));
+    }
+    Ok(store::run_dir()?.join(format!("{room_id}.start.log")))
+}
+
+/// Why [`ensure_room_daemon_running`] did not leave a daemon accepting on the room's
+/// socket.
+#[derive(Debug)]
+pub enum RoomStartError {
+    /// Nothing was spawned: the room id was malformed, the socket probe failed, or
+    /// resolving the executable, opening the start log or the spawn itself failed.
+    NotStarted(anyhow::Error),
+    /// A daemon was spawned but did not accept within `waited`. It is left running,
+    /// and its stderr is in the start log.
+    NotAccepting { pid: u32, waited: Duration },
+}
+
+impl std::fmt::Display for RoomStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotStarted(e) => write!(f, "the secure room daemon was not started: {e:#}"),
+            Self::NotAccepting { pid, waited } => write!(
+                f,
+                "spawned room daemon (pid {pid}) did not start accepting within {waited:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RoomStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotStarted(e) => Some(e.as_ref()),
+            Self::NotAccepting { .. } => None,
+        }
+    }
+}
+
+/// Ensure the secure-room daemon for `room_id` is RUNNING, spawning it if needed.
+///
+/// Returns `Ok(false)` when a daemon already accepts on the room's socket (nothing is
+/// spawned), and `Ok(true)` once a freshly spawned daemon accepts within `wait`. The
+/// spawn matches the terminal's room start: `--daemon --session <room_id> --kind
+/// secure`, the caller's environment plus `KOMA_ROOM_PARENT=<parent_id>`, and
+/// `workdir` (the parent session's workdir) as the current directory, so the room's
+/// workspace bucket is the parent's. The child's stderr goes to
+/// [`room_start_log_path`]. A failure before or during the spawn is
+/// [`RoomStartError::NotStarted`]; a daemon that does not accept in time is
+/// [`RoomStartError::NotAccepting`], and the child is left running, since it may
+/// still be finishing its start.
+///
+/// The coding-daemon spawn ([`ensure_daemon_running`]) is a separate path and is not
+/// affected.
+#[allow(dead_code)] // public entry for out-of-module callers that open a room
+pub fn ensure_room_daemon_running(
+    room_id: &str,
+    parent_id: &str,
+    workdir: &Path,
+    wait: Duration,
+) -> Result<bool, RoomStartError> {
+    let log = room_start_log_path(room_id).map_err(RoomStartError::NotStarted)?;
+    let path = store::daemon_sock_path(room_id).map_err(RoomStartError::NotStarted)?;
+    ensure_room_daemon_at(&path, wait, || {
+        spawn_room_daemon(room_id, parent_id, workdir, &log)
+    })
+}
+
+/// Probe-then-spawn core of [`ensure_room_daemon_running`], keyed by an explicit socket
+/// path and spawner so it can run against a scratch socket.
+fn ensure_room_daemon_at(
+    path: &Path,
+    wait: Duration,
+    spawn: impl FnOnce() -> Result<u32>,
+) -> Result<bool, RoomStartError> {
+    if probe_or_clear(path).map_err(RoomStartError::NotStarted)? {
+        return Ok(false);
+    }
+    let pid = spawn().map_err(RoomStartError::NotStarted)?;
+    let deadline = Instant::now() + wait;
+    loop {
+        if sock_path_alive(path) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Err(RoomStartError::NotAccepting { pid, waited: wait });
+        }
+        std::thread::sleep(SPAWN_POLL_INTERVAL);
+    }
+}
+
+/// Spawn a DETACHED secure-room daemon for `room_id` and return its PID.
+///
+/// Detached the same way as [`spawn_daemon`] (`setsid` on unix,
+/// `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), with stdin and stdout
+/// null and stderr written to `log` (see [`open_start_log`]). A background thread
+/// waits on the child so a daemon that exits while this process is still running is
+/// reaped instead of lingering as a zombie.
+fn spawn_room_daemon(room_id: &str, parent_id: &str, workdir: &Path, log: &Path) -> Result<u32> {
+    let exe = std::env::current_exe().context("cannot resolve current executable path")?;
+    let stderr = open_start_log(log)?;
+    let mut cmd = room_daemon_command(&exe, room_id, parent_id, workdir);
+    cmd.stderr(Stdio::from(stderr));
+
+    // SAFETY: `setsid()` is async-signal-safe and touches no Rust state; it runs only in
+    // the forked child between fork and exec. A failure is ignored (best-effort
+    // detach), as in `spawn_daemon`.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn the secure room daemon in {}", workdir.display()))?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
+}
+
+/// Build the room daemon command without spawning it: `exe --daemon --session
+/// <room_id> --kind secure`, the inherited environment plus `KOMA_ROOM_PARENT`, the
+/// current directory set to `workdir`, and stdin/stdout null. Stderr and the detach
+/// settings are applied by [`spawn_room_daemon`].
+fn room_daemon_command(exe: &Path, room_id: &str, parent_id: &str, workdir: &Path) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.arg("--daemon")
+        .arg("--session")
+        .arg(room_id)
+        .arg("--kind")
+        .arg("secure")
+        .env(ROOM_PARENT_ENV, parent_id)
+        .current_dir(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
+    cmd
+}
+
+/// Create or truncate the start log at `path` for writing, creating its directory
+/// first (owner-only, 0700 on unix, as [`store::ensure_dirs`] makes `run/`). On unix
+/// the file is owner-only (0600), including a file left by an earlier spawn with a
+/// wider mode. A symlink or any other non-regular entry at `path` is refused and left
+/// untouched.
+fn open_start_log(path: &Path) -> Result<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        if !dir.is_dir() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("create run dir {}", dir.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                    .with_context(|| format!("restrict run dir {}", dir.display()))?;
+            }
+        }
+    }
+    // Opened without truncation; only a regular file is truncated, after the check below.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOFOLLOW refuses a symlink at the path, and O_NONBLOCK keeps a FIFO there
+        // from blocking the open. Neither changes writes to a regular file.
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = opts
+        .open(path)
+        .with_context(|| format!("open room start log {}", path.display()))?;
+    let is_file = file
+        .metadata()
+        .with_context(|| format!("inspect room start log {}", path.display()))?
+        .is_file();
+    if !is_file {
+        return Err(anyhow!("room start log {} is not a regular file", path.display()));
+    }
+    file.set_len(0)
+        .with_context(|| format!("truncate room start log {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("restrict room start log {}", path.display()))?;
+    }
+    Ok(file)
+}
+
 // ─── blocking framed request/reply ───────────────────────────────────────────
 
 /// Send one [`ClientRequest`] on `stream` as a length-prefixed JSON frame (4-byte
@@ -834,5 +1056,216 @@ fn wait_until_dead(session_id: &str, timeout: Duration) -> bool {
             return false;
         }
         std::thread::sleep(SPAWN_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod room_spawn_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use std::ffi::OsStr;
+    use std::path::PathBuf;
+
+    /// Unique scratch dir under std temp, short enough for a unix socket path.
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("koma-rd-{label}-{nanos}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn room_command_matches_the_terminal_room_spawn() {
+        let workdir = scratch("cmd");
+        let cmd = room_daemon_command(Path::new("/opt/koma"), "room-1", "parent-1", &workdir);
+
+        assert_eq!(cmd.get_program(), OsStr::new("/opt/koma"));
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            ["--daemon", "--session", "room-1", "--kind", "secure"].map(OsStr::new)
+        );
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
+        assert_eq!(
+            envs,
+            vec![(OsStr::new("KOMA_ROOM_PARENT"), Some(OsStr::new("parent-1")))]
+        );
+        assert_eq!(cmd.get_current_dir(), Some(workdir.as_path()));
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    #[test]
+    fn start_log_is_created_in_a_missing_dir_and_truncated_per_open() {
+        let dir = scratch("log");
+        let log = dir.join("run").join("room-1.start.log");
+
+        {
+            let mut f = open_start_log(&log).unwrap();
+            f.write_all(b"first attempt failed with a long message\n").unwrap();
+        }
+        {
+            let mut f = open_start_log(&log).unwrap();
+            f.write_all(b"second\n").unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "second\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let run = std::fs::metadata(dir.join("run")).unwrap().permissions().mode() & 0o777;
+            assert_eq!(run, 0o700, "a run dir created here is owner-only");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_log_is_owner_only_even_when_an_old_file_was_wider() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let log = dir.join("room-1.start.log");
+
+        drop(open_start_log(&log).unwrap());
+        let mode = std::fs::metadata(&log).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(open_start_log(&log).unwrap());
+        let mode = std::fs::metadata(&log).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_room_socket_returns_false_without_spawning() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = scratch("live");
+        let sock = dir.join("r.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let spawned = AtomicBool::new(false);
+
+        let started = ensure_room_daemon_at(&sock, Duration::from_millis(200), || {
+            spawned.store(true, Ordering::SeqCst);
+            Ok(1)
+        })
+        .unwrap();
+
+        assert!(!started);
+        assert!(!spawned.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_room_socket_is_cleared_and_a_started_daemon_returns_true() {
+        let dir = scratch("stale");
+        let sock = dir.join("r.sock");
+        // A bound-then-dropped listener leaves a socket file nobody accepts on.
+        drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+        assert!(sock.exists());
+
+        let mut listener = None;
+        let started = ensure_room_daemon_at(&sock, Duration::from_secs(2), || {
+            assert!(!sock.exists(), "the stale socket is removed before the spawn");
+            listener = Some(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+            Ok(1)
+        })
+        .unwrap();
+
+        assert!(started);
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn room_daemon_that_never_accepts_times_out() {
+        let dir = scratch("timeout");
+        #[cfg(unix)]
+        let sock = dir.join("r.sock");
+        #[cfg(windows)]
+        let sock = PathBuf::from(format!(
+            r"\\.\pipe\koma-test-room-{}",
+            dir.file_name().and_then(|n| n.to_str()).unwrap_or("x")
+        ));
+
+        let err = ensure_room_daemon_at(&sock, Duration::from_millis(150), || Ok(4242))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RoomStartError::NotAccepting { pid: 4242, waited } if waited == Duration::from_millis(150)),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("pid 4242"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_spawn_reports_that_nothing_started() {
+        let dir = scratch("nospawn");
+        #[cfg(unix)]
+        let sock = dir.join("r.sock");
+        #[cfg(windows)]
+        let sock = PathBuf::from(format!(
+            r"\\.\pipe\koma-test-room-{}",
+            dir.file_name().and_then(|n| n.to_str()).unwrap_or("x")
+        ));
+
+        let err = ensure_room_daemon_at(&sock, Duration::from_millis(150), || {
+            Err(anyhow!("spawn refused"))
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, RoomStartError::NotStarted(_)), "{err:?}");
+        assert!(err.to_string().contains("spawn refused"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_room_id_that_is_not_a_session_id_is_refused() {
+        assert!(is_room_id("1cd5bb4cb5e553e58e48d7af38d06b6e"));
+        for bad in ["", "room-1", "../../../../tmp/x", "1CD5BB4CB5E553E58E48D7AF38D06B6E"] {
+            assert!(!is_room_id(bad), "{bad}");
+            assert!(room_start_log_path(bad).is_err(), "{bad}");
+        }
+        let err = ensure_room_daemon_running("../x", "parent", Path::new("."), Duration::ZERO)
+            .unwrap_err();
+        assert!(matches!(err, RoomStartError::NotStarted(_)), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_the_start_log_path_is_refused_and_its_target_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("symlink");
+        let target = dir.join("victim");
+        std::fs::write(&target, b"keep me\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let log = dir.join("room-1.start.log");
+        std::os::unix::fs::symlink(&target, &log).unwrap();
+
+        assert!(open_start_log(&log).is_err());
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_start_log_path_is_refused_without_blocking() {
+        let dir = scratch("fifo");
+        let log = dir.join("room-1.start.log");
+        let c_path = std::ffi::CString::new(log.to_string_lossy().as_bytes()).unwrap();
+        // SAFETY: `c_path` is a valid NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+
+        assert!(open_start_log(&log).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

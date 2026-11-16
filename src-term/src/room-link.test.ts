@@ -14,6 +14,7 @@ test("room frames keep the chief, the lanes, the shelf and the map", () => {
     trajectory: "goal",
   })
   expect(parseRoomFrame({ closed: null })).toEqual({ type: "closed" })
+  expect(parseRoomFrame("closed")).toEqual({ type: "closed" })
   expect(parseRoomFrame({ Snapshot: {} })).toBeNull()
 })
 

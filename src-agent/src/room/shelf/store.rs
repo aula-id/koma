@@ -523,3 +523,38 @@ fn put_typed(conn: &mut Connection, kind: &str, args: &Args, link: bool) -> Resu
     tx.commit()?;
     Ok((Value::Object(out), events))
 }
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use serde_json::json;
+
+    use super::Shelf;
+
+    #[test]
+    fn the_fingerprint_changes_on_a_put_and_is_stable_otherwise() {
+        let shelf = Shelf::open_in_memory().expect("in-memory shelf");
+        let empty = shelf.fingerprint().expect("fingerprint");
+        assert_eq!(shelf.fingerprint().expect("fingerprint"), empty);
+
+        let put = |key: &str, revision: i64| {
+            shelf
+                .call("put", &json!({ "key": key, "content": "x", "expected_revision": revision }))
+                .expect("put");
+        };
+        put("notes/a", 0);
+        let one = shelf.fingerprint().expect("fingerprint");
+        assert_ne!(one, empty);
+
+        // Reads leave it alone.
+        shelf.call("get", &json!({ "key": "notes/a" })).expect("get");
+        shelf.list_items(&[], true, 10).expect("list");
+        assert_eq!(shelf.fingerprint().expect("fingerprint"), one);
+
+        // A new revision of the same key and a new key both move it.
+        put("notes/a", 1);
+        let two = shelf.fingerprint().expect("fingerprint");
+        assert_ne!(two, one);
+        put("notes/b", 0);
+        assert_ne!(shelf.fingerprint().expect("fingerprint"), two);
+    }
+}

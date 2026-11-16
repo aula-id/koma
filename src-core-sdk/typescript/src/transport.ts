@@ -1,12 +1,25 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { isAbsolute } from 'node:path';
-import { METHODS, SdkError, DeliveryUnknownError, type ClientOptions, type Hello, type Method, type RequestOptions, type Event, type State } from './types.js';
-import { validateHello, validateEvent, validateResult, object, string } from './validate.js';
+import { METHODS, ROOM_EVENTS, SdkError, DeliveryUnknownError, type ClientOptions, type ErrorDetails, type Hello, type Method, type RequestOptions, type Event, type RoomEvent, type State } from './types.js';
+import { errorDetails, implementedMethods, validateHello, validateEvent, validateResult, object, string } from './validate.js';
 
-type Incoming = Event & { gap?: boolean };
+/** An event as queued: `gap` is set when the envelope sequence skipped a number before it. */
+export type Incoming = (Event | RoomEvent) & { gap?: boolean };
+export function isRoomEvent(event: Event | RoomEvent): event is RoomEvent { return event.event.startsWith('room.'); }
 export const MAX_FRAME_BYTES = 40 * 1024 * 1024;
 const MAX_EVENTS_BYTES = 64 * 1024 * 1024;
-const mutations = new Set<Method>(['create', 'resume', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure']);
+/** Per-process request cap of adapters that do not advertise `limits.request_ids`. */
+export const DEFAULT_REQUEST_IDS = 65_536;
+const mutations = new Set<Method>(['create', 'resume', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure',
+  'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.effort.set', 'config.limits.set',
+  'sessions.rename', 'sessions.delete', 'sessions.stop', 'skills.install', 'skills.remove', 'skills.create', 'skills.update',
+  'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control',
+  'room.models.set', 'room.avatars.upsert', 'room.avatars.remove']);
+/** A delete with `dry_run:true` writes nothing, so a lost reply to it is not a lost mutation. */
+function isMutation(method: Method, params: Record<string, unknown>): boolean {
+  if ((method === 'config.providers.delete' || method === 'config.models.delete') && params.dry_run === true) return false;
+  return mutations.has(method);
+}
 type Pending = { method: Method; params: Record<string, unknown>; written: boolean; resolve: (x: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
 export class Transport {
@@ -17,6 +30,7 @@ export class Transport {
   private readyReject!: (e: unknown) => void;
   private pending = new Map<string, Pending>();
   private counter = 0;
+  private sent = 0;
   private writeBytes = 0;
   private parts: Buffer[] = [];
   private bytes = 0;
@@ -58,6 +72,18 @@ export class Transport {
     });
   }
   get diagnostics(): string { return this.stderrTail.toString('utf8'); }
+  /** Requests written to this adapter so far. */
+  get requestsSent(): number { return this.sent; }
+  /** Requests this adapter accepts before the next one is fatal (hello `limits.request_ids`). */
+  get requestIdLimit(): number {
+    const limit = this.hello?.limits.request_ids;
+    return Number.isSafeInteger(limit) && (limit as number) > 0 ? limit as number : DEFAULT_REQUEST_IDS;
+  }
+  get requestsRemaining(): number { return Math.max(0, this.requestIdLimit - this.sent); }
+  /** False once the adapter failed, exited or was closed; a stateless caller may then start a new one. */
+  get usable(): boolean { return !this.failure && !this.ended && !this.expectedExit; }
+  /** Whether the adapter implements a method: hello `methods`, or `capabilities` for an older adapter. */
+  supports(method: string): boolean { return !!this.hello && implementedMethods(this.hello).includes(method); }
   private data(chunk: Buffer): void {
     if (this.failure) return;
     try {
@@ -85,15 +111,14 @@ export class Transport {
   private frame(frame: unknown, bytes: number): void {
     object(frame);
     if (!this.hello) {
-      validateHello(frame, this.options.requiredCapabilities ?? METHODS);
-      this.hello = frame as unknown as Hello;
+      this.hello = validateHello(frame, this.options.requiredCapabilities ?? METHODS);
       clearTimeout(this.helloTimer); this.readyResolve(this.hello); return;
     }
     if (frame.type === 'event') {
       if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) <= this.seq) throw new SdkError('protocol', 'Invalid event sequence');
       this.gap ||= frame.seq !== this.seq + 1;
       this.seq = frame.seq as number;
-      if (!['state', 'output_append', 'turn'].includes(frame.event as string)) return; // Additive event kinds retain sequence validation.
+      if (!['state', 'output_append', 'turn', ...ROOM_EVENTS].includes(frame.event as string)) return; // Additive event kinds retain sequence validation.
       validateEvent(frame);
       const event = { ...frame, gap: this.gap } as unknown as Incoming; this.gap = false;
       if (this.eventError) return;
@@ -118,22 +143,24 @@ export class Transport {
     if (hasError) {
       object(frame.error); string(frame.error.code, true); string(frame.error.message);
       if (frame.error.delivery !== 'unknown' && frame.error.delivery !== 'not_sent') throw new SdkError('protocol', 'Invalid error delivery');
+      const details = errorDetails(frame.error);
       this.finish(frame.id as string);
-      pending.reject(this.requestError(frame.error.code as string, frame.error.message as string, frame.id as string, pending, frame.error.delivery === 'unknown'));
+      pending.reject(this.requestError(frame.error.code as string, frame.error.message as string, frame.id as string, pending, frame.error.delivery === 'unknown', details));
     } else {
       validateResult(pending.method, frame.result, pending.params);
       if (pending.method === 'detach') this.expectedExit = true;
       this.finish(frame.id as string); pending.resolve(frame.result);
     }
   }
-  private requestError(code: string, message: string, id: string, p: Pending, unknown = p.written): SdkError {
-    if (unknown && mutations.has(p.method)) {
-      const error = new DeliveryUnknownError(code, message, id, p.method);
-      error.turnId = p.params.turn_id as string | undefined;
-      error.sessionId = p.params.session_id as string | undefined;
-      return error;
-    }
-    return new SdkError(code, message, unknown ? 'unknown' : 'not_sent', id, p.method);
+  private requestError(code: string, message: string, id: string, p: Pending, unknown = p.written, details: ErrorDetails = {}): SdkError {
+    let error: SdkError;
+    if (unknown && isMutation(p.method, p.params)) {
+      const lost = new DeliveryUnknownError(code, message, id, p.method);
+      lost.turnId = p.params.turn_id as string | undefined;
+      lost.sessionId = p.params.session_id as string | undefined;
+      error = lost;
+    } else error = new SdkError(code, message, unknown ? 'unknown' : 'not_sent', id, p.method);
+    return Object.assign(error, details);
   }
   private finish(id: string): void { this.pending.get(id)?.cleanup(); this.pending.delete(id); }
   async request<T>(method: Method, params: Record<string, unknown>, options: RequestOptions = {}): Promise<T> {
@@ -142,7 +169,7 @@ export class Transport {
     const id = String(++this.counter);
     if (this.failure) throw new SdkError(this.failure.code, this.failure.message, 'not_sent', id, method);
     if (this.expectedExit || this.ended) throw new SdkError('closed', 'Adapter is closed', 'not_sent', id, method);
-    if (!this.hello!.capabilities.includes(method)) throw new SdkError('unsupported_method', `Adapter does not support ${method}`, 'not_sent', id, method);
+    if (!this.supports(method)) throw new SdkError('unsupported_method', `Adapter does not support ${method}`, 'not_sent', id, method);
     if (this.pending.size >= 64) throw new SdkError('pending_overflow', 'At most 64 pending requests', 'not_sent', id, method);
     if (options.signal?.aborted) throw new SdkError('cancelled', 'Local await cancelled', 'not_sent', id, method);
     const line = JSON.stringify({ id, method, params });
@@ -161,7 +188,7 @@ export class Transport {
       this.pending.set(id, p);
       options.signal?.addEventListener('abort', abort, { once: true });
       // Conservatively mark before write: even a write error can follow a partial dispatch.
-      p.written = true;
+      p.written = true; this.sent++;
       try { this.child.stdin.write(line + '\n', e => { this.writeBytes -= size; if (e) this.fail(new SdkError('transport', e.message)); }); }
       catch (e) { this.writeBytes -= size; this.fail(new SdkError('transport', String(e))); }
     });
@@ -193,7 +220,11 @@ export class Transport {
     if (this.failure) throw this.failure;
     if (this.eventError) { this.overflowObserved = true; throw this.eventError; }
   }
-  async *events(options: Pick<RequestOptions, 'signal'> = {}, recover?: () => Promise<State>): AsyncGenerator<Incoming> {
+  /**
+   * One consumer. After an overflow, the next call runs `recover`: a state (a session) is yielded as a `resynced` state event
+   * and supersedes queued observations; a list of events (a room) is yielded as given and the queue is kept.
+   */
+  async *events(options: Pick<RequestOptions, 'signal'> = {}, recover?: () => Promise<State | Incoming[]>): AsyncGenerator<Incoming> {
     if (this.iterating) throw new SdkError('invalid_state', 'Only one event iterator can be active');
     this.iterating = true;
     try {
@@ -201,12 +232,15 @@ export class Transport {
         this.resyncRequired = true;
         this.eventError = undefined; this.overflowObserved = false;
         const seq = this.seq;
-        const state = await recover();
+        const recovered = await recover();
         this.checkEvents();
-        this.queue = this.queue.filter(({ event }) => (event.event === 'state' ? event.state.revision : event.revision) > state.revision);
-        this.queueBytes = this.queue.reduce((sum, item) => sum + item.bytes, 0);
         this.resyncRequired = false;
-        yield { type: 'event', event: 'state', seq, state, resynced: true };
+        if (Array.isArray(recovered)) yield* recovered;
+        else {
+          this.queue = this.queue.filter(({ event }) => isRoomEvent(event) || (event.event === 'state' ? event.state.revision : event.revision) > recovered.revision);
+          this.queueBytes = this.queue.reduce((sum, item) => sum + item.bytes, 0);
+          yield { type: 'event', event: 'state', seq, state: recovered, resynced: true };
+        }
       }
       while (true) {
         if (options.signal?.aborted) throw new SdkError('cancelled', 'Event await cancelled; turn was not interrupted');

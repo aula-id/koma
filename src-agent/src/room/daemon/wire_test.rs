@@ -14,7 +14,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, SessionStatus};
 use crate::ipc::split_stream;
 use crate::room::actor::{ActorMsg, NoBuiltins, RoomConfig, RoomEvent, StatusSnapshot};
 use crate::room::lane::{ModelClient, ModelReply, ModelRequest};
-use crate::room::wire::{RoomClient, RoomServer};
+use crate::room::wire::{RoomAck, RoomClient, RoomServer, SdkAttachment};
 
 use super::assemble::RoomSession;
 
@@ -158,22 +158,33 @@ async fn a_client_sends_a_line_and_reads_the_chief() {
 /// A serve loop fed by hand, with no actor, so the test controls what was said and when.
 struct Bench {
     sock: PathBuf,
+    dir: PathBuf,
     events: tokio::sync::mpsc::UnboundedSender<RoomEvent>,
     from_clients: tokio::sync::mpsc::UnboundedReceiver<ActorMsg>,
     serve: tokio::task::JoinHandle<()>,
 }
 
+/// A named pipe has no folder of its own, so the room's files go in a real temp directory.
+fn bench_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("koma-room-bench-{}", unique()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    dir
+}
+
 fn bench() -> Bench {
+    let dir = bench_dir();
+    let book = super::models::test_book(&dir);
+    bench_with(dir, book)
+}
+
+fn bench_with(dir: PathBuf, book: Arc<super::models::ModelBook>) -> Bench {
     let sock = sock_path();
     let listener = crate::ipc::server::bind(&sock).expect("bind");
     let (events, events_rx) = unbounded_channel();
     let (to_actor, from_clients) = unbounded_channel();
     let status = SessionStatus { session_id: "s".into(), name: "secure".into(), pwd: String::new(), working: false };
-    // A named pipe has no folder of its own, so the room's files go in a real temp directory.
-    let dir = std::env::temp_dir().join(format!("koma-room-bench-{}", unique()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), super::models::test_book(&dir), Arc::new(super::stage::Staging::new(&dir))));
-    Bench { sock, events, from_clients, serve }
+    let serve = tokio::spawn(super::serve::run(listener, to_actor, events_rx, status, Arc::new(AtomicBool::new(false)), book, Arc::new(super::stage::Staging::new(&dir))));
+    Bench { sock, dir, events, from_clients, serve }
 }
 
 impl Bench {
@@ -193,19 +204,45 @@ impl Bench {
     }
 
     async fn attach(&self) -> (crate::ipc::IpcReadHalf, crate::ipc::IpcWriteHalf, FrameReader, usize) {
+        let (read_half, write_half, reader, welcome) = self.attach_hello().await;
+        let RoomServer::Hello { replayed, .. } = welcome else { panic!("first frame was {welcome:?}") };
+        (read_half, write_half, reader, replayed)
+    }
+
+    async fn attach_hello(&self) -> (crate::ipc::IpcReadHalf, crate::ipc::IpcWriteHalf, FrameReader, RoomServer) {
         let stream = client::connect(&self.sock).await.expect("attach");
         let (mut read_half, mut write_half) = split_stream(stream);
         let mut reader = FrameReader::new();
         write(&mut write_half, &RoomClient::Hello).await;
         let welcome: RoomServer = read(&mut read_half, &mut reader).await;
-        let RoomServer::Hello { replayed, .. } = welcome else { panic!("first frame was {welcome:?}") };
-        (read_half, write_half, reader, replayed)
+        (read_half, write_half, reader, welcome)
+    }
+
+    /// The next message for the actor other than the status request an attach makes.
+    async fn delivered(&mut self) -> ActorMsg {
+        loop {
+            let message = tokio::time::timeout(Duration::from_secs(5), self.from_clients.recv())
+                .await
+                .expect("timed out waiting for the actor")
+                .expect("serve alive");
+            if message != ActorMsg::Resync {
+                return message;
+            }
+        }
+    }
+
+    /// Nothing but status requests reached the actor.
+    fn nothing_delivered(&mut self) {
+        while let Ok(message) = self.from_clients.try_recv() {
+            assert_eq!(message, ActorMsg::Resync, "nothing is delivered");
+        }
     }
 
     fn stop(self) {
         self.serve.abort();
         #[cfg(unix)]
         let _ = std::fs::remove_file(&self.sock);
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -377,4 +414,215 @@ fn a_saved_line_with_no_audience_still_loads_and_a_new_one_carries_it() {
     let json = serde_json::to_string(&new).expect("encode");
     assert!(json.contains("\"audience\":\"team\""), "{json}");
     assert_eq!(serde_json::from_str::<RoomServer>(&json).expect("decode"), new);
+}
+
+/// The next acknowledgement on the connection, skipping the room's own frames.
+async fn next_ack(read_half: &mut crate::ipc::IpcReadHalf, reader: &mut FrameReader) -> RoomAck {
+    loop {
+        let bytes = tokio::time::timeout(Duration::from_secs(5), read_frame_from(read_half, reader))
+            .await
+            .expect("timed out waiting for an ack")
+            .expect("read");
+        if let Ok(ack) = serde_json::from_slice::<RoomAck>(&bytes) {
+            return ack;
+        }
+        serde_json::from_slice::<RoomServer>(&bytes).expect("a room frame");
+    }
+}
+
+fn sdk_user(id: &str, text: &str, attachments: Vec<SdkAttachment>) -> RoomClient {
+    RoomClient::SdkUser { id: id.into(), text: text.into(), attachments }
+}
+
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
+    0x1F, 0x15, 0xC4, 0x89, 0, 0, 0, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0D, 0x0A, 0x2D, 0xB4, 0, 0, 0, 0,
+    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+#[tokio::test]
+async fn the_hello_names_the_optional_frames_the_build_and_the_template() {
+    let dir = bench_dir();
+    let template = dir.join("template");
+    std::fs::create_dir_all(&template).expect("mkdir");
+    let overlay = dir.join("room");
+    let registry = Arc::new(crate::room::registry::RegistryHandle::with_layers(Some(template), overlay.clone()).expect("registry"));
+    let revision = registry.template_revision();
+    assert!(revision.is_some());
+    let book = Arc::new(super::models::ModelBook::new(
+        &crate::model::app_config::AppConfig::default(),
+        &crate::model::settings::Settings::default(),
+        registry,
+        overlay,
+    ));
+    let with_template = bench_with(dir, book);
+    let (_r, _w, _reader, welcome) = with_template.attach_hello().await;
+    let RoomServer::Hello { kind, replayed, features, version, template_revision } = welcome else { panic!("{welcome:?}") };
+    assert_eq!((kind.as_str(), replayed), ("secure", 0));
+    assert_eq!(features, vec!["sdk_user".to_string(), "sdk_reload".to_string()]);
+    assert_eq!(version, crate::model::store::build_fingerprint());
+    assert_eq!(template_revision, revision);
+    with_template.stop();
+
+    // A room started without a template sends no revision.
+    let bench = bench();
+    let (_r, _w, _reader, welcome) = bench.attach_hello().await;
+    assert!(matches!(welcome, RoomServer::Hello { template_revision: None, .. }), "{welcome:?}");
+    bench.stop();
+}
+
+#[test]
+fn a_hello_from_an_older_room_still_parses_and_the_terminal_frames_are_unchanged() {
+    for old in [r#"{"hello":{"kind":"secure","replayed":2}}"#, r#"{"hello":{"kind":"secure"}}"#] {
+        let hello: RoomServer = serde_json::from_str(old).expect("an older hello");
+        let RoomServer::Hello { kind, features, version, template_revision, .. } = hello else { panic!("{hello:?}") };
+        assert_eq!(kind, "secure");
+        assert!(features.is_empty() && version.is_empty() && template_revision.is_none());
+    }
+    let new = RoomServer::hello(1, "v".into(), None);
+    let json = serde_json::to_value(&new).expect("encode");
+    assert_eq!(json["hello"]["kind"], "secure", "the terminal reads only the kind");
+    assert!(json["hello"].get("template_revision").is_none());
+    assert_eq!(serde_json::to_string(&RoomClient::User { text: "hi".into() }).expect("encode"), r#"{"user":{"text":"hi"}}"#);
+    assert_eq!(serde_json::to_string(&RoomClient::Paste { text: "pwd".into() }).expect("encode"), r#"{"paste":{"text":"pwd"}}"#);
+    assert_eq!(serde_json::to_string(&RoomClient::Hello).expect("encode"), r#""hello""#);
+}
+
+#[test]
+fn the_sdk_frames_have_their_wire_shape() {
+    let frame: RoomClient = serde_json::from_str(
+        r#"{"sdk_user":{"id":"1","text":"hi","attachments":[{"kind":"image_file","path":"/a.png"},{"kind":"pasted_text","text":"x"}]}}"#,
+    )
+    .expect("sdk_user");
+    assert_eq!(
+        frame,
+        sdk_user("1", "hi", vec![SdkAttachment::ImageFile { path: "/a.png".into() }, SdkAttachment::PastedText { text: "x".into() }])
+    );
+    assert_eq!(serde_json::from_str::<RoomClient>(r#"{"sdk_user":{"id":"2","text":"hi"}}"#).expect("no attachments"), sdk_user("2", "hi", Vec::new()));
+    assert_eq!(serde_json::from_str::<RoomClient>(r#"{"sdk_reload":{"id":"3"}}"#).expect("sdk_reload"), RoomClient::SdkReload { id: "3".into() });
+    let sent = serde_json::to_value(RoomAck::sent("1".into(), vec!["[Image #1]".into()])).expect("encode");
+    assert_eq!(sent, serde_json::json!({"sdk_ack": {"id": "1", "ok": true, "inserts": ["[Image #1]"], "warnings": []}}));
+    let refused = serde_json::to_value(RoomAck::refused("1".into(), "unreadable".into(), "no".into())).expect("encode");
+    assert_eq!(refused, serde_json::json!({"sdk_ack": {"id": "1", "ok": false, "code": "unreadable", "error": "no", "inserts": [], "warnings": []}}));
+    let reloaded = serde_json::to_value(RoomAck::reloaded("3".into(), 4, vec!["w".into()])).expect("encode");
+    assert_eq!(reloaded, serde_json::json!({"sdk_ack": {"id": "3", "ok": true, "inserts": [], "version": 4, "warnings": ["w"]}}));
+    assert!(serde_json::from_value::<RoomServer>(sent).is_err(), "an ack is not a room frame");
+}
+
+#[tokio::test]
+async fn an_sdk_message_is_acked_and_reaches_the_actor_like_a_typed_line() {
+    let mut bench = bench();
+    let (mut r, mut w, mut reader, _) = bench.attach().await;
+
+    write(&mut w, &sdk_user("a", "hi", Vec::new())).await;
+    assert_eq!(next_ack(&mut r, &mut reader).await, RoomAck::sent("a".into(), Vec::new()));
+    assert_eq!(bench.delivered().await, ActorMsg::User("hi".into()));
+
+    let long = "row\n".repeat(20);
+    write(&mut w, &sdk_user("b", "read this", vec![SdkAttachment::PastedText { text: long.clone() }])).await;
+    let RoomAck::SdkAck { id, ok, inserts, .. } = next_ack(&mut r, &mut reader).await;
+    assert_eq!((id.as_str(), ok), ("b", true));
+    assert_eq!(inserts, vec!["[Pasted Text #1]".to_string()]);
+    let ActorMsg::User(text) = bench.delivered().await else { panic!("expected a plain user message") };
+    assert!(text.starts_with("read this\n<<<pasted_text n=1") && text.contains(&long), "{text}");
+
+    let file = bench.dir.join("shot.png");
+    std::fs::write(&file, PNG).expect("write image");
+    let image = SdkAttachment::ImageFile { path: file.to_string_lossy().into_owned() };
+    write(&mut w, &sdk_user("c", "what is this?", vec![image])).await;
+    assert_eq!(next_ack(&mut r, &mut reader).await, RoomAck::sent("c".into(), vec!["[Image #1]".into()]));
+    let ActorMsg::UserWith { text, images } = bench.delivered().await else { panic!("expected a message with an image") };
+    assert_eq!(text, "what is this?\n[Image #1]");
+    assert_eq!(images.len(), 1);
+    assert!(images[0].path.starts_with(bench.dir.join("images")) && images[0].path.is_file());
+    bench.stop();
+}
+
+#[tokio::test]
+async fn a_refused_attachment_delivers_nothing_and_leaves_what_a_paste_staged() {
+    let mut bench = bench();
+    let (mut r, mut w, mut reader, _) = bench.attach().await;
+    let long = "row\n".repeat(20);
+    write(&mut w, &RoomClient::Paste { text: long.clone() }).await;
+    let pasted = next_matching(&mut r, &mut reader, |f| matches!(f, RoomServer::Pasted { .. })).await;
+    assert_eq!(pasted, RoomServer::Pasted { insert: "[Pasted Text #1]".into() });
+
+    let missing = bench.dir.join("missing.png");
+    let bad = SdkAttachment::ImageFile { path: missing.to_string_lossy().into_owned() };
+    write(&mut w, &sdk_user("x", "look", vec![SdkAttachment::PastedText { text: "a\nb".into() }, bad])).await;
+    let RoomAck::SdkAck { id, ok, code, error, inserts, .. } = next_ack(&mut r, &mut reader).await;
+    assert_eq!((id.as_str(), ok, code.as_deref()), ("x", false, Some("unreadable")));
+    assert!(error.is_some_and(|e| !e.is_empty()) && inserts.is_empty());
+    bench.nothing_delivered();
+
+    // A good sdk message does not take the staged paste either.
+    write(&mut w, &sdk_user("y", "plain", Vec::new())).await;
+    assert!(matches!(next_ack(&mut r, &mut reader).await, RoomAck::SdkAck { ok: true, .. }));
+    assert_eq!(bench.delivered().await, ActorMsg::User("plain".into()));
+
+    write(&mut w, &RoomClient::User { text: "read [Pasted Text #1]".into() }).await;
+    let ActorMsg::User(text) = bench.delivered().await else { panic!("expected a plain user message") };
+    assert!(text.contains("<<<pasted_text n=1") && text.contains(&long), "the paste stayed staged: {text}");
+    bench.stop();
+}
+
+#[tokio::test]
+async fn a_reload_answers_with_the_version_and_the_warnings_of_a_broken_file() {
+    let bench = bench();
+    let (mut r, mut w, mut reader, _) = bench.attach().await;
+    write(&mut w, &RoomClient::SdkReload { id: "r1".into() }).await;
+    let RoomAck::SdkAck { id, ok, version, warnings, .. } = next_ack(&mut r, &mut reader).await;
+    assert_eq!((id.as_str(), ok), ("r1", true));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let before = version.expect("a version");
+
+    let overlay = bench.dir.join("room");
+    std::fs::create_dir_all(&overlay).expect("mkdir");
+    std::fs::write(overlay.join("avatars.toml"), "this is [not toml").expect("write");
+    write(&mut w, &RoomClient::SdkReload { id: "r2".into() }).await;
+    let RoomAck::SdkAck { id, ok, version, warnings, .. } = next_ack(&mut r, &mut reader).await;
+    assert_eq!((id.as_str(), ok), ("r2", true));
+    assert!(!warnings.is_empty(), "a broken overlay file is reported");
+    assert!(version.expect("a version") >= before);
+    bench.stop();
+}
+
+#[tokio::test]
+async fn acks_are_never_replayed_or_logged_and_the_line_is() {
+    let mut bench = bench();
+    let (mut r, mut w, mut reader, _) = bench.attach().await;
+    write(&mut w, &sdk_user("a", "scan the login", vec![SdkAttachment::PastedText { text: "pwd".into() }])).await;
+    next_ack(&mut r, &mut reader).await;
+    write(&mut w, &RoomClient::SdkReload { id: "b".into() }).await;
+    next_ack(&mut r, &mut reader).await;
+    write(&mut w, &sdk_user("c", "bad", vec![SdkAttachment::ImageFile { path: "relative.png".into() }])).await;
+    next_ack(&mut r, &mut reader).await;
+    assert_eq!(bench.delivered().await, ActorMsg::User("scan the login\npwd".into()));
+    bench.settle().await;
+
+    let (mut r2, _w2, mut reader2, replayed) = bench.attach().await;
+    assert_eq!(replayed, 1, "only the line that was said");
+    let said = next(&mut r2, &mut reader2).await;
+    assert_eq!(said, RoomServer::Visible { author: "you".into(), text: "scan the login\npwd".into(), audience: Some(crate::room::work::Audience::User) });
+    let log = std::fs::read_to_string(bench.dir.join(super::serve::LOG_FILE)).expect("the log");
+    assert_eq!(log.lines().count(), 1, "{log}");
+    assert!(!log.contains("sdk_ack"), "{log}");
+    bench.stop();
+}
+
+#[tokio::test]
+async fn an_unknown_frame_still_closes_the_connection() {
+    let bench = bench();
+    let (mut r, mut w, mut reader, _) = bench.attach().await;
+    write(&mut w, &serde_json::json!({"sdk_later": {"id": "1"}})).await;
+    let end = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if read_frame_from(&mut r, &mut reader).await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(end.is_ok(), "the daemon closed the connection");
+    bench.stop();
 }

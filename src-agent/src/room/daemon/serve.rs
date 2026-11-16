@@ -22,8 +22,8 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, SessionStatus};
 use crate::ipc::{split_stream, IpcListener, IpcWriteHalf};
 use crate::room::actor::{ActorMsg, RoomEvent};
 use super::models::ModelBook;
-use super::stage::{Pasted, Staging};
-use crate::room::wire::{RoomClient, RoomServer};
+use super::stage::{with_inserts, Pasted, Staging};
+use crate::room::wire::{RoomAck, RoomClient, RoomServer};
 
 /// Spoken lines kept for a client that attaches late.
 pub const BACKLOG_CAP: usize = 2000;
@@ -220,7 +220,8 @@ async fn handle_conn(
     let (replayed_tx, replayed_rx) = oneshot::channel();
     let _ = sub_tx.send(Subscription { tx, replayed: replayed_tx });
     let replayed = replayed_rx.await.unwrap_or(0);
-    write_json(&mut write, &RoomServer::hello(replayed)).await?;
+    let hello = RoomServer::hello(replayed, crate::model::store::build_fingerprint(), book.template_revision());
+    write_json(&mut write, &hello).await?;
     // The replayed status can be minutes old: ask for a current one.
     let _ = to_actor.send(ActorMsg::Resync);
     loop {
@@ -282,6 +283,30 @@ async fn handle_conn(
                     RoomClient::Quit => {
                         let _ = write_json(&mut write, &RoomServer::Closed).await;
                         break;
+                    }
+                    RoomClient::SdkUser { id, text, attachments } => {
+                        let composing = Arc::clone(&stage);
+                        let raw = text.clone();
+                        let composed = tokio::task::spawn_blocking(move || composing.compose(&raw, &attachments)).await;
+                        let ack = match composed {
+                            Ok(Ok((composed, images, inserts))) => {
+                                let said = with_inserts(&text, &inserts);
+                                let _ = note_tx.send(RoomServer::Visible { author: "you".into(), text: said, audience: Some(crate::room::work::Audience::User) });
+                                let _ = to_actor.send(if images.is_empty() {
+                                    ActorMsg::User(composed)
+                                } else {
+                                    ActorMsg::UserWith { text: composed, images }
+                                });
+                                RoomAck::sent(id, inserts)
+                            }
+                            Ok(Err((code, error))) => RoomAck::refused(id, code, error),
+                            Err(_) => RoomAck::refused(id, "interrupted".into(), "the message was not composed".into()),
+                        };
+                        write_json(&mut write, &ack).await?;
+                    }
+                    RoomClient::SdkReload { id } => {
+                        let (version, warnings) = book.reload_registry();
+                        write_json(&mut write, &RoomAck::reloaded(id, version, warnings)).await?;
                     }
                 }
             }

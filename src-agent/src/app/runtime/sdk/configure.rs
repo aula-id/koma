@@ -1,4 +1,5 @@
-//! Pure catalogue write for SDK `configure`.
+//! Pure catalogue work for the SDK: the `configure` write, the `config.*`
+//! deletes and role release, and the public catalogue view.
 //!
 //! No daemon or disk access. Callers save, and the live path re-pins Main from
 //! [`Applied::main_uuid`]. Provider `api_type` is set here because
@@ -53,6 +54,13 @@ pub(crate) fn apply(
 /// Does not mutate `config`.
 pub(crate) fn reply(config: &AppConfig, params: &Value) -> Result<Value, String> {
     describe(config, &parse(params, false)?)
+}
+
+/// Validate `params` without a catalogue. The adapter runs this before it
+/// forwards a call to a live session, so the daemon's own parser, which may be
+/// from an older binary, never sees a call this one rejects.
+pub(crate) fn check(params: &Value) -> Result<(), String> {
+    parse(params, false).map(|_| ())
 }
 
 struct ProviderIn {
@@ -396,11 +404,8 @@ fn parse_role(name: &str) -> Option<ModelRole> {
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
         "planner" => ModelRole::Planner,
-        "cyber-red" | "cyber_red" => ModelRole::CyberRed,
-        "cyber-blue" | "cyber_blue" => ModelRole::CyberBlue,
-        "cyber-research" | "cyber_research" | "cyber-researcher" | "cyber_researcher" => {
-            ModelRole::CyberResearch
-        }
+        // Only the five public roles are writable. Other stored roles still
+        // display through `role_name`.
         _ => return None,
     })
 }
@@ -437,6 +442,223 @@ fn is_http_url(endpoint: &str) -> bool {
     match url::Url::parse(endpoint) {
         Ok(parsed) => matches!(parsed.scheme(), "http" | "https"),
         Err(_) => false,
+    }
+}
+
+/// A public role name as the SDK spells it. Only the five public roles parse.
+pub(crate) fn parse_public_role(name: &str) -> Option<ModelRole> {
+    parse_role(name)
+}
+
+/// Why a catalogue delete is refused before anything is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    NotFound,
+    /// The provider belongs to an extension; only uninstalling it removes it.
+    Managed,
+}
+
+/// What a catalogue delete removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Removal {
+    pub models_removed: Vec<String>,
+    pub main_reset: bool,
+    /// Public roles the removed model held (model deletes only).
+    pub roles_released: Vec<ModelRole>,
+}
+
+/// Remove a user provider and every model that points at it.
+/// `AppConfig::cascade_remove_provider` silently does nothing for an unknown
+/// uuid, so existence and ownership are checked first.
+pub(crate) fn delete_provider(config: &mut AppConfig, uuid: &str) -> Result<Removal, Refusal> {
+    let provider = config
+        .providers
+        .iter()
+        .find(|provider| provider.uuid == uuid)
+        .ok_or(Refusal::NotFound)?;
+    if provider.ext_id.is_some() {
+        return Err(Refusal::Managed);
+    }
+    let purge = config.cascade_remove_provider(uuid);
+    Ok(Removal {
+        models_removed: purge.models_removed,
+        main_reset: purge.main_reset,
+        roles_released: Vec::new(),
+    })
+}
+
+/// Remove one global catalogue model.
+pub(crate) fn delete_model(config: &mut AppConfig, uuid: &str) -> Result<Removal, Refusal> {
+    let model = config
+        .models
+        .iter()
+        .find(|model| model.uuid == uuid)
+        .ok_or(Refusal::NotFound)?;
+    let mut roles_released: Vec<ModelRole> = model
+        .effective_roles()
+        .into_iter()
+        .filter(|role| super::host::redact::public_role(*role).is_some())
+        .collect();
+    roles_released.sort_by_key(|role| role_rank(*role));
+    let dead = std::iter::once(uuid.to_string()).collect();
+    let purge = config.cascade_remove_models(&dead);
+    Ok(Removal {
+        models_removed: purge.models_removed,
+        main_reset: purge.main_reset,
+        roles_released,
+    })
+}
+
+/// Release `role` from the global catalogue. Returns the uuid of the entry
+/// that held it, or `None` when nobody did and nothing changed.
+pub(crate) fn unassign_role(config: &mut AppConfig, role: ModelRole) -> Option<String> {
+    let holder = config
+        .models
+        .iter()
+        .find(|model| model.effective_roles().contains(&role))
+        .map(|model| model.uuid.clone())?;
+    crate::model::app_config::assign_role(&mut config.models, role, None);
+    Some(holder)
+}
+
+/// Which perspective a [`describe_all`] view takes.
+pub(crate) struct ViewOf<'a> {
+    pub view: &'static str,
+    pub revision: String,
+    pub missing: bool,
+    pub roles: &'a [crate::app::resolve::RoleResolution],
+    pub main_fallback: Option<&'static str>,
+    /// Names for provider uuids the config does not know, such as the
+    /// daemon's in-memory catalogue.
+    pub extra_names: &'a dyn Fn(&str) -> Option<String>,
+}
+
+/// The public view of the whole catalogue. Every field goes through the
+/// redacting projections, so no key, token or endpoint credential is copied.
+pub(crate) fn describe_all(config: &AppConfig, of: ViewOf<'_>) -> super::dto::ConfigView {
+    use super::dto::{self, MAX_MODELS, MAX_OAUTH, MAX_PROVIDERS};
+    use super::host::redact;
+
+    let providers: Vec<dto::Provider> = config
+        .providers
+        .iter()
+        .take(MAX_PROVIDERS)
+        .map(|provider| redact::provider(config, provider))
+        .collect();
+    let oauth: Vec<dto::OAuthConn> = config
+        .oauth_conns
+        .iter()
+        .take(MAX_OAUTH)
+        .map(redact::oauth)
+        .collect();
+    let mut entries: Vec<&ModelEntry> = config.models.iter().collect();
+    let models_truncated = entries.len() > MAX_MODELS;
+    if models_truncated {
+        // Every role holder first, then the rest by name.
+        entries.sort_by(|a, b| {
+            a.effective_roles()
+                .is_empty()
+                .cmp(&b.effective_roles().is_empty())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        entries.truncate(MAX_MODELS);
+    }
+    let models = entries
+        .into_iter()
+        .map(|model| describe_model(config, model))
+        .collect();
+    let names = |uuid: &str| redact::provider_name(config, uuid).or_else(|| (of.extra_names)(uuid));
+    dto::ConfigView {
+        revision: of.revision,
+        file: if of.missing { "missing" } else { "ok" },
+        view: of.view,
+        providers,
+        providers_truncated: config.providers.len() > MAX_PROVIDERS,
+        oauth,
+        oauth_truncated: config.oauth_conns.len() > MAX_OAUTH,
+        models,
+        models_truncated,
+        roles: redact::role_routes(of.roles, names),
+        main_fallback: of.main_fallback,
+    }
+}
+
+fn describe_model(config: &AppConfig, model: &ModelEntry) -> super::dto::Model {
+    let (provider_kind, provider_name) = if let Some(provider) = config
+        .providers
+        .iter()
+        .find(|provider| provider.uuid == model.provider_uuid)
+    {
+        ("provider", Some(provider.name.clone()))
+    } else if let Some(conn) = config
+        .oauth_conns
+        .iter()
+        .find(|conn| conn.uuid == model.provider_uuid)
+    {
+        ("oauth", Some(conn.name.clone()))
+    } else {
+        ("missing", None)
+    };
+    let held = model.effective_roles();
+    let mut public: Vec<ModelRole> = held
+        .iter()
+        .copied()
+        .filter(|role| super::host::redact::public_role(*role).is_some())
+        .collect();
+    public.sort_by_key(|role| role_rank(*role));
+    public.dedup();
+    super::dto::Model {
+        model_uuid: model.uuid.clone(),
+        name: model.name.clone(),
+        model_id: model.model_id.clone(),
+        provider_uuid: model.provider_uuid.clone(),
+        provider_kind,
+        provider_name,
+        route: model.route.clone(),
+        roles: public.into_iter().map(role_name).collect(),
+        other_roles: held
+            .iter()
+            .any(|role| super::host::redact::public_role(*role).is_none()),
+        source_uuid: model.source_uuid.clone(),
+    }
+}
+
+/// `main_fallback` of a global view.
+pub(crate) fn global_main_fallback(config: &AppConfig) -> Option<&'static str> {
+    use crate::app::resolve::{main_fallback_reason, MainFallback};
+    let settings = crate::model::settings::Settings::default();
+    main_fallback_reason(config, &settings).map(|reason| match reason {
+        MainFallback::Unconfigured => "unconfigured",
+        MainFallback::ProviderRemoved => "provider_removed",
+        MainFallback::NoKey => "no_key",
+        MainFallback::NotSignedIn => "not_signed_in",
+    })
+}
+
+/// `main_fallback` of a session view, read from the session's own Main route:
+/// the adapter holds that route, not the session's settings file.
+pub(crate) fn session_main_fallback(
+    config: &AppConfig,
+    main: Option<&crate::app::resolve::RoleResolution>,
+) -> Option<&'static str> {
+    let Some(main) = main else {
+        return Some("unconfigured");
+    };
+    match main.reason.as_deref() {
+        None => None,
+        Some("unassigned") => Some("unconfigured"),
+        Some("provider_missing") | Some("reference_deleted") => Some("provider_removed"),
+        Some("credentials_unavailable") => {
+            let anchor = main.provider_uuid.as_deref().unwrap_or_default();
+            if config.oauth_conns.iter().any(|conn| conn.uuid == anchor)
+                && !config.providers.iter().any(|p| p.uuid == anchor)
+            {
+                Some("not_signed_in")
+            } else {
+                Some("no_key")
+            }
+        }
+        Some(_) => None,
     }
 }
 

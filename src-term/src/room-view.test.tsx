@@ -143,6 +143,19 @@ test("a turn shows collapsed thinking, a tool card and markdown, and long lines 
   expect(text).toContain("so I ran pwd myself.")
 })
 
+test("a failed tool result shows the failure mark instead of the check", async () => {
+  const tool = (ok: boolean): Line => ({
+    id: "t", author: "chief", lane: "chat",
+    items: [{ kind: "tool", id: "c1", name: "bash", args: '{"command":"false"}', result: { ok, text: "exit 1" } }],
+  })
+  const failed = await frame(70, 24, { lines: [say("you", "run it"), tool(false)] })
+  expect(failed).toContain("✗ bash")
+  expect(failed).not.toContain("✓ bash")
+  const passed = await frame(70, 24, { lines: [say("you", "run it"), tool(true)] })
+  expect(passed).toContain("✓ bash")
+  expect(passed).not.toContain("✗ bash")
+})
+
 import { useState } from "react"
 
 function Live({ sent, start = "" }: { sent: string[]; start?: string }) {
