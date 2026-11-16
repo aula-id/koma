@@ -68,7 +68,7 @@ use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, Tool as RmcpTool};
 use rmcp::service::{Peer, RoleClient, RunningService};
-use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
+use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::ServiceExt;
 
 use crate::dto::openrouter::{ToolDef, ToolFunctionDef};
@@ -81,10 +81,44 @@ use crate::model::app_config::{McpServerEntry, McpTransport};
 // existing bare call site in this file keeps compiling unchanged.
 #[cfg(test)]
 mod activation_tests;
+mod expand;
+#[cfg(test)]
+mod expand_tests;
 mod proxy;
+mod resolve;
+#[cfg(test)]
+mod resolve_tests;
 mod util;
 use proxy::proxy_request;
 use util::flatten_result;
+
+/// Read-only launch check for `koma doctor`: `Some(message)` when an enabled
+/// stdio server's command cannot be found. Never spawns anything.
+pub(crate) fn resolve_for_doctor(server: &McpServerEntry) -> Option<String> {
+    if server.transport != McpTransport::Stdio || server.command.trim().is_empty() {
+        return None;
+    }
+    let windows = cfg!(windows);
+    let (server, _) = expand::expand_entry(server, &|n| std::env::var(n).ok());
+    let host = crate::coding::environment::host_path()
+        .to_string_lossy()
+        .into_owned();
+    let path_var = resolve::effective_path(&server.env, &host, windows);
+    let pathext = std::env::var("PATHEXT").ok();
+    let cmd = server.command.trim();
+    let found = resolve::resolve_with(cmd, &path_var, pathext.as_deref(), None, windows, &|p| {
+        std::path::Path::new(p).is_file()
+    });
+    match found {
+        Some(_) => None,
+        None => Some(resolve::not_found_message(
+            cmd,
+            &path_var,
+            pathext.as_deref(),
+            windows,
+        )),
+    }
+}
 
 /// Session exposure applies to extension tools and extension-owned bundled MCP
 /// servers. Ordinary user-configured MCP servers remain available as before.
@@ -995,32 +1029,90 @@ impl McpManager {
 async fn connect_one(
     server: &McpServerEntry,
 ) -> Result<(RunningService<RoleClient, ()>, Vec<RmcpTool>), String> {
+    let (expanded, missing) = expand::expand_entry(server, &|n| std::env::var(n).ok());
+    if !missing.is_empty() {
+        crate::model::store::append_global_error_log(
+            "mcp",
+            &format!(
+                "server '{}': {} not set; passed through literally",
+                server.name,
+                missing.join(", ")
+            ),
+        );
+    }
+    let server = &expanded;
     // The whole connect (transport build + MCP initialize + first tool list) is
     // wrapped in a single timeout so a server that hangs at any stage is abandoned.
+    let tail = Arc::new(Mutex::new(String::new()));
     let fut = async {
         let service: RunningService<RoleClient, ()> = match server.transport {
             McpTransport::Stdio => {
                 if server.command.trim().is_empty() {
                     return Err("stdio server has no command".to_string());
                 }
-                // Build the child-process transport: the configured command + args,
-                // plus any configured environment variables.
-                let args = server.args.clone();
-                let env = server.env.clone();
-                let cmd = tokio::process::Command::new(&server.command).configure(|c| {
-                    for a in &args {
-                        c.arg(a);
-                    }
-                    for (k, v) in &env {
-                        c.env(k, v);
-                    }
-                    // No console flash on Windows — see
-                    // `tool::shell::no_console_window_tokio`'s docs for the
-                    // `FreeConsole()` causal chain this guards against.
-                    crate::tool::shell::no_console_window_tokio(c);
-                });
-                let transport = TokioChildProcess::new(cmd)
-                    .map_err(|e| format!("spawn '{}' failed: {e}", server.command))?;
+                let windows = cfg!(windows);
+                let host = crate::coding::environment::host_path()
+                    .to_string_lossy()
+                    .into_owned();
+                let path_var = resolve::effective_path(&server.env, &host, windows);
+                let pathext = std::env::var("PATHEXT").ok();
+                let cmd_text = server.command.trim();
+                let resolved = resolve::resolve_with(
+                    cmd_text,
+                    &path_var,
+                    pathext.as_deref(),
+                    None,
+                    windows,
+                    &|p| std::path::Path::new(p).is_file(),
+                );
+                let program = resolve::choose_program(cmd_text, resolved.as_deref(), windows)
+                    .ok_or_else(|| {
+                        resolve::not_found_message(cmd_text, &path_var, pathext.as_deref(), windows)
+                    })?;
+                let mut cmd = tokio::process::Command::new(&program);
+                cmd.args(&server.args);
+                // Host PATH first, then the server's own env, so a configured
+                // PATH still wins.
+                cmd.env("PATH", &host);
+                for (k, v) in &server.env {
+                    cmd.env(k, v);
+                }
+                // No console flash on Windows — see
+                // `tool::shell::no_console_window_tokio`'s docs for the
+                // `FreeConsole()` causal chain this guards against.
+                crate::tool::shell::no_console_window_tokio(&mut cmd);
+                let (transport, stderr) = TokioChildProcess::builder(cmd)
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|e| {
+                        if !windows
+                            && e.kind() == std::io::ErrorKind::NotFound
+                            && !resolve::is_path_like(cmd_text, false)
+                        {
+                            resolve::not_found_message(cmd_text, &path_var, None, false)
+                        } else {
+                            resolve::describe_spawn_error(
+                                cmd_text,
+                                &program,
+                                e.kind(),
+                                &e.to_string(),
+                                windows,
+                            )
+                        }
+                    })?;
+                if let Some(stderr) = stderr {
+                    // Drains for the child's whole life so a full pipe never
+                    // blocks the server; ends on EOF.
+                    let tail = Arc::clone(&tail);
+                    tokio::spawn(async move {
+                        use tokio::io::AsyncBufReadExt;
+                        let mut lines = tokio::io::BufReader::new(stderr).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            let mut t = tail.lock().unwrap_or_else(|p| p.into_inner());
+                            resolve::push_tail(&mut t, &line, resolve::STDERR_TAIL_BYTES);
+                        }
+                    });
+                }
                 ().serve(transport)
                     .await
                     .map_err(|e| format!("initialize failed: {e}"))?
@@ -1043,11 +1135,15 @@ async fn connect_one(
         Ok((service, tools))
     };
 
-    match tokio::time::timeout(CONNECT_TIMEOUT, fut).await {
+    let result = match tokio::time::timeout(CONNECT_TIMEOUT, fut).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "connect timed out after {}s",
             CONNECT_TIMEOUT.as_secs()
         )),
-    }
+    };
+    result.map_err(|msg| {
+        let t = tail.lock().unwrap_or_else(|p| p.into_inner());
+        resolve::with_stderr(msg, &t)
+    })
 }
