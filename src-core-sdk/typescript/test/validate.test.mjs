@@ -36,6 +36,16 @@ test('wrong shapes are protocol errors', () => {
   rejected('sessions.list', { sessions: [row], next_cursor: 5 });
   rejected('sessions.rename', { session: row }, { session_id: 'other' });
   rejected('sessions.stop', { stopped: false, was_live: false });
+  const message = { id: 1, role: 'user', text: 't', created_at: 5 };
+  const transcript = { session_id: 's', live: false, messages: [message], next_since: null };
+  validateResult('sessions.transcript', transcript, { session_id: 's' });
+  validateResult('sessions.transcript', { ...transcript, messages: [{ ...message, truncated: true }], next_since: 1 }, { session_id: 's' });
+  rejected('sessions.transcript', transcript, { session_id: 'other' });
+  rejected('sessions.transcript', { ...transcript, messages: [{ ...message, id: 0 }] }, { session_id: 's' });
+  rejected('sessions.transcript', { ...transcript, messages: [{ ...message, role: 'robot' }] }, { session_id: 's' });
+  rejected('sessions.transcript', { ...transcript, messages: [{ ...message, truncated: false }] }, { session_id: 's' });
+  rejected('sessions.transcript', { ...transcript, next_since: 0 }, { session_id: 's' });
+  rejected('sessions.transcript', { ...transcript, live: 'no' }, { session_id: 's' });
   rejected('usage.query', { from_at: 1, to_at: 2, ledger: '', totals: {} });
   rejected('skills.get', { ...skill, instruction: 1 });
   rejected('room.send', { sent: true, acked: true, inserts: [], echo_line_seq: -1 });

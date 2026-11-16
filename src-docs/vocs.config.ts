@@ -173,6 +173,7 @@ export default defineConfig({
         ['approve', '/sdk/reference/approve'],
         ['detach', '/sdk/reference/detach'],
         ['configure', '/sdk/reference/configure'],
+        ['sessions.transcript', '/sdk/reference/sessions-transcript'],
       ]),
     ],
     '/extension': [

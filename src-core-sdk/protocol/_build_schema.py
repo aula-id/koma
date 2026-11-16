@@ -46,6 +46,7 @@ session_params={
  'sessions.rename':obj({'session_id':ident,'name':session_name}),
  'sessions.delete':obj({'session_id':ident}),
  'sessions.stop':obj({'session_id':ident}),
+ 'sessions.transcript':obj({'session_id':ident,'since':offset,'limit':{'type':'integer','minimum':1,'maximum':500}},['session_id']),
 }
 usage_params={'usage.query':obj({'from_at':{'type':'integer'},'to_at':{'type':'integer'},'session_id':ident,'workdir':ident,'group_by':enum('none','model','role','session'),'bucket':enum('none','hour','day','week'),'tz_offset_minutes':{'type':'integer','minimum':-720,'maximum':840},'limit':{'type':'integer','minimum':1,'maximum':500}},[])}
 skill_address={'tier':skill_ref,'workdir':ident,'name':ident}
@@ -122,6 +123,8 @@ d['sessions_list_result']=obj({'sessions':array(ref('session_row'),500),'next_cu
 d['session_rename_result']=obj({'session':ref('session_row')})
 d['session_delete_result']=obj({'deleted':{'const':True},'kind':ident,'orphaned_room_session_id':nullable})
 d['session_stop_result']=obj({'stopped':{'const':True},'was_live':boolean})
+d['transcript_message']=obj({'id':revision,'role':enum('system','user','assistant','tool'),'text':s,'created_at':count,'truncated':{'const':True}},['id','role','text','created_at'])
+d['session_transcript_result']=obj({'session_id':ident,'live':boolean,'messages':array(ref('transcript_message'),500),'next_since':{'type':['integer','null'],'minimum':1}})
 total_props={'calls':count,'tokens_in':count,'tokens_cached':count,'tokens_out':count,'cost':{'type':'number','minimum':0}}
 d['usage_totals']=obj(total_props)
 d['usage_group']=obj({**total_props,'key':s,'label':nullable,'role_kind':ident,'agent':nullable,'kind':nullable,'deleted':boolean},[*total_props,'key','label'])
@@ -173,7 +176,7 @@ d['team']=obj({'target':ident,'revision':doc_revision,'layer_present':boolean,'t
 team_write={'team':ref('team'),'applies':ident,'propagation':ref('propagation')}
 d['team_write_result']=obj(team_write)
 d['avatar_remove_result']=obj({**team_write,'reverted_to':nullable})
-d['response']={'oneOf':[obj({'type':{'const':'response'},'id':ident,'result':{'oneOf':[obj({'state':ref('state'),'session_info':ref('session_info'),'warnings':array(obj({'code':ident,'message':s}),8)},['state']),ref('turn_result'),ref('replacement_result'),obj({'approved':boolean}),obj({'detached':{'const':True}}),ref('configure_result'),ref('config_view'),ref('provider_delete_result'),ref('model_delete_result'),ref('role_unassign_result'),ref('effort_options_result'),ref('effort_result'),ref('limits_result'),obj({'session_info':ref('session_info')}),ref('sessions_list_result'),ref('session_rename_result'),ref('session_delete_result'),ref('session_stop_result'),ref('usage_result'),ref('skills_list_result'),ref('skill_detail'),ref('skill_file_result'),ref('skill_write_result'),ref('skill_update_result'),ref('skill_remove_result'),ref('room_list_result'),ref('attach_result'),ref('room_close_result'),ref('room_send_result'),ref('room_sent_result'),ref('room_status'),ref('room_history_result'),ref('shelf_list_result'),ref('shelf_item'),ref('trajectory_result'),ref('reports_result'),ref('spend_result'),ref('team'),ref('team_write_result'),ref('avatar_remove_result')]}}),obj({'type':{'const':'response'},'id':ident,'error':ref('error')})]}
+d['response']={'oneOf':[obj({'type':{'const':'response'},'id':ident,'result':{'oneOf':[obj({'state':ref('state'),'session_info':ref('session_info'),'warnings':array(obj({'code':ident,'message':s}),8)},['state']),ref('turn_result'),ref('replacement_result'),obj({'approved':boolean}),obj({'detached':{'const':True}}),ref('configure_result'),ref('config_view'),ref('provider_delete_result'),ref('model_delete_result'),ref('role_unassign_result'),ref('effort_options_result'),ref('effort_result'),ref('limits_result'),obj({'session_info':ref('session_info')}),ref('sessions_list_result'),ref('session_rename_result'),ref('session_delete_result'),ref('session_stop_result'),ref('session_transcript_result'),ref('usage_result'),ref('skills_list_result'),ref('skill_detail'),ref('skill_file_result'),ref('skill_write_result'),ref('skill_update_result'),ref('skill_remove_result'),ref('room_list_result'),ref('attach_result'),ref('room_close_result'),ref('room_send_result'),ref('room_sent_result'),ref('room_status'),ref('room_history_result'),ref('shelf_list_result'),ref('shelf_item'),ref('trajectory_result'),ref('reports_result'),ref('spend_result'),ref('team'),ref('team_write_result'),ref('avatar_remove_result')]}}),obj({'type':{'const':'response'},'id':ident,'error':ref('error')})]}
 # Forbid only mutually exclusive envelope keys; additive fields remain permitted.
 for variant in d['response']['oneOf']:
     variant['not']={'required':['error' if 'result' in variant['properties'] else 'result']}
