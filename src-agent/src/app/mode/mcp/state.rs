@@ -293,6 +293,97 @@ impl McpState {
     }
 }
 
+/// Placeholder the GUI shows (and sends back unchanged) for a stored header value, so
+/// header secrets never reach the webview.
+pub(crate) const HEADER_KEEP: &str = "********";
+
+/// Header pairs for the webview: names kept, every value replaced by [`HEADER_KEEP`].
+pub(crate) fn mask_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(k, _)| (k.clone(), HEADER_KEEP.to_string()))
+        .collect()
+}
+
+/// Headers from the form: a value that is blank or still [`HEADER_KEEP`] takes the stored
+/// value of the same-named header (so an untouched row survives a save); anything else is
+/// the new value. Entries without a name are dropped.
+fn merge_headers(stored: &[(String, String)], sent: &[(String, String)]) -> Vec<(String, String)> {
+    sent.iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| {
+            let name = k.trim().to_string();
+            let value = v.trim();
+            if value.is_empty() || value == HEADER_KEEP {
+                let kept = stored.iter().find(|(sk, _)| sk.eq_ignore_ascii_case(&name));
+                (name, kept.map(|(_, sv)| sv.clone()).unwrap_or_default())
+            } else {
+                (name, value.to_string())
+            }
+        })
+        .collect()
+}
+
+fn clean_list(list: &[String]) -> Vec<String> {
+    list.iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Build the entry for a GUI `SetMcpServer`: start from the stored row (so fields the
+/// form did not send survive), apply the legacy string fields, then each structured
+/// `extras` field that was sent. An empty `cwd` or a zero timeout clears the setting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn entry_from_form(
+    existing: Option<&McpServerEntry>,
+    uuid: Option<String>,
+    name: &str,
+    enabled: bool,
+    transport: &str,
+    command: &str,
+    args: &str,
+    env: &str,
+    url: &str,
+    x: &crate::ipc::proto::McpServerExtras,
+) -> McpServerEntry {
+    let mut e = existing.cloned().unwrap_or_default();
+    e.uuid = uuid.unwrap_or_default();
+    e.name = name.trim().to_string();
+    e.enabled = enabled;
+    e.transport = if transport == "http" {
+        McpTransport::Http
+    } else {
+        McpTransport::Stdio
+    };
+    e.command = command.trim().to_string();
+    e.url = url.trim().to_string();
+    e.args = x.argv.clone().unwrap_or_else(|| parse_args(args));
+    e.env = x.env_pairs.clone().unwrap_or_else(|| parse_env(env));
+    if let Some(h) = &x.headers {
+        e.headers = merge_headers(&e.headers, h);
+    }
+    if let Some(c) = &x.cwd {
+        let c = c.trim();
+        e.cwd = (!c.is_empty()).then(|| c.to_string());
+    }
+    if let Some(ms) = x.startup_timeout_ms {
+        e.startup_timeout_ms = (ms > 0).then_some(ms);
+    }
+    if let Some(ms) = x.tool_timeout_ms {
+        e.tool_timeout_ms = (ms > 0).then_some(ms);
+    }
+    if let Some(l) = &x.allowed_tools {
+        e.allowed_tools = clean_list(l);
+    }
+    if let Some(l) = &x.disabled_tools {
+        e.disabled_tools = clean_list(l);
+    }
+    // A GUI-configured server is user-owned: no extension provenance.
+    e.ext_id = None;
+    e
+}
+
 /// Split raw args text into a `Vec<String>` on any whitespace, dropping empties.
 pub(crate) fn parse_args(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(|s| s.to_string()).collect()

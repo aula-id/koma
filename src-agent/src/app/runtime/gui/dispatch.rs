@@ -272,6 +272,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             args,
             env,
             url,
+            extras,
         } => {
             forward_config_req(
                 &ctx.req,
@@ -285,6 +286,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     args,
                     env,
                     url,
+                    extras,
                 },
             );
         }

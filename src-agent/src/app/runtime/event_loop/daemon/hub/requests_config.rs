@@ -67,24 +67,14 @@ impl DaemonHub {
         args: String,
         env: String,
         url: String,
+        extras: crate::ipc::proto::McpServerExtras,
     ) {
-        let entry = crate::model::app_config::McpServerEntry {
-            uuid: uuid.unwrap_or_default(),
-            name: name.trim().to_string(),
-            enabled,
-            transport: if transport == "http" {
-                crate::model::app_config::McpTransport::Http
-            } else {
-                crate::model::app_config::McpTransport::Stdio
-            },
-            command: command.trim().to_string(),
-            args: crate::app::mode::mcp::parse_args(&args),
-            env: crate::app::mode::mcp::parse_env(&env),
-            url: url.trim().to_string(),
-            // A GUI-configured server is user-owned — no extension provenance.
-            ext_id: None,
-            ..Default::default()
-        };
+        let existing = uuid
+            .as_ref()
+            .and_then(|u| state.rest.config.mcp_servers.iter().find(|s| &s.uuid == u));
+        let entry = crate::app::mode::mcp::entry_from_form(
+            existing, uuid, &name, enabled, &transport, &command, &args, &env, &url, &extras,
+        );
         state.rest.config.upsert_mcp_server(entry);
         let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
         self.ack_or_error(idx, result);

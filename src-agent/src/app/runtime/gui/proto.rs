@@ -291,6 +291,8 @@ pub(super) enum GuiReq {
         args: String,
         env: String,
         url: String,
+        #[serde(default)]
+        extras: crate::ipc::proto::McpServerExtras,
     },
     /// Import MCP servers from pasted JSON (McpPanel "Import JSON").
     ImportMcpJson {

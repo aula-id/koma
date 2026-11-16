@@ -347,6 +347,14 @@ pub(super) fn push_config(
                 .collect::<Vec<_>>()
                 .join(", "),
             url: s.url.clone(),
+            argv: s.args.clone(),
+            env_pairs: s.env.clone(),
+            headers: crate::app::mode::mcp::mask_headers(&s.headers),
+            cwd: s.cwd.clone().unwrap_or_default(),
+            startup_timeout_ms: s.startup_timeout_ms,
+            tool_timeout_ms: s.tool_timeout_ms,
+            allowed_tools: s.allowed_tools.clone(),
+            disabled_tools: s.disabled_tools.clone(),
             tool_count: cfg.mcp_status.get(&s.uuid).copied().unwrap_or(0),
             error: cfg.mcp_errors.get(&s.uuid).cloned(),
         })
@@ -507,5 +515,28 @@ mod tests {
             "synthetic row duplicated a global koma-free model: {ids:?}"
         );
         assert!(ids.iter().any(|id| id == "global-free"));
+    }
+
+    #[test]
+    fn mcp_header_values_never_reach_the_webview() {
+        let mut cfg = projection(vec![], vec![]);
+        cfg.mcp_servers = vec![crate::model::app_config::McpServerEntry {
+            uuid: "m1".into(),
+            name: "gh".into(),
+            args: vec!["a b".into()],
+            headers: vec![("Authorization".into(), "Bearer sekret-token".into())],
+            ..Default::default()
+        }];
+        let mut last = PushState::new();
+        let json = std::cell::RefCell::new(String::new());
+        push_config(Some(&cfg), &|s| *json.borrow_mut() = s, &mut last);
+        assert!(!json.borrow().contains("sekret-token"));
+        let v: serde_json::Value = serde_json::from_str(&json.borrow()).unwrap();
+        assert_eq!(v["mcp"][0]["headers"][0][0], "Authorization");
+        assert_eq!(
+            v["mcp"][0]["headers"][0][1],
+            crate::app::mode::mcp::HEADER_KEEP
+        );
+        assert_eq!(v["mcp"][0]["argv"][0], "a b");
     }
 }

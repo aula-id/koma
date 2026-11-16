@@ -657,9 +657,11 @@ impl DaemonHub {
                 args,
                 env,
                 url,
+                extras,
             } => {
                 self.set_mcp_server(
                     idx, state, handle, uuid, name, enabled, transport, command, args, env, url,
+                    extras,
                 );
             }
 

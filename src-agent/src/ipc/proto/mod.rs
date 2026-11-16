@@ -33,6 +33,23 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 // ─── lightweight session metadata ────────────────────────────────────────────
 
+/// Structured MCP form fields the GUI sends next to the legacy string fields. `None`
+/// means "not sent": keep the stored value (`argv`/`env_pairs` fall back to parsing the
+/// legacy `args`/`env` strings). Header values equal to the keep-marker (or blank) keep
+/// the stored value of the same-named header.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpServerExtras {
+    pub argv: Option<Vec<String>>,
+    pub env_pairs: Option<Vec<(String, String)>>,
+    pub headers: Option<Vec<(String, String)>>,
+    pub cwd: Option<String>,
+    pub startup_timeout_ms: Option<u64>,
+    pub tool_timeout_ms: Option<u64>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub disabled_tools: Option<Vec<String>>,
+}
+
 /// A NON-attaching snapshot of one session-daemon's single owned session — the data
 /// the hub/swapper collects when DISCOVERING live daemons (it probes each
 /// `run/<id>.sock` for this, never opening a full attach/snapshot stream). Carries
@@ -306,6 +323,8 @@ pub enum ClientRequest {
         args: String,
         env: String,
         url: String,
+        #[serde(default)]
+        extras: McpServerExtras,
     },
     /// Import MCP servers from pasted JSON (Claude Code, Cursor or VS Code shape, or a
     /// bare README fragment): parsed with `app::mcp::project::parse_servers_json`,
