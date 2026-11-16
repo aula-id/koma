@@ -1049,7 +1049,7 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 /// Find which workspace contains the given absolute path.
 pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
     for ws in workspaces {
-        let ws = winpath::canonical(&ws).unwrap_or_else(|_| ws.clone());
+        let ws = winpath::canonical(ws).unwrap_or_else(|_| ws.clone());
         if abs.starts_with(&ws) {
             return Some(ws);
         }
