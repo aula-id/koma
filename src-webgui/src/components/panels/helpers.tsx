@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useKoma } from '../../store/koma'
 import { Plus, Pencil, Trash2, Check, X, ChevronLeft } from 'lucide-react'
 
 // Shared presentational atoms for sidebar CRUD panels.
@@ -185,5 +186,75 @@ export function FormActions({ onCancel, onSave, saveDisabled }: { onCancel: () =
         Save
       </button>
     </div>
+  )
+}
+
+export function InlineNameInput({
+  initial,
+  placeholder,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string
+  placeholder: string
+  onSubmit: (value: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState(initial)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+  const commit = () => {
+    const v = value.trim()
+    if (!v) {
+      onCancel()
+      return
+    }
+    onSubmit(v)
+  }
+  return (
+    <form
+      className="flex min-w-0 flex-1 items-center gap-1"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault()
+        commit()
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+        onBlur={() => {
+          if (!value.trim()) onCancel()
+        }}
+        className="h-5 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
+      />
+      <IconBtn label="Confirm" tone="emerald" onClick={commit}>
+        <Check size={12} />
+      </IconBtn>
+      <IconBtn label="Cancel" tone="red" onClick={onCancel}>
+        <X size={12} />
+      </IconBtn>
+    </form>
+  )
+}
+
+export function WelcomeLink({ which }: { which: 'diagram' | 'design' }) {
+  const open = useKoma((s) => s.openWelcomeTab)
+  return (
+    <button type="button" onClick={() => open(which)} className="px-5 py-1 text-[12px] text-koma-accent hover:underline">
+      Open welcome
+    </button>
   )
 }
