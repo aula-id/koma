@@ -258,17 +258,37 @@ impl McpState {
     /// (e.g. `url` on a Stdio server) but stay empty because they were never
     /// shown/edited — exactly the union-of-fields shape `McpServerEntry` expects.
     pub fn to_entry(&self) -> McpServerEntry {
+        let base = self
+            .servers
+            .iter()
+            .find(|s| s.uuid == self.draft_uuid)
+            .cloned()
+            .unwrap_or_default();
+        // Unchanged text keeps the stored vectors verbatim (an arg containing a space,
+        // an env value containing a comma): the TUI edits strings, not lists.
+        let args = if self.draft_args == base.args.join(" ") {
+            base.args.clone()
+        } else {
+            parse_args(&self.draft_args)
+        };
+        let env = if self.draft_env == join_env(&base.env) {
+            base.env.clone()
+        } else {
+            parse_env(&self.draft_env)
+        };
         McpServerEntry {
             uuid: self.draft_uuid.clone(),
             name: self.draft_name.trim().to_string(),
             enabled: self.draft_enabled,
             transport: self.draft_transport,
             command: self.draft_command.trim().to_string(),
-            args: parse_args(&self.draft_args),
-            env: parse_env(&self.draft_env),
+            args,
+            env,
             url: self.draft_url.trim().to_string(),
-            // A dashboard-edited server is user-owned — no extension provenance.
+            // A dashboard-edited server is user-owned: no extension provenance.
             ext_id: None,
+            // Headers, cwd, timeouts and tool lists survive a TUI edit.
+            ..base
         }
     }
 }

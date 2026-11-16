@@ -321,6 +321,7 @@ fn apply_global_config_req(
                 url: url.trim().to_string(),
                 // A GUI-configured server is user-owned — no extension provenance.
                 ext_id: None,
+                ..Default::default()
             });
             true
         }

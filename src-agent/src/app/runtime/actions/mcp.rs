@@ -137,8 +137,9 @@ fn ensure_mcp_manager(state: &mut AppState, handle: &tokio::runtime::Handle) {
     }
 
     let proxy = crate::model::store::mcp_daemon_sock_path().and_then(|sock| {
-        crate::app::runtime::manage::ensure_mcp_daemon_running()
-            .and_then(|()| crate::app::mcp::McpManager::connect_proxy(handle, sock))
+        crate::app::runtime::manage::ensure_mcp_daemon_running().and_then(|()| {
+            crate::app::mcp::McpManager::connect_proxy(handle, sock, &state.rest.config.mcp_servers)
+        })
     });
     state.rest.mcp_manager = Some(match proxy {
         // Proxying to the shared global daemon: the dedup win.

@@ -58,6 +58,8 @@ fn entry_expansion_skips_names_and_leaves_input_untouched() {
         args: vec!["${B}".into(), "plain".into()],
         env: vec![("${A}".into(), "${B}".into())],
         url: "https://h/${A}".into(),
+        headers: vec![("${A}".into(), "Bearer ${B}".into())],
+        cwd: Some("${A}/work".into()),
         ..Default::default()
     };
     let (e, missing) = expand_entry(&server, &lookup);
@@ -67,5 +69,10 @@ fn entry_expansion_skips_names_and_leaves_input_untouched() {
     assert_eq!(e.args, vec!["beta", "plain"]);
     assert_eq!(e.env, vec![("${A}".to_string(), "beta".to_string())]);
     assert_eq!(e.url, "https://h/alpha");
+    assert_eq!(
+        e.headers,
+        vec![("${A}".to_string(), "Bearer beta".to_string())]
+    );
+    assert_eq!(e.cwd.as_deref(), Some("alpha/work"));
     assert_eq!(server.command, "${A}");
 }

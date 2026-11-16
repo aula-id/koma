@@ -67,10 +67,12 @@ impl McpManager {
     ///
     /// A `handle` is accepted for signature symmetry with [`Self::connect_all`] (and
     /// so a future async-proxy variant can spawn on it); the current proxy is fully
-    /// synchronous connect-per-call, so it is not stored.
+    /// synchronous connect-per-call, so it is not stored. `servers` only seeds the
+    /// read budget for a `Call` (the longest configured tool timeout).
     pub fn connect_proxy(
         _handle: &tokio::runtime::Handle,
         sock: PathBuf,
+        servers: &[McpServerEntry],
     ) -> anyhow::Result<Arc<Self>> {
         // Prime the advertise cache from the daemon. A connect/list failure here is
         // the fallback trigger — surface it so the caller drops to a Local manager.
@@ -88,6 +90,7 @@ impl McpManager {
                 sock,
                 cache: Mutex::new((defs, names)),
                 proxy_errors: Mutex::new(std::collections::HashMap::new()),
+                call_timeout: Mutex::new(super::util::proxy_call_timeout(servers)),
             },
             status_cache: Mutex::new((None, std::collections::HashMap::new())),
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
@@ -122,7 +125,14 @@ impl McpManager {
         // usable) — a failed live-reconnect is never worse than the prior state.
         let (handle, snapshot) = match &self.backend {
             McpBackend::Local { handle, snapshot } => (handle, snapshot),
-            McpBackend::Proxy { sock, cache, .. } => {
+            McpBackend::Proxy {
+                sock,
+                cache,
+                call_timeout,
+                ..
+            } => {
+                *call_timeout.lock().unwrap_or_else(|p| p.into_inner()) =
+                    super::util::proxy_call_timeout(servers);
                 match super::proxy::proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
                     Ok(McpResponse::Ack) => {}
                     Ok(other) => crate::model::store::append_global_error_log(
@@ -301,7 +311,11 @@ impl McpManager {
                             // its tools. `take()` leaves `to_discard = None` so nothing
                             // is torn down afterwards.
                             snap.conns
-                                .insert(server.uuid.clone(), ServerConn { service, peer });
+                                .insert(server.uuid.clone(), ServerConn {
+                                    service,
+                                    peer,
+                                    call_timeout: super::util::tool_timeout(&server),
+                                });
                             snap.errors.remove(&server.uuid);
                             snap.tools.extend(discovered);
                         } else {

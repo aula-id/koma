@@ -37,6 +37,7 @@ fn proxy_preserves_and_dispatches_session_extension_tools_locally() {
         sock: "/unused-mcp-test-socket".into(),
         cache: Mutex::new((vec![], vec![])),
         proxy_errors: Mutex::new(HashMap::new()),
+        call_timeout: Mutex::new(PROXY_IO_TIMEOUT),
     };
     *inner.advertise_cache_at.lock().unwrap() = Some(now);
     *inner.advertise_confirmed_empty_at.lock().unwrap() = Some(now);

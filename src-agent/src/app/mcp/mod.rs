@@ -68,6 +68,7 @@ use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, Tool as RmcpTool};
 use rmcp::service::{Peer, RoleClient, RunningService};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::ServiceExt;
 
@@ -89,7 +90,7 @@ mod resolve;
 #[cfg(test)]
 mod resolve_tests;
 mod util;
-use proxy::proxy_request;
+use proxy::{proxy_request, proxy_request_timeout};
 use util::flatten_result;
 
 /// Read-only launch check for `koma doctor`: `Some(message)` when an enabled
@@ -106,7 +107,12 @@ pub(crate) fn resolve_for_doctor(server: &McpServerEntry) -> Option<String> {
     let path_var = resolve::effective_path(&server.env, &host, windows);
     let pathext = std::env::var("PATHEXT").ok();
     let cmd = server.command.trim();
-    let found = resolve::resolve_with(cmd, &path_var, pathext.as_deref(), None, windows, &|p| {
+    let cwd = server
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    let found = resolve::resolve_with(cmd, &path_var, pathext.as_deref(), cwd, windows, &|p| {
         std::path::Path::new(p).is_file()
     });
     match found {
@@ -208,15 +214,6 @@ fn extension_and_bundled_tools_follow_session_activation() {
 // no `use` needed here, it's reached through the type, not this module's path.
 mod connect;
 
-/// How long a single server connect (spawn + MCP initialize + first tool list)
-/// may take before it is abandoned. A hung server then contributes zero tools
-/// instead of stalling forever.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// How long a single `call_tool` round-trip may take before [`McpManager::execute_blocking`]
-/// gives up and returns an error string to the model.
-const CALL_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Where a [`DiscoveredTool`]'s calls are dispatched. Every tool in the snapshot
 /// is either a plain rmcp MCP server tool (the original design) or an
 /// extension-owned tool from `contributes.tools` (Wave B; see
@@ -260,6 +257,9 @@ struct ServerConn {
     /// A cheap clone handle onto the service, used to issue `call_tool` requests
     /// from the dispatch path. `Peer` is `Clone + Send + Sync`.
     peer: Peer<RoleClient>,
+    /// How long one `call_tool` may take before [`McpManager::execute_blocking`] gives
+    /// up and returns an error string to the model.
+    call_timeout: Duration,
 }
 
 /// Mutable snapshot the manager exposes: the live connections (by server uuid) and
@@ -279,8 +279,8 @@ struct Snapshot {
 
 /// How long the [`McpBackend::Proxy`] waits for the global MCP daemon to answer a
 /// single request before giving up. Sized to just outrun the daemon's own
-/// [`CALL_TIMEOUT`] on a `Call` (the daemon returns a timeout string of its own at
-/// 60s, so the proxy's read should not fire first), with a small margin for the
+/// the server tool timeout on a `Call` (the daemon returns a timeout string of its own at
+/// 60s by default, so the proxy's read should not fire first), with a small margin for the
 /// round-trip. A hung/vanished daemon then surfaces as an error string to the model
 /// instead of hanging the tool thread forever.
 const PROXY_IO_TIMEOUT: Duration = Duration::from_secs(65);
@@ -308,6 +308,8 @@ enum McpBackend {
         /// alongside the tool counts in `status_cache`. Populated by the
         /// `server_status_cached` background refresh.
         proxy_errors: Mutex<std::collections::HashMap<String, String>>,
+        /// Read budget for a `Call`: the longest configured tool timeout plus a margin.
+        call_timeout: Mutex<Duration>,
     },
 }
 
@@ -831,13 +833,16 @@ impl McpManager {
             // PROXY: forward the call to the global daemon. `server_uuid` is left
             // empty — the daemon resolves the owning server from the namespaced
             // `tool` name (matching the in-process resolution below).
-            McpBackend::Proxy { sock, .. } => {
+            McpBackend::Proxy {
+                sock, call_timeout, ..
+            } => {
+                let timeout = *call_timeout.lock().unwrap_or_else(|p| p.into_inner());
                 let req = McpRequest::Call {
                     server_uuid: String::new(),
                     tool: namespaced_name.to_string(),
                     args: args.to_string(),
                 };
-                return match proxy_request(sock, &req) {
+                return match proxy_request_timeout(sock, &req, timeout) {
                     // The daemon already folded any tool-level error into the result
                     // string, so a CallResult is always the model-facing tool output.
                     Ok(McpResponse::CallResult(s)) => Ok(s),
@@ -861,7 +866,7 @@ impl McpManager {
         // no sync->async bridge needed) and returns before the rmcp path below.
         enum Dispatch {
             Ext { ext_id: String, original: String },
-            Server(Peer<RoleClient>, String),
+            Server(Peer<RoleClient>, String, Duration),
         }
         let dispatch = {
             let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
@@ -879,16 +884,16 @@ impl McpManager {
                     let conn = snap.conns.get(server_uuid).ok_or_else(|| {
                         format!("MCP server for tool '{namespaced_name}' is not connected")
                     })?;
-                    Dispatch::Server(conn.peer.clone(), tool.original.clone())
+                    Dispatch::Server(conn.peer.clone(), tool.original.clone(), conn.call_timeout)
                 }
             }
         };
 
-        let (peer, original) = match dispatch {
+        let (peer, original, call_timeout) = match dispatch {
             Dispatch::Ext { ext_id, original } => {
                 return self.invoke_extension_tool(&ext_id, &original, namespaced_name, args);
             }
-            Dispatch::Server(peer, original) => (peer, original),
+            Dispatch::Server(peer, original, call_timeout) => (peer, original, call_timeout),
         };
 
         // Convert the JSON arguments into the `JsonObject` (serde_json::Map) rmcp
@@ -916,14 +921,14 @@ impl McpManager {
             let _ = tx.send(result);
         });
 
-        match rx.recv_timeout(CALL_TIMEOUT) {
+        match rx.recv_timeout(call_timeout) {
             Ok(r) => r,
             // Distinguish a real timeout (the task is still running but slow) from a
             // dropped sender (the spawned task vanished without sending — e.g. the
             // runtime was shut down), so the model sees the actual cause.
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
                 "MCP tool '{namespaced_name}' timed out after {}s",
-                CALL_TIMEOUT.as_secs()
+                call_timeout.as_secs()
             )),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
                 "MCP tool '{namespaced_name}' task dropped before result (runtime shut down?)"
@@ -1024,7 +1029,7 @@ impl McpManager {
 }
 
 /// Connect to a single server (spawn/initialize the rmcp client and list its
-/// tools), bounded by [`CONNECT_TIMEOUT`]. Returns the live service plus the
+/// tools), bounded by the server's startup timeout. Returns the live service plus the
 /// discovered tools.
 async fn connect_one(
     server: &McpServerEntry,
@@ -1041,6 +1046,7 @@ async fn connect_one(
         );
     }
     let server = &expanded;
+    let startup = util::startup_timeout(server);
     // The whole connect (transport build + MCP initialize + first tool list) is
     // wrapped in a single timeout so a server that hangs at any stage is abandoned.
     let tail = Arc::new(Mutex::new(String::new()));
@@ -1057,11 +1063,16 @@ async fn connect_one(
                 let path_var = resolve::effective_path(&server.env, &host, windows);
                 let pathext = std::env::var("PATHEXT").ok();
                 let cmd_text = server.command.trim();
+                let cwd = server
+                    .cwd
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty());
                 let resolved = resolve::resolve_with(
                     cmd_text,
                     &path_var,
                     pathext.as_deref(),
-                    None,
+                    cwd,
                     windows,
                     &|p| std::path::Path::new(p).is_file(),
                 );
@@ -1071,6 +1082,9 @@ async fn connect_one(
                     })?;
                 let mut cmd = tokio::process::Command::new(&program);
                 cmd.args(&server.args);
+                if let Some(dir) = cwd {
+                    cmd.current_dir(dir);
+                }
                 // Host PATH first, then the server's own env, so a configured
                 // PATH still wins.
                 cmd.env("PATH", &host);
@@ -1121,7 +1135,18 @@ async fn connect_one(
                 if server.url.trim().is_empty() {
                     return Err("http server has no url".to_string());
                 }
-                let transport = StreamableHttpClientTransport::from_uri(server.url.clone());
+                let mut headers = HashMap::new();
+                for (k, v) in &server.headers {
+                    let name = reqwest::header::HeaderName::from_bytes(k.trim().as_bytes())
+                        .map_err(|_| format!("invalid header name '{k}'"))?;
+                    // Never echo the value: it may be a credential.
+                    let value = reqwest::header::HeaderValue::from_str(v.trim())
+                        .map_err(|_| format!("invalid value for header '{k}'"))?;
+                    headers.insert(name, value);
+                }
+                let cfg = StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+                    .custom_headers(headers);
+                let transport = StreamableHttpClientTransport::from_config(cfg);
                 ().serve(transport)
                     .await
                     .map_err(|e| format!("initialize failed: {e}"))?
@@ -1135,12 +1160,9 @@ async fn connect_one(
         Ok((service, tools))
     };
 
-    let result = match tokio::time::timeout(CONNECT_TIMEOUT, fut).await {
+    let result = match tokio::time::timeout(startup, fut).await {
         Ok(res) => res,
-        Err(_) => Err(format!(
-            "connect timed out after {}s",
-            CONNECT_TIMEOUT.as_secs()
-        )),
+        Err(_) => Err(format!("connect timed out after {}s", startup.as_secs())),
     };
     result.map_err(|msg| {
         let t = tail.lock().unwrap_or_else(|p| p.into_inner());

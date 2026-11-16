@@ -53,6 +53,7 @@ impl DaemonHub {
             url: url.trim().to_string(),
             // A GUI-configured server is user-owned — no extension provenance.
             ext_id: None,
+            ..Default::default()
         };
         state.rest.config.upsert_mcp_server(entry);
         let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);

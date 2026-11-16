@@ -59,7 +59,7 @@ pub(super) fn expand_str(
     out
 }
 
-/// A copy of `server` with command, args, env values and url expanded. Names
+/// A copy of `server` with command, args, env values, url, header values and cwd expanded. Names
 /// (env keys, server name) are never expanded. Returns the unset variable names
 /// that had no default, deduplicated.
 pub(super) fn expand_entry(
@@ -80,5 +80,14 @@ pub(super) fn expand_entry(
         .map(|(k, v)| (k.clone(), expand_str(v, lookup, &mut missing)))
         .collect();
     e.url = expand_str(&server.url, lookup, &mut missing);
+    e.headers = server
+        .headers
+        .iter()
+        .map(|(k, v)| (k.clone(), expand_str(v, lookup, &mut missing)))
+        .collect();
+    e.cwd = server
+        .cwd
+        .as_deref()
+        .map(|c| expand_str(c, lookup, &mut missing));
     (e, missing)
 }

@@ -33,6 +33,16 @@ pub(super) fn proxy_request(
     sock: &std::path::Path,
     req: &McpRequest,
 ) -> anyhow::Result<McpResponse> {
+    proxy_request_timeout(sock, req, PROXY_IO_TIMEOUT)
+}
+
+/// [`proxy_request`] with an explicit read/write budget, for a `Call` whose server
+/// configures a tool timeout longer than the default.
+pub(super) fn proxy_request_timeout(
+    sock: &std::path::Path,
+    req: &McpRequest,
+    timeout: std::time::Duration,
+) -> anyhow::Result<McpResponse> {
     use anyhow::Context;
 
     // Connect (blocking). A refused/absent socket means the daemon isn't accepting.
@@ -42,10 +52,10 @@ pub(super) fn proxy_request(
     // read timeout is the primary guard (a slow tool); the write side is naturally
     // tiny but is bounded for symmetry.
     stream
-        .set_read_timeout(Some(PROXY_IO_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .context("set MCP proxy read timeout")?;
     stream
-        .set_write_timeout(Some(PROXY_IO_TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .context("set MCP proxy write timeout")?;
 
     proxy_send(&mut stream, req)?;

@@ -9,6 +9,8 @@
 //! (`app::runtime::actions::mcp`) reads them back to mutate + persist the config.
 
 mod state;
+#[cfg(test)]
+mod state_tests;
 mod types;
 
 pub use state::{transport_label, McpState};

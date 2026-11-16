@@ -3,17 +3,68 @@
 //! to `pub(super)` — each is called directly from `McpManager` methods in the
 //! parent module (not just internally within this file). No behaviour change.
 
+use std::time::Duration;
+
 use rmcp::model::Tool as RmcpTool;
 
 use crate::model::app_config::McpServerEntry;
 
-use super::{DiscoveredTool, ToolSource};
+use super::{DiscoveredTool, ToolSource, PROXY_IO_TIMEOUT};
+
+/// How long a server connect (spawn + initialize + first tool list) may take when
+/// the entry sets no `startup_timeout_ms`.
+pub(super) const DEFAULT_STARTUP: Duration = Duration::from_secs(20);
+/// How long one `call_tool` round-trip may take when the entry sets no `tool_timeout_ms`.
+pub(super) const DEFAULT_TOOL: Duration = Duration::from_secs(60);
+const MIN_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_STARTUP: Duration = Duration::from_secs(600);
+const MAX_TOOL: Duration = Duration::from_secs(3600);
+
+fn clamped(ms: Option<u64>, default: Duration, max: Duration) -> Duration {
+    match ms {
+        None | Some(0) => default,
+        Some(ms) => Duration::from_millis(ms).clamp(MIN_TIMEOUT, max),
+    }
+}
+
+/// Connect budget for `s`: unset or 0 is the default, anything else clamps to [1 s, 10 min].
+pub(super) fn startup_timeout(s: &McpServerEntry) -> Duration {
+    clamped(s.startup_timeout_ms, DEFAULT_STARTUP, MAX_STARTUP)
+}
+
+/// Per tool-call budget for `s`: unset or 0 is the default, anything else clamps to [1 s, 1 h].
+pub(super) fn tool_timeout(s: &McpServerEntry) -> Duration {
+    clamped(s.tool_timeout_ms, DEFAULT_TOOL, MAX_TOOL)
+}
+
+/// Proxy read budget for a `Call`: the longest enabled server tool timeout plus 5 s so
+/// the daemon's own timeout message arrives first, never below [`PROXY_IO_TIMEOUT`].
+pub(super) fn proxy_call_timeout(servers: &[McpServerEntry]) -> Duration {
+    servers
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| tool_timeout(s) + Duration::from_secs(5))
+        .fold(PROXY_IO_TIMEOUT, Duration::max)
+}
+
+/// Whether the tool with ORIGINAL name `original` is offered: it must match
+/// `allowed_tools` (when non-empty) and must not match `disabled_tools`. Patterns are
+/// globs; a pattern that does not compile only matches by equality.
+pub(super) fn tool_offered(s: &McpServerEntry, original: &str) -> bool {
+    let hit = |pat: &String| match globset::Glob::new(pat) {
+        Ok(g) => g.compile_matcher().is_match(original),
+        Err(_) => pat == original,
+    };
+    (s.allowed_tools.is_empty() || s.allowed_tools.iter().any(hit))
+        && !s.disabled_tools.iter().any(hit)
+}
 
 /// Turn a server's raw rmcp tools into namespaced [`DiscoveredTool`]s.
 pub(super) fn namespace_tools(server: &McpServerEntry, tools: &[RmcpTool]) -> Vec<DiscoveredTool> {
     let prefix = sanitize_server_name(&server.name);
     tools
         .iter()
+        .filter(|t| tool_offered(server, &t.name))
         .map(|t| {
             let original = t.name.to_string();
             DiscoveredTool {
@@ -120,3 +171,7 @@ pub(super) fn flatten_result(res: rmcp::model::CallToolResult) -> Result<String,
         Ok(text)
     }
 }
+
+#[cfg(test)]
+#[path = "util_tests.rs"]
+mod util_tests;
