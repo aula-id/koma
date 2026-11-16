@@ -30,6 +30,7 @@ import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { BottomPanel } from '../components/BottomPanel'
 import { useKoma } from '../store/koma'
+import { resolveViewSelection } from '../lib/sidebarSelect'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
@@ -117,13 +118,14 @@ function RootLayout() {
   // Counter for generating unique terminal IDs.
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
-  // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
-  // open. ExplorePanel's own effect on the same tick expands its PLAN section.
+  // `focusPlanTick`): switch the sidebar to the Chat view, ensure it's
+  // open and focus the chat tab. ExplorePanel's own effect on the same tick expands its PLAN section.
   const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   useEffect(() => {
     if (focusPlanTick === 0) return
     setActiveView('explore')
     setSidebarOpen(true)
+    useKoma.getState().activateTab('chat')
   }, [focusPlanTick])
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
@@ -356,14 +358,14 @@ function RootLayout() {
   }, [platform, req])
 
   // Click the active view's icon to collapse/expand; click another to switch to
-  // it (and ensure the sidebar is open).
+  // it (and ensure the sidebar is open). The Chat icon also focuses the chat
+  // tab, and only collapses when the chat tab was already focused.
   const selectView = (view: SidebarView) => {
-    if (view === activeView) {
-      setSidebarOpen((o) => !o)
-    } else {
-      setActiveView(view)
-      setSidebarOpen(true)
-    }
+    const st = useKoma.getState()
+    const r = resolveViewSelection(view, activeView, sidebarOpen, st.ui.activeTabId)
+    if (r.activateChat) st.activateTab('chat')
+    setActiveView(r.view)
+    setSidebarOpen(r.sidebarOpen)
   }
 
   // Drag the divider between the sidebar and the terminal to resize. Tracks the
