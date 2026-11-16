@@ -452,3 +452,20 @@ fn built_in_and_main_advertised_tool_names_are_unique() {
         "main advertised tool names must be unique"
     );
 }
+
+#[test]
+fn normalize_tool_path_maps_per_platform() {
+    assert_eq!(normalize_tool_path_for("/c/Users/x", true), r"C:\Users\x");
+    assert_eq!(normalize_tool_path_for("src/a.rs", true), r"src\a.rs");
+    assert_eq!(normalize_tool_path_for("/tmp/x", true), r"\tmp\x");
+    assert_eq!(normalize_tool_path_for("a\\b", false), "a/b");
+}
+
+#[test]
+fn model_display_path_is_workspace_relative() {
+    let ws = vec![PathBuf::from("/ws")];
+    assert_eq!(
+        model_display_path(&ws, Path::new("/ws/src/a.rs")),
+        "src/a.rs"
+    );
+}

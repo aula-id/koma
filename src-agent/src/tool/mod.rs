@@ -46,7 +46,7 @@ pub mod shell_filter;
 pub mod skill;
 pub mod task;
 pub mod todo;
-
+pub mod winpath;
 
 pub use dircache::DirCache;
 pub use output::CallTrack;
@@ -593,6 +593,10 @@ pub fn model_display_path(workspaces: &[PathBuf], abs: &Path) -> String {
             if let Ok(rel) = abs.strip_prefix(ws) {
                 return rel.to_string_lossy().replace('\\', "/");
             }
+            if let Ok(rel) = abs.strip_prefix(winpath::canonical(ws).unwrap_or_else(|_| ws.clone()))
+            {
+                return rel.to_string_lossy().replace('\\', "/");
+            }
         }
         return abs.to_string_lossy().replace('\\', "/");
     }
@@ -798,14 +802,16 @@ pub fn main_tool_names() -> Vec<String> {
     out
 }
 
-// Native Windows separators preserve verbatim and UNC path prefixes.
 fn normalize_tool_path(path: &str) -> String {
-    #[cfg(windows)]
-    {
-        path.replace('/', "\\")
-    }
-    #[cfg(not(windows))]
-    {
+    normalize_tool_path_for(path, cfg!(windows))
+}
+
+/// Windows keeps native separators (UNC prefixes survive) and maps git-bash
+/// style `/c/x` onto `C:\x`; elsewhere backslashes become `/`.
+fn normalize_tool_path_for(path: &str, windows: bool) -> String {
+    if windows {
+        winpath::msys_to_win(path).unwrap_or_else(|| path.replace('/', "\\"))
+    } else {
         path.replace('\\', "/")
     }
 }
@@ -836,7 +842,7 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
             }
         }
         for ws in workspaces {
-            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            let ws_canon = winpath::canonical(ws).unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
                 return Ok(candidate);
             }
@@ -855,7 +861,7 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
             workspaces.len()
         )
     })?;
-    let ws = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let ws = winpath::canonical(base).unwrap_or_else(|_| base.to_path_buf());
     let bare = if rel.starts_with('[') {
         bare.trim_start_matches(['/', '\\'])
     } else {
@@ -916,7 +922,7 @@ pub fn resolve_read(
                 return Ok(normalized);
             }
         }
-        let candidate = match as_path.canonicalize() {
+        let candidate = match winpath::canonical(as_path) {
             Ok(p) => p,
             Err(_) => {
                 let mut existing = as_path;
@@ -931,9 +937,8 @@ pub fn resolve_read(
                         None => break,
                     }
                 }
-                let mut base = existing
-                    .canonicalize()
-                    .unwrap_or_else(|_| existing.to_path_buf());
+                let mut base =
+                    winpath::canonical(existing).unwrap_or_else(|_| existing.to_path_buf());
                 for seg in tail.iter().rev() {
                     base.push(seg);
                 }
@@ -941,7 +946,7 @@ pub fn resolve_read(
             }
         };
         for ws in workspaces {
-            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            let ws_canon = winpath::canonical(ws).unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
                 return Ok(candidate);
             }
@@ -953,12 +958,12 @@ pub fn resolve_read(
 
 /// Canonicalize a path, falling back to verbatim if the OS can't resolve it.
 fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    winpath::canonical(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Partial-canonicalize a path.
 fn partial_canonicalize(as_path: &Path) -> PathBuf {
-    match as_path.canonicalize() {
+    match winpath::canonical(as_path) {
         Ok(p) => p,
         Err(_) => {
             let mut existing = as_path;
@@ -973,9 +978,7 @@ fn partial_canonicalize(as_path: &Path) -> PathBuf {
                     None => break,
                 }
             }
-            let mut base = existing
-                .canonicalize()
-                .unwrap_or_else(|_| existing.to_path_buf());
+            let mut base = winpath::canonical(existing).unwrap_or_else(|_| existing.to_path_buf());
             for seg in tail.iter().rev() {
                 base.push(seg);
             }
@@ -1046,7 +1049,7 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 /// Find which workspace contains the given absolute path.
 pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
     for ws in workspaces {
-        let ws = ws.canonicalize().unwrap_or_else(|_| ws.clone());
+        let ws = winpath::canonical(&ws).unwrap_or_else(|_| ws.clone());
         if abs.starts_with(&ws) {
             return Some(ws);
         }

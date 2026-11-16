@@ -283,13 +283,13 @@ pub(crate) fn read_workspace_dir(id: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Expand a leading `~` against `home`: `~` → `home`, `~/rest` → `home/rest`. A `~user`
+/// Expand a leading `~` against `home`: `~` → `home`, `~/rest` or `~\rest` → `home/rest`. A `~user`
 /// form (leading `~` that is neither `~` nor `~/…`) is rejected. Any other string is
 /// returned verbatim as a [`PathBuf`].
 fn expand_tilde(raw: &str, home: &Path) -> Result<PathBuf> {
     if raw == "~" {
         Ok(home.to_path_buf())
-    } else if let Some(rest) = raw.strip_prefix("~/") {
+    } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
         Ok(home.join(rest))
     } else if raw.starts_with('~') {
         bail!("the '~user' form is not supported: {raw}")

@@ -96,8 +96,10 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
         Operation::Notifications { .. } => {
             anyhow::bail!("Notification requests use registered session IDs, not workspace paths")
         }
-        Operation::Hello => Ok(json!({"protocol":1,"root":canonical.to_string_lossy(),
-            "capabilities":["paths","read","save","config","tasks","packs","debug","notebook"], "version":env!("CARGO_PKG_VERSION")})),
+        Operation::Hello => Ok(
+            json!({"protocol":1,"root":crate::tool::winpath::display_path(&canonical).to_string_lossy(),
+            "capabilities":["paths","read","save","config","tasks","packs","debug","notebook"], "version":env!("CARGO_PKG_VERSION")}),
+        ),
         Operation::TaskDefinitions => super::tasks::definitions(&canonical),
         Operation::TaskStart {
             task_id,

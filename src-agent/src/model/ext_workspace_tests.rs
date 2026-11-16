@@ -210,3 +210,12 @@ fn inactive_extension_workspace_and_agent_are_absent_from_system_prompt() {
         .contains(&fixture.agent));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn expand_tilde_accepts_both_separators_and_rejects_user_form() {
+    let home = Path::new("/h");
+    assert_eq!(expand_tilde("~", home).unwrap(), PathBuf::from("/h"));
+    assert_eq!(expand_tilde("~/x", home).unwrap(), home.join("x"));
+    assert_eq!(expand_tilde("~\\x", home).unwrap(), home.join("x"));
+    assert!(expand_tilde("~user", home).is_err());
+}

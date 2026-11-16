@@ -11,7 +11,7 @@
 //!
 //! Exit: 0 ok · 1 error · 2 `--once` timeout · 3 approval-parked
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -497,17 +497,21 @@ fn resolve_workdir(raw: Option<&str>) -> Result<Option<PathBuf>> {
 }
 
 fn expand_user(p: &str) -> PathBuf {
+    expand_user_with(p, dirs::home_dir().as_deref())
+}
+
+/// `~`, `~/x` and `~\x` against `home`; anything else (including `~user`) is unchanged.
+fn expand_user_with(p: &str, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else {
+        return PathBuf::from(p);
+    };
     if p == "~" {
-        return std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(p));
+        return home.to_path_buf();
     }
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+    match p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(p),
     }
-    PathBuf::from(p)
 }
 
 /// Poll daemon-authoritative state after SubmitInput has been processed.

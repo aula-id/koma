@@ -83,7 +83,7 @@ fn parse_bare_index(s: &str) -> Option<usize> {
 /// the tool and the `/cd` command canonicalise identically before any containment
 /// check / before storing the new cwd.
 pub fn canonicalize_existing(p: &Path) -> Result<PathBuf> {
-    p.canonicalize()
+    crate::tool::winpath::canonical(p)
         .map_err(|e| anyhow::anyhow!("cannot resolve '{}': {e}", p.display()))
 }
 

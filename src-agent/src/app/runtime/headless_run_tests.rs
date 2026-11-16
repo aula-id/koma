@@ -249,3 +249,22 @@ fn state_disconnect_is_an_error_instead_of_successful_setup() {
     };
     assert!(request_state(&dead, Duration::from_millis(10)).is_err());
 }
+
+#[test]
+fn expand_user_handles_both_separators() {
+    let home = Path::new("/h");
+    assert_eq!(expand_user_with("~", Some(home)), PathBuf::from("/h"));
+    assert_eq!(
+        expand_user_with("~/x", Some(home)),
+        Path::new("/h").join("x")
+    );
+    assert_eq!(
+        expand_user_with("~\\x", Some(home)),
+        Path::new("/h").join("x")
+    );
+    assert_eq!(
+        expand_user_with("~user", Some(home)),
+        PathBuf::from("~user")
+    );
+    assert_eq!(expand_user_with("~/x", None), PathBuf::from("~/x"));
+}

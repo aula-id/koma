@@ -114,7 +114,10 @@ impl Collector {
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(1)
                 .max(1);
-            let path = self.cwd.join(file).to_string_lossy().into_owned();
+            let mut path = self.cwd.join(file).to_string_lossy().into_owned();
+            if cfg!(windows) {
+                path = path.replace('\\', "/");
+            }
             if self
                 .values
                 .iter()

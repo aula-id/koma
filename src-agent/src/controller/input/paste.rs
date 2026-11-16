@@ -256,6 +256,39 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
     state.set_mode(mode);
 }
 
+/// `file:///C:/x` leaves `/C:/x` after the scheme; drop that slash. Windows
+/// drive and UNC paths keep their backslashes; otherwise `\<char>` unescapes to `<char>`.
+fn normalize_dropped_path(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    if let [b'/', d, b':', b'/' | b'\\', ..] = bytes {
+        if d.is_ascii_alphabetic() {
+            return raw.get(1..).unwrap_or(raw).to_string();
+        }
+    }
+    if let [d, b':', b'\\', ..] = bytes {
+        if d.is_ascii_alphabetic() {
+            return raw.to_string();
+        }
+    }
+    if raw.starts_with("\\\\") {
+        return raw.to_string();
+    }
+    let mut unescaped = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                unescaped.push(next);
+            } else {
+                unescaped.push(c);
+            }
+        } else {
+            unescaped.push(c);
+        }
+    }
+    unescaped
+}
+
 /// If the pasted `text` is a path to an existing image file, return the cleaned
 /// path as an owned String. Otherwise return `None` (the paste is treated as
 /// ordinary text).
@@ -287,21 +320,7 @@ pub fn image_path_paste(text: &str) -> Option<String> {
         cleaned = stripped.to_string();
     }
 
-    // Unescape backslash-escapes: replace \<char> with <char>
-    let mut unescaped = String::new();
-    let mut chars = cleaned.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(next) = chars.next() {
-                unescaped.push(next);
-            } else {
-                unescaped.push(c);
-            }
-        } else {
-            unescaped.push(c);
-        }
-    }
-    cleaned = unescaped;
+    cleaned = normalize_dropped_path(&cleaned);
 
     if cleaned.is_empty() {
         return None;
@@ -315,5 +334,30 @@ pub fn image_path_paste(text: &str) -> Option<String> {
         Some(cleaned)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod dropped_path_tests {
+    use super::normalize_dropped_path;
+
+    #[test]
+    fn dropped_paths_normalise_per_style() {
+        assert_eq!(
+            normalize_dropped_path("/C:/Users/me/a.png"),
+            "C:/Users/me/a.png"
+        );
+        assert_eq!(
+            normalize_dropped_path(r"C:\Users\me\a.png"),
+            r"C:\Users\me\a.png"
+        );
+        assert_eq!(
+            normalize_dropped_path(r"\\srv\share\a.png"),
+            r"\\srv\share\a.png"
+        );
+        assert_eq!(
+            normalize_dropped_path(r"/tmp/my\ file.png"),
+            "/tmp/my file.png"
+        );
     }
 }
