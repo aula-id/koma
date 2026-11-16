@@ -1,12 +1,12 @@
 //! Assembling a room from a session's on-disk state.
 //!
 //! This opens the session's `room.sqlite` (the shelf and the work tables share
-//! it), loads the registry with the session overlay, and spawns the actor with
-//! a ticker. It takes the model and tool seams as arguments, so it stays free
-//! of the daemon's `AppState`: the daemon builds the real seams, and tests pass
-//! fakes.
+//! it), loads the registry with the optional template and the session overlay,
+//! and spawns the actor with a ticker. It takes the model and tool seams as
+//! arguments, so it stays free of the daemon's `AppState`: the daemon builds
+//! the real seams, and tests pass fakes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,10 +39,23 @@ impl RoomSession {
         builtins: Arc<dyn BuiltinHost>,
         config: RoomConfig,
     ) -> Result<Self, String> {
+        Self::open_with_template(session_dir, model, builtins, config, None)
+    }
+
+    /// [`open`](Self::open) with the registry template at `template` layered
+    /// between the embedded files and the session overlay. The template is
+    /// read once, here. `config` is passed to the room unchanged.
+    pub fn open_with_template(
+        session_dir: &Path,
+        model: Arc<dyn ModelClient>,
+        builtins: Arc<dyn BuiltinHost>,
+        config: RoomConfig,
+        template: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let db = super::super::room_db_path(session_dir);
         let shelf = Arc::new(Shelf::open(&db).map_err(|e| e.0)?);
         let store = WorkStore::open(&db)?;
-        let registry = Arc::new(RegistryHandle::with_overlay(overlay_dir_for(session_dir))?);
+        let registry = Arc::new(RegistryHandle::with_layers(template, overlay_dir_for(session_dir))?);
         let coordinator = Arc::new(Coordinator::new(store, Arc::clone(&shelf), Arc::clone(&registry)));
         let room = spawn_room_in(
             coordinator,
@@ -145,6 +158,40 @@ mod tests {
         let model = Arc::new(OneShot(Mutex::new(HashMap::new()), "x".into()));
         let result = RoomSession::open(&file, model, Arc::new(NoBuiltins), RoomConfig::default());
         assert!(result.is_err(), "opening under a file should fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_room_layers_its_template_under_the_session_overlay() {
+        let dir = temp_session("template");
+        let template = dir.join("template");
+        std::fs::create_dir_all(&template).expect("mkdir");
+        std::fs::write(
+            template.join("avatars.toml"),
+            "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\ndisplay = \"Template Web\"\n",
+        )
+        .expect("write");
+        let overlay = crate::room::registry::overlay_dir_for(&dir);
+        std::fs::create_dir_all(&overlay).expect("mkdir");
+        std::fs::write(overlay.join("avatars.toml"), "[[avatar]]\nid = \"red-web\"\nrole = \"red\"\nalias = \"tw\"\n")
+            .expect("write");
+
+        let model = Arc::new(OneShot(Mutex::new(HashMap::new()), "idle".into()));
+        let session = RoomSession::open_with_template(&dir, model, Arc::new(NoBuiltins), RoomConfig::default(), Some(template))
+            .expect("open");
+        let reg = session.registry.current();
+        assert_eq!(reg.display_of("red-web"), "Template Web");
+        assert_eq!(reg.alias_of("red-web"), "TW");
+        assert!(session.registry.template_revision().is_some_and(|r| r.len() == 16));
+        close(session).await;
+
+        // Without a template the room reads the session overlay alone, as before.
+        let model = Arc::new(OneShot(Mutex::new(HashMap::new()), "idle".into()));
+        let session = RoomSession::open(&dir, model, Arc::new(NoBuiltins), RoomConfig::default()).expect("open");
+        let alone = RegistryHandle::with_overlay(overlay).expect("load");
+        assert_eq!(session.registry.current(), alone.current());
+        assert_eq!(session.registry.template_revision(), None);
+        close(session).await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 

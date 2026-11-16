@@ -10,11 +10,27 @@ from typing import Any
 from ._transport import Transport
 from .errors import (DeliveryUnknown, IncompatibleAdapter, ProtocolError, RemoteError,
                      RequestTimeout, TransportError)
+from .room import (_OMIT, HostCalls, Room, _display_name, _id_param, attach_params, avatars_remove_params,
+                   avatars_upsert_params, inline_zip, models_set_params)
+from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseResult, HistoryPage, RoomClosedEvent, RoomPage,
+                         RoomSpend, RoomStatus, SendResult, SentResult, ReportPage, ShelfItem, ShelfPage, Team,
+                         TeamWriteResult, Trajectory, decode_room_event)
 from .types import (ApprovalResult, Attachment, Binary, DetachResult, Hello, Policy,
-                    ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy)
+                    ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy,
+                    ConfigView, EffortOptions, EffortResult, Limits, ModelDeleteResult, ProviderDeleteResult,
+                    PublicRole, RoleUnassignResult, SessionInfo, CreateWarning, _create_warnings,
+                    SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SkillDetail,
+                    SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult, UsageReport)
 
 
 _ROLES = ("main", "awareness", "safeguard", "compactor", "planner")
+
+
+def _unassign_params(role: PublicRole | str, if_revision: str | None) -> dict[str, Any]:
+    params: dict[str, Any] = {"role": _role_param(role), "scope": "global"}
+    if if_revision is not None:
+        params["if_revision"] = if_revision
+    return params
 
 
 def _configure_params(providers: Sequence[Mapping[str, Any]] | None,
@@ -94,6 +110,24 @@ def _validate_configure(result: dict[str, Any]) -> None:
             raise ValueError("configure model")
 
 
+def _delete_params(key: str, uuid: str, if_revision: str | None, dry_run: bool) -> dict[str, Any]:
+    params: dict[str, Any] = {key: _id_param(key, uuid)}
+    if if_revision is not None:
+        params["if_revision"] = if_revision
+    if type(dry_run) is not bool:
+        raise ValueError("dry_run must be a boolean")
+    if dry_run:
+        params["dry_run"] = True
+    return params
+
+
+def _role_param(role: PublicRole | str) -> str:
+    try:
+        return PublicRole(role).value
+    except ValueError:
+        raise ValueError(f"role must be one of {', '.join(_ROLES)}") from None
+
+
 class ObservationUnavailable(TransportError):
     def __init__(self, turn_id: str, message: str):
         self.turn_id = turn_id
@@ -104,6 +138,11 @@ class _Wire(Transport):
     def __init__(self, *args: Any, **kwargs: Any):
         self.hello: asyncio.Future[Hello] = asyncio.get_running_loop().create_future()
         self.sequence = 0
+        # The room binding as the adapter last confirmed it. Set while the frame is read, so that
+        # events behind an attach response are judged against the new epoch.
+        self.room_epoch: str | None = None
+        self.room_floor = 0
+        self.room_closed: CloseReason | None = None
         super().__init__(*args, **kwargs)
 
     def _fail(self, error: TransportError) -> None:
@@ -124,7 +163,19 @@ class _Wire(Transport):
                 or not isinstance(caps, list) or not all(isinstance(c, str) for c in caps)
                 or not isinstance(diagnostics, list) or not all(isinstance(d, str) for d in diagnostics)):
                 raise ProtocolError("malformed hello")
-            self.hello.set_result(Hello(1, Binary(b["path"], b["version"]), tuple(caps), tuple(diagnostics)))
+            additions: dict[str, Any] = {}
+            for key in ("methods", "features", "events"):
+                if key in message:
+                    names = message[key]
+                    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                        raise ProtocolError("malformed hello")
+                    additions[key] = tuple(names)
+            if "limits" in message:
+                if not isinstance(message["limits"], dict):
+                    raise ProtocolError("malformed hello")
+                additions["limits"] = message["limits"]
+            self.hello.set_result(Hello(1, Binary(b["path"], b["version"]), tuple(caps), tuple(diagnostics),
+                                        **additions))
         elif kind == "response":
             request_id = message.get("id")
             if not isinstance(request_id, str) or not request_id:
@@ -151,6 +202,7 @@ class _Wire(Transport):
                     _validate_result(p.method, message["result"])
                 except (ValueError, KeyError, TypeError) as exc:
                     raise ProtocolError(f"malformed {p.method} result: {exc}") from exc
+                self._room_binding(p.method, message["result"])
                 p.future.set_result(message["result"])
         elif kind == "event":
             seq = message.get("seq")
@@ -165,6 +217,16 @@ class _Wire(Transport):
                 State.from_wire(message["state"])
                 if type(message["resynced"]) is not bool:
                     raise ProtocolError("invalid resynced flag")
+            elif message["event"].startswith("room."):
+                try:
+                    decoded = decode_room_event(message)
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ProtocolError(f"malformed {message['event']} event: {exc}") from exc
+                if decoded is None or decoded.epoch != self.room_epoch:
+                    return
+                if isinstance(decoded, RoomClosedEvent):
+                    self.room_closed = decoded.reason
+                message["_room"] = decoded
             elif message["event"] in ("output_append", "turn"):
                 if type(message["revision"]) is not int or message["revision"] < 1:
                     raise ProtocolError("invalid event revision")
@@ -181,9 +243,71 @@ class _Wire(Transport):
             raise ProtocolError(f"unexpected frame type {kind!r}")
 
 
+    def _room_binding(self, method: str, result: dict[str, Any]) -> None:
+        if method in ("room.open", "room.attach"):
+            self.room_epoch = result["epoch"]
+            self.room_floor = result["history"]["last_line_seq"] or 0
+            self.room_closed = None
+        elif method == "room.close":
+            self.room_epoch = None
+
+
+def _validate_limits(d: dict[str, Any]) -> None:
+    Limits.from_wire(d)
+    if "session_info" in d:
+        SessionInfo.from_wire(d["session_info"])
+
+
+# One decoder per method added after v1; enum-like strings in them are open (unknown -> OTHER).
+_RESULTS: dict[str, Any] = {
+    "config.get": ConfigView.from_wire,
+    "config.providers.delete": ProviderDeleteResult.from_wire,
+    "config.models.delete": ModelDeleteResult.from_wire,
+    "config.roles.unassign": RoleUnassignResult.from_wire,
+    "config.effort.get": EffortOptions.from_wire,
+    "config.effort.set": EffortResult.from_wire,
+    "config.limits.get": _validate_limits,
+    "config.limits.set": _validate_limits,
+    "sessions.info": lambda d: SessionInfo.from_wire(d["session_info"]),
+    "sessions.list": SessionPage.from_wire,
+    "sessions.rename": SessionRenameResult.from_wire,
+    "sessions.delete": SessionDeleteResult.from_wire,
+    "sessions.stop": SessionStopResult.from_wire,
+    "usage.query": UsageReport.from_wire,
+    "skills.list": SkillPage.from_wire,
+    "skills.get": SkillDetail.from_wire,
+    "skills.read_file": SkillFile.from_wire,
+    "skills.create": SkillWriteResult.from_wire,
+    "skills.update": SkillUpdateResult.from_wire,
+    "skills.install": SkillWriteResult.from_wire,
+    "skills.remove": SkillRemoveResult.from_wire,
+    "room.list": RoomPage.from_wire,
+    "room.open": AttachResult.from_wire,
+    "room.attach": AttachResult.from_wire,
+    "room.close": CloseResult.from_wire,
+    "room.send": SendResult.from_wire,
+    "room.interrupt": SentResult.from_wire,
+    "room.control": SentResult.from_wire,
+    "room.status": RoomStatus.from_wire,
+    "room.history": HistoryPage.from_wire,
+    "room.shelf.list": ShelfPage.from_wire,
+    "room.item": ShelfItem.from_wire,
+    "room.trajectory": Trajectory.from_wire,
+    "room.reports": ReportPage.from_wire,
+    "room.spend": RoomSpend.from_wire,
+    "room.team.get": Team.from_wire,
+    "room.models.set": TeamWriteResult.from_wire,
+    "room.avatars.upsert": TeamWriteResult.from_wire,
+    "room.avatars.remove": AvatarRemoveResult.from_wire,
+}
+
+
 def _validate_result(method: str, d: dict[str, Any]) -> None:
     if method in ("create", "resume", "state"):
         State.from_wire(d["state"])
+        if "session_info" in d:
+            SessionInfo.from_wire(d["session_info"])
+        _create_warnings(d)
     elif method in ("submit", "enqueue", "interrupt", "interrupt_and_submit"):
         result = TurnResult.from_wire(d)
         allowed = {"submit": {"started", "rejected"}, "enqueue": {"queued", "rejected"},
@@ -208,6 +332,8 @@ def _validate_result(method: str, d: dict[str, Any]) -> None:
             raise ValueError("detach not acknowledged")
     elif method == "configure":
         _validate_configure(d)
+    elif method in _RESULTS:
+        _RESULTS[method](d)
 
 
 class Client:
@@ -254,7 +380,7 @@ class Client:
             if self._closed:
                 raise TransportError("client closed during subprocess startup")
             hello = await asyncio.wait_for(asyncio.shield(t.hello), self.request_timeout)
-            missing = set(required) - set(hello.capabilities)
+            missing = {method for method in required if not hello.supports(method)}
             if missing:
                 raise IncompatibleAdapter(f"missing required capabilities: {', '.join(sorted(missing))}")
             return t, hello
@@ -275,7 +401,12 @@ class Client:
             self._transports.discard(t)
 
     async def create(self, cwd: str | os.PathLike[str], *, model_id: str | None = None,
-                     policy: Policy = Policy(), external_approvals: bool = False) -> Session:
+                     policy: Policy = Policy(), external_approvals: bool = False,
+                     name: str | None = None) -> Session:
+        """Start a coding session. `name` needs an adapter with the `create.name` feature.
+
+        If naming fails the session is still created: see `session.warnings` (`rename_failed`).
+        """
         cwd = os.fspath(cwd)
         if not os.path.isabs(cwd):
             raise ValueError("cwd must be absolute on daemon host")
@@ -285,7 +416,9 @@ class Client:
                                   "external_approvals": external_approvals}
         if model_id is not None:
             params["model_id"] = model_id
-        return await self._bind("create", params)
+        if name is not None:
+            params["name"] = _display_name(name)
+        return await self._bind("create", params, feature="create.name" if name is not None else None)
 
     async def resume(self, session_id: str, *, policy: Policy | None = None,
                      external_approvals: bool = False) -> Session:
@@ -312,12 +445,52 @@ class Client:
             await transport.close()
             self._transports.discard(transport)
 
-    async def _bind(self, method: str, params: dict[str, Any]) -> Session:
+    def host(self, *, recycle_after: int = 60_000) -> Host:
+        """A handle for calls that need no session. Its adapter starts on the first call."""
+        if self._closed:
+            raise TransportError("client closed")
+        return Host(self, recycle_after=recycle_after)
+
+    async def room_open(self, parent_session_id: str, *, tail: int | None = None,
+                        wait_ms: int | None = None) -> Room:
+        """Start (when needed) and attach the room of a coding session. `wait_ms` is 0 to 30000 (default 12000).
+
+        Takes the room's live view over from any other client. The returned `Room` owns its adapter.
+        """
+        params = attach_params("parent_session_id", parent_session_id, tail, wait_ms, 30000)
+        return await self._bind_room("room.open", params, wait_ms or 12000)
+
+    async def room_attach(self, session_id: str, *, tail: int | None = None, wait_ms: int | None = None) -> Room:
+        """Attach a room that is already running, by the room's own session id. `wait_ms` is 0 to 15000.
+
+        Takes the room's live view over from any other client; a room that is not running is
+        `RemoteError` with `reason == "not_running"` (use `room_open`).
+        """
+        params = attach_params("session_id", session_id, tail, wait_ms, 15000)
+        return await self._bind_room("room.attach", params, wait_ms or 2000)
+
+    async def _bind_room(self, method: str, params: dict[str, Any], wait_ms: int) -> Room:
+        t, hello = await self._connect((method, "room.close", "room.history"))
+        try:
+            result = await t.request(method, params, mutation=True,
+                                     envelope=lambda i, m, p: {"id": i, "method": m, "params": p},
+                                     timeout=max(self.request_timeout, wait_ms / 1000 + 10))
+            return Room(self, t, hello, AttachResult.from_wire(result))
+        except BaseException:
+            await t.close()
+            self._transports.discard(t)
+            raise
+
+    async def _bind(self, method: str, params: dict[str, Any], feature: str | None = None) -> Session:
         t, hello = await self._connect((method, "state", "detach"))
         session = Session(self, t, hello, external_approvals=params["external_approvals"])
         try:
+            if feature is not None and not hello.has_feature(feature):
+                raise IncompatibleAdapter(f"adapter lacks feature {feature}")
             response = await session._request(method, params, mutation=True)
             session._update_state(State.from_wire(response["state"]))
+            session._apply_info(response)
+            session.warnings = _create_warnings(response)
             self._sessions.add(session)
             return session
         except BaseException:
@@ -332,10 +505,118 @@ class Client:
         self._sessions.clear()
 
 
-class Session:
+class Host(HostCalls):
+    """Calls that need no session (config reads, global config writes) on an unbound adapter.
+
+    The adapter is started on the first call and replaced transparently before its request-id
+    limit: an unbound adapter holds no state. A failed adapter is replaced on the next call;
+    the call that failed is never retried.
+    """
+    def __init__(self, client: Client, *, recycle_after: int = 60_000):
+        if type(recycle_after) is not int or recycle_after < 1:
+            raise ValueError("recycle_after must be a positive integer")
+        self._client = client
+        self.recycle_after = recycle_after
+        self.hello: Hello | None = None
+        self._transport: _Wire | None = None
+        self._sent = 0
+        self._budget = 0
+        self._inflight: dict[_Wire, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def __aenter__(self) -> Host:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.close()
+
+    @property
+    def requests_remaining(self) -> int | None:
+        """Requests left on the current adapter before it is replaced; None before the first call."""
+        return None if self._transport is None else self._budget - self._sent
+
+    async def _retire(self, transport: _Wire) -> None:
+        if self._inflight.get(transport, 0) == 0:
+            self._inflight.pop(transport, None)
+            await transport.close()
+            self._client._transports.discard(transport)
+
+    async def _call(self, method: str, params: dict[str, Any], *, mutation: bool,
+                    feature: str | None = None) -> dict[str, Any]:
+        async with self._lock:
+            t = self._transport
+            if t is None or t.failure is not None or t._closed or self._sent >= self._budget:
+                self._transport = None
+                if t is not None:
+                    await self._retire(t)
+                t, hello = await self._client._connect(())
+                self._transport, self.hello, self._sent = t, hello, 0
+                self._budget = min(self.recycle_after, hello.request_ids)
+            assert self.hello is not None
+            if not self.hello.supports(method):
+                raise IncompatibleAdapter(f"adapter does not support {method}")
+            if feature is not None and not self.hello.has_feature(feature):
+                raise IncompatibleAdapter(f"adapter lacks feature {feature}")
+            self._sent += 1
+            self._inflight[t] = self._inflight.get(t, 0) + 1
+        try:
+            return await t.request(method, params, mutation=mutation,
+                envelope=lambda i, m, p: {"id": i, "method": m, "params": p},
+                timeout=self._client.request_timeout)
+        finally:
+            self._inflight[t] -= 1
+            if t is not self._transport:
+                await self._retire(t)
+
+    async def configure(self, *, providers: Sequence[Mapping[str, Any]] | None = None,
+                        models: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
+        """Write providers and model roles. No daemon is started."""
+        return await self._call("configure", _configure_params(providers, models), mutation=True)
+
+    async def config_get(self) -> ConfigView:
+        """The global view of config.json. Secrets are never included."""
+        return ConfigView.from_wire(await self._call("config.get", {"view": "global"}, mutation=False))
+
+    async def config_providers_delete(self, provider_uuid: str, *, if_revision: str | None = None,
+                                      dry_run: bool = False) -> ProviderDeleteResult:
+        """Delete a provider and its models. `dry_run=True` reports the effect and writes nothing."""
+        params = _delete_params("provider_uuid", provider_uuid, if_revision, dry_run)
+        return ProviderDeleteResult.from_wire(
+            await self._call("config.providers.delete", params, mutation=not dry_run))
+
+    async def config_models_delete(self, model_uuid: str, *, if_revision: str | None = None,
+                                   dry_run: bool = False) -> ModelDeleteResult:
+        """Delete a global model entry. `dry_run=True` reports the effect and writes nothing."""
+        params = _delete_params("model_uuid", model_uuid, if_revision, dry_run)
+        return ModelDeleteResult.from_wire(
+            await self._call("config.models.delete", params, mutation=not dry_run))
+
+    async def config_roles_unassign(self, role: PublicRole | str, *,
+                                    if_revision: str | None = None) -> RoleUnassignResult:
+        """Clear a role globally. An unassigned compactor, awareness or planner inherits Main;
+        safeguard never does."""
+        return RoleUnassignResult.from_wire(
+            await self._call("config.roles.unassign", _unassign_params(role, if_revision), mutation=True))
+
+    async def close(self) -> None:
+        async with self._lock:
+            t, self._transport = self._transport, None
+        if t is not None:
+            await t.close()
+            self._client._transports.discard(t)
+            self._inflight.pop(t, None)
+
+
+_ANY_MAIN: Any = object()
+
+
+class Session(HostCalls):
     def __init__(self, client: Client, transport: _Wire, hello: Hello, *, external_approvals: bool):
         self._client, self._transport, self.hello = client, transport, hello
         self._state: State | None = None
+        self._info: SessionInfo | None = None
+        self.warnings: tuple[CreateWarning, ...] = ()
+        self._requests = 0
         self._external_approvals = external_approvals
         self._event_lock = asyncio.Lock()
         self._approval_lock = asyncio.Lock()
@@ -355,9 +636,28 @@ class Session:
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
 
+    @property
+    def requests_remaining(self) -> int:
+        """Requests this adapter still accepts. At 0, resume the session from a fresh adapter."""
+        return max(0, self.hello.request_ids - self._requests)
+
+    @property
+    def session_info(self) -> SessionInfo | None:
+        """The newest `SessionInfo` seen, or None when the adapter does not send it."""
+        return self._info
+
+    async def _call(self, method: str, params: dict[str, Any], *, mutation: bool,
+                    feature: str | None = None) -> dict[str, Any]:
+        if feature is not None and not self.hello.has_feature(feature):
+            raise IncompatibleAdapter(f"adapter lacks feature {feature}")
+        return await self._request(method, params, mutation=mutation)
+
     async def _request(self, method: str, params: dict[str, Any], *, mutation: bool) -> dict[str, Any]:
-        if method not in self.hello.capabilities:
+        if not self.hello.supports(method):
             raise IncompatibleAdapter(f"adapter does not support {method}")
+        if self.requests_remaining == 0:
+            raise TransportError("adapter request-id limit reached; resume from a fresh adapter")
+        self._requests += 1
         try:
             return await self._transport.request(method, params, mutation=mutation,
                 envelope=lambda i, m, p: {"id": i, "method": m, "params": p},
@@ -372,9 +672,110 @@ class Session:
             self._state = state
         return self._state
 
+    def _update_info(self, info: SessionInfo) -> SessionInfo:
+        # Ordered by the adapter's observation clock, never by the state revision.
+        if self._info is None or info.observed_at_ms > self._info.observed_at_ms:
+            self._info = info
+        return self._info
+
+    def _apply_info(self, result: dict[str, Any]) -> None:
+        if isinstance(result, dict) and "session_info" in result:
+            self._update_info(SessionInfo.from_wire(result["session_info"]))
+
     async def get_state(self) -> State:
         result = await self._request("state", {}, mutation=False)
-        return self._update_state(State.from_wire(result["state"]))
+        state = self._update_state(State.from_wire(result["state"]))
+        self._apply_info(result)
+        return state
+
+    async def info(self) -> SessionInfo:
+        """Fresh session facts (name, effort, routes, limits, daemon); costs no daemon round trip."""
+        result = await self._request("sessions.info", {}, mutation=False)
+        return self._update_info(SessionInfo.from_wire(result["session_info"]))
+
+    async def config_get(self, *, view: str = "session") -> ConfigView:
+        """config.json as this session sees it (`view="session"`, with its Main pin) or globally."""
+        if view not in ("session", "global"):
+            raise ValueError("view must be 'session' or 'global'")
+        return ConfigView.from_wire(await self._request("config.get", {"view": view}, mutation=False))
+
+    async def config_providers_delete(self, provider_uuid: str, *, if_revision: str | None = None,
+                                      dry_run: bool = False) -> ProviderDeleteResult:
+        """Delete a provider and its models through this session's daemon. `dry_run=True` writes nothing."""
+        params = _delete_params("provider_uuid", provider_uuid, if_revision, dry_run)
+        result = await self._request("config.providers.delete", params, mutation=not dry_run)
+        self._apply_info(result)
+        return ProviderDeleteResult.from_wire(result)
+
+    async def config_models_delete(self, model_uuid: str, *, if_revision: str | None = None,
+                                   dry_run: bool = False) -> ModelDeleteResult:
+        """Delete a global model entry through this session's daemon. `dry_run=True` writes nothing."""
+        params = _delete_params("model_uuid", model_uuid, if_revision, dry_run)
+        result = await self._request("config.models.delete", params, mutation=not dry_run)
+        self._apply_info(result)
+        return ModelDeleteResult.from_wire(result)
+
+    async def config_roles_unassign(self, role: PublicRole | str, *,
+                                    if_revision: str | None = None) -> RoleUnassignResult:
+        """Clear a role globally, as `Host.config_roles_unassign` does. To drop this session's own
+        Main pin, use `clear_main_pin`."""
+        result = await self._request("config.roles.unassign", _unassign_params(role, if_revision), mutation=True)
+        self._apply_info(result)
+        return RoleUnassignResult.from_wire(result)
+
+    async def clear_main_pin(self) -> RoleUnassignResult:
+        """Clear this session's Main pin, so Main follows the global assignment. Resets effort."""
+        result = await self._request("config.roles.unassign", {"role": "main", "scope": "session"}, mutation=True)
+        self._apply_info(result)
+        return RoleUnassignResult.from_wire(result)
+
+    async def effort_get(self, *, wait_ms: int | None = None) -> EffortOptions:
+        """Effort options for the session's Main model; may wait up to `wait_ms` while they load."""
+        params: dict[str, Any] = {}
+        if wait_ms is not None:
+            if type(wait_ms) is not int or not 0 <= wait_ms <= 10000:
+                raise ValueError("wait_ms must be an integer from 0 to 10000")
+            params["wait_ms"] = wait_ms
+        return EffortOptions.from_wire(await self._request("config.effort.get", params, mutation=False))
+
+    async def effort_set(self, effort: str, *, if_main_model: str | None = _ANY_MAIN) -> EffortResult:
+        """Set reasoning effort (`"default"` = model default) for this session.
+
+        With `if_main_model`, the call is refused (`main_changed`) unless that is still the Main model.
+        """
+        if (not isinstance(effort, str) or not 1 <= len(effort) <= 64
+                or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in effort)):
+            raise ValueError("effort must be 1 to 64 characters without whitespace or control characters")
+        params: dict[str, Any] = {"effort": effort}
+        if if_main_model is not _ANY_MAIN:
+            if if_main_model is not None and not isinstance(if_main_model, str):
+                raise ValueError("if_main_model must be a string or None")
+            params["if_main_model"] = if_main_model
+        result = await self._request("config.effort.set", params, mutation=True)
+        self._apply_info(result)
+        return EffortResult.from_wire(result)
+
+    async def limits_get(self) -> Limits:
+        return Limits.from_wire(await self._request("config.limits.get", {}, mutation=False))
+
+    async def limits_set(self, *, max_output_tokens: int | None = None, context_window_limit: int | None = None,
+                         context_model_alias: str | None = None) -> Limits:
+        """Change output and context limits from the next model call. `0` means auto; `""` clears the alias."""
+        params: dict[str, Any] = {}
+        for key, value in (("max_output_tokens", max_output_tokens), ("context_window_limit", context_window_limit)):
+            if value is not None:
+                if type(value) is not int or value < 0:
+                    raise ValueError(f"{key} must be a non-negative integer")
+                params[key] = value
+        if context_model_alias is not None:
+            if not isinstance(context_model_alias, str):
+                raise ValueError("context_model_alias must be a string")
+            params["context_model_alias"] = context_model_alias
+        if not params:
+            raise ValueError("give max_output_tokens, context_window_limit or context_model_alias")
+        result = await self._request("config.limits.set", params, mutation=True)
+        self._apply_info(result)
+        return Limits.from_wire(result)
 
     async def events(self) -> AsyncIterator[Event]:
         """Single consumer; revisions/offsets prevent duplicate output after readback."""

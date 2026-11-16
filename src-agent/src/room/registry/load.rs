@@ -436,24 +436,79 @@ pub fn apply_overlay(registry: &mut Registry, overlay: Parsed, warnings: &mut Ve
     // Avatars merge by id: the overlay can add avatars or restyle existing
     // ones, but an existing avatar keeps its role and every avatar must play a
     // role that exists. Permissions come from the role, so this widens nothing.
+    // An existing avatar is restyled field by field, so an overlay entry that
+    // sets one lane keeps the display name and alias from below.
     for a in overlay.avatars.into_iter().flatten() {
         if !registry.roles.contains_key(&a.role) {
-            warnings.push(format!(
-                "avatars.toml: avatar '{}' uses unknown role '{}'; ignored",
-                a.id, a.role
+            warnings.push(entry_warning(
+                &a.id,
+                &format!("uses unknown role '{}'", a.role),
             ));
             continue;
         }
         match registry.avatars.get(&a.id) {
-            Some(existing) if existing.role != a.role => warnings.push(format!(
-                "avatars.toml: avatar '{}' cannot change its role; ignored",
-                a.id
-            )),
-            _ => {
+            Some(existing) if existing.role != a.role => {
+                warnings.push(entry_warning(&a.id, "cannot change its role"))
+            }
+            Some(existing) => {
+                let merged = merge_avatar(existing, a);
+                registry.avatars.insert(merged.id.clone(), merged);
+            }
+            None => {
                 registry.avatars.insert(a.id.clone(), a);
             }
         }
     }
     registry.prompts.extend(overlay.prompts);
     registry.skills.extend(overlay.skills);
+}
+
+/// An upper-layer avatar over the existing one with the same id and role.
+fn merge_avatar(lower: &Avatar, upper: Avatar) -> Avatar {
+    Avatar {
+        display: upper.display.or_else(|| lower.display.clone()),
+        alias: upper.alias.or_else(|| lower.alias.clone()),
+        chat: merge_lane(&lower.chat, upper.chat),
+        work: merge_lane(&lower.work, upper.work),
+        id: upper.id,
+        role: upper.role,
+    }
+}
+
+/// One lane across two layers. `{provider, model}` is one unit: an upper lane
+/// that names a model or a provider replaces the lower lane whole, so a
+/// provider from one layer never pairs with a model from another. An upper
+/// lane with only an effort keeps the lower model and sets the effort; an
+/// empty upper lane keeps the lower lane.
+fn merge_lane(lower: &LaneModel, upper: LaneModel) -> LaneModel {
+    if upper.model.is_some() || upper.provider.is_some() {
+        return upper;
+    }
+    LaneModel {
+        provider: lower.provider.clone(),
+        model: lower.model.clone(),
+        effort: upper.effort.or_else(|| lower.effort.clone()),
+    }
+}
+
+const AVATARS_FILE: &str = "avatars.toml";
+const ENTRY_WARNING_END: &str = "; ignored";
+
+/// A warning about one entry of `avatars.toml`; the loader still applies the
+/// file's other entries.
+fn entry_warning(id: &str, what: &str) -> String {
+    format!("{AVATARS_FILE}: avatar '{id}' {what}{ENTRY_WARNING_END}")
+}
+
+/// The avatar id a warning from [`entry_warning`] is about, or `None` for any
+/// other warning.
+pub fn warned_entry(warning: &str) -> Option<&str> {
+    let rest = warning
+        .strip_prefix(AVATARS_FILE)?
+        .strip_prefix(": avatar '")?;
+    if !rest.ends_with(ENTRY_WARNING_END) {
+        return None;
+    }
+    let (id, _) = rest.split_once('\'')?;
+    valid_ident(id, true).then_some(id)
 }

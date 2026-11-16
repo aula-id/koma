@@ -28,55 +28,45 @@ impl SkillRegistry {
     /// Load all built-in v0.4.0 tiers, then valid configured External roots.
     /// Later tiers override earlier skills by canonical name.
     pub fn load(workdir: Option<&Path>, extra_skill_roots: &[PathBuf]) -> Self {
-        let mut skills = BTreeMap::new();
-        if let Ok(dir) = global_skills_dir() {
-            scan_skills_root(&dir, SkillSource::Global, &mut skills);
-        }
-        if let Some(workdir) = workdir {
-            scan_skills_root(
-                &workdir.join(".claude").join("skills"),
-                SkillSource::Claude,
-                &mut skills,
-            );
-            scan_skills_root(
-                &workdir.join(".agent").join("skills"),
-                SkillSource::ProjectAgent,
-                &mut skills,
-            );
-            scan_skills_root(
-                &workdir.join(".agents").join("skills"),
-                SkillSource::ProjectAgents,
-                &mut skills,
-            );
-        }
-        for root in valid_extra_skill_roots(workdir, extra_skill_roots) {
-            scan_skills_root(
-                &root.path,
-                SkillSource::ExtraRoot(root.config_index),
-                &mut skills,
-            );
-        }
-        Self { skills }
+        let global = global_skills_dir().ok();
+        Self::load_tiers(global.as_deref(), workdir, extra_skill_roots, &mut SkipSink::Log)
     }
 
     #[cfg(test)]
     pub(super) fn load_isolated(workdir: Option<&Path>, extra_skill_roots: &[PathBuf]) -> Self {
+        Self::load_tiers(None, workdir, extra_skill_roots, &mut SkipSink::Log)
+    }
+
+    /// Scan every tier in precedence order into one registry. `global` is the
+    /// Global root, or `None` to leave that tier out.
+    fn load_tiers(
+        global: Option<&Path>,
+        workdir: Option<&Path>,
+        extra_skill_roots: &[PathBuf],
+        sink: &mut SkipSink<'_>,
+    ) -> Self {
         let mut skills = BTreeMap::new();
+        if let Some(global) = global {
+            scan_skills_root(global, SkillSource::Global, &mut skills, sink);
+        }
         if let Some(workdir) = workdir {
             scan_skills_root(
                 &workdir.join(".claude").join("skills"),
                 SkillSource::Claude,
                 &mut skills,
+                sink,
             );
             scan_skills_root(
                 &workdir.join(".agent").join("skills"),
                 SkillSource::ProjectAgent,
                 &mut skills,
+                sink,
             );
             scan_skills_root(
                 &workdir.join(".agents").join("skills"),
                 SkillSource::ProjectAgents,
                 &mut skills,
+                sink,
             );
         }
         for root in valid_extra_skill_roots(workdir, extra_skill_roots) {
@@ -84,6 +74,7 @@ impl SkillRegistry {
                 &root.path,
                 SkillSource::ExtraRoot(root.config_index),
                 &mut skills,
+                sink,
             );
         }
         Self { skills }
@@ -200,8 +191,10 @@ impl SkillRegistry {
         Self::load_isolated(Some(root), &[])
     }
 
-    #[cfg(test)]
-    pub(super) fn from_defs(defs: Vec<SkillDef>) -> Self {
+    /// A registry of exactly `defs`, keyed by name: one root's skills from
+    /// [`load_root`], so the persistence functions can address a skill that
+    /// the merged registry shadows.
+    pub(crate) fn from_defs(defs: Vec<SkillDef>) -> Self {
         Self { skills: defs.into_iter().map(|d| (d.name.clone(), d)).collect() }
     }
 
@@ -326,7 +319,87 @@ pub(crate) fn global_skills_dir() -> anyhow::Result<PathBuf> {
     Ok(crate::model::store::base_dir()?.join("skills"))
 }
 
-fn scan_skills_root(root: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
+/// A skill entry that discovery found but could not load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SkippedSkill {
+    /// The flat skill file or the `SKILL.md` of a dir-form skill.
+    pub path: PathBuf,
+    /// Why it was skipped.
+    pub error: String,
+}
+
+/// Where scanning reports skills it could not load.
+enum SkipSink<'a> {
+    /// Append to the global error log (what `SkillRegistry::load` does).
+    Log,
+    /// Collect for the caller, without logging.
+    Collect(&'a mut Vec<SkippedSkill>),
+}
+
+impl SkipSink<'_> {
+    fn record(&mut self, path: &Path, error: &anyhow::Error) {
+        match self {
+            Self::Log => crate::model::store::append_global_error_log(
+                "skill registry",
+                &format!("skipped {}: {error}", path.display()),
+            ),
+            Self::Collect(skipped) => skipped.push(SkippedSkill {
+                path: path.to_path_buf(),
+                error: error.to_string(),
+            }),
+        }
+    }
+}
+
+/// Load the same tiers as [`SkillRegistry::load`] and return the skills that
+/// could not be loaded with their path and error, instead of logging them.
+#[allow(dead_code)] // called by the SDK skill listing, which is not wired up yet
+pub(crate) fn load_with_diagnostics(
+    workdir: Option<&Path>,
+    extra_skill_roots: &[PathBuf],
+) -> (SkillRegistry, Vec<SkippedSkill>) {
+    let global = global_skills_dir().ok();
+    let mut skipped = Vec::new();
+    let registry = SkillRegistry::load_tiers(
+        global.as_deref(),
+        workdir,
+        extra_skill_roots,
+        &mut SkipSink::Collect(&mut skipped),
+    );
+    (registry, skipped)
+}
+
+/// Load the skills of one discovery root on its own, ordered by name, so a
+/// skill that a later tier shadows in the merged registry is still reachable.
+/// Skills that fail to load are left out without logging; the merged load
+/// reports them. An absent root gives an empty list.
+pub(crate) fn load_root(root: &Path, source: SkillSource) -> Vec<SkillDef> {
+    load_root_with_diagnostics(root, source).0
+}
+
+/// [`load_root`], together with the skills of that root that could not be
+/// loaded, collected without logging.
+pub(crate) fn load_root_with_diagnostics(
+    root: &Path,
+    source: SkillSource,
+) -> (Vec<SkillDef>, Vec<SkippedSkill>) {
+    let mut skills = BTreeMap::new();
+    let mut skipped = Vec::new();
+    scan_skills_root(
+        root,
+        source,
+        &mut skills,
+        &mut SkipSink::Collect(&mut skipped),
+    );
+    (skills.into_values().collect(), skipped)
+}
+
+fn scan_skills_root(
+    root: &Path,
+    source: SkillSource,
+    skills: &mut BTreeMap<String, SkillDef>,
+    sink: &mut SkipSink<'_>,
+) {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -343,14 +416,19 @@ fn scan_skills_root(root: &Path, source: SkillSource, skills: &mut BTreeMap<Stri
             continue;
         }
         if metadata.is_file() {
-            load_flat_skill(&path, source, skills);
+            load_flat_skill(&path, source, skills, sink);
         } else if metadata.is_dir() {
-            load_dir_skill(&path, source, skills);
+            load_dir_skill(&path, source, skills, sink);
         }
     }
 }
 
-fn load_flat_skill(path: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
+fn load_flat_skill(
+    path: &Path,
+    source: SkillSource,
+    skills: &mut BTreeMap<String, SkillDef>,
+    sink: &mut SkipSink<'_>,
+) {
     let name = match path.file_stem() {
         Some(stem) => stem.to_string_lossy().to_lowercase(),
         None => return,
@@ -364,14 +442,16 @@ fn load_flat_skill(path: &Path, source: SkillSource, skills: &mut BTreeMap<Strin
         Ok(skill) => {
             skills.insert(skill.name.clone(), skill);
         }
-        Err(error) => crate::model::store::append_global_error_log(
-            "skill registry",
-            &format!("skipped {}: {error}", path.display()),
-        ),
+        Err(error) => sink.record(path, &error),
     }
 }
 
-fn load_dir_skill(dir: &Path, source: SkillSource, skills: &mut BTreeMap<String, SkillDef>) {
+fn load_dir_skill(
+    dir: &Path,
+    source: SkillSource,
+    skills: &mut BTreeMap<String, SkillDef>,
+    sink: &mut SkipSink<'_>,
+) {
     let entry_file = SKILL_ENTRY_FILES
         .iter()
         .map(|name| dir.join(name))
@@ -388,10 +468,7 @@ fn load_dir_skill(dir: &Path, source: SkillSource, skills: &mut BTreeMap<String,
         Ok(skill) => {
             skills.insert(skill.name.clone(), skill);
         }
-        Err(error) => crate::model::store::append_global_error_log(
-            "skill registry",
-            &format!("skipped {}: {error}", entry_path.display()),
-        ),
+        Err(error) => sink.record(&entry_path, &error),
     }
 }
 
@@ -401,5 +478,93 @@ pub(crate) fn scan_skills_root_for_test(
     source: SkillSource,
     skills: &mut BTreeMap<String, SkillDef>,
 ) {
-    scan_skills_root(root, source, skills);
+    scan_skills_root(root, source, skills, &mut SkipSink::Log);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod root_tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("koma-skill-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_skill(root: &Path, name: &str, description: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\ndescription: {description}\n---\nBody.\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_root_lists_skill_shadowed_by_later_tier() {
+        let workdir = temp_dir();
+        let agent = workdir.join(".agent").join("skills");
+        let agents = workdir.join(".agents").join("skills");
+        write_skill(&agent, "demo", "from agent");
+        write_skill(&agents, "demo", "from agents");
+
+        let merged = SkillRegistry::load_isolated(Some(&workdir), &[]);
+        let winner = merged.get("demo").unwrap();
+        assert_eq!(winner.source, SkillSource::ProjectAgents);
+        assert_eq!(winner.description, "from agents");
+
+        let shadowed = load_root(&agent, SkillSource::ProjectAgent);
+        assert_eq!(shadowed.len(), 1);
+        assert_eq!(shadowed[0].name, "demo");
+        assert_eq!(shadowed[0].source, SkillSource::ProjectAgent);
+        assert_eq!(shadowed[0].description, "from agent");
+
+        std::fs::remove_dir_all(&workdir).unwrap();
+    }
+
+    #[test]
+    fn diagnostics_list_invalid_skill_and_valid_ones_load() {
+        let workdir = temp_dir();
+        let root = workdir.join(".agents").join("skills");
+        write_skill(&root, "good", "works");
+        let bad_dir = root.join("bad");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("SKILL.md"), "no frontmatter here\n").unwrap();
+
+        let mut skipped = Vec::new();
+        let registry = SkillRegistry::load_tiers(
+            None,
+            Some(&workdir),
+            &[],
+            &mut SkipSink::Collect(&mut skipped),
+        );
+        assert!(registry.get("good").is_some());
+        assert!(registry.get("bad").is_none());
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].path, bad_dir.join("SKILL.md"));
+        assert!(!skipped[0].error.is_empty());
+
+        std::fs::remove_dir_all(&workdir).unwrap();
+    }
+
+    #[test]
+    fn absent_root_is_empty() {
+        let workdir = temp_dir();
+        let missing = workdir.join("missing");
+        assert!(load_root(&missing, SkillSource::Global).is_empty());
+
+        let mut skipped = Vec::new();
+        let registry = SkillRegistry::load_tiers(
+            None,
+            Some(&missing),
+            &[],
+            &mut SkipSink::Collect(&mut skipped),
+        );
+        assert!(registry.is_empty());
+        assert!(skipped.is_empty());
+
+        std::fs::remove_dir_all(&workdir).unwrap();
+    }
 }

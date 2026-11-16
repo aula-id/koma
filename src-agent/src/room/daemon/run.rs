@@ -122,7 +122,9 @@ pub fn run_secure_daemon(opts: crate::cli::Opts) -> Result<()> {
     let sock_path = crate::model::store::daemon_sock_path(&session_id)?;
     let (session, serve) = {
         let _enter = handle.enter();
-        let session = match RoomSession::open(&session_dir, model, builtins, RoomConfig { oracle_roots, ..RoomConfig::default() }) {
+        let config = RoomConfig { oracle_roots, ..RoomConfig::default() };
+        let template = crate::room::registry::template_dir();
+        let session = match RoomSession::open_with_template(&session_dir, model, builtins, config, template) {
             Ok(session) => session,
             Err(e) => {
                 drop(_enter);

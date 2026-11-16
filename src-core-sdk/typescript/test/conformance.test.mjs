@@ -168,3 +168,230 @@ test('configure refuses an empty key before sending', async () => {
   if (existsSync(log)) assert.equal(readFileSync(log, 'utf8').includes('configure'), false);
  } finally { await c.close(); rmSync(log, { force: true }); }
 });
+
+const SECRETS = ['sk-fake-planted', 'fake-pass', 'fake-query', 'fake-oauth-token'];
+function noSecrets(value) { const text = JSON.stringify(value); for (const s of SECRETS) assert.equal(text.includes(s), false, s); }
+// An adapter that sends a current hello and never answers, so every request ends locally.
+const SILENT = `import json,sys
+v1=['create','resume','state','submit','enqueue','interrupt','interrupt_and_submit','approve','configure','detach']
+print(json.dumps(dict(type='hello',protocol=1,binary=dict(path='/silent',version='0'),diagnostics=[],capabilities=v1,
+ methods=v1+['config.get','config.providers.delete','config.models.delete','config.roles.unassign'],features=[],events=[],limits={})),flush=True)
+for _ in sys.stdin: pass`;
+
+test('hello carries methods features events limits and requires only the v1 capabilities', async () => {
+ const c = client('config');
+ try {
+  const hello = await c.probe();
+  assert.deepEqual(hello.capabilities, ['create','resume','state','submit','enqueue','interrupt','interrupt_and_submit','approve','configure','detach']);
+  assert.ok(hello.methods.includes('config.get') && hello.methods.includes('sessions.info'));
+  assert.ok(hello.features.includes('errors.reason'));
+  assert.deepEqual(hello.events.slice(0, 3), ['state', 'output_append', 'turn']);
+  assert.ok(hello.events.includes('room.line') && hello.events.includes('room.gap'));
+  assert.equal(hello.limits.request_ids, 65536);
+ } finally { await c.close(); }
+ const legacy = client('legacy_hello');
+ try {
+  const hello = await legacy.probe();
+  assert.deepEqual([hello.methods, hello.features, hello.events, hello.limits], [[], [], [], {}]);
+ } finally { await legacy.close(); }
+});
+
+test('host reads a redacted config view without secrets', async () => {
+ const c = client('config'); const host = c.host();
+ try {
+  assert.equal(await host.supports('config.get'), true);
+  const view = await host.getConfig();
+  assert.equal(view.view, 'global'); assert.equal(view.file, 'ok'); assert.match(view.revision, /^[0-9a-f]{16}$/);
+  const local = view.providers.find(p => p.provider_uuid === 'prov-local');
+  assert.equal(local.endpoint, 'https://llm.example.test/v1'); assert.equal(local.endpoint_redacted, true);
+  assert.equal(local.key_state, 'set'); assert.equal(local.has_key, true);
+  assert.equal(view.models.find(m => m.model_uuid === 'model-planner').other_roles, true);
+  assert.equal(view.models.find(m => m.model_uuid === 'model-orphan').provider_kind, 'missing');
+  assert.equal(view.roles.length, 5);
+  noSecrets(view);
+ } finally { await host.close(); await c.close(); }
+});
+
+test('host deletes: dry run, stale revision, managed, not found, committed', async () => {
+ const c = client('config'); const host = c.host();
+ try {
+  const before = await host.getConfig();
+  const dry = await host.deleteProvider({ provider_uuid: 'prov-local', dry_run: true });
+  assert.equal(dry.dry_run, true); assert.deepEqual(dry.removed.models_removed, ['model-main', 'model-planner']);
+  assert.equal(dry.removed.main_reset, true); assert.deepEqual(dry.propagation, {});
+  assert.equal((await host.getConfig()).revision, before.revision);
+  await assert.rejects(host.deleteProvider({ provider_uuid: 'prov-local', if_revision: '0000000000000000' }),
+   e => e instanceof SdkError && !(e instanceof DeliveryUnknownError) && e.reason === 'stale' && e.code === 'invalid_state' && e.delivery === 'not_sent');
+  await assert.rejects(host.deleteProvider({ provider_uuid: 'prov-ext' }), e => e.reason === 'managed');
+  await assert.rejects(host.deleteModel({ model_uuid: 'model-none' }), e => e.code === 'not_found' && e.reason === 'not_found');
+  await assert.rejects(host.deleteModel({ model_uuid: '' }), e => e.code === 'invalid_input');
+  const done = await host.deleteModel({ model_uuid: 'model-orphan', if_revision: before.revision });
+  assert.equal(done.dry_run, false); assert.equal(done.config.view, 'global');
+  assert.equal(done.propagation.bound, 'not_bound'); assert.equal(done.propagation.rooms, 'next_start');
+  assert.equal(done.config.models.some(m => m.model_uuid === 'model-orphan'), false);
+  assert.notEqual(done.config.revision, before.revision);
+  const unchanged = await host.unassignRole({ role: 'compactor' });
+  assert.equal(unchanged.changed, false);
+  const released = await host.unassignRole({ role: 'main' });
+  assert.equal(released.changed, true); assert.equal(released.previous_model_uuid, 'model-main');
+  assert.equal(released.config.main_fallback, 'unconfigured');
+  noSecrets([dry, done, released]);
+ } finally { await host.close(); await c.close(); }
+});
+
+test('an unverified delete is a lost mutation with written and detail; the host stays usable', async () => {
+ const c = client('config'); const host = c.host();
+ try {
+  await assert.rejects(host.deleteModel({ model_uuid: 'model-unverified' }), e => e instanceof DeliveryUnknownError
+   && e.reason === 'unverified' && e.written === true && e.code === 'unavailable' && e.method === 'config.models.delete'
+   && Array.isArray(e.detail.diff) && e.detail.diff[0] === 'model-unverified');
+  assert.equal((await host.getConfig()).models.some(m => m.model_uuid === 'model-unverified'), false);
+ } finally { await host.close(); await c.close(); }
+});
+
+test('a lost reply is a lost mutation only for calls that write', async () => {
+ const c = new Client({ executable: python, adapterArgs: ['-c', SILENT], timeoutMs: 1000 }); const host = c.host();
+ try {
+  await assert.rejects(host.deleteProvider({ provider_uuid: 'p', dry_run: true }, { timeoutMs: 30 }),
+   e => !(e instanceof DeliveryUnknownError) && e.code === 'timeout' && e.delivery === 'unknown');
+  await assert.rejects(host.getConfig({}, { timeoutMs: 30 }), e => !(e instanceof DeliveryUnknownError) && e.delivery === 'unknown');
+  await assert.rejects(host.deleteProvider({ provider_uuid: 'p' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
+  await assert.rejects(host.deleteModel({ model_uuid: 'm', dry_run: false }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
+  await assert.rejects(host.unassignRole({ role: 'main' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
+ } finally { await host.close(); await c.close(); }
+});
+
+test('host replaces its adapter before the request-id limit and after a failure', async () => {
+ const { HOST_RECYCLE_AFTER } = await import('../dist/index.js');
+ const c = client('config'); const host = c.host();
+ try {
+  await host.getConfig();
+  const first = await host.transport();
+  first.sent = HOST_RECYCLE_AFTER - 1;
+  const inflight = host.getConfig();
+  while (first.sent < HOST_RECYCLE_AFTER) await new Promise(r => setImmediate(r));
+  const next = host.getConfig();
+  assert.equal((await inflight).view, 'global'); assert.equal((await next).view, 'global');
+  const second = await host.transport();
+  assert.notEqual(second, first); assert.equal(second.requestsSent, 1);
+  await first.exited; assert.equal(c.connections.has(first), false);
+  second.child.kill('SIGKILL'); await second.exited;
+  assert.equal((await host.getConfig()).view, 'global');
+  assert.notEqual(await host.transport(), second);
+ } finally { await host.close(); await c.close(); }
+});
+
+test('wrong binding errors expose reason binding allowed', async () => {
+ const { Transport } = await import('../dist/transport.js');
+ const t = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'wrong_binding'], timeoutMs: 1000 });
+ try {
+  await assert.rejects(t.request('state', {}), e => e.code === 'invalid_state' && e.message === 'no session bound'
+   && e.reason === 'wrong_binding' && e.binding === 'unbound' && e.allowed.join() === 'coding' && e.delivery === 'not_sent');
+  await assert.rejects(t.request('config.effort.get', {}), e => e.reason === 'wrong_binding' && e.allowed.join() === 'coding');
+  await assert.rejects(t.request('config.get', { view: 'session' }), e => e.reason === 'wrong_binding');
+  await t.request('create', { cwd: '/fake/work' });
+  await assert.rejects(t.request('resume', { session_id: 'x' }), e => e.reason === 'already_bound' && e.binding === 'coding' && e.message === 'session already bound');
+ } finally { await t.close(); }
+ const unbound = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'wrong_binding'], timeoutMs: 1000 });
+ try {
+  // The role is checked before the binding.
+  await assert.rejects(unbound.request('room.status', {}), e => e.reason === 'wrong_binding' && e.allowed.join() === 'room_live,room_closed');
+  await assert.rejects(unbound.request('config.roles.unassign', { role: 'planner', scope: 'session' }), e => e.reason === 'out_of_range');
+  // Unbound detach keeps its v1 error, with no added keys.
+  await assert.rejects(unbound.request('detach', {}), e => e.code === 'invalid_state' && e.message === 'no session bound'
+   && e.reason === undefined && e.binding === undefined);
+ } finally { await unbound.close(); }
+ const closed = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'wrong_binding', '--binding', 'room_closed'], timeoutMs: 1000 });
+ try {
+  await assert.rejects(closed.request('config.limits.get', {}), e => e.reason === 'wrong_binding' && e.binding === 'room_closed'
+   && e.message === 'config.limits.get requires binding coding; this adapter is room_closed');
+  assert.equal((await closed.request('config.get', {})).view, 'global');
+ } finally { await closed.close(); }
+});
+
+test('session config calls keep session_info ordered by observed_at_ms', async () => {
+ const c = client('config');
+ try {
+  const s = await c.create({ cwd: '/fake/work' });
+  const created = s.sessionInfo;
+  assert.equal(created.name, 'fake session'); assert.equal(created.effort, 'default');
+  assert.equal(created.routes.find(r => r.role === 'main').origin, 'session');
+  const remaining = s.requestsRemaining;
+  assert.equal(remaining, 65536 - 1);
+  assert.equal((await s.getConfig()).view, 'session');
+  assert.equal(s.requestsRemaining, remaining - 1);
+  const { revision } = await s.getState();
+  const limits = await s.setLimits({ max_output_tokens: 4096 });
+  assert.equal(limits.max_output_tokens, 4096); assert.equal(s.sessionInfo.limits.max_output_tokens, 4096);
+  assert.ok(s.sessionInfo.observed_at_ms > created.observed_at_ms);
+  // A state result is applied by observed_at_ms even when the state revision did not move.
+  s.latestInfo = created;
+  assert.equal((await s.getState()).revision, revision);
+  assert.equal(s.sessionInfo.limits.max_output_tokens, 4096);
+  s.observe({ session_info: created });
+  assert.equal(s.sessionInfo.limits.max_output_tokens, 4096);
+  assert.equal((await s.info()).limits.max_output_tokens, 4096);
+  assert.equal((await s.getLimits()).max_output_tokens, 4096);
+  await assert.rejects(s.setLimits({}), e => e.reason === 'missing_params' && e.code === 'invalid_request');
+  const loading = await s.getEffort({ wait_ms: 0 });
+  assert.equal(loading.state, 'loading'); assert.equal(loading.main_model_uuid, 'model-main');
+  await assert.rejects(s.setEffort({ effort: 'high', if_main_model: 'model-other' }), e => e.reason === 'main_changed' && !(e instanceof DeliveryUnknownError));
+  await assert.rejects(s.setEffort({ effort: 'extreme' }), e => e.reason === 'not_offered');
+  const effort = await s.setEffort({ effort: 'high', if_main_model: 'model-main' });
+  assert.equal(effort.superseded, false); assert.equal(s.sessionInfo.effort, 'high');
+  assert.deepEqual((await s.getEffort()).options, ['default', 'low', 'medium', 'high']);
+  await assert.rejects(s.unassignRole({ role: 'main', scope: 'session', if_revision: 'absent' }), e => e.reason === 'conflicting_params');
+  await assert.rejects(s.unassignRole({ role: 'planner', scope: 'session' }), e => e.reason === 'out_of_range');
+  const unpinned = await s.clearMainPin();
+  assert.equal(unpinned.changed, true); assert.equal(unpinned.config.view, 'session');
+  assert.equal(s.sessionInfo.effort, 'default'); assert.equal(s.sessionInfo.routes.find(r => r.role === 'main').origin, 'global');
+  const dry = await s.deleteProvider({ provider_uuid: 'prov-local', dry_run: true });
+  assert.equal(dry.dry_run, true); assert.ok(dry.session_info);
+  // Without a scope a session's unassignRole is global, as on Host.
+  const released = await s.unassignRole({ role: 'planner' });
+  assert.equal(released.changed, true); assert.equal(released.config.view, 'global');
+  assert.equal(s.sessionInfo.routes.find(r => r.role === 'main').origin, 'global');
+  noSecrets([s.sessionInfo, dry, unpinned]);
+ } finally { await c.close(); }
+});
+
+test('an older adapter is gated on capabilities and has no session_info or reasons', async () => {
+ const log = join(tmpdir(), `koma-legacy-${process.pid}.log`);
+ rmSync(log, { force: true });
+ const c = client('legacy_hello', { env: { KOMA_FAKE_LOG: log } }); const host = c.host();
+ try {
+  assert.equal(await host.supports('config.get'), false);
+  await assert.rejects(host.getConfig(), e => e.code === 'unsupported_method' && e.delivery === 'not_sent');
+  const s = await c.create({ cwd: '/fake/work' });
+  assert.equal(s.sessionInfo, null); assert.equal(s.supports('state'), true); assert.equal(s.supports('sessions.info'), false);
+  await assert.rejects(s.info(), e => e.code === 'unsupported_method');
+  await assert.rejects(s.setLimits({ max_output_tokens: 4096 }), e => e.code === 'unsupported_method' && !(e instanceof DeliveryUnknownError));
+  assert.equal((await s.getState()).revision, 1); assert.equal(s.sessionInfo, null);
+  assert.equal(s.requestsRemaining, 65536 - 2);
+  assert.equal(readFileSync(log, 'utf8').includes('config.'), false);
+ } finally { await host.close(); await c.close(); rmSync(log, { force: true }); }
+ const { Transport } = await import('../dist/transport.js');
+ const t = new Transport({ executable: python, adapterArgs: [fake, '--scenario', 'legacy_hello'], timeoutMs: 1000 });
+ try { await assert.rejects(t.request('state', {}), e => e.code === 'invalid_state' && e.reason === undefined && e.allowed === undefined); }
+ finally { await t.close(); }
+});
+
+test('new enum-like strings are open; v1 enums and public roles stay closed', async () => {
+ const { validateResult } = await import('../dist/validate.js');
+ const route = role => ({ role, origin: 'someday', model_uuid: null, source_uuid: null, configured_model: null, provider_uuid: null, provider_name: null, effective_model: null, reason: 'new_reason' });
+ const view = { revision: 'absent', file: 'elsewhere', view: 'global', providers: [{ provider_uuid: 'p', name: 'n', api_type: 'gemini', endpoint: 'e', endpoint_redacted: false, managed: false, has_key: false, key_state: 'sealed', model_count: 0 }],
+  providers_truncated: false, oauth: [], oauth_truncated: false, models: [{ model_uuid: 'm', name: 'm', model_id: 'm', provider_uuid: 'p', provider_kind: 'plugin', provider_name: null, route: null, roles: ['main'], other_roles: false, source_uuid: null }],
+  models_truncated: false, roles: ['main', 'awareness', 'safeguard', 'compactor', 'planner'].map(route), main_fallback: 'future' };
+ validateResult('config.get', view, {});
+ validateResult('config.roles.unassign', { changed: false, previous_model_uuid: null, config: view, propagation: { bound: 'later', extra: 'x' } }, { role: 'main' });
+ validateResult('config.effort.get', { state: 'warming', options: ['default'], selected: 'default', note: null, main_model_uuid: null }, {});
+ assert.throws(() => validateResult('config.get', { ...view, models: [{ ...view.models[0], roles: ['cyber-red'] }] }, {}), e => e.code === 'protocol');
+ assert.throws(() => validateResult('config.get', { ...view, providers: [{ ...view.providers[0], api_key: 'x' }] }, {}), e => e.code === 'protocol');
+ assert.throws(() => validateResult('config.get', view, { view: 'session' }), e => e.code === 'protocol');
+ assert.throws(() => validateResult('config.providers.delete', { dry_run: false, removed: { provider_uuid: 'p', models_removed: [], main_reset: false }, config: view, propagation: {} }, { provider_uuid: 'p', dry_run: true }), e => e.code === 'protocol');
+ assert.throws(() => validateResult('sessions.info', { disposition: 'started', turn_id: 't', reason: null }, {}), e => e.code === 'protocol');
+ const state = { revision: 1, external_approvals: false, pending_approval: null, gate: null, session_id: 's', cwd: '/w', model_id: 'm', policy: { plan: 'forbid', approval: 'reject' }, turn: null, working: false, awaiting_approval: false, approval_reason: null, pending_count: 0, messages: [], streaming: null };
+ validateResult('state', { state }, {});
+ assert.throws(() => validateResult('state', { state: { ...state, messages: [{ role: 'robot', content: '' }] } }, {}), e => e.code === 'protocol');
+ assert.throws(() => validateResult('state', { state: { ...state, turn: { id: 't', state: 'paused', error: null } } }, {}), e => e.code === 'protocol');
+});

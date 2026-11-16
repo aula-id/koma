@@ -99,7 +99,7 @@ fn field(map: &serde_json::Map<String, Value>, names: &[&str]) -> String {
     names.iter().find_map(|n| map.get(*n).and_then(Value::as_str).filter(|s| !s.trim().is_empty())).map(|s| clip(s, CLIP)).unwrap_or_default()
 }
 
-fn row_of(entry: &ShelfEntry) -> ShelfRow {
+pub(crate) fn row_of(entry: &ShelfEntry) -> ShelfRow {
     let content = entry.content.as_deref().unwrap_or("");
     let record = serde_json::from_str::<Value>(content).ok().and_then(|v| v.as_object().cloned());
     let (kind, title, status) = match &record {
@@ -144,7 +144,7 @@ fn goal_of(view: &TrajectoryView) -> Goal {
     }
 }
 
-fn report_of(entry: &ShelfEntry) -> Option<Report> {
+pub(crate) fn report_of(entry: &ShelfEntry) -> Option<Report> {
     let map = serde_json::from_str::<Value>(entry.content.as_deref()?).ok()?.as_object()?.clone();
     let text = |name: &str| map.get(name).and_then(Value::as_str).unwrap_or("").to_string();
     let keys = map.get("finding_keys").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();

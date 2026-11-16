@@ -111,3 +111,82 @@ pub fn is_locked(session_dir: &Path) -> bool {
         }
     }
 }
+
+/// Whether the PID recorded in the session's `session.lock` is a live process
+/// (this one included).
+///
+/// The read-only twin of [`is_locked`]: a missing, unreadable or unparseable
+/// lock reads as `false`, and a stale lock (dead PID) reads as `false` too, but
+/// nothing is ever removed. Listings use it so that looking at a session never
+/// changes its directory.
+#[allow(dead_code)] // read by session listings outside the TUI; the TUI uses `is_locked`
+pub fn owner_alive(session_dir: &Path) -> bool {
+    std::fs::read_to_string(lock_path(session_dir))
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u32>().ok())
+        .is_some_and(pid_alive)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PID that no process holds: above the default Linux `pid_max` (4194304)
+    /// and macOS's 99998, and not a valid Windows process id in practice.
+    const DEAD_PID: u32 = 4_000_000_000;
+
+    /// A fresh directory under the OS temp root, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "koma-session-lock-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn owner_alive_reports_own_pid_and_keeps_the_file() {
+        let dir = TempDir::new("own");
+        write_lock(dir.path());
+        assert!(owner_alive(dir.path()));
+        assert!(lock_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn owner_alive_leaves_a_stale_lock_in_place() {
+        let dir = TempDir::new("stale");
+        std::fs::write(lock_path(dir.path()), DEAD_PID.to_string()).unwrap();
+        assert!(!owner_alive(dir.path()));
+        assert!(lock_path(dir.path()).exists(), "stale lock was removed");
+        std::fs::write(lock_path(dir.path()), "not a pid").unwrap();
+        assert!(!owner_alive(dir.path()));
+        assert!(lock_path(dir.path()).exists(), "garbage lock was removed");
+    }
+
+    #[test]
+    fn owner_alive_on_missing_lock_creates_nothing() {
+        let dir = TempDir::new("missing");
+        assert!(!owner_alive(dir.path()));
+        assert!(!lock_path(dir.path()).exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
