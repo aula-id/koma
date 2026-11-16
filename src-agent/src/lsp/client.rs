@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use super::catalog::{self, ServerSpec};
 use super::resolve::{self, Source};
+use crate::tool::winpath::strip_verbatim;
 
 /// Default timeout for LSP request/response round-trips.
 const REQ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -2124,21 +2125,6 @@ fn fallback_file_uri(path: &str) -> String {
     } else {
         format!("file:///{encoded}")
     }
-}
-
-/// Drop the Windows verbatim prefix: `\\?\C:\x` -> `C:\x`, `\\?\UNC\h\s` -> `\\h\s`.
-/// Anything else is returned unchanged.
-fn strip_verbatim(p: &str) -> String {
-    if let Some(r) = p.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{r}");
-    }
-    if let Some(r) = p.strip_prefix(r"\\?\") {
-        let b = r.as_bytes();
-        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-            return r.to_string();
-        }
-    }
-    p.to_string()
 }
 
 /// Canonical map key for a file URI: percent-decoded path with a Windows drive
