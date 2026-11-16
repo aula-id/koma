@@ -18,6 +18,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { CodingPalette } from '../components/CodingPalette'
+import { AboutDialog } from '../components/AboutKoma'
 import { CodingTransactions } from '../components/CodingTransactions'
 import { CodingHistory } from '../components/CodingHistory'
 import { NotebookCreateDialog } from '../components/NotebookCreateDialog'
@@ -446,6 +447,7 @@ function RootLayout() {
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <CodingPalette />
+      <AboutDialog />
       <CodingDebug />
       <CodingTests />
       <CodingHistory />

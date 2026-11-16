@@ -3,6 +3,7 @@ declare global {
   interface Window {
     __komaUiScaleReply?: (reply: import('./lib/uiScale').UiScaleReply) => void
     __komaComputerPalette?: Record<string, string>
+    __komaBuild?: unknown
     __komaComputerInitial?: import('./types/computer').ComputerStatus | null
     __komaScreenBrowserPalette?: Record<string, string>
     __komaScreenBrowserInitial?: import('./types/screenBrowser').ScreenBrowserStatus | null

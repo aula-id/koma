@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
-import { BookOpen, GraduationCap, Library } from 'lucide-react'
+import { BookOpen, GraduationCap, Info, Library } from 'lucide-react'
+import { AboutPanel } from './AboutKoma'
 import TutorialTab from './TutorialTab'
 import LegacyHelpReference from './LegacyHelpReference'
 import { MessageBody } from './MessageBody'
@@ -10,6 +11,7 @@ const HELP_SECTIONS = [
   { id: 'Assistant', label: 'Assistant', Icon: GraduationCap },
   { id: 'Reference', label: 'Reference', Icon: BookOpen },
   { id: 'Guides', label: 'Guides', Icon: Library },
+  { id: 'About', label: 'About', Icon: Info },
 ] as const
 
 type HelpSection = (typeof HELP_SECTIONS)[number]['id']
@@ -177,6 +179,17 @@ export default function HelpTab() {
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {section === 'About' && (
+        <div
+          role="tabpanel"
+          id="help-panel-About"
+          aria-labelledby="help-section-About"
+          className="flex-1 overflow-auto p-5"
+        >
+          <AboutPanel />
         </div>
       )}
     </div>
