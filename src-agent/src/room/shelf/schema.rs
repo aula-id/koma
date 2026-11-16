@@ -120,14 +120,14 @@ pub fn typed_tool(kind: &str) -> Option<(String, Value)> {
         }
         "report" => {
             f.add("markdown", text("The report body in markdown"), true);
-            f.add("finding_key", text("The main finding; starts with findings/"), false);
-            f.add("finding_keys", list("All findings the report covers. Give this or finding_key"), false);
+            f.add("finding_key", text("The main finding; starts with findings/"), true);
+            f.add("finding_keys", list("Every finding the report covers, when there is more than one"), false);
             f.add("title", text("Report title"), false);
             f.add("audience", choice(&["manager", "technical"], "Who reads it (default manager)"), false);
             f.add("severity_summary", text("One line on the severities"), false);
             f.add("go_no_go", text("Release recommendation"), false);
             f.cvss();
-            "Publish a report over findings. Give finding_key or finding_keys."
+            "Publish a report over findings. Give finding_key (and optionally finding_keys for extra coverage)."
         }
         "asset" => {
             f.add("host", text("The host the asset lives on"), true);
@@ -203,6 +203,7 @@ mod tests {
         match name {
             "claim_key" => json!("claims/a"),
             "verdict_key" => json!("verdicts/a"),
+            "finding_key" => json!("findings/a"),
             "severity" => json!("high"),
             "verdict" => json!("confirmed"),
             "claim_revision" => json!(1),
@@ -224,9 +225,6 @@ mod tests {
             if Some(name) != skip {
                 out.insert(name.to_string(), sample(kind, name, &properties[name]));
             }
-        }
-        if kind == "report" {
-            out.insert("finding_key".into(), json!("findings/a"));
         }
         out
     }
