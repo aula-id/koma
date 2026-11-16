@@ -325,6 +325,18 @@ declare global {
         tabId: string
       }
     | {
+        r: 'SkillUploadChunk'
+        target: 'global' | 'project'
+        name: string
+        uploadId: string
+        offset: number
+        total: number
+        dataB64: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
         r: 'DownloadSkillZip'
         skillId: string
         generation: string

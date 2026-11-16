@@ -6,13 +6,13 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { Field } from './panels/form'
 import { insideSkillProject } from './skillProject'
 import { showToast } from '../lib/toast'
+import { INSTALL_CONFIRM_MS, MAX_SKILL_ZIP_BYTES, MAX_SKILL_ZIP_LABEL, uploadChunks, uploadProgress } from '../lib/skillUpload'
 
 const actionBtn = 'flex items-center gap-1 rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40'
 
-const MAX_ZIP_BYTES = 64 * 1024 * 1024
 let uploadSeq = 0
 
-function readFileAsBase64(file: File): Promise<string> {
+function readFileAsBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
@@ -50,6 +50,7 @@ export default function UploadSkillTab() {
   const [requestId, setRequestId] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const result = requestId && lastOp?.requestId === requestId ? lastOp : null
@@ -60,6 +61,16 @@ export default function UploadSkillTab() {
   useEffect(() => {
     if (!insideProject && scope === 'project') setScope('global')
   }, [insideProject, scope])
+
+  // No SkillOp after the last chunk means the host or daemon dropped the install: stop waiting.
+  useEffect(() => {
+    if (!requestId || result || progress !== 100) return
+    const timer = window.setTimeout(() => {
+      setRequestId(null)
+      setLocalError('Install was not confirmed. Check the skills list; the package may still have installed.')
+    }, INSTALL_CONFIRM_MS)
+    return () => window.clearTimeout(timer)
+  }, [requestId, result, progress])
 
   useEffect(() => {
     if (!success) return
@@ -74,13 +85,18 @@ export default function UploadSkillTab() {
     if (!file || !insideSkillProject(useKoma.getState().session.id, useKoma.getState().settingsValues?.workdir, useKoma.getState().coding.activeRoot)) return
     setLocalError(null)
     setRequestId(null)
+    setProgress(null)
     setSelectedFile(file.name)
     if (!PACKAGE_EXTENSION.test(file.name)) {
       setLocalError('Choose a .zip or .skill package.')
       return
     }
-    if (file.size > MAX_ZIP_BYTES) {
-      setLocalError('Skill package exceeds the 64 MiB upload limit.')
+    if (file.size === 0) {
+      setLocalError('Choose a non-empty package.')
+      return
+    }
+    if (file.size > MAX_SKILL_ZIP_BYTES) {
+      setLocalError(`Skill package exceeds the ${MAX_SKILL_ZIP_LABEL} upload limit.`)
       return
     }
     const name = skillNameFromFilename(file.name)
@@ -88,12 +104,22 @@ export default function UploadSkillTab() {
       setLocalError('The package filename does not produce a valid skill name.')
       return
     }
+    const id = `install-zip-${++uploadSeq}`
+    // The host keeps one staged file per upload id; the timestamp keeps ids unique across windows.
+    const uploadId = `${id}-${Date.now().toString(36)}`
     try {
-      const dataB64 = await readFileAsBase64(file)
-      const id = `install-zip-${++uploadSeq}`
       setRequestId(id)
-      req({ r: 'InstallSkillZip', target: scope, name, dataB64, requestId: id, sessionEpoch: epoch, tabId: 'upload-skill' })
+      setProgress(0)
+      for (const { offset, end } of uploadChunks(file.size)) {
+        const dataB64 = await readFileAsBase64(file.slice(offset, end))
+        req({ r: 'SkillUploadChunk', target: scope, name, uploadId, offset, total: file.size, dataB64, requestId: id, sessionEpoch: epoch, tabId: 'upload-skill' })
+        // A failure reported for this upload (host error, IPC down) ends it; later chunks would only be rejected.
+        if (useKoma.getState().skillOpResults[id]) return
+        setProgress(uploadProgress(end, file.size))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
     } catch (error) {
+      setRequestId(null)
       setLocalError(error instanceof Error ? error.message : 'Failed to read ZIP file')
     }
   }, [epoch, req, scope])
@@ -136,19 +162,18 @@ export default function UploadSkillTab() {
             <div className="px-3 py-1.5">
               <button type="button" onClick={chooseFile} disabled={busy || !insideProject} title={insideProject ? undefined : 'Open a project to add a skill'} className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded border border-dashed border-koma-border px-3 py-5 text-[12px] text-koma-fg transition-colors hover:border-koma-accent hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-40">
                 {busy ? <BrailleSpinner size={16} /> : <Upload size={18} className="text-koma-accent" />}
-                {busy ? 'Installing…' : selectedFile ? `Choose another package (${selectedFile})` : 'Choose .zip or .skill package'}
+                {busy ? (progress !== null && progress < 100 ? `Uploading ${progress}%` : 'Installing…') : selectedFile ? `Choose another package (${selectedFile})` : 'Choose .zip or .skill package'}
               </button>
               <input ref={inputRef} type="file" accept=".zip,.skill,application/zip" className="hidden" onChange={onFile} disabled={busy || !insideProject} />
-              <p className="mt-2 text-[11px] text-koma-fg opacity-45">A .zip or .skill package up to 64 MiB. Must contain a valid SKILL.md.</p>
+              <p className="mt-2 text-[11px] text-koma-fg opacity-45">A .zip or .skill package up to 256 MiB. Must contain a valid SKILL.md.</p>
             </div>
-            {/* Keep these limits aligned with src-agent/src/model/skill/persistence.rs and its safety tests. */}
+            {/* Keep these limits aligned with src-agent/src/model/skill/persistence.rs (MAX_SKILL_ZIP_BYTES, MAX_SKILL_UNPACKED_BYTES) and its safety tests. */}
             <details className="mx-3 rounded border border-koma-border px-3 py-2 text-koma-fg">
               <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">Package requirements</summary>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-koma-fg opacity-45">
                 <li>Maximum 1,000 files and folder depth 16.</li>
-                <li>Maximum 8 MiB per companion file.</li>
-                <li>Maximum 2 MiB for SKILL.md.</li>
-                <li>Maximum 64 MiB compressed and 64 MiB uncompressed total.</li>
+                                <li>Maximum 2 MiB for SKILL.md.</li>
+                <li>Maximum 256 MiB compressed and 256 MiB uncompressed total.</li>
                 <li>No symlinks, special files, path traversal, collisions, or malformed SKILL.md.</li>
               </ul>
             </details>
