@@ -10,16 +10,12 @@ import { SHAPE_MIME, diagramFileName, isDiagramPath } from '../../lib/diagram'
 import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
 import { DiagramRefMenuItems } from '../DiagramVisual'
 import { DIAGRAM_PALETTE, ShapePreview, type DiagramPaletteEntry } from '../diagram/DiagramShapePreview'
+import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 const PALETTE_GROUPS = ['Basic', 'Flowchart', 'Containers', 'Database'] as const
 
 const EMPTY_ROOTS: string[] = []
 
-
-function rootLabel(root: string): string {
-  const parts = root.split('/').filter(Boolean)
-  return parts[parts.length - 1] || root
-}
 
 function InlineNameInput({
   initial,

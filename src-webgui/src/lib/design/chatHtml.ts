@@ -14,6 +14,7 @@ import {
 } from './model'
 import { firstVisiblePaint, nodePaints, resolveColor, resolvePaintCss } from './paint'
 import type { DesignDoc, DesignNode, DesignPaint } from './types'
+import { fileUrl, stripVerbatim } from '../pathDisplay'
 
 type Point = { x: number; y: number }
 type Box = { x: number; y: number; w: number; h: number }
@@ -73,12 +74,12 @@ export function escHtml(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/** Absolute file URL for an asset path under the workspace root. */
+/** Absolute file URL for an asset path under the workspace root (POSIX, drive-letter or UNC). */
 export function designFileUrl(root: string, path: string): string {
   const rel = path.replace(/^\.\//, '')
-  const abs = rel.startsWith('/') ? rel : `${root.replace(/\/+$/, '')}/${rel.replace(/^\/+/, '')}`
-  const encoded = abs.split('/').map((part) => encodeURIComponent(part)).join('/')
-  return `file://${encoded}`
+  const isAbsolute = /^(?:[\\/]|[A-Za-z]:[\\/])/.test(rel)
+  const abs = isAbsolute ? rel : `${stripVerbatim(root).replace(/[\\/]+$/, '')}/${rel.replace(/^[\\/]+/, '')}`
+  return fileUrl(abs)
 }
 
 function expandInstances(doc: DesignDoc, node: DesignNode, stack: string[]): DesignNode {

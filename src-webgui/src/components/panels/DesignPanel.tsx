@@ -35,6 +35,7 @@ import { emitDesignLayer } from '../../lib/designUi'
 import { designPngBase64 } from '../../lib/designRender'
 import { utf8ToBase64 } from '../../lib/diagramNotes'
 import type { DesignFileState } from '../../store/design'
+import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 const EMPTY_ROOTS: string[] = []
 const EMPTY_DESIGN_DOCS: Record<string, DesignFileState> = {}
@@ -187,11 +188,6 @@ export function TokenEditor({ root, path, doc, query = '', onCommit }: { root: s
       })}
     </div>
   )
-}
-
-function rootLabel(root: string): string {
-  const parts = root.split('/').filter(Boolean)
-  return parts[parts.length - 1] || root
 }
 
 function InlineNameInput({

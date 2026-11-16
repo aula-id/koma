@@ -36,16 +36,12 @@ import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, IconBtn } from './helpers'
 import { Segmented, Select } from './form'
 import { CodingSearchPanel } from './CodingSearchPanel'
+import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
   if (!name) return dir
   return `${dir.replace(/\/+$/, '')}/${name.replace(/^\/+/, '')}`
-}
-
-function rootLabel(root: string): string {
-  const parts = root.split('/').filter(Boolean)
-  return parts[parts.length - 1] || root
 }
 
 function cleanName(raw: string): string | null {

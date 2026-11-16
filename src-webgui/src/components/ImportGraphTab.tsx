@@ -5,6 +5,7 @@ import { BrailleSpinner } from './BrailleSpinner'
 import { ImportGraphFlow } from './ImportGraphFlow'
 import { sourceLanguage } from '../lib/importGraphLanguages'
 import { isTabVisible, normalizeGroups } from '../store/editorGroups'
+import { pathBasename } from '../lib/pathDisplay'
 
 // Detail pane width constants.
 const DETAIL_W_MIN = 260
@@ -223,7 +224,7 @@ export default function ImportGraphTab() {
     () => availableRoots.map((r) => {
       // Compact label: displayPath basename (backend-computed from configured_path).
       // Falls back to canonical root basename when displayPath is absent.
-      const label = r.displayPath ?? (r.configuredPath ?? r.root).split('/').pop() ?? r.root
+      const label = r.displayPath ?? pathBasename(r.configuredPath ?? r.root)
       // Full sublabel for title/tooltip: configuredPath if it differs from root.
       const sublabel = r.configuredPath && r.configuredPath !== r.root
         ? r.configuredPath
