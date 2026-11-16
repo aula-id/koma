@@ -247,12 +247,15 @@ fn github_asset(id: &str, dest: &Path) -> Result<(PathBuf, String, String)> {
             && !name.contains("musl")
             && (name.ends_with(".tar.gz") || name.ends_with(".tar.xz") || name.ends_with(".zip"))
     };
-    let assets: Vec<_> = release["assets"]
+    let mut assets: Vec<_> = release["assets"]
         .as_array()
         .context("Release has no assets")?
         .iter()
         .filter(|a| a["name"].as_str().is_some_and(matches))
         .collect();
+    let names: Vec<&str> = assets.iter().filter_map(|a| a["name"].as_str()).collect();
+    let kept = prefer_platform_archive(&names, cfg!(windows));
+    assets.retain(|a| a["name"].as_str().is_some_and(|n| kept.contains(&n)));
     anyhow::ensure!(
         assets.len() == 1,
         "No unambiguous {id} release for {os}/{arch}; select a compatible external executable"
@@ -315,7 +318,8 @@ fn vsix(id: &str, dest: &Path) -> Result<(PathBuf, String, String)> {
 /// Phpactor ships a self-contained phar; run it with `php` (see
 /// `spawn_server_process`), so no Composer or checkout is needed.
 fn phpactor_phar(dest: &Path) -> Result<(PathBuf, String, String)> {
-    super::runtimes::ensure_tool("php").context("PHP must be installed before selecting Phpactor")?;
+    super::runtimes::ensure_tool("php")
+        .context("PHP must be installed before selecting Phpactor")?;
     let release = json_url("https://api.github.com/repos/phpactor/phpactor/releases/latest")?;
     let asset = release["assets"]
         .as_array()
@@ -435,4 +439,48 @@ pub(crate) fn install(id: &str) -> Result<()> {
     )?;
     println!("Installed {id}: {}", binary.display());
     Ok(())
+}
+
+/// When several release archives match the platform, keep the .zip ones on
+/// Windows and the others elsewhere.
+fn prefer_platform_archive<'a>(names: &[&'a str], windows: bool) -> Vec<&'a str> {
+    if names.len() <= 1 {
+        return names.to_vec();
+    }
+    let kept: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| n.ends_with(".zip") == windows)
+        .collect();
+    if kept.is_empty() {
+        names.to_vec()
+    } else {
+        kept
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefer_platform_archive;
+
+    #[test]
+    fn picks_zip_on_windows_and_tarball_elsewhere() {
+        let win = ["zls-x86_64-windows.tar.xz", "zls-x86_64-windows.zip"];
+        assert_eq!(
+            prefer_platform_archive(&win, true),
+            ["zls-x86_64-windows.zip"]
+        );
+        let lin = ["zls-x86_64-linux.tar.xz", "zls-x86_64-linux.zip"];
+        assert_eq!(
+            prefer_platform_archive(&lin, false),
+            ["zls-x86_64-linux.tar.xz"]
+        );
+    }
+
+    #[test]
+    fn leaves_single_and_zipless_sets_alone() {
+        assert_eq!(prefer_platform_archive(&["a.tar.gz"], true), ["a.tar.gz"]);
+        let two = ["a.tar.gz", "a.tar.xz"];
+        assert_eq!(prefer_platform_archive(&two, true), two);
+    }
 }
