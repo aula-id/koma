@@ -280,7 +280,7 @@ struct Snapshot {
 
 /// How long the [`McpBackend::Proxy`] waits for the global MCP daemon to answer a
 /// single request before giving up. Sized to just outrun the daemon's own
-/// the server tool timeout on a `Call` (the daemon returns a timeout string of its own at
+/// tool timeout on a `Call` (the daemon returns a timeout string of its own at
 /// 60s by default, so the proxy's read should not fire first), with a small margin for the
 /// round-trip. A hung/vanished daemon then surfaces as an error string to the model
 /// instead of hanging the tool thread forever.
