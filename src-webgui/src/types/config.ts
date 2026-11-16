@@ -26,6 +26,17 @@ export type McpServer = {
   connected?: boolean
   /** Human-readable error when the server failed to connect. Absent = OK or connecting. */
   error?: string
+  // Structured forms: `args` above joins arguments with spaces, which loses an argument
+  // that contains one, so the host also sends the lists.
+  argv?: string[]
+  envPairs?: [string, string][]
+  /** Header names with every value masked (see `HEADER_KEEP` in mcpForm.ts). */
+  headers?: [string, string][]
+  cwd?: string
+  startupTimeoutMs?: number
+  toolTimeoutMs?: number
+  allowedTools?: string[]
+  disabledTools?: string[]
 }
 
 // `hasKey` is a presence flag, NOT the key itself — the daemon never sends the

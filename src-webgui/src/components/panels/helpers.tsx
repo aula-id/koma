@@ -163,7 +163,7 @@ export function DetailHeader({
   )
 }
 
-export function FormActions({ onCancel, onSave, saveDisabled }: { onCancel: () => void; onSave: () => void; saveDisabled?: boolean }) {
+export function FormActions({ onCancel, onSave, saveDisabled, saveLabel = 'Save' }: { onCancel: () => void; onSave: () => void; saveDisabled?: boolean; saveLabel?: string }) {
   return (
     <div
       className="flex flex-none items-center justify-end gap-2 border-t border-koma-border px-3 py-2"
@@ -182,7 +182,7 @@ export function FormActions({ onCancel, onSave, saveDisabled }: { onCancel: () =
         data-tour="form-save"
         className="rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg transition-colors enabled:hover:bg-koma-hover disabled:opacity-40"
       >
-        Save
+        {saveLabel}
       </button>
     </div>
   )

@@ -1,10 +1,11 @@
-import { Plus, Pencil, Trash2, Check, X } from 'lucide-react'
+import { Plus, FileJson, Pencil, Trash2, Check, X } from 'lucide-react'
 import type { McpServer } from '../../../types/config'
 
 type Props = {
   servers: McpServer[]
   armed: string | null
   onAdd: () => void
+  onImport: () => void
   onEdit: (s: McpServer) => void
   onArm: (id: string) => void
   onDisarm: () => void
@@ -16,6 +17,7 @@ export function McpListView({
   servers,
   armed,
   onAdd,
+  onImport,
   onEdit,
   onArm,
   onDisarm,
@@ -121,12 +123,18 @@ export function McpListView({
           </div>
         ))}
       </div>
-      <div className="flex-none border-t border-koma-border p-2">
+      <div className="flex flex-none gap-2 border-t border-koma-border p-2">
         <button
           onClick={onAdd}
-          className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
         >
           <Plus size={14} /> Add server
+        </button>
+        <button
+          onClick={onImport}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        >
+          <FileJson size={14} /> Import JSON
         </button>
       </div>
     </>

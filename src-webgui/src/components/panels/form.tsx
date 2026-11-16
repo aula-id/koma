@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type InputHTMLAttributes,
+  type TextareaHTMLAttributes,
   type ReactNode,
   type RefObject,
 } from 'react'
@@ -33,6 +34,15 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className="h-7 w-full rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
+    />
+  )
+}
+
+export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className="min-h-[56px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1 font-mono text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
     />
   )
 }

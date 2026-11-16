@@ -2,24 +2,10 @@ import { useState, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { McpListView } from './mcp/McpListView'
 import { McpEditView } from './mcp/McpEditView'
+import { McpImportView } from './mcp/McpImportView'
+import { blankDraft, draftToRequest, toDraft, type McpDraft } from './mcp/mcpForm'
 import { useKoma } from '../../store/koma'
 import type { McpServer } from '../../types/config'
-
-let seq = 0
-function blankServer(): McpServer {
-  seq += 1
-  return {
-    id: `srv-${seq}`,
-    name: '',
-    enabled: true,
-    transport: 'stdio',
-    command: '',
-    args: '',
-    env: '',
-    url: '',
-    toolCount: 0,
-  }
-}
 
 const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
@@ -31,7 +17,8 @@ export function McpPanel() {
   const servers = useKoma((s) => s.config.mcp)
   const req = useKoma((s) => s.req)
   const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus)
-  const [draft, setDraft] = useState<McpServer | null>(null)
+  const [draft, setDraft] = useState<McpDraft | null>(null)
+  const [importing, setImporting] = useState(false)
   const [isNew, setIsNew] = useState(false)
   const [armed, setArmed] = useState<string | null>(null)
 
@@ -42,32 +29,26 @@ export function McpPanel() {
   }, [])
 
   const openAdd = () => {
-    setDraft(blankServer())
+    setDraft(blankDraft())
     setIsNew(true)
   }
   const openEdit = (s: McpServer) => {
-    setDraft({ ...s })
+    setDraft(toDraft(s))
     setIsNew(false)
   }
-  const patch = (p: Partial<McpServer>) => setDraft((d) => (d ? { ...d, ...p } : d))
+  const patch = (p: Partial<McpDraft>) => setDraft((d) => (d ? { ...d, ...p } : d))
   const cancel = () => setDraft(null)
   const save = () => {
     if (!draft || !draft.name.trim()) return
     // Flat payload matching the daemon's GuiReq::SetMcpServer. `uuid` is the
     // daemon config uuid on edit; `null` for a new server (the client-side
     // `draft.id` is a synthetic placeholder, so the daemon mints a real uuid).
-    req({
-      r: 'SetMcpServer',
-      uuid: isNew ? null : draft.id,
-      name: draft.name,
-      enabled: draft.enabled,
-      transport: draft.transport,
-      command: draft.command,
-      args: draft.args,
-      env: draft.env,
-      url: draft.url,
-    })
+    req(draftToRequest(draft, isNew))
     setDraft(null)
+  }
+  const importJson = (text: string) => {
+    req({ r: 'ImportMcpJson', text })
+    setImporting(false)
   }
   const remove = (id: string) => {
     req({ r: 'DeleteMcpServer', uuid: id })
@@ -80,7 +61,18 @@ export function McpPanel() {
   return (
     <div className="relative h-full overflow-hidden">
       <AnimatePresence initial={false}>
-        {draft ? (
+        {importing ? (
+          <motion.div
+            key="import"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={SLIDE}
+            className="absolute inset-0 flex flex-col bg-koma-panel"
+          >
+            <McpImportView onImport={importJson} onCancel={() => setImporting(false)} />
+          </motion.div>
+        ) : draft ? (
           <motion.div
             key="form"
             initial={{ x: '100%' }}
@@ -106,6 +98,7 @@ export function McpPanel() {
               servers={servers}
               armed={armed}
               onAdd={openAdd}
+              onImport={() => setImporting(true)}
               onEdit={openEdit}
               onArm={(id) => setArmed(id)}
               onDisarm={() => setArmed(null)}
