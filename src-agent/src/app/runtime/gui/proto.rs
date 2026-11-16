@@ -907,6 +907,22 @@ pub(super) enum GuiReq {
         #[serde(default, rename = "tabId")]
         tab_id: String,
     },
+    SkillUploadChunk {
+        target: String,
+        name: String,
+        #[serde(rename = "uploadId")]
+        upload_id: String,
+        offset: u64,
+        total: u64,
+        #[serde(rename = "dataB64")]
+        data_b64: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
     DownloadSkillZip {
         #[serde(rename = "skillId")]
         skill_id: String,
@@ -1619,6 +1635,23 @@ mod skill_wire_tests {
         assert!(
             matches!(upload, GuiReq::InstallSkillZip { data_b64, .. } if data_b64 == "UEsDBA==")
         );
+
+        let chunk: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "SkillUploadChunk",
+            "target": "global",
+            "name": "packaged",
+            "uploadId": "install-zip-1-abc",
+            "offset": 4194304,
+            "total": 9437184,
+            "dataB64": "UEsDBA==",
+            "requestId": "install-zip-1"
+        }))
+        .expect("chunk request");
+        assert!(matches!(
+            chunk,
+            GuiReq::SkillUploadChunk { upload_id, offset: 4194304, total: 9437184, session_epoch: 0, tab_id, .. }
+                if upload_id == "install-zip-1-abc" && tab_id.is_empty()
+        ));
 
         let download: GuiReq = serde_json::from_value(serde_json::json!({
             "r": "DownloadSkillZip",

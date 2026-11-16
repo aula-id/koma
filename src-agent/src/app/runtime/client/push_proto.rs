@@ -1246,7 +1246,7 @@ pub(super) fn push_skill_detail_values(
     );
 }
 
-pub(super) fn push_skill_op(
+pub(crate) fn push_skill_op(
     push: &dyn Fn(String),
     request_id: String,
     session_epoch: u64,

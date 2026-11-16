@@ -656,6 +656,33 @@ fn handle_detached_skill_mutation(push: &dyn Fn(String), request: ClientRequest)
                 vec![outcome(name, result)],
             )
         }
+        ClientRequest::InstallSkillZipPath {
+            target,
+            name,
+            path,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let result = OwnedSkillTarget::parse(&target).and_then(|target| {
+                if target == OwnedSkillTarget::Project {
+                    return Err(unavailable_project());
+                }
+                crate::model::skill::install_staged_upload(
+                    None,
+                    target,
+                    &name,
+                    std::path::Path::new(&path),
+                )
+            });
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "install-zip".to_string(),
+                vec![outcome(name, result)],
+            )
+        }
         ClientRequest::DownloadSkillZip {
             skill_id,
             generation,
@@ -2905,6 +2932,14 @@ fn host_remote_attach(
     }
 }
 
+/// True while the GUI host is attached to a remote (SSH) session. A remote daemon runs on
+/// another machine, so a staged-file path means nothing to it and uploads must go inline.
+static REMOTE_ATTACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn remote_attached() -> bool {
+    REMOTE_ATTACHED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn host_remote(
     handle: &tokio::runtime::Handle,
@@ -2922,6 +2957,7 @@ fn host_remote(
     lsp_manager: &std::sync::Arc<std::sync::Mutex<crate::lsp::LspManager>>,
 ) -> HostStep {
     *current = Some(session_id);
+    REMOTE_ATTACHED.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut g) = live_req.lock() {
         *g = Some(active.connection.req_tx.clone());
     }
@@ -2952,6 +2988,7 @@ fn host_remote(
     if let Ok(mut g) = live_req.lock() {
         *g = None;
     }
+    REMOTE_ATTACHED.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut m) = live_marks.lock() {
         m.clear();
     }

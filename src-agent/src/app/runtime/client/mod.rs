@@ -119,6 +119,7 @@ use crate::app::runtime::terminal::TerminalGuard;
 pub(in crate::app::runtime) use host::run_host_relay;
 // Re-export ClientTransition so `remote::client` can reference it without making
 // the entire `render` module public.
+pub(crate) use host::remote_attached;
 pub(crate) use render::ClientTransition;
 
 type RemoteResume = (
