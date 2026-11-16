@@ -399,6 +399,10 @@ export type KomaState = {
   // it. No wire request — the Help tab is static content, unlike Settings.
   openNotificationsTab: () => void
   openHelpTab: () => void
+  // Open (or focus) the singleton Welcome tab of the Diagram or Design feature.
+  openWelcomeTab: (which: 'diagram' | 'design') => void
+  // Activity-icon click: open the Welcome tab only when the feature has no tab and no files; waits for the .koma listing.
+  maybeOpenWelcomeTab: (which: 'diagram' | 'design') => void
   // Open (or focus) the singleton Tutorial tab (id 'tutorial').
   openTutorialTab: () => void
   // Send one Tutorial coach turn (host koma-free). Appends the user message
