@@ -86,7 +86,7 @@ pub enum McpRequest {
     /// Restart ONE server (drop its connection, reconnect it when enabled) without
     /// touching the others. Answered with [`McpResponse::Ack`]. Additive: an old daemon
     /// fails to decode it and is replaced by the fingerprint check on the next ensure.
-    RestartServer { server: McpServerEntry },
+    RestartServer { server: Box<McpServerEntry> },
     /// Per-server connection state, for the `/mcp` panel. Answered with
     /// [`McpResponse::Status`].
     Status,

@@ -260,3 +260,66 @@ fn load_rejects_a_file_outside_the_root() {
     assert!(l.rows.is_empty());
     std::fs::remove_dir_all(&base).unwrap();
 }
+
+#[test]
+fn set_and_remove_server_in_text() {
+    let e = |name: &str| McpServerEntry {
+        uuid: String::new(),
+        name: name.into(),
+        enabled: true,
+        transport: McpTransport::Stdio,
+        command: "npx".into(),
+        args: vec!["-y".into()],
+        env: vec![("K".into(), "v".into())],
+        url: String::new(),
+        headers: Vec::new(),
+        cwd: None,
+        startup_timeout_ms: None,
+        tool_timeout_ms: None,
+        allowed_tools: Vec::new(),
+        disabled_tools: Vec::new(),
+        ext_id: None,
+    };
+    let t1 = set_server_in_text(None, &e("a")).unwrap();
+    assert!(t1.contains("\"mcpServers\""));
+    let t2 = set_server_in_text(Some(&t1), &e("b")).unwrap();
+    let back = parse(&t2);
+    assert_eq!(back.servers.len(), 2);
+    assert_eq!(
+        back.servers[0].env,
+        vec![("K".to_string(), "v".to_string())]
+    );
+    // VS Code `servers` and a bare map keep their shape.
+    let vs = set_server_in_text(Some(r#"{"servers":{"x":{"command":"c"}}}"#), &e("a")).unwrap();
+    assert!(vs.contains("\"servers\"") && !vs.contains("mcpServers"));
+    let bare = set_server_in_text(Some(r#"{"x":{"command":"c"}}"#), &e("a")).unwrap();
+    assert_eq!(parse(&bare).servers.len(), 2);
+    assert!(set_server_in_text(Some(r#"{"command":"c"}"#), &e("a")).is_err());
+    assert!(set_server_in_text(Some("[1]"), &e("a")).is_err());
+
+    let t3 = remove_server_from_text(&t2, "a").unwrap().unwrap();
+    assert_eq!(parse(&t3).servers.len(), 1);
+    assert_eq!(remove_server_from_text(&t3, "zzz").unwrap(), None);
+}
+
+#[test]
+fn write_project_file_refuses_symlink_outside_and_oversize() {
+    let base = std::env::temp_dir().join(format!("koma-mcp-w-{}", new_uuid()));
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    write_project_file(&root, "{}").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join(".mcp.json")).unwrap(),
+        "{}"
+    );
+    assert!(write_project_file(&root, &"x".repeat(1024 * 1024 + 1)).is_err());
+    #[cfg(unix)]
+    {
+        let outside = base.join("outside.json");
+        std::fs::write(&outside, "{}").unwrap();
+        std::fs::remove_file(root.join(".mcp.json")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join(".mcp.json")).unwrap();
+        assert!(write_project_file(&root, "{\"a\":1}").is_err());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "{}");
+    }
+}

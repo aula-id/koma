@@ -20,6 +20,21 @@ use crate::model::app_config::McpServerEntry;
 use super::util::{namespace_tools, sanitize_server_name};
 use super::{connect_one, McpBackend, McpManager, ServerConn, Snapshot, ToolSource};
 
+/// Send a new server set to the running global MCP daemon (what a session's proxy
+/// manager does on its own reconnect). For `koma mcp`, which has no manager.
+pub fn reconnect_global_daemon(servers: &[McpServerEntry]) -> anyhow::Result<()> {
+    let sock = crate::model::store::mcp_daemon_sock_path()?;
+    match super::proxy::proxy_request(
+        &sock,
+        &McpRequest::Reconnect {
+            servers: servers.to_vec(),
+        },
+    )? {
+        McpResponse::Ack => Ok(()),
+        other => anyhow::bail!("unexpected response from the MCP daemon: {other:?}"),
+    }
+}
+
 impl McpManager {
     /// Build a LOCAL manager and kick off a background connect for every ENABLED
     /// server. Returns immediately — connecting never blocks startup.
@@ -264,7 +279,7 @@ impl McpManager {
             McpBackend::Local { handle, snapshot } => (handle, snapshot),
             McpBackend::Proxy { sock, .. } => {
                 let req = McpRequest::RestartServer {
-                    server: server.clone(),
+                    server: Box::new(server.clone()),
                 };
                 match super::proxy::proxy_request(sock, &req) {
                     Ok(McpResponse::Ack) => {}

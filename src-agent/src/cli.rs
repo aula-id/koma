@@ -312,6 +312,9 @@ pub struct Opts {
     /// coding panel. Short-circuited in `main` before the TUI (same pattern as
     /// `doctor` / `ext`).
     pub lsp: Option<crate::lsp::LspCli>,
+    /// `koma mcp <list|get|add|add-json|remove|approve …>` — manage MCP servers. Short-
+    /// circuited first in `main`, so server arguments such as `--local` stay inert.
+    pub mcp: Option<crate::app::mcp::cli::McpCli>,
     /// `koma room …`: read-only views of a secure-room session. Short-circuited
     /// in `main` before the TUI (same pattern as `lsp`).
     pub room: Option<crate::room::cli::RoomCli>,
@@ -373,6 +376,7 @@ pub fn print_help() -> i32 {
          \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
          \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
          \x20 lsp <status|install|uninstall> manage language servers for the coding panel\n\
+         \x20 mcp <list|get|add|add-json|remove|approve>  manage MCP servers (koma mcp for details)\n\
          \x20 server                         headless daemon over stdio (for remote dev via SSH)\n\
          \x20 remote <user@host>              SSH-connect to a remote machine and run koma\n\
          \x20 run                            headless one-shot against the session daemon\n\
@@ -625,6 +629,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
                 .cloned()
                 .collect();
             opts.lsp = Some(crate::lsp::LspCli::parse(&lsp_args));
+        }
+        Some("mcp") => {
+            // Re-collect from `all`: server flags after `--` must reach the parser intact.
+            let mcp_args: Vec<String> = all
+                .iter()
+                .skip(1) // argv[0]
+                .skip_while(|a| a.as_str() != "mcp")
+                .skip(1) // the `mcp` token itself
+                .cloned()
+                .collect();
+            opts.mcp = Some(crate::app::mcp::cli::McpCli::parse(&mcp_args));
         }
         Some("room") => {
             // Everything after the `room` verb; re-collected from `all` so flag

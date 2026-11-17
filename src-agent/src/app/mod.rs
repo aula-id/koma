@@ -61,7 +61,7 @@ pub use runtime::run_remote_linker;
 pub use runtime::run_server;
 pub use runtime::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
-    run_daemon_subcommand, run_doctor,
+    run_daemon_subcommand, run_doctor, run_mcp_cli,
 };
 pub use term_preview::{run_term_preview, run_term_remote, TermStart};
 pub use update::run_update;

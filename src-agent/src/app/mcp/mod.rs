@@ -82,6 +82,7 @@ use crate::model::app_config::{McpServerEntry, McpTransport};
 // existing bare call site in this file keeps compiling unchanged.
 #[cfg(test)]
 mod activation_tests;
+pub mod cli;
 mod expand;
 #[cfg(test)]
 mod expand_tests;
@@ -91,6 +92,7 @@ mod resolve;
 #[cfg(test)]
 mod resolve_tests;
 mod util;
+pub use connect::reconnect_global_daemon;
 use proxy::{proxy_request, proxy_request_timeout};
 use util::flatten_result;
 

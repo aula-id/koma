@@ -318,44 +318,192 @@ pub(crate) fn layer_from_text(
     layer
 }
 
+/// The canonical form of a project root, used as the approval key.
+pub(crate) fn root_key(root: &Path) -> String {
+    root.canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The text of `<root>/.mcp.json`: `Ok(None)` when it does not exist, an error when it
+/// resolves outside the root (a symlink), is larger than 1 MiB or cannot be read.
+pub(crate) fn read_project_file(root: &Path) -> Result<Option<String>, String> {
+    let file = root.join(".mcp.json");
+    if !file.exists() {
+        return Ok(None);
+    }
+    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let actual = file
+        .canonicalize()
+        .map_err(|e| format!("cannot read .mcp.json: {e}"))?;
+    if !actual.starts_with(&root_real) {
+        return Err(".mcp.json is outside the project folder".to_string());
+    }
+    let meta = actual
+        .metadata()
+        .map_err(|e| format!("cannot read .mcp.json: {e}"))?;
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(".mcp.json is larger than 1 MiB".to_string());
+    }
+    std::fs::read_to_string(&actual)
+        .map(Some)
+        .map_err(|e| format!("cannot read .mcp.json: {e}"))
+}
+
 /// `None` when `<root>/.mcp.json` does not exist. A file that resolves outside the root
 /// (a symlink) or is larger than 1 MiB yields a layer carrying only an error.
 pub(crate) fn load_project_layer(
     root: &Path,
     approvals: &[McpProjectApproval],
 ) -> Option<ProjectLayer> {
-    let file = root.join(".mcp.json");
-    if !file.exists() {
-        return None;
+    let key = root_key(root);
+    match read_project_file(root) {
+        Ok(None) => None,
+        Ok(Some(text)) => Some(layer_from_text(root, &key, &text, approvals)),
+        Err(error) => Some(ProjectLayer {
+            file: root.join(".mcp.json"),
+            root_key: key,
+            error: Some(error),
+            rows: Vec::new(),
+        }),
     }
-    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let root_key = root_real.to_string_lossy().into_owned();
-    let failed = |error: String| ProjectLayer {
-        file: file.clone(),
-        root_key: root_key.clone(),
-        error: Some(error),
-        rows: Vec::new(),
+}
+
+/// One server in the Claude Code JSON shape (`type`, `command`, `args`, `env`, `url`,
+/// `headers`, `cwd`, plus the koma extras when set). Values are written as stored.
+pub(crate) fn entry_json(e: &McpServerEntry) -> serde_json::Value {
+    use serde_json::{json, Map, Value};
+    let pairs = |p: &[(String, String)]| -> Value {
+        Value::Object(
+            p.iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect::<Map<String, Value>>(),
+        )
     };
-    let actual = match file.canonicalize() {
-        Ok(p) => p,
-        Err(e) => return Some(failed(format!("cannot read .mcp.json: {e}"))),
-    };
-    if !actual.starts_with(&root_real) {
-        return Some(failed(
-            ".mcp.json is outside the project folder".to_string(),
-        ));
-    }
-    match actual.metadata() {
-        Ok(m) if m.len() > MAX_FILE_BYTES => {
-            return Some(failed(".mcp.json is larger than 1 MiB".to_string()))
+    let mut o = Map::new();
+    match e.transport {
+        McpTransport::Stdio => {
+            o.insert("type".into(), json!("stdio"));
+            o.insert("command".into(), json!(e.command));
+            if !e.args.is_empty() {
+                o.insert("args".into(), json!(e.args));
+            }
+            if !e.env.is_empty() {
+                o.insert("env".into(), pairs(&e.env));
+            }
         }
-        Ok(_) => {}
-        Err(e) => return Some(failed(format!("cannot read .mcp.json: {e}"))),
+        McpTransport::Http => {
+            o.insert("type".into(), json!("http"));
+            o.insert("url".into(), json!(e.url));
+            if !e.headers.is_empty() {
+                o.insert("headers".into(), pairs(&e.headers));
+            }
+        }
     }
-    match std::fs::read_to_string(&actual) {
-        Ok(text) => Some(layer_from_text(root, &root_key, &text, approvals)),
-        Err(e) => Some(failed(format!("cannot read .mcp.json: {e}"))),
+    if let Some(c) = &e.cwd {
+        o.insert("cwd".into(), json!(c));
     }
+    if !e.enabled {
+        o.insert("disabled".into(), json!(true));
+    }
+    if let Some(ms) = e.startup_timeout_ms {
+        o.insert("startupTimeoutMs".into(), json!(ms));
+    }
+    if let Some(ms) = e.tool_timeout_ms {
+        o.insert("toolTimeoutMs".into(), json!(ms));
+    }
+    if !e.allowed_tools.is_empty() {
+        o.insert("allowedTools".into(), json!(e.allowed_tools));
+    }
+    if !e.disabled_tools.is_empty() {
+        o.insert("disabledTools".into(), json!(e.disabled_tools));
+    }
+    Value::Object(o)
+}
+
+/// Which object of a parsed `.mcp.json` holds the servers. `Err` when the file is a
+/// single bare server (no name to edit under) or not an object.
+fn servers_slot(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<&mut serde_json::Map<String, serde_json::Value>, String> {
+    use serde_json::Value;
+    let key = if root.get("mcpServers").is_some_and(Value::is_object) {
+        Some("mcpServers")
+    } else if root.get("servers").is_some_and(Value::is_object) {
+        Some("servers")
+    } else if root.is_empty() {
+        root.insert("mcpServers".into(), Value::Object(Default::default()));
+        Some("mcpServers")
+    } else if root.get("command").is_some_and(Value::is_string)
+        || root.get("url").is_some_and(Value::is_string)
+    {
+        return Err(
+            "the file holds a single unnamed server; wrap it as {\"mcpServers\": {...}} first"
+                .into(),
+        );
+    } else {
+        None
+    };
+    match key {
+        Some(k) => match root.get_mut(k) {
+            Some(Value::Object(m)) => Ok(m),
+            _ => Err("cannot edit .mcp.json".to_string()),
+        },
+        None => Ok(root),
+    }
+}
+
+fn parse_root(text: Option<&str>) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match text.map(str::trim).filter(|t| !t.is_empty()) {
+        None => Ok(Default::default()),
+        Some(t) => match serde_json::from_str::<serde_json::Value>(t) {
+            Ok(serde_json::Value::Object(m)) => Ok(m),
+            Ok(_) => Err(".mcp.json is not a JSON object".to_string()),
+            Err(e) => Err(format!(".mcp.json is not valid JSON: {e}")),
+        },
+    }
+}
+
+fn to_pretty(root: serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+    serde_json::to_string_pretty(&serde_json::Value::Object(root))
+        .map(|mut s| {
+            s.push('\n');
+            s
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// The file text with `entry` added or replaced under its name. `text` is the current
+/// file (`None` for a new one). Other servers and keys are kept.
+pub(crate) fn set_server_in_text(
+    text: Option<&str>,
+    entry: &McpServerEntry,
+) -> Result<String, String> {
+    let mut root = parse_root(text)?;
+    servers_slot(&mut root)?.insert(entry.name.clone(), entry_json(entry));
+    to_pretty(root)
+}
+
+/// The file text without server `name`; `Ok(None)` when no such server is in it.
+pub(crate) fn remove_server_from_text(text: &str, name: &str) -> Result<Option<String>, String> {
+    let mut root = parse_root(Some(text))?;
+    if servers_slot(&mut root)?.remove(name).is_none() {
+        return Ok(None);
+    }
+    to_pretty(root).map(Some)
+}
+
+/// Write `<root>/.mcp.json`, applying the same checks as reading it: an existing file
+/// must not resolve outside the root, and the text must fit the size cap.
+pub(crate) fn write_project_file(root: &Path, text: &str) -> Result<(), String> {
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return Err(".mcp.json would be larger than 1 MiB".to_string());
+    }
+    read_project_file(root)?;
+    let file = root.join(".mcp.json");
+    let target = file.canonicalize().unwrap_or(file);
+    std::fs::write(&target, text).map_err(|e| format!("cannot write .mcp.json: {e}"))
 }
 
 impl ProjectLayer {
