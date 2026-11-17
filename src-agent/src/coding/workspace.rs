@@ -447,11 +447,13 @@ fn paths(root: &Path, query: &str) -> Result<Value> {
             truncated = true;
             break;
         }
-        let path = entry
-            .path()
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = entry.path().strip_prefix(root)?.to_string_lossy();
+        // Backslash is a separator only on Windows; it is a legal name byte elsewhere.
+        let path = if cfg!(windows) {
+            rel.replace('\\', "/")
+        } else {
+            rel.into_owned()
+        };
         if let Some(score) = fuzzy_score(&path.to_lowercase(), &needle) {
             matches.push((score, path));
         }
