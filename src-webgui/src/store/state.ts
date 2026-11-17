@@ -482,7 +482,7 @@ export type KomaState = {
   refreshBranches: () => void
   // Repo picker (multi-repo support): re-fetch every detected repository root
   // + which one is active.
-  refreshRepos: () => void
+  refreshRepos: (force?: boolean) => void
   // Repo picker pick: switch the active repo to `root`. Optimistically
   // updates `activeRepoRoot` + clears the stale graph/activity slices
   // (preserving the graph view mode) before telling the host — each panel's

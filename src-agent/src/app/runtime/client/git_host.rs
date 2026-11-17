@@ -231,9 +231,17 @@ pub(super) fn spawn_git_branch_list(
 }
 
 /// `HostCtl::GitRepos` while detached. Mirrors [`spawn_git_branch_list`].
-pub(super) fn spawn_git_repos(push: impl Fn(String) + Send + 'static, cur: Option<String>) {
+pub(super) fn spawn_git_repos(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    force: bool,
+) {
     std::thread::spawn(move || {
-        let repos = git_repos::discover_repos(cur.as_deref());
+        let repos = if force {
+            git_repos::discover_repos_fresh(cur.as_deref())
+        } else {
+            git_repos::discover_repos(cur.as_deref())
+        };
         let active =
             git_repos::active_repo(cur.as_deref()).map(|p| p.to_string_lossy().into_owned());
         push_repo_list(&push, RepoListResult { repos, active });
@@ -564,9 +572,17 @@ pub(super) fn spawn_git_branch_list_attached(
 }
 
 /// `HostCtl::GitRepos` while attached. Mirrors [`spawn_git_branch_list_attached`].
-pub(super) fn spawn_git_repos_attached(tx: Sender<RepoListResult>, cur: Option<String>) {
+pub(super) fn spawn_git_repos_attached(
+    tx: Sender<RepoListResult>,
+    cur: Option<String>,
+    force: bool,
+) {
     std::thread::spawn(move || {
-        let repos = git_repos::discover_repos(cur.as_deref());
+        let repos = if force {
+            git_repos::discover_repos_fresh(cur.as_deref())
+        } else {
+            git_repos::discover_repos(cur.as_deref())
+        };
         let active =
             git_repos::active_repo(cur.as_deref()).map(|p| p.to_string_lossy().into_owned());
         let _ = tx.send(RepoListResult { repos, active });

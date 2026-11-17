@@ -162,7 +162,7 @@ fn hostctl_to_req(ctl: &super::HostCtl) -> Option<RemoteGitReq> {
         super::HostCtl::GitBranchList { request_id } => Some(RemoteGitReq::BranchList {
             request_id: *request_id,
         }),
-        super::HostCtl::GitRepos => Some(RemoteGitReq::Repos),
+        super::HostCtl::GitRepos { .. } => Some(RemoteGitReq::Repos),
         super::HostCtl::SetActiveRepo { root } => {
             Some(RemoteGitReq::SetActiveRepo { root: root.clone() })
         }

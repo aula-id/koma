@@ -26,6 +26,7 @@ import { GitGraphMini } from '../GitGraphMini'
 import { ConflictBanner } from '../ConflictBanner'
 import { Empty } from './helpers'
 import { Select } from './form'
+import { repoOptionLabel } from './repoLabel'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
@@ -345,16 +346,25 @@ export function GitPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {repos.length > 1 && (
+      {repos.length >= 1 && (
         <div className="flex items-center gap-1.5 border-b border-koma-border px-2 py-1">
           <FolderGit2 size={12} className="flex-none text-koma-dim opacity-60" />
           <div className="min-w-0 flex-1" title="Active repository">
             <Select
               value={activeRepoRoot ?? git.root ?? ''}
-              options={repos.map((r) => ({ value: r.root, label: r.name }))}
+              options={repos.map((r) => ({ value: r.root, label: repoOptionLabel(r) }))}
               onChange={(root) => setActiveRepo(root)}
             />
           </div>
+          <button
+            type="button"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+            title="Rescan for repositories"
+            aria-label="Rescan for repositories"
+            onClick={() => refreshRepos(true)}
+          >
+            <RefreshCw size={12} />
+          </button>
         </div>
       )}
       <ConflictBanner />

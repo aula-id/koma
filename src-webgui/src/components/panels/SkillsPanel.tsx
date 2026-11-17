@@ -9,6 +9,7 @@ import { Segmented, Select } from './form'
 import { SkillDeleteConfirm } from '../SkillDeleteConfirm'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
 import { nextSkillSelection } from '../skillListSelection'
+import { clampPage, pageBounds, pageCount, pageOfIndex, skillPageSize } from '../skillPagination'
 import { insideSkillProject, skillProjectRoot } from '../skillProject'
 
 type SkillsPanelView = 'list' | 'methods'
@@ -162,10 +163,14 @@ export function SkillsPanel() {
   const req = useKoma((s) => s.req)
   const searchRef = useRef<HTMLInputElement>(null)
   const rowRefs = useRef(new Map<string, HTMLButtonElement>())
+  const listRef = useRef<HTMLDivElement>(null)
+  const pendingFocus = useRef<string | null>(null)
   const anchorRef = useRef<string | null>(null)
   const discoveredEpochRef = useRef<number | null>(null)
   const [view, setView] = useState<SkillsPanelView>('list')
   const [focusId, setFocusId] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
+  const [listHeight, setListHeight] = useState(0)
   const [menu, setMenu] = useState<SkillMenuState | null>(null)
   const [duplicate, setDuplicate] = useState<SkillCatalogueEntry[] | null>(null)
   const [deleting, setDeleting] = useState<SkillCatalogueEntry[] | null>(null)
@@ -219,6 +224,12 @@ export function SkillsPanel() {
     })
   }, [filter, loaded, projectRoot, query, skills])
   const visibleIds = useMemo(() => visible.map((skill) => skill.skillId), [visible])
+  const pageSize = skillPageSize(listHeight)
+  const safePage = clampPage(page, visibleIds.length, pageSize)
+  const { start, end } = pageBounds(safePage, visibleIds.length, pageSize)
+  const pageRows = visible.slice(start, end)
+  const pageIds = visibleIds.slice(start, end)
+  const tabStopId = focusId && pageIds.includes(focusId) ? focusId : pageIds[0]
   const selectedSet = useMemo(() => new Set(selection), [selection])
   const menuSkills = useMemo(
     () => (menu ? visible.filter((skill) => menu.skillIds.includes(skill.skillId)) : []),
@@ -231,6 +242,30 @@ export function SkillsPanel() {
     if (anchorRef.current && !visibleIds.includes(anchorRef.current)) anchorRef.current = null
     if (focusId && !visibleIds.includes(focusId)) setFocusId(visibleIds[0] ?? null)
   }, [focusId, selection, setSelection, visibleIds])
+
+  useEffect(() => setPage(0), [filter, query, projectRoot])
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage)
+  }, [page, safePage])
+
+  // The list element is re-created when the view switches, so re-attach on `view`.
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    setListHeight(el.clientHeight)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => setListHeight(entry.contentRect.height))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [view])
+
+  // A keyboard move across a page boundary focuses the row once its page has rendered.
+  useEffect(() => {
+    const id = pendingFocus.current
+    if (!id) return
+    pendingFocus.current = null
+    rowRefs.current.get(id)?.focus()
+  }, [safePage])
 
   const closeMenu = () => setMenu(null)
 
@@ -290,7 +325,11 @@ export function SkillsPanel() {
     event.preventDefault()
     const id = visibleIds[next]
     setFocusId(id)
-    rowRefs.current.get(id)?.focus()
+    const target = pageOfIndex(next, pageSize)
+    if (target !== safePage) {
+      pendingFocus.current = id
+      setPage(target)
+    } else rowRefs.current.get(id)?.focus()
   }
 
   if (view === 'methods' && insideProject) {
@@ -320,7 +359,7 @@ export function SkillsPanel() {
       },
     ]
     return (
-      <div data-tour="skills-panel" className="flex h-full min-w-0 flex-col overflow-hidden bg-koma-panel text-koma-fg">
+      <div data-tour="skills-panel" className="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden bg-koma-panel text-koma-fg">
         <DetailHeader onBack={() => setView('list')} title="Add skill" backTourId="skills-add-back" tourId="skills-add-header" />
         <div data-tour="skills-add-methods" className="min-h-0 flex-1 overflow-auto py-1">
           <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">
@@ -349,7 +388,7 @@ export function SkillsPanel() {
   }
 
   return (
-    <div data-tour="skills-panel" className="flex h-full min-w-0 flex-col overflow-hidden text-koma-fg" onKeyDown={(event) => {
+    <div data-tour="skills-panel" className="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden bg-koma-panel text-koma-fg" onKeyDown={(event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault()
         searchRef.current?.focus()
@@ -406,11 +445,12 @@ export function SkillsPanel() {
 
       {unconfirmed && <div role="status" className="flex-none border-b border-koma-border px-2 py-1.5 text-[10px] text-koma-dim">{unconfirmed}</div>}
 
-      <div data-tour="skills-list" role="listbox" aria-label="Skills" aria-multiselectable="true" className="min-h-0 flex-1 overflow-auto py-1" onKeyDown={onListKeyDown}>
+      <div ref={listRef} data-tour="skills-list" role="listbox" aria-label="Skills" aria-multiselectable="true" className="min-h-0 flex-1 overflow-auto py-1" onKeyDown={onListKeyDown}>
         {loading && !skills.length ? <div className="flex justify-center py-10"><BrailleSpinner size={16} /></div>
           : error ? <Empty>{error}</Empty>
           : !visible.length ? <Empty>{query ? `No skills match “${query}”` : filter === 'project' ? 'No project skills' : 'No global skills'}</Empty>
-          : visible.map((skill, index) => {
+          : pageRows.map((skill, offset) => {
+            const index = start + offset
             const isSelected = selectedSet.has(skill.skillId)
             const isOpen = activeSkillId === skill.skillId
             const isLoaded = loaded.has(skill.name)
@@ -423,7 +463,7 @@ export function SkillsPanel() {
                 role="option"
                 aria-selected={isSelected}
                 aria-current={isOpen ? 'true' : undefined}
-                tabIndex={(focusId ?? visibleIds[0]) === skill.skillId ? 0 : -1}
+                tabIndex={tabStopId === skill.skillId ? 0 : -1}
                 onFocus={() => setFocusId(skill.skillId)}
                 onClick={(event) => choose(skill, event)}
                 onDoubleClick={() => openSkill(skill)}
@@ -441,6 +481,13 @@ export function SkillsPanel() {
           })}
       </div>
 
+      {visible.length > pageSize && (
+        <nav data-tour="skills-pager" aria-label="Skills pages" className="flex flex-none items-center justify-between gap-2 border-t border-koma-border px-2 py-1 text-[10px] text-koma-fg">
+          <button type="button" aria-label="Previous page" disabled={safePage === 0} onClick={() => setPage(safePage - 1)} className="rounded border border-koma-border px-2 py-0.5 hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent">Prev</button>
+          <span aria-live="polite" className="opacity-60">{start + 1}-{end} of {visible.length}</span>
+          <button type="button" aria-label="Next page" disabled={safePage >= pageCount(visible.length, pageSize) - 1} onClick={() => setPage(safePage + 1)} className="rounded border border-koma-border px-2 py-0.5 hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent">Next</button>
+        </nav>
+      )}
       <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" disabled={!insideProject} title={insideProject ? 'Add skill' : 'Open a project to add a skill'} onClick={() => { if (insideProject) setView('methods') }} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"><Plus size={13} /> Add skill</button></div>
       {menu && menuSkills.length > 0 && (
         <SkillContextMenu

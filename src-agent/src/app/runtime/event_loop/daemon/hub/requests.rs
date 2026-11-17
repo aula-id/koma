@@ -408,6 +408,7 @@ impl DaemonHub {
             } => self.set_extra_skill_roots(idx, state, roots, request_id, session_epoch, tab_id),
             request @ (ClientRequest::CreateSkill { .. }
             | ClientRequest::InstallSkillZip { .. }
+            | ClientRequest::InstallSkillZipPath { .. }
             | ClientRequest::DownloadSkillZip { .. }
             | ClientRequest::UpdateSkill { .. }
             | ClientRequest::DuplicateSkills { .. }
@@ -1071,6 +1072,7 @@ impl DaemonHub {
             | ClientRequest::ReloadSkills { .. }
             | ClientRequest::CreateSkill { .. }
             | ClientRequest::InstallSkillZip { .. }
+            | ClientRequest::InstallSkillZipPath { .. }
             | ClientRequest::DownloadSkillZip { .. }
             | ClientRequest::UpdateSkill { .. }
             | ClientRequest::DuplicateSkills { .. }

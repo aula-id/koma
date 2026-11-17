@@ -119,6 +119,7 @@ use crate::app::runtime::terminal::TerminalGuard;
 pub(in crate::app::runtime) use host::run_host_relay;
 // Re-export ClientTransition so `remote::client` can reference it without making
 // the entire `render` module public.
+pub(crate) use host::remote_attached;
 pub(crate) use render::ClientTransition;
 
 type RemoteResume = (
@@ -624,8 +625,10 @@ pub(crate) enum HostCtl {
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Host-local, never the daemon, like
     /// [`GitBranchList`](Self::GitBranchList); see [`git_repos::discover_repos`].
-    /// Reply lands as a `RepoList` push.
-    GitRepos,
+    /// Reply lands as a `RepoList` push. `force` bypasses the discovery cache.
+    GitRepos {
+        force: bool,
+    },
     /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
     /// (an absolute toplevel path from a prior `RepoList`). Host-local, never the
     /// daemon, like [`SetGitKey`](Self::SetGitKey) — no reply of its own; the worker

@@ -716,6 +716,18 @@ pub enum ClientRequest {
         #[serde(default)]
         tab_id: String,
     },
+    /// Install a package the GUI host already staged on disk (see `model::skill::upload`).
+    /// Carries a path, not the bytes, so it is not bounded by `MAX_FRAME_BYTES`.
+    InstallSkillZipPath {
+        target: String,
+        name: String,
+        path: String,
+        request_id: String,
+        #[serde(default)]
+        session_epoch: u64,
+        #[serde(default)]
+        tab_id: String,
+    },
     DownloadSkillZip {
         skill_id: String,
         generation: String,

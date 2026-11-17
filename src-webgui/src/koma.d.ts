@@ -3,6 +3,7 @@ declare global {
   interface Window {
     __komaUiScaleReply?: (reply: import('./lib/uiScale').UiScaleReply) => void
     __komaComputerPalette?: Record<string, string>
+    __komaBuild?: unknown
     __komaComputerInitial?: import('./types/computer').ComputerStatus | null
     __komaScreenBrowserPalette?: Record<string, string>
     __komaScreenBrowserInitial?: import('./types/screenBrowser').ScreenBrowserStatus | null
@@ -338,6 +339,18 @@ declare global {
         tabId: string
       }
     | {
+        r: 'SkillUploadChunk'
+        target: 'global' | 'project'
+        name: string
+        uploadId: string
+        offset: number
+        total: number
+        dataB64: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
         r: 'DownloadSkillZip'
         skillId: string
         generation: string
@@ -575,7 +588,7 @@ declare global {
     // host-side — works regardless of attach state. Reply lands as the
     // BranchList push envelope.
     | { r: 'GitBranchList'; requestId?: number | null }
-    | { r: 'GitRepos' }
+    | { r: 'GitRepos'; force?: boolean }
     | { r: 'SetActiveRepo'; root: string }
     // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     // only, never `--force`): switch (or detach onto) `ref` — a branch name or

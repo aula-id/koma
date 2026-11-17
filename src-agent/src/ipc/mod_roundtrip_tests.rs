@@ -297,6 +297,14 @@ fn client_request_variants_roundtrip() {
             session_epoch: 7,
             tab_id: "upload-skill".to_string(),
         },
+        ClientRequest::InstallSkillZipPath {
+            target: "global".to_string(),
+            name: "packaged".to_string(),
+            path: "/tmp/skill-upload/upload-1.zip".to_string(),
+            request_id: "upload-1".to_string(),
+            session_epoch: 7,
+            tab_id: "upload-skill".to_string(),
+        },
         ClientRequest::DownloadSkillZip {
             skill_id: "opaque".to_string(),
             generation: "generation".to_string(),

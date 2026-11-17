@@ -18,6 +18,12 @@ pub const MAX_DUPLICATE_FILES: usize = 1_000;
 pub const MAX_DUPLICATE_COMPANION_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_DUPLICATE_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_SKILL_ENTRY_BYTES: u64 = 2 * 1024 * 1024;
+/// Archive size accepted by the ZIP install paths (a package can be larger than one IPC frame).
+pub const MAX_SKILL_ZIP_BYTES: u64 = 256 * 1024 * 1024;
+/// Total UNCOMPRESSED size accepted by ZIP install.
+pub const MAX_SKILL_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+/// One companion file inside an installed ZIP may use the whole unpacked budget.
+pub const MAX_SKILL_ZIP_COMPANION_BYTES: u64 = MAX_SKILL_UNPACKED_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnedSkillTarget {
@@ -479,12 +485,36 @@ pub fn install_owned_skill_zip(
     name: &str,
     archive_bytes: &[u8],
 ) -> Result<PathBuf> {
-    if archive_bytes.len() as u64 > MAX_DUPLICATE_TOTAL_BYTES {
-        bail!("ZIP package exceeds the 64 MiB upload limit");
+    if archive_bytes.len() as u64 > MAX_SKILL_ZIP_BYTES {
+        bail!("ZIP package exceeds the 256 MiB upload limit");
     }
+    install_zip_archive(workdir, target, name, Cursor::new(archive_bytes))
+}
+
+/// Install from a ZIP already staged on disk (the GUI upload route), so the package
+/// never has to fit in memory or in one IPC frame as raw bytes.
+pub fn install_owned_skill_zip_file(
+    workdir: Option<&Path>,
+    target: OwnedSkillTarget,
+    name: &str,
+    path: &Path,
+) -> Result<PathBuf> {
+    let file =
+        std::fs::File::open(path).with_context(|| format!("open staged ZIP {}", path.display()))?;
+    if file.metadata()?.len() > MAX_SKILL_ZIP_BYTES {
+        bail!("ZIP package exceeds the 256 MiB upload limit");
+    }
+    install_zip_archive(workdir, target, name, std::io::BufReader::new(file))
+}
+
+fn install_zip_archive<R: Read + std::io::Seek>(
+    workdir: Option<&Path>,
+    target: OwnedSkillTarget,
+    name: &str,
+    reader: R,
+) -> Result<PathBuf> {
     let name = checked_name(name)?;
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(archive_bytes)).context("open skill ZIP package")?;
+    let mut archive = zip::ZipArchive::new(reader).context("open skill ZIP package")?;
     if archive.len() > MAX_DUPLICATE_FILES + MAX_DUPLICATE_DEPTH + 1 {
         bail!("ZIP package has too many entries");
     }
@@ -524,7 +554,7 @@ pub fn install_owned_skill_zip(
         let limit = if is_entry {
             MAX_SKILL_ENTRY_BYTES
         } else {
-            MAX_DUPLICATE_COMPANION_BYTES
+            MAX_SKILL_ZIP_COMPANION_BYTES
         };
         if entry.size() > limit {
             bail!("ZIP entry exceeds its byte limit: {}", path.display());
@@ -537,8 +567,8 @@ pub fn install_owned_skill_zip(
         total = total
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| anyhow!("ZIP uncompressed size overflow"))?;
-        if total > MAX_DUPLICATE_TOTAL_BYTES {
-            bail!("ZIP package exceeds the 64 MiB uncompressed limit");
+        if total > MAX_SKILL_UNPACKED_BYTES {
+            bail!("ZIP package exceeds the 256 MiB uncompressed limit");
         }
         files.push(ArchiveFile { path, bytes });
     }
@@ -1242,6 +1272,74 @@ mod tests {
         assert!(!tmp.join("escape").exists());
         assert!(!tmp.join(".agents/skills/unsafe").exists());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_zip_file_matches_bytes_install() {
+        let tmp = std::env::temp_dir().join(format!("koma-skill-zipfile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let package = zip_package(&[
+            ("SKILL.md", b"---\ndescription: Packaged\n---\nBody\n"),
+            ("assets/data.bin", &[7u8; 1024]),
+        ]);
+        let staged = tmp.join("staged.zip");
+        std::fs::write(&staged, &package).unwrap();
+        let from_bytes =
+            install_owned_skill_zip(Some(&tmp), OwnedSkillTarget::Project, "viabytes", &package)
+                .unwrap();
+        let from_file =
+            install_owned_skill_zip_file(Some(&tmp), OwnedSkillTarget::Project, "viafile", &staged)
+                .unwrap();
+        for relative in ["SKILL.md", "assets/data.bin"] {
+            assert_eq!(
+                std::fs::read(from_bytes.parent().unwrap().join(relative)).unwrap(),
+                std::fs::read(from_file.parent().unwrap().join(relative)).unwrap()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_zip_file_rejects_over_limit() {
+        let tmp = std::env::temp_dir().join(format!("koma-skill-zipbig-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let staged = tmp.join("big.zip");
+        std::fs::File::create(&staged)
+            .unwrap()
+            .set_len(MAX_SKILL_ZIP_BYTES + 1)
+            .unwrap();
+        let err =
+            install_owned_skill_zip_file(Some(&tmp), OwnedSkillTarget::Project, "big", &staged)
+                .unwrap_err();
+        assert!(err.to_string().contains("256 MiB"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_accepts_a_companion_above_the_duplicate_cap() {
+        let tmp =
+            std::env::temp_dir().join(format!("koma-skill-zipasset-{}", uuid::Uuid::new_v4()));
+        let asset = vec![1u8; (MAX_DUPLICATE_COMPANION_BYTES + 1) as usize];
+        let package = zip_package(&[
+            ("SKILL.md", b"---\ndescription: Big asset\n---\nBody\n"),
+            ("assets/big.bin", &asset),
+        ]);
+        let installed =
+            install_owned_skill_zip(Some(&tmp), OwnedSkillTarget::Project, "bigasset", &package)
+                .unwrap();
+        assert_eq!(
+            std::fs::metadata(installed.parent().unwrap().join("assets/big.bin"))
+                .unwrap()
+                .len(),
+            asset.len() as u64
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_and_duplicate_limits_stay_split() {
+        const { assert!(MAX_SKILL_UNPACKED_BYTES >= MAX_SKILL_ZIP_BYTES) };
+        assert_eq!(MAX_DUPLICATE_TOTAL_BYTES, 64 * 1024 * 1024);
     }
 
     #[test]
