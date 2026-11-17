@@ -417,20 +417,39 @@ fn is_single_path_component(name: &str) -> bool {
     }
 }
 
-/// `CON`, `NUL`, `COM1`, and the other legacy device names. They are ordinary
-/// filenames on macOS and Linux, and unusable paths on Windows.
-#[cfg(not(windows))]
-fn is_windows_reserved_name(_name: &str) -> bool {
-    false
-}
-
-#[cfg(windows)]
-fn is_windows_reserved_name(name: &str) -> bool {
-    let base = name.split(['.', ':']).next().unwrap_or(name);
+/// `CON`, `NUL`, `COM1`, and the other legacy device names (stem before the first
+/// `.` or `:`, case-insensitive). Pure so every host can test it; callers apply it
+/// only on Windows, where these are unusable. They are ordinary names elsewhere.
+fn is_windows_reserved_name_for(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let base = lower.split(['.', ':']).next().unwrap_or("");
     matches!(base, "con" | "prn" | "aux" | "nul")
         || ((base.starts_with("com") || base.starts_with("lpt"))
             && base.len() == 4
-            && base.as_bytes()[3].is_ascii_digit())
+            && base.as_bytes().get(3).is_some_and(|b| (b'1'..=b'9').contains(b)))
+}
+
+fn is_windows_reserved_name(name: &str) -> bool {
+    cfg!(windows) && is_windows_reserved_name_for(name)
+}
+
+/// ZIP entry path check beyond `enclosed_name`: every component must be a normal
+/// name; on Windows also no `:` (drive / alternate data stream), no trailing `.` or
+/// space, and no reserved device stem.
+fn zip_entry_name_ok(path: &Path, windows: bool) -> bool {
+    path.components().all(|c| match c {
+        Component::Normal(n) => {
+            if !windows {
+                return true;
+            }
+            let s = n.to_string_lossy();
+            !s.contains(':')
+                && !s.ends_with('.')
+                && !s.ends_with(' ')
+                && !is_windows_reserved_name_for(&s)
+        }
+        _ => false,
+    })
 }
 
 fn refuse_existing(path: &Path, requested: &str) -> Result<()> {
@@ -533,6 +552,9 @@ fn install_zip_archive<R: Read + std::io::Seek>(
             .ok_or_else(|| anyhow!("ZIP contains an unsafe path"))?;
         if path.as_os_str().is_empty() {
             continue;
+        }
+        if !zip_entry_name_ok(&path, cfg!(windows)) {
+            bail!("ZIP contains an unsafe path");
         }
         if let Some(mode) = entry.unix_mode() {
             let kind = mode & 0o170000;
@@ -705,7 +727,7 @@ pub fn export_owned_skill_zip(
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
         for item in &inventory.files {
-            let name = item.relative.to_string_lossy().replace('\\', "/");
+            let name = crate::model::slash::to_slash(&item.relative.to_string_lossy(), cfg!(windows));
             writer.start_file(name, options)?;
             writer.write_all(&item.bytes)?;
         }
@@ -929,6 +951,23 @@ fn reject_unsafe_tree(path: &Path, depth: usize, files: &mut usize) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip_entry_names_are_gated_per_platform() {
+        for ok in ["a/b.md", "SKILL.md", "refs/x y.md"] {
+            assert!(zip_entry_name_ok(Path::new(ok), true), "{ok}");
+            assert!(zip_entry_name_ok(Path::new(ok), false), "{ok}");
+        }
+        for bad in ["con.txt", "a/NUL", "a:b", "x.", "d/y ", "a/com1.md", "lpt9"] {
+            assert!(!zip_entry_name_ok(Path::new(bad), true), "{bad}");
+            assert!(zip_entry_name_ok(Path::new(bad), false), "{bad}");
+        }
+        assert!(!zip_entry_name_ok(Path::new("../x"), false));
+        assert!(!zip_entry_name_ok(Path::new("/x"), false));
+        assert!(is_windows_reserved_name_for("COM1.txt"));
+        assert!(!is_windows_reserved_name_for("com0"));
+        assert!(!is_windows_reserved_name_for("console"));
+    }
 
     fn zip_package(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut cursor = Cursor::new(Vec::new());

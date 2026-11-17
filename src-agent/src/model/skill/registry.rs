@@ -118,7 +118,7 @@ impl SkillRegistry {
         }
         let relative =
             relative_companion(path).ok_or_else(|| anyhow::anyhow!("Invalid companion path"))?;
-        let normalized = relative.to_string_lossy().replace('\\', "/");
+        let normalized = crate::model::slash::to_slash(&relative.to_string_lossy(), cfg!(windows));
         if !skill.companion_files.iter().any(|file| file == &normalized) {
             anyhow::bail!("Companion file is not in the skill inventory");
         }

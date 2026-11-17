@@ -219,3 +219,61 @@ fn expand_tilde_accepts_both_separators_and_rejects_user_form() {
     assert_eq!(expand_tilde("~\\x", home).unwrap(), home.join("x"));
     assert!(expand_tilde("~user", home).is_err());
 }
+
+#[test]
+fn starts_with_fold_matrix() {
+    let base = Path::new("/h/.ssh");
+    let p = Path::new("/h/.SSH/x");
+    assert!(starts_with_fold(p, base, true));
+    assert!(!starts_with_fold(p, base, false));
+    assert!(starts_with_fold(Path::new("/h/.ssh/x"), base, false));
+    assert!(!starts_with_fold(Path::new("/h/.ss"), base, true));
+    assert!(!starts_with_fold(Path::new("/h"), base, true));
+    assert!(eq_fold(
+        Path::new("/h/.CONFIG"),
+        Path::new("/h/.config"),
+        true
+    ));
+    assert!(!eq_fold(
+        Path::new("/h/.CONFIG"),
+        Path::new("/h/.config"),
+        false
+    ));
+    assert!(!eq_fold(
+        Path::new("/h/.config/x"),
+        Path::new("/h/.config"),
+        true
+    ));
+}
+
+#[test]
+fn policy_violation_folds_case_only_when_asked() {
+    let home = PathBuf::from("/nonexistent-koma-home-r2");
+    for name in [".SSH", ".Aws", ".GnuPG", ".CONFIG"] {
+        let p = home.join(name).join("x");
+        let root = home.join(name);
+        if name == ".CONFIG" {
+            assert!(policy_violation(&root, &home, true).is_some());
+            assert!(policy_violation(&root, &home, false).is_none());
+        } else {
+            assert!(policy_violation(&p, &home, true).is_some(), "{name}");
+            assert!(policy_violation(&p, &home, false).is_none(), "{name}");
+        }
+    }
+    // Exact-case credential dir is rejected on every platform.
+    assert!(policy_violation(&home.join(".ssh/x"), &home, false).is_some());
+    assert!(policy_violation(&home.join("a/b"), &home, true).is_none());
+}
+
+#[test]
+fn parent_dir_workspace_is_rejected_without_creating_anything() {
+    let name = format!("koma-r2-escape-{}", uuid::Uuid::new_v4().simple());
+    let home = dirs::home_dir().unwrap();
+    let outside = home.parent().map(|p| p.join(&name));
+    let err = validate_workspace_dir(&format!("~/../{name}")).unwrap_err();
+    assert!(err.to_string().contains("'..'"), "{err}");
+    if let Some(o) = outside {
+        assert!(!o.exists());
+    }
+    assert!(!remove_workspace_dir(&format!("~/../{name}")));
+}

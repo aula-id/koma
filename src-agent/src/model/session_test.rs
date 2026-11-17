@@ -37,14 +37,20 @@ fn workspaces_block_two_roots() {
 }
 
 #[test]
-fn workspaces_block_normalizes_backslashes() {
+fn workspaces_block_normalizes_backslashes_on_windows_only() {
     let dirs = vec![
         PathBuf::from("C:\\Users\\dev\\a"),
         PathBuf::from("C:\\Users\\dev\\b"),
     ];
     let block = Session::format_workspaces_block(&dirs).unwrap();
-    assert!(block.contains("[0] C:/Users/dev/a  (primary)"));
-    assert!(block.contains("[1] C:/Users/dev/b"));
+    if cfg!(windows) {
+        assert!(block.contains("[0] C:/Users/dev/a  (primary)"));
+        assert!(block.contains("[1] C:/Users/dev/b"));
+    } else {
+        // Backslash is a legal file-name character on macOS/Linux: kept verbatim.
+        assert!(block.contains("[0] C:\\Users\\dev\\a  (primary)"));
+        assert!(block.contains("[1] C:\\Users\\dev\\b"));
+    }
 }
 
 #[test]

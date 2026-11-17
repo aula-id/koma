@@ -629,6 +629,27 @@ fn companion_reads_require_inventory_identity_generation_and_containment() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+#[cfg(unix)]
+#[test]
+fn backslash_companion_name_is_listed_and_readable_on_unix() {
+    let tmp = std::env::temp_dir().join(format!("koma-skill-bslash-{}", uuid::Uuid::new_v4()));
+    let project = tmp.join("project");
+    let skill_dir = project.join(".agents/skills/demo");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "---\ndescription: Demo\n---\nBody").unwrap();
+    std::fs::write(skill_dir.join("a\\b.md"), "Back").unwrap();
+    let registry = SkillRegistry::load_isolated(Some(&project), &[]);
+    let skill = registry.get("demo").unwrap();
+    assert_eq!(skill.companion_files, vec!["a\\b.md"]);
+    assert_eq!(
+        registry
+            .read_companion_text(&skill.skill_id, &skill.generation, "a\\b.md")
+            .unwrap(),
+        "Back"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── Search tests ───────────────────────────────────────────────────────────
 
 fn def(name: &str, description: &str, extra: &str) -> super::def::SkillDef {
