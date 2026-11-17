@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useKoma } from '../store/koma'
 import type { Tab } from '../store/koma'
 import { McpEditView } from './panels/mcp/McpEditView'
@@ -38,6 +38,11 @@ function EditBody({ tab }: { tab: Extract<Tab, { kind: 'mcp'; mode: 'new' | 'edi
   const server = useKoma((s) => (uuid ? s.config.mcp.find((m) => m.id === uuid) : undefined))
   const [draft, setDraft] = useState<McpDraft | null>(() => (tab.mode === 'new' ? blankDraft() : server ? toDraft(server) : null))
   const isNew = tab.mode === 'new'
+  // The sidebar switch changes `enabled` while this tab is open; follow it so Save does not revert it.
+  const savedEnabled = server?.enabled
+  useEffect(() => {
+    if (savedEnabled !== undefined) setDraft((d) => (d && d.enabled !== savedEnabled ? { ...d, enabled: savedEnabled } : d))
+  }, [savedEnabled])
   const close = () => closeTab(tab.id)
 
   if (!draft) {
