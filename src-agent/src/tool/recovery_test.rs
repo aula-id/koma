@@ -186,7 +186,8 @@ fn recovery_is_typed_bounded_and_preserved_in_output_processing() {
     assert!(first.contains("Requested path: missing/child"));
     assert!(first.contains(&format!(
         "Resolved path: {}",
-        f.root.join("missing/child").display()
+        // Joined per component: the resolver reports native separators.
+        f.root.join("missing").join("child").display()
     )));
     assert_eq!(
         first
