@@ -67,10 +67,8 @@ impl Tool for WebDownload {
             return Ok("error: save_name must not be empty".to_string());
         }
 
-        if save_name.contains('/') || save_name.contains('\\') {
-            return Ok(format!(
-                "error: save_name must not contain path separators, got: {save_name}"
-            ));
+        if let Err(msg) = check_save_name(save_name, cfg!(windows)) {
+            return Ok(msg);
         }
 
         let download_dir = match &ctx.download_dir {
@@ -160,3 +158,20 @@ impl Tool for WebDownload {
         }
     }
 }
+
+/// Validate `save_name` as a single safe file name. The error is the full
+/// tool-result string. `windows` adds the Windows-only rules.
+fn check_save_name(name: &str, windows: bool) -> Result<(), String> {
+    if name.contains('/') || name.contains('\\') {
+        return Err(format!(
+            "error: save_name must not contain path separators, got: {name}"
+        ));
+    }
+    crate::tool::winpath::safe_single_component(name, windows)
+        .map(|_| ())
+        .map_err(|e| format!("error: invalid save_name '{name}': {e}"))
+}
+
+#[cfg(test)]
+#[path = "web_download_test.rs"]
+mod tests;
