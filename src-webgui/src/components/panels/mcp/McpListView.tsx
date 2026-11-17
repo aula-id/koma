@@ -1,5 +1,6 @@
-import { Plus, FileJson, Pencil, Trash2, Check, X, RotateCw } from 'lucide-react'
+import { Plug, Plus, FileJson, Pencil, Trash2, Check, X, RotateCw } from 'lucide-react'
 import type { McpProject, McpServer } from '../../../types/config'
+import { EmptyState } from '../helpers'
 
 type Props = {
   servers: McpServer[]
@@ -181,9 +182,9 @@ export function McpListView({
     <>
       <div className="flex-1 overflow-auto py-1">
         {servers.length === 0 && projectServers.length === 0 && !project && (
-          <div className="px-3 py-6 text-center text-[12px] text-koma-fg opacity-35">
-            No MCP servers
-          </div>
+          <EmptyState icon={Plug} title="No MCP servers yet" hint="Add one with the Add server button below.">
+            MCP servers connect Koma to other tools and data, like files, a database or a web service.
+          </EmptyState>
         )}
         {servers.map(row)}
         {project && (

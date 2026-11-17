@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { ChevronRight, FilePlus, Info, Plus, Search, Sparkles, Upload, X, type LucideIcon } from 'lucide-react'
 import { useKoma, type SkillCatalogueEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { DetailHeader, Empty } from './helpers'
+import { DetailHeader, Empty, EmptyState } from './helpers'
 import { Segmented, Select } from './form'
 import { SkillDeleteConfirm } from '../SkillDeleteConfirm'
 import { SkillDuplicateDialog } from '../SkillDuplicateDialog'
@@ -448,7 +448,11 @@ export function SkillsPanel() {
       <div ref={listRef} data-tour="skills-list" role="listbox" aria-label="Skills" aria-multiselectable="true" className="min-h-0 flex-1 overflow-auto py-1" onKeyDown={onListKeyDown}>
         {loading && !skills.length ? <div className="flex justify-center py-10"><BrailleSpinner size={16} /></div>
           : error ? <Empty>{error}</Empty>
-          : !visible.length ? <Empty>{query ? `No skills match “${query}”` : filter === 'project' ? 'No project skills' : 'No global skills'}</Empty>
+          : !visible.length ? (query ? <Empty>{`No skills match “${query}”`}</Empty> : (
+            <EmptyState icon={Sparkles} title={filter === 'project' ? 'No project skills yet' : 'No global skills yet'} hint="Add one with the Add skill button below.">
+              A skill is a saved set of instructions Koma can follow, like “write release notes in our style”.
+            </EmptyState>
+          ))
           : pageRows.map((skill, offset) => {
             const index = start + offset
             const isSelected = selectedSet.has(skill.skillId)
@@ -488,7 +492,10 @@ export function SkillsPanel() {
           <button type="button" aria-label="Next page" disabled={safePage >= pageCount(visible.length, pageSize) - 1} onClick={() => setPage(safePage + 1)} className="rounded border border-koma-border px-2 py-0.5 hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent">Next</button>
         </nav>
       )}
-      <div className="flex-none border-t border-koma-border p-2"><button type="button" data-tour="skills-add" disabled={!insideProject} title={insideProject ? 'Add skill' : 'Open a project to add a skill'} onClick={() => { if (insideProject) setView('methods') }} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[11px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"><Plus size={13} /> Add skill</button></div>
+      <div className="flex-none border-t border-koma-border p-2">
+        <button type="button" data-tour="skills-add" disabled={!insideProject} aria-describedby={insideProject ? undefined : 'skills-add-reason'} title={insideProject ? 'Add skill' : 'Open a project to add a skill'} onClick={() => { if (insideProject) setView('methods') }} className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"><Plus size={14} /> Add skill</button>
+        {!insideProject && <p id="skills-add-reason" className="mt-1 px-1 text-[11px] leading-snug text-koma-fg opacity-75">Open a project first so Koma knows where to save the skill.</p>}
+      </div>
       {menu && menuSkills.length > 0 && (
         <SkillContextMenu
           state={menu}

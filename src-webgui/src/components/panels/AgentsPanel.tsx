@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Bot, Plus } from 'lucide-react'
 import { useKoma, resolveModelLabel, type AgentEntry, type CatalogueModelEntry, type CatalogueProviderEntry } from '../../store/koma'
-import { Empty } from './helpers'
+import { EmptyState } from './helpers'
 import { AccordionSection } from '../AccordionSection'
 
 // A group's rows are hidden by default once they'd otherwise drown the flat
@@ -120,7 +120,11 @@ export function AgentsPanel() {
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
       <div className="flex-1 overflow-auto py-1">
-        {agents.length === 0 && <Empty>No agents</Empty>}
+        {agents.length === 0 && (
+          <EmptyState icon={Bot} title="No agents yet" hint="Add one with the Add agent button below.">
+            Agents are helpers with their own instructions, like a code reviewer. Koma can hand work to them.
+          </EmptyState>
+        )}
         {flatAgents.map((a) => (
           <AgentRow
             key={a.name}
@@ -136,7 +140,8 @@ export function AgentsPanel() {
           return (
             <AccordionSection
               key={extId}
-              title={`${label} (${list.length})`}
+              title={label}
+              count={list.length}
               open={open}
               onToggle={() => setOpenGroups((s) => ({ ...s, [extId]: !open }))}
             >

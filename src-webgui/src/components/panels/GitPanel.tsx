@@ -24,7 +24,7 @@ import { AccordionSection } from '../AccordionSection'
 import { BranchSwitcher } from '../BranchSwitcher'
 import { GitGraphMini } from '../GitGraphMini'
 import { ConflictBanner } from '../ConflictBanner'
-import { Empty } from './helpers'
+import { Empty, EmptyState, NoProjectState } from './helpers'
 import { Select } from './form'
 import { repoOptionLabel } from './repoLabel'
 import { useKoma } from '../../store/koma'
@@ -317,7 +317,7 @@ export function GitPanel() {
   if (sessionId === null) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>Open a project to use Source Control</Empty>
+        <NoProjectState feature="Source Control" />
       </div>
     )
   }
@@ -327,7 +327,13 @@ export function GitPanel() {
   if (git.error || !git.root) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>{repos.length === 0 ? 'No repository detected in this workspace' : (git.error ?? 'Not a git repository')}</Empty>
+        {repos.length === 0 ? (
+          <EmptyState title="No Git history here">
+            This folder is not tracked by Git yet, so there are no changes to show. Ask Koma in the chat to set it up.
+          </EmptyState>
+        ) : (
+          <Empty>{git.error ?? 'Not a git repository'}</Empty>
+        )}
       </div>
     )
   }
@@ -442,7 +448,7 @@ export function GitPanel() {
         />
       </div>
       {clean ? (
-        <Empty>No changes</Empty>
+        <Empty>No changes since the last commit.</Empty>
       ) : (
         <>
           {git.conflicted.length > 0 && (
@@ -476,7 +482,7 @@ export function GitPanel() {
             }
           >
             {staged.length === 0 ? (
-              <Empty>No staged changes</Empty>
+              <Empty>Nothing staged yet. Use + on a change to stage it.</Empty>
             ) : (
               staged.map((e) => (
                 <FileRow
@@ -506,7 +512,7 @@ export function GitPanel() {
             }
           >
             {unstaged.length === 0 ? (
-              <Empty>No changes</Empty>
+              <Empty>No unstaged changes.</Empty>
             ) : (
               <>
                 {armedDiscard === DISCARD_ALL && (

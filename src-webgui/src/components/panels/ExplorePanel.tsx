@@ -228,7 +228,7 @@ export function ExplorePanel() {
             )}
           </div>
         ) : planTodos.length === 0 ? (
-          <Empty>{isPlan ? 'No todos yet' : 'No todos'}</Empty>
+          <Empty>No steps yet. Koma lists its plan here for bigger tasks.</Empty>
         ) : (
           planTodos.map((t, i) => {
             const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
@@ -244,12 +244,12 @@ export function ExplorePanel() {
         )}
       </AccordionSection>
       <AccordionSection
-        title={files.length === 0 ? 'File changed' : `File changed · ${files.length}`}
+        title={files.length === 0 ? 'Files changed' : `Files changed · ${files.length}`}
         open={open.files}
         onToggle={() => setOpen((s) => ({ ...s, files: !s.files }))}
       >
         {files.length === 0 ? (
-          <Empty>No changes</Empty>
+          <Empty>No files changed yet. Files Koma edits show up here.</Empty>
         ) : (
           files.map((f) => {
             const meta = FILE_STATUS[f.status] ?? { letter: '?', tone: 'text-koma-dim' }
@@ -276,7 +276,7 @@ export function ExplorePanel() {
         onToggle={() => setOpen((s) => ({ ...s, bash: !s.bash }))}
       >
         {bash.length === 0 ? (
-          <Empty>No bash sessions</Empty>
+          <Empty>No commands run yet.</Empty>
         ) : (
           [...bash].reverse().map((b) => {
             const jobId = Number(String(b.id).replace(/^bash-/, ''))
@@ -302,7 +302,7 @@ export function ExplorePanel() {
         onToggle={() => setOpen((s) => ({ ...s, agents: !s.agents }))}
       >
         {subagents.length === 0 ? (
-          <Empty>No agents</Empty>
+          <Empty>No agents running.</Empty>
         ) : (
           [...subagents].reverse().map((a, i) => {
             const id = a.id

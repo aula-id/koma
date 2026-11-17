@@ -394,6 +394,8 @@ describe.sequential('Skills panel browser contracts', () => {
     const add = host.querySelector<HTMLButtonElement>('[data-tour="skills-add"]')!
     expect(add.disabled).toBe(true)
     expect(add.title).toContain('Open a project')
+    expect(add.getAttribute('aria-describedby')).toBe('skills-add-reason')
+    expect(host.querySelector('#skills-add-reason')?.textContent).toBe('Open a project first so Koma knows where to save the skill.')
     add.click()
     expect(document.querySelector('[data-tour="skills-add-methods"]')).toBeNull()
     expect(req.mock.calls.some(([request]) => request.r === 'NewSession')).toBe(false)
