@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useId, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 
 /** Label above the control, optional helper line below, one field per row. */
@@ -15,14 +15,45 @@ export function FormRow({
   htmlFor?: string
   children: ReactNode
 }) {
+  const uid = useId()
+  const labelId = `${uid}-label`
+  const hintId = hint ? `${uid}-hint` : undefined
+  const errorId = error ? `${uid}-error` : undefined
+  const describedBy = [errorId, hintId].filter(Boolean).join(' ') || undefined
+  // A real input gets the helper and error text as its description; a control
+  // without an id (the segmented choice) is grouped under the label instead.
+  const control =
+    htmlFor && isValidElement<Record<string, unknown>>(children)
+      ? cloneElement(children, { 'aria-describedby': describedBy, 'aria-invalid': error ? true : undefined })
+      : children
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label htmlFor={htmlFor} className="text-[11px] font-semibold text-koma-fg opacity-75">
-        {label}
-      </label>
-      {children}
-      {error && <span className="text-[11px] text-red-400">{error}</span>}
-      {hint && <span className="text-[11px] leading-snug text-koma-fg opacity-55">{hint}</span>}
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="text-[11px] font-semibold text-koma-fg opacity-75">
+          {label}
+        </label>
+      ) : (
+        <span id={labelId} className="text-[11px] font-semibold text-koma-fg opacity-75">
+          {label}
+        </span>
+      )}
+      {htmlFor ? (
+        control
+      ) : (
+        <div role="group" aria-labelledby={labelId} aria-describedby={describedBy}>
+          {control}
+        </div>
+      )}
+      {error && (
+        <span id={errorId} className="text-[11px] text-koma-error">
+          {error}
+        </span>
+      )}
+      {hint && (
+        <span id={hintId} className="text-[11px] leading-snug text-koma-fg opacity-55">
+          {hint}
+        </span>
+      )}
     </div>
   )
 }

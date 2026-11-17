@@ -104,10 +104,12 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
           )}
           <div className="flex items-center justify-between gap-3">
             <span className="flex min-w-0 flex-col">
-              <span className="text-[11px] font-semibold text-koma-fg opacity-75">Enabled</span>
+              <span id={id('enabled')} className="text-[11px] font-semibold text-koma-fg opacity-75">
+                Enabled
+              </span>
               <span className="text-[11px] text-koma-fg opacity-55">Off keeps the server saved but unused.</span>
             </span>
-            <Toggle on={draft.enabled} onChange={(v) => onChange({ enabled: v })} />
+            <Toggle labelledBy={id('enabled')} on={draft.enabled} onChange={(v) => onChange({ enabled: v })} />
           </div>
         </div>
 

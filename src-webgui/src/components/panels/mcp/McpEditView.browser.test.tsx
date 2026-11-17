@@ -5,9 +5,9 @@ import '../../../styles.css'
 import { McpEditView } from './McpEditView'
 import { blankDraft } from './mcpForm'
 
-function mount(draft = blankDraft()) {
+function mount(draft = blankDraft(), width = 240) {
   return render(
-    <div data-testid="host" style={{ width: 240, height: 500, display: 'flex', flexDirection: 'column' }} className="bg-koma-panel">
+    <div data-testid="host" style={{ width, height: 500, display: 'flex', flexDirection: 'column' }} className="bg-koma-panel">
       <McpEditView draft={draft} isNew onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} />
     </div>,
   )
@@ -40,5 +40,20 @@ describe('McpEditView layout', () => {
     const tools = toggles().find((b) => b.textContent?.includes('Tool access'))!
     expect(tools.getAttribute('aria-expanded')).toBe('false')
     expect(tools.textContent).toContain('all allowed')
+  })
+  it('fits 400px with every group open and ties labels, hints and the switch to their controls', async () => {
+    const d = { ...blankDraft(), envText: 'A=1', toolSec: 'abc', allowedText: 'x' }
+    await mount(d, 400)
+    for (const b of toggles()) if (b.getAttribute('aria-expanded') === 'false') await userEvent.click(b)
+    const scroller = document.querySelector<HTMLElement>('.overflow-y-auto')!
+    expect(scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth)
+    expect(document.querySelectorAll('.overflow-y-auto').length).toBe(1)
+    const inputs = [...document.querySelectorAll<HTMLElement>('input, textarea')]
+    expect(inputs.length).toBeGreaterThan(4)
+    for (const el of inputs) expect(document.querySelector(`label[for="${el.id}"]`)).not.toBeNull()
+    const args = document.querySelector<HTMLElement>('textarea[placeholder^="-y"]')!
+    expect(document.getElementById(args.getAttribute('aria-describedby')!)?.textContent).toContain('One argument per line')
+    expect(document.querySelector('[role="switch"]')?.getAttribute('aria-labelledby')).toBeTruthy()
+    expect(document.activeElement?.getAttribute('placeholder')).toBe('e.g. filesystem')
   })
 })

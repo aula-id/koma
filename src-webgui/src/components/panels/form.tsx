@@ -47,10 +47,21 @@ export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   )
 }
 
-export function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+export function Toggle({
+  on,
+  onChange,
+  labelledBy,
+}: {
+  on: boolean
+  onChange: (v: boolean) => void
+  labelledBy?: string
+}) {
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={on}
+      aria-labelledby={labelledBy}
       onClick={() => onChange(!on)}
       className={`relative h-4 w-7 flex-none rounded-full transition-colors ${on ? 'bg-emerald-500/70' : 'bg-koma-grip'}`}
     >
