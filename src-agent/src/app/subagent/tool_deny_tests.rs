@@ -136,6 +136,7 @@ fn run_agent(tool: &str) -> (Vec<AgentEvent>, Vec<String>) {
         .unwrap();
     let (tx, mut rx) = unbounded_channel();
     let (_inject_tx, inject_rx) = unbounded_channel();
+    let (_approval_tx, approval_rx) = unbounded_channel();
     let mut convo = crate::model::conversation::Conversation::new("You are a test agent.");
     convo.push_user("call the tool");
     runtime.block_on(run_agent_loop(
@@ -155,6 +156,8 @@ fn run_agent(tool: &str) -> (Vec<AgentEvent>, Vec<String>) {
         1,
         None,
         false,
+        crate::model::app_config::SubagentRisky::default(),
+        approval_rx,
     ));
     let mut events = Vec::new();
     while let Ok(e) = rx.try_recv() {

@@ -1,0 +1,53 @@
+---
+title: config.subagent_risky.set
+description: Choose what a sub-agent's risky tool call goes through.
+method: config.subagent_risky.set
+---
+
+# config.subagent_risky.set
+
+Choose what a sub-agent's risky tool call goes through before it runs. A risky call is a call to `write`, `edit`, `delete`, `bash`, `git_operator`, `web_download`, `browser_tabs`, `browser_interact` or `browser_evaluate`, and, under `parent` and `deny` only, a `git_worktree` call with `action: "remove"`. These are the tools the coding session itself asks its owner about in Normal mode. MCP and extension tool calls are not gated by this policy, and neither are sub-agent tools that write small state of their own, such as `checklist`, `todo`, `remember`, `forget` and `git_cred`.
+
+Check that `config.subagent_risky.set` is in the hello `methods` first. An adapter without it answers `unsupported_method`.
+
+Send `mode`:
+
+- `classifier` is the default. The tool-call classifier decides and no human is asked. An unavailable classifier blocks the call.
+- `parent` parks the call on the parent session's approval prompt. It runs only after the owner approves it.
+- `deny` refuses the call without running it and without asking anyone.
+
+`if_revision` is optional and fails with `stale` when `config.json` has changed since that revision.
+
+```json
+{
+  "id": "13",
+  "method": "config.subagent_risky.set",
+  "params": { "mode": "parent" }
+}
+```
+
+The result has `changed`, `mode`, the fresh global `config` view and `propagation`. `changed` is false, and nothing is written, when the stored mode already matches. Only the `subagent_risky` key of `config.json` changes, under the SDK config lock, so a key another writer saved is kept. Sub-agents started after the daemon has loaded the new value use it. A sub-agent that is already running keeps the mode it started with, so set the mode before any session starts.
+
+## Answering a parked call
+
+Under `parent`, the parked call shows on the parent session as an ordinary tool approval. `state.awaiting_approval` is true, and `state.pending_approval` and `state.gate` are set. `approval_reason` starts with `sub-agent #<n> (<agent>) wants to run <tool>:` and then the first 200 characters of the arguments. The `call_id` is `subagent-<n>:<id>`, so it never collides with a call of the session itself.
+
+Answer it with [`approve`](/sdk/reference/approve), as for any tool approval. `approve: true` lets that one call run. `approve: false` refuses that call only, and the sub-agent and the session's turn carry on. The session's own parked call is shown and answered first. With several sub-agents parked, the lowest sub-agent id comes first.
+
+A session created with `policy.approval: "reject"` refuses the call at once and nothing parks. With no client attached, a parked sub-agent call is refused after the same timeout as the session's own parked calls. The plan restriction of the parent still applies after an approval, so approving never lets a sub-agent write in Plan mode.
+
+The default leaves `config.json` byte-identical to one that never had the key. A `config.json` that holds any other value, a non-string included, reads as `deny`. A missing `mode` is `missing_params`, and any other value is `out_of_range`.
+
+## Python
+
+```python
+result = await host.config_subagent_risky_set("parent")
+print(result.changed, result.mode)
+```
+
+## TypeScript
+
+```ts
+const result = await host.setSubagentRisky({ mode: 'parent' });
+console.log(result.changed, result.mode);
+```

@@ -34,7 +34,7 @@ MODEL_ID = 'smoke-model'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 # Port 9 (discard) on loopback: connections are refused and never leave the machine.
 CLOSED = 'http://127.0.0.1:9'
 # Hosts of koma's public catalogues; the daemon's log must never name them.
@@ -297,6 +297,22 @@ def run_unbound(adapter):
     cleared = adapter.result('config.tool_policy.set', deny=[])
     expect(cleared['changed'] is True and cleared['deny'] == [], f'deny list cleared: {cleared}')
     step('7c config.tool_policy.set: stored, idempotent, a bad pattern refused, cleared')
+
+    before = global_view(adapter)['revision']
+    result = adapter.result('config.subagent_risky.set', mode='parent')
+    expect(result['changed'] is True and result['mode'] == 'parent', f'mode stored: {result}')
+    expect(result['config']['revision'] != before, 'setting the mode changes config.json')
+    kept = global_view(adapter)
+    expect(any(p['name'] == PROVIDER for p in kept['providers']), 'the provider survives a mode write')
+    again = adapter.result('config.subagent_risky.set', mode='parent')
+    expect(again['changed'] is False and again['config']['revision'] == result['config']['revision'],
+           f'the same mode writes nothing: {again}')
+    error = adapter.error('config.subagent_risky.set', mode='allow')
+    expect((error['code'], error.get('reason'), error['delivery']) == ('invalid_request', 'out_of_range', 'not_sent'),
+           f'an unknown mode is refused: {error}')
+    reset = adapter.result('config.subagent_risky.set', mode='classifier')
+    expect(reset['changed'] is True and reset['mode'] == 'classifier', f'mode reset: {reset}')
+    step('7d config.subagent_risky.set: stored, idempotent, an unknown mode refused, reset')
     root = os.path.realpath(short_temp_dir())
     try:
         before = global_view(adapter)['revision']

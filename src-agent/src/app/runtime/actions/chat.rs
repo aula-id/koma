@@ -528,6 +528,11 @@ pub(super) fn handle_approve_tool(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    // A sub-agent's parked call (`subagent_risky = parent`) is answered here
+    // when the session has no call of its own waiting.
+    if state.rest.fg_mut().answer_subagent_approval(true, "") {
+        return Ok(());
+    }
     anyhow::ensure!(
         state.rest.fg().awaiting_approval,
         "no tool call awaiting approval"
@@ -648,6 +653,11 @@ pub(super) fn handle_approve_tool(
 /// Handle `Action::DenyTool`: answer every pending call with "denied by user",
 /// commit, and stop — do not re-stream.
 pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
+    // Denying a sub-agent's parked call refuses that call only; the turn and
+    // the sub-agent carry on.
+    if state.rest.fg_mut().answer_subagent_approval(false, "denied by user") {
+        return Ok(());
+    }
     // Mirror ApproveTool: do not let DenyTool short-circuit a parked plan/mission
     // decision (that would halt the turn instead of "chat more" via DenyPlan).
     if super::plan_decision::is_pending_plan_or_mission_ready(state) {

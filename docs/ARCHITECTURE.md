@@ -184,6 +184,8 @@ pub trait Tool: Send + Sync {
 | `graph_query` | `tool/graph.rs` | Import graph (when enabled) |
 | … | `tool/mod.rs` `all_tools()` | Canonical registry |
 
+**Sub-agent risky calls.** A sub-agent has no human of its own. `subagent_risky` in `config.json` (`classifier` by default, or `parent`, or `deny`) decides what its risky tool calls (`tool::tool_is_risky`) go through: the tool-call classifier, the parent session's approval prompt, or a refusal. The one gate is `risky_gate` in `app/subagent/engine.rs`; a sub-agent only runs structured tool calls, so text markup in its reply never reaches it. Under `parent` the call is announced as `AgentEvent::ApprovalRequest`, kept on the `SubAgent`, and projected onto the session's `awaiting_approval` snapshot as `subagent-<id>:<call id>`; `ApproveTool` and `DenyTool` answer it down the sub-agent's approval channel. The SDK sets it with `config.subagent_risky.set`.
+
 Paths: there is **no** `tool/fs.rs` — use `tool/fs/{read,write,edit,delete,dirlist,mod}.rs`.
 
 

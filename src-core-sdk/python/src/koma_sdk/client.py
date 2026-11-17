@@ -18,7 +18,7 @@ from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseRes
 from .types import (ApprovalResult, Attachment, Binary, DetachResult, Hello, Policy,
                     ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy,
                     ConfigView, EffortOptions, EffortResult, Limits, ModelDeleteResult, ProviderDeleteResult,
-                    PublicRole, RoleUnassignResult, ToolPolicyResult, SkillRootsResult, SessionInfo, CreateWarning, _create_warnings,
+                    PublicRole, RoleUnassignResult, SubagentRiskyResult, ToolPolicyResult, SkillRootsResult, SessionInfo, CreateWarning, _create_warnings,
                     SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SessionTranscript,
                     SkillDetail,
                     SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult, UsageReport)
@@ -42,6 +42,14 @@ def _tool_policy_params(deny: Sequence[str], if_revision: str | None) -> dict[st
         params["if_revision"] = if_revision
     return params
 
+
+def _subagent_risky_params(mode: str, if_revision: str | None) -> dict[str, Any]:
+    if not isinstance(mode, str):
+        raise TypeError("mode must be 'classifier', 'parent' or 'deny'")
+    params: dict[str, Any] = {"mode": mode}
+    if if_revision is not None:
+        params["if_revision"] = if_revision
+    return params
 
 def _skill_roots_params(roots: Sequence[str], if_revision: str | None) -> dict[str, Any]:
     if isinstance(roots, str) or not all(isinstance(root, str) for root in roots):
@@ -284,6 +292,7 @@ _RESULTS: dict[str, Any] = {
     "config.models.delete": ModelDeleteResult.from_wire,
     "config.roles.unassign": RoleUnassignResult.from_wire,
     "config.tool_policy.set": ToolPolicyResult.from_wire,
+    "config.subagent_risky.set": SubagentRiskyResult.from_wire,
     "config.skill_roots.set": SkillRootsResult.from_wire,
     "config.effort.get": EffortOptions.from_wire,
     "config.effort.set": EffortResult.from_wire,
@@ -628,6 +637,16 @@ class Host(HostCalls):
         return ToolPolicyResult.from_wire(
             await self._call("config.tool_policy.set", _tool_policy_params(deny, if_revision), mutation=True))
 
+    async def config_subagent_risky_set(self, mode: str, *,
+                                        if_revision: str | None = None) -> SubagentRiskyResult:
+        """Choose what a sub-agent's risky tool call (write, edit, delete, bash and the like) goes through:
+        `"classifier"` (the default), `"parent"` (the call parks on the parent session's approval, answered with
+        `approve`) or `"deny"` (refused). Only that key of config.json changes. Sub-agents started after the
+        daemon has loaded the new value use it."""
+        return SubagentRiskyResult.from_wire(
+            await self._call("config.subagent_risky.set", _subagent_risky_params(mode, if_revision),
+                             mutation=True))
+
     async def config_skill_roots_set(self, roots: Sequence[str], *,
                                      if_revision: str | None = None) -> SkillRootsResult:
         """Replace the external skill roots with `roots` (absolute paths of existing directories; `[]`
@@ -767,6 +786,14 @@ class Session(HostCalls):
                                      mutation=True)
         self._apply_info(result)
         return ToolPolicyResult.from_wire(result)
+
+    async def config_subagent_risky_set(self, mode: str, *,
+                                        if_revision: str | None = None) -> SubagentRiskyResult:
+        """Set the sub-agent risky-tool mode, as `Host.config_subagent_risky_set` does."""
+        result = await self._request("config.subagent_risky.set", _subagent_risky_params(mode, if_revision),
+                                     mutation=True)
+        self._apply_info(result)
+        return SubagentRiskyResult.from_wire(result)
 
     async def config_skill_roots_set(self, roots: Sequence[str], *,
                                      if_revision: str | None = None) -> SkillRootsResult:

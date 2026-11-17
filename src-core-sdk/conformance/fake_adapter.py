@@ -18,7 +18,7 @@ MAX_LINE = 40 * 1024 * 1024
 V1_METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt',
               'interrupt_and_submit', 'approve', 'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
                    'sessions.transcript']
 SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
@@ -126,6 +126,7 @@ else:
 effort_ready = set()
 tool_deny = []
 skill_roots = []
+subagent_risky = ['classifier']
 info_clock = 0
 
 def event():
@@ -157,6 +158,8 @@ def revision():
         document['tool_policy'] = dict(deny=tool_deny)
     if skill_roots:
         document['skill_roots'] = skill_roots
+    if subagent_risky[0] != 'classifier':
+        document['subagent_risky'] = subagent_risky[0]
     raw = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -471,6 +474,30 @@ def tool_policy_set(rid, params):
     return response(rid, with_info(dict(changed=True, deny=stored, config=config_view('global'),
                                          propagation=propagation)))
 
+def subagent_risky_set(rid, params):
+    if 'mode' not in params:
+        return invalid(rid, 'missing_params', 'mode is required')
+    mode = params['mode']
+    if mode not in ('classifier', 'parent', 'deny'):
+        return invalid(rid, 'out_of_range', 'mode must be classifier, parent or deny')
+    error = check_common(rid, params)
+    if error:
+        return error
+    error = check_stale(rid, params)
+    if error:
+        return error
+    if mode == subagent_risky[0]:
+        return response(rid, with_info(dict(changed=False, mode=mode, config=config_view('global'),
+                                             propagation={})))
+    subagent_risky[0] = mode
+    catalogue['file'] = 'ok'
+    if session is not None:
+        touch()
+    propagation = dict(bound='reloaded' if binding == 'coding' else 'not_bound', broadcast='sent',
+                       rebind='not_needed', rooms='next_start')
+    return response(rid, with_info(dict(changed=True, mode=mode, config=config_view('global'),
+                                         propagation=propagation)))
+
 def skill_roots_set(rid, params):
     if 'roots' not in params:
         return invalid(rid, 'missing_params', 'roots is required')
@@ -573,6 +600,8 @@ def config_call(rid, method, params):
         return roles_unassign(rid, params)
     if method == 'config.tool_policy.set':
         return tool_policy_set(rid, params)
+    if method == 'config.subagent_risky.set':
+        return subagent_risky_set(rid, params)
     if method == 'config.skill_roots.set':
         return skill_roots_set(rid, params)
     denied = binding_denial(rid, method, params)

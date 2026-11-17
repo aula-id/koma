@@ -239,6 +239,7 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
     // every key to the daemon, which owns the real loop + injection channel), so
     // this sender is never drained — present only to satisfy the field's type.
     let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (approval_tx, _approval_rx) = tokio::sync::mpsc::unbounded_channel();
     // Re-attach the display-only reasoning the wire carried out-of-band:
     // `ChatMessage::reasoning` is `#[serde(skip)]`, so every deserialised message
     // arrives with `reasoning: None`. The side-channel is index-aligned with
@@ -261,6 +262,8 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         abort,
         rx,
         inject_tx,
+        approval_tx,
+        pending_approval: None,
         transcript: sa.transcript.clone(),
         messages,
         // Carry the projected live in-progress report text so the full-screen

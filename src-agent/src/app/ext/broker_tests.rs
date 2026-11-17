@@ -437,6 +437,7 @@ fn inert_subagent(
     // A live injection sender the test can observe as "sent" for a Running
     // fixture; its receiver is dropped, so the send is a harmless no-op.
     let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (approval_tx, _approval_rx) = tokio::sync::mpsc::unbounded_channel();
     SubAgent {
         id,
         agent_name: agent_name.to_string(),
@@ -446,6 +447,8 @@ fn inert_subagent(
         abort,
         rx,
         inject_tx,
+        approval_tx,
+        pending_approval: None,
         transcript: Vec::new(),
         messages: Vec::new(),
         live_text: String::new(),

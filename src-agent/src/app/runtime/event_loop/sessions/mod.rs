@@ -8,6 +8,8 @@
 mod deferred;
 mod streaming;
 mod subagents;
+#[cfg(test)]
+mod subagent_approval_tests;
 
 use std::sync::Arc;
 

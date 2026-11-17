@@ -695,6 +695,58 @@ pub struct CascadePurge {
     pub main_reset: bool,
 }
 
+/// What a sub-agent's risky tool call (write, edit, delete, bash and the other
+/// tools in [`crate::tool::tool_is_risky`]) goes through before it runs.
+///
+/// - `Classifier` (default): the tool-call classifier decides, no human is asked.
+/// - `Parent`: the call parks on the parent session's approval prompt and runs
+///   only after the owner approves it.
+/// - `Deny`: the call is refused without running.
+///
+/// An unknown or non-string value in `config.json` reads as `Deny`, so a typo
+/// closes the gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubagentRisky {
+    #[default]
+    Classifier,
+    Parent,
+    Deny,
+}
+
+impl SubagentRisky {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Classifier
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "classifier" => Some(Self::Classifier),
+            "parent" => Some(Self::Parent),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Classifier => "classifier",
+            Self::Parent => "parent",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SubagentRisky {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(value
+            .as_str()
+            .and_then(Self::parse)
+            .unwrap_or(Self::Deny))
+    }
+}
+
 /// `tool_policy` in `config.json`: tool names and globs that never run.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicy {
@@ -772,6 +824,10 @@ pub struct AppConfig {
     /// remain in config so Settings can explain the problem.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_skill_roots: Vec<std::path::PathBuf>,
+    /// How a sub-agent's risky tool call is gated. Absent from the file while
+    /// it is the default, so an unchanged install keeps a byte-identical config.
+    #[serde(default, skip_serializing_if = "SubagentRisky::is_default")]
+    pub subagent_risky: SubagentRisky,
     /// The hard tool deny list (see `tool::policy`). Absent from the file while
     /// empty, so an unchanged install keeps a byte-identical config.
     #[serde(default, skip_serializing_if = "ToolPolicy::is_empty")]
@@ -814,6 +870,7 @@ impl Default for AppConfig {
             installed_extensions: Vec::new(),
             ext_preferred_models: std::collections::BTreeMap::new(),
             extra_skill_roots: Vec::new(),
+            subagent_risky: SubagentRisky::default(),
             tool_policy: ToolPolicy::default(),
             kept_unreadable: Vec::new(),
         }

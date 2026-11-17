@@ -11,7 +11,7 @@ const MAX_EVENTS_BYTES = 64 * 1024 * 1024;
 /** Per-process request cap of adapters that do not advertise `limits.request_ids`. */
 export const DEFAULT_REQUEST_IDS = 65_536;
 const mutations = new Set<Method>(['create', 'resume', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure',
-  'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.set', 'config.limits.set',
+  'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.set', 'config.limits.set',
   'sessions.rename', 'sessions.delete', 'sessions.stop', 'skills.install', 'skills.remove', 'skills.create', 'skills.update',
   'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control',
   'room.models.set', 'room.avatars.upsert', 'room.avatars.remove']);
