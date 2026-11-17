@@ -332,7 +332,7 @@ function TreeNode({
             {/* Idle: max-w-0 so actions take no flex width (no premature ellipsis).
                 Hover: expand and show. opacity alone would still reserve space. */}
             {!draft ? (
-              <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[168px] group-hover:opacity-100">
+              <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[168px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[168px] group-has-[:focus-visible]:opacity-100">
                 {entry.isDir && (
                   <>
                     <IconBtn label="New file" onClick={() => onStartCreate(entry.path, 'file')}>

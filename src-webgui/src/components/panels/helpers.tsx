@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useKoma } from '../../store/koma'
-import { Plus, Pencil, Trash2, Check, X, ChevronLeft } from 'lucide-react'
+import { Plus, Pencil, Trash2, Check, X, ChevronLeft, FolderOpen, Settings, type LucideIcon } from 'lucide-react'
 
 // Shared presentational atoms for sidebar CRUD panels.
 
@@ -25,7 +25,7 @@ export function IconBtn({
       aria-label={label}
       title={label}
       className={`flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg transition ${
-        faded ? 'opacity-0 group-hover:opacity-60' : 'opacity-70'
+        faded ? 'opacity-0 group-hover:opacity-60 group-has-[:focus-visible]:opacity-60 focus-visible:!opacity-100' : 'opacity-70'
       } hover:!opacity-100 ${hover}`}
     >
       {children}
@@ -73,8 +73,10 @@ export function Row({ leading, title, subtitle, right, confirmLabel, armed, onEd
       {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
           Hover: expand and show. opacity alone would still reserve space. */}
       <div
-        className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 ${
-          onEdit ? 'group-hover:max-w-[44px]' : 'group-hover:max-w-[20px]'
+        className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 ${
+          onEdit
+            ? 'group-hover:max-w-[44px] group-has-[:focus-visible]:max-w-[44px]'
+            : 'group-hover:max-w-[20px] group-has-[:focus-visible]:max-w-[20px]'
         }`}
       >
         {onEdit && (
@@ -91,7 +93,106 @@ export function Row({ leading, title, subtitle, right, confirmLabel, armed, onEd
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="px-5 py-1.5 text-[12px] text-koma-fg opacity-35">{children}</div>
+  return <div className="px-5 py-2 text-[12px] leading-snug text-koma-fg opacity-75">{children}</div>
+}
+
+export type EmptyAction = {
+  /** Sentence case, one verb, no trailing full stop, max 24 chars. */
+  label: string
+  onClick: () => void
+  icon?: ReactNode
+  disabled?: boolean
+  /** Shown as visible text under the button and linked via aria-describedby. */
+  disabledReason?: string
+}
+
+const emptyBtn =
+  'flex min-h-[28px] w-full items-center justify-center gap-1.5 rounded px-3 py-1.5 text-center text-[12px] leading-tight focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-koma-accent disabled:cursor-not-allowed disabled:opacity-50'
+
+// Welcome view for a panel (or a panel's first-run state) with nothing in it.
+// At most one primary and one secondary action. A single empty section of an
+// otherwise populated panel uses the quiet one-line `Empty` instead.
+export function EmptyState({
+  icon: Icon,
+  title,
+  children,
+  primary,
+  secondary,
+  hint,
+  footer,
+}: {
+  icon?: LucideIcon
+  title: string
+  children: ReactNode
+  primary?: EmptyAction
+  secondary?: EmptyAction
+  hint?: ReactNode
+  footer?: ReactNode
+}) {
+  const id = useId()
+  const button = (a: EmptyAction, kind: 'primary' | 'secondary', suffix: string) => {
+    const reasonId = `${id}-${suffix}`
+    const showReason = a.disabled && a.disabledReason
+    return (
+      <>
+        <button
+          type="button"
+          onClick={a.onClick}
+          disabled={a.disabled}
+          aria-describedby={showReason ? reasonId : undefined}
+          className={`${emptyBtn} ${
+            kind === 'primary'
+              ? 'bg-koma-accent font-medium text-koma-bg hover:opacity-90'
+              : 'border border-koma-border text-koma-fg opacity-90 hover:bg-koma-hover hover:opacity-100'
+          }`}
+        >
+          {a.icon ?? (kind === 'primary' ? <Plus size={14} /> : null)}
+          {a.label}
+        </button>
+        {showReason && (
+          <p id={reasonId} className="text-[11px] leading-snug text-koma-fg opacity-75">
+            {a.disabledReason}
+          </p>
+        )}
+      </>
+    )
+  }
+  return (
+    <div role="region" aria-label={title} className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+      {Icon && <Icon size={24} strokeWidth={1.5} aria-hidden className="mb-1 text-koma-dim" />}
+      <div className="text-[13px] font-semibold text-koma-fg">{title}</div>
+      <p className="text-[12px] leading-snug text-koma-fg opacity-75 [overflow-wrap:anywhere]">{children}</p>
+      {(primary || secondary) && (
+        <div className="mt-1 flex w-full max-w-[260px] flex-col gap-1.5">
+          {primary && button(primary, 'primary', 'p')}
+          {secondary && button(secondary, 'secondary', 's')}
+        </div>
+      )}
+      {hint && <div className="text-[11px] leading-snug text-koma-fg opacity-75">{hint}</div>}
+      {footer}
+    </div>
+  )
+}
+
+export function NoWorkspaceState() {
+  const openSettingsTab = useKoma((s) => s.openSettingsTab)
+  return (
+    <EmptyState
+      icon={FolderOpen}
+      title="No project folder"
+      primary={{ label: 'Open Settings', icon: <Settings size={14} />, onClick: () => openSettingsTab() }}
+    >
+      Koma works inside a folder on your computer. Add one under Working directories in Settings (Session section).
+    </EmptyState>
+  )
+}
+
+export function NoProjectState({ feature }: { feature: string }) {
+  return (
+    <EmptyState icon={FolderOpen} title="No project open">
+      Open a project from the start screen to use {feature}.
+    </EmptyState>
+  )
 }
 
 // Compact rounded scope badge (replaces literal "[glob]"/"[local]" text) —
@@ -112,25 +213,34 @@ export function ScopePill({ scope }: { scope: 'global' | 'local' }) {
   )
 }
 
+// `text` is the visible word next to the plus; it must be the start of `label`
+// (label-in-name). The word hides below 200px via the `@container` that
+// AccordionSection puts on its header, so only use `text` in its action slot.
 export function AddBtn({
   onClick,
   label,
+  text,
   tourId,
 }: {
   onClick: () => void
   label: string
+  text?: string
   /** Stable driver.js / tutorial target (always discoverable; not hover-gated). */
   tourId?: string
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={label}
       aria-label={label}
       data-tour={tourId}
-      className="flex h-5 w-5 items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+      className={`flex h-6 flex-none items-center justify-center gap-1 rounded text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-koma-accent ${
+        text ? 'px-1.5 text-[11px] font-medium normal-case tracking-normal' : 'w-6'
+      }`}
     >
       <Plus size={14} />
+      {text ? <span className="hidden @[200px]:inline">{text}</span> : null}
     </button>
   )
 }
@@ -253,8 +363,8 @@ export function InlineNameInput({
 export function WelcomeLink({ which }: { which: 'diagram' | 'design' }) {
   const open = useKoma((s) => s.openWelcomeTab)
   return (
-    <button type="button" onClick={() => open(which)} className="px-5 py-1 text-[12px] text-koma-accent hover:underline">
-      Open welcome
+    <button type="button" onClick={() => open(which)} className="self-center px-5 py-1 text-[12px] text-koma-accent hover:underline">
+      See how it works
     </button>
   )
 }

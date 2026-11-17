@@ -142,7 +142,7 @@ export function McpListView({
             )}
             {/* Idle: max-w-0 so actions take no flex width (no permanent empty gutter).
                     Hover: expand and show. opacity alone would still reserve space. */}
-            <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[66px] group-hover:opacity-100">
+            <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[66px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[66px] group-has-[:focus-visible]:opacity-100">
               {s.enabled && (
                 <button
                   onClick={() => onRestart(s.id)}

@@ -242,7 +242,7 @@ export function DiagramPanel() {
                           <File size={13} className="flex-none opacity-70" />
                           <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                         </button>
-                        <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100">
+                        <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[56px] group-has-[:focus-visible]:opacity-100">
                           <IconBtn label="Rename" onClick={() => { setRenaming(entry.path); setCreating(false); setDeleting(null) }}>
                             <Pencil size={12} />
                           </IconBtn>

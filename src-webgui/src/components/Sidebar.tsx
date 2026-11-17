@@ -42,6 +42,21 @@ const TITLES: Record<SidebarView, string> = {
 }
 
 // Sidebar shell: header + the active view's panel. Width from RootLayout state.
+function HeaderRefresh({ label, busy, onClick }: { label: string; busy?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title={label}
+      aria-label={label}
+      className="flex h-6 w-6 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-koma-accent disabled:cursor-wait"
+    >
+      {busy ? <BrailleSpinner size={14} /> : <RefreshCw size={14} />}
+    </button>
+  )
+}
+
 export function Sidebar({ width, view }: SidebarProps) {
   const usageScope = useKoma((s) => s.ui.usageScope)
   const setUsageScope = useKoma((s) => s.setUsageScope)
@@ -79,7 +94,7 @@ export function Sidebar({ width, view }: SidebarProps) {
       className="flex min-w-0 flex-none flex-col overflow-hidden border-r border-koma-border bg-koma-panel"
     >
       <div className="flex h-[35px] flex-none items-center justify-between gap-2 px-5 text-[11px] uppercase tracking-wider text-koma-fg whitespace-nowrap">
-        <span className="opacity-60">{TITLES[view]}</span>
+        <span className="opacity-80">{TITLES[view]}</span>
         {view === 'usage' && (
           <div className="flex items-center gap-1.5 normal-case tracking-normal">
             {hasSession && (
@@ -92,64 +107,20 @@ export function Sidebar({ width, view }: SidebarProps) {
                 onChange={setUsageScope}
               />
             )}
-            <button
-              type="button"
-              onClick={refreshUsagePreview}
-              disabled={usagePreviewBusy}
-              title="Refresh"
-              aria-label="Refresh usage"
-              className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
-            >
-              {usagePreviewBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
-            </button>
+            <HeaderRefresh label="Refresh usage" onClick={refreshUsagePreview} busy={usagePreviewBusy} />
           </div>
         )}
         {view === 'git' && (
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={refreshing}
-            title="Refresh"
-            aria-label="Refresh source control"
-            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
-          >
-            {refreshing ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
-          </button>
+          <HeaderRefresh label="Refresh source control" onClick={handleRefresh} busy={refreshing} />
         )}
         {view === 'mcp' && (
-          <button
-            type="button"
-            onClick={refreshMcpStatus}
-            disabled={mcpStatusBusy}
-            title="Refresh"
-            aria-label="Refresh MCP status"
-            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
-          >
-            {mcpStatusBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
-          </button>
+          <HeaderRefresh label="Refresh MCP status" onClick={refreshMcpStatus} busy={mcpStatusBusy} />
         )}
         {view === 'skills' && (
-          <button
-            type="button"
-            onClick={refreshSkills}
-            disabled={skillsLoading}
-            title="Rescan skill locations"
-            aria-label="Rescan skill locations"
-            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
-          >
-            {skillsLoading ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
-          </button>
+          <HeaderRefresh label="Rescan skill locations" onClick={refreshSkills} busy={skillsLoading} />
         )}
         {view === 'importGraph' && (
-          <button
-            type="button"
-            onClick={() => refreshImportGraph()}
-            title="Refresh"
-            aria-label="Refresh import graph"
-            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
-          >
-            <RefreshCw size={12} />
-          </button>
+          <HeaderRefresh label="Refresh import graph" onClick={() => refreshImportGraph()} />
         )}
       </div>
       <div className="relative min-h-0 flex-1">

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 
 type AccordionSectionProps = {
@@ -13,24 +13,31 @@ type AccordionSectionProps = {
   shrink?: boolean
   /** Smallest height (px) an open filling section keeps, so a shrinking sibling cannot squeeze it out. */
   minHeight?: number
+  /** Shown after the title. Pass only when greater than 0: never display "0". */
+  count?: number
 }
 
-// VSCode-style collapsible section. `action` (e.g. a + button) shows on hover.
+// VSCode-style collapsible section. `action` (e.g. a + button) is always shown
+// at 70% and 100% on header hover. The header is an @container so actions can
+// drop their text label when the sidebar is narrow (see AddBtn).
 // An OPEN section FLEX-FILLS the remaining panel height (`flex-1 min-h-0`) and
 // scrolls its body internally, so there's no dead gap below the last section
 // and a long list never shoves the other headers out of view. A CLOSED section
 // collapses to just its header (`flex-none`). Requires the parent to be a flex
 // column with `min-h-0` (see ExplorePanel/ConnectorListView).
-export function AccordionSection({ title, open, onToggle, action, children, fill = true, shrink = false, minHeight }: AccordionSectionProps) {
+export function AccordionSection({ title, open, onToggle, action, children, fill = true, shrink = false, minHeight, count }: AccordionSectionProps) {
+  const bodyId = useId()
   const body = fill ? 'min-h-0 flex-1 overflow-y-auto pb-1' : shrink ? 'min-h-0 overflow-y-auto pb-1' : 'pb-1'
   return (
     <div
       className={`flex flex-col ${open ? (fill ? 'min-h-0 flex-1' : shrink ? 'min-h-0 flex-initial' : 'flex-none') : 'flex-none'}`}
       style={open && fill && minHeight ? { minHeight } : undefined}
     >
-      <div className="group flex h-[22px] flex-none items-center bg-koma-head pr-1 hover:bg-koma-hover">
+      <div className="group @container flex h-[24px] flex-none items-center bg-koma-head pr-1 hover:bg-koma-hover">
         <button
           onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={open ? bodyId : undefined}
           className="flex h-full flex-1 items-center gap-1 px-2 text-[11px] font-semibold uppercase text-koma-fg opacity-75 hover:opacity-100"
         >
           <ChevronRight
@@ -39,12 +46,13 @@ export function AccordionSection({ title, open, onToggle, action, children, fill
             className={`transition-transform ${open ? 'rotate-90' : ''}`}
           />
           <span className="truncate">{title}</span>
+          {count !== undefined && <span className="ml-1 flex-none font-normal normal-case opacity-75">{count}</span>}
         </button>
         {action && (
           <div className="flex items-center opacity-70 group-hover:opacity-100">{action}</div>
         )}
       </div>
-      {open && <div className={body}>{children}</div>}
+      {open && <div id={bodyId} className={body}>{children}</div>}
     </div>
   )
 }

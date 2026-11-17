@@ -85,7 +85,7 @@ function OAuthConnRow({
       </span>
       {/* Idle: max-w-0 so the trash takes no flex width. opacity alone would
           still reserve a permanent empty gutter on the right. */}
-      <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[20px] group-hover:opacity-100">
+      <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[20px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[20px] group-has-[:focus-visible]:opacity-100">
         <button
           onClick={onArm}
           aria-label="Disconnect"

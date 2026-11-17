@@ -239,10 +239,10 @@ function FileRow({
       {/* Idle: max-w-0 so actions take no flex width. Hover expands for icons. */}
       {actionCount > 0 && (
         <div
-          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 ${
             actionCount >= 2
-              ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]'
-              : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+              ? 'group-hover:max-w-[40px] group-has-[:focus-visible]:max-w-[40px]'
+              : 'group-hover:max-w-[20px] group-has-[:focus-visible]:max-w-[20px]'
           }`}
         >
           {onDiscard && (
