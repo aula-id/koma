@@ -77,7 +77,7 @@ export function BottomPanel() {
     return () => { document.body.style.cursor = cursor; document.body.style.userSelect = userSelect }
   }, [resizing])
   const close = () => {
-    setTab(null)
+    setTab(null); setMaximized(false)
     if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true })
   }
 
