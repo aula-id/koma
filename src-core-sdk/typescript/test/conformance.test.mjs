@@ -175,7 +175,7 @@ function noSecrets(value) { const text = JSON.stringify(value); for (const s of 
 const SILENT = `import json,sys
 v1=['create','resume','state','submit','enqueue','interrupt','interrupt_and_submit','approve','configure','detach']
 print(json.dumps(dict(type='hello',protocol=1,binary=dict(path='/silent',version='0'),diagnostics=[],capabilities=v1,
- methods=v1+['config.get','config.providers.delete','config.models.delete','config.roles.unassign','config.skill_roots.set'],features=[],events=[],limits={})),flush=True)
+ methods=v1+['config.get','config.providers.delete','config.models.delete','config.roles.unassign','config.tool_policy.set','config.skill_roots.set'],features=[],events=[],limits={})),flush=True)
 for _ in sys.stdin: pass`;
 
 test('hello carries methods features events limits and requires only the v1 capabilities', async () => {
@@ -239,6 +239,28 @@ test('host deletes: dry run, stale revision, managed, not found, committed', asy
  } finally { await host.close(); await c.close(); }
 });
 
+test('setToolPolicy replaces the hard tool deny list on a host and on a session', async () => {
+ const c = client('config'); const host = c.host();
+ try {
+  const before = await host.getConfig();
+  const first = await host.setToolPolicy({ deny: ['web_fetch', 'computer_*'] });
+  assert.equal(first.changed, true); assert.deepEqual(first.deny, ['web_fetch', 'computer_*']); assert.equal(first.config.view, 'global');
+  assert.equal(first.propagation.bound, 'not_bound'); assert.notEqual(first.config.revision, before.revision);
+  const again = await host.setToolPolicy({ deny: ['web_fetch', 'computer_*'], if_revision: first.config.revision });
+  assert.equal(again.changed, false);
+  await assert.rejects(host.setToolPolicy({ deny: ['bash'], if_revision: '0000000000000000' }), e => e.reason === 'stale');
+  await assert.rejects(host.setToolPolicy({ deny: ['two words'] }), e => e.reason === 'out_of_range');
+  await assert.rejects(host.setToolPolicy({ deny: 'bash' }), e => e.code === 'invalid_input');
+  await assert.rejects(host.setToolPolicy({ deny: [''] }), e => e.code === 'invalid_input');
+  const cleared = await host.setToolPolicy({ deny: [] });
+  assert.equal(cleared.changed, true); assert.deepEqual(cleared.deny, []);
+  noSecrets([first, again, cleared]);
+  const s = await c.create({ cwd: '/fake/work' });
+  const set = await s.setToolPolicy({ deny: ['bash'] });
+  assert.equal(set.changed, true); assert.equal(set.propagation.bound, 'reloaded'); assert.ok(set.session_info);
+ } finally { await host.close(); await c.close(); }
+});
+
 test('setSkillRoots replaces the external skill roots on a host and on a session', async () => {
  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'koma-roots-')));
  const c = client('config'); const host = c.host();
@@ -281,6 +303,7 @@ test('a lost reply is a lost mutation only for calls that write', async () => {
   await assert.rejects(host.deleteProvider({ provider_uuid: 'p' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
   await assert.rejects(host.deleteModel({ model_uuid: 'm', dry_run: false }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
   await assert.rejects(host.unassignRole({ role: 'main' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
+  await assert.rejects(host.setToolPolicy({ deny: [] }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
   await assert.rejects(host.setSkillRoots({ roots: [] }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
  } finally { await host.close(); await c.close(); }
 });
@@ -408,6 +431,8 @@ test('new enum-like strings are open; v1 enums and public roles stay closed', as
   models_truncated: false, roles: ['main', 'awareness', 'safeguard', 'compactor', 'planner'].map(route), main_fallback: 'future' };
  validateResult('config.get', view, {});
  validateResult('config.roles.unassign', { changed: false, previous_model_uuid: null, config: view, propagation: { bound: 'later', extra: 'x' } }, { role: 'main' });
+ validateResult('config.tool_policy.set', { changed: true, deny: ['web_*'], config: view, propagation: { bound: 'later' } }, { deny: ['web_*'] });
+ assert.throws(() => validateResult('config.tool_policy.set', { changed: true, deny: [1], config: view, propagation: {} }, {}), e => e.code === 'protocol');
  validateResult('config.skill_roots.set', { changed: true, roots: ['/srv/skills'], config: view, propagation: { bound: 'later' } }, { roots: ['/srv/skills'] });
  assert.throws(() => validateResult('config.skill_roots.set', { changed: true, roots: [1], config: view, propagation: {} }, {}), e => e.code === 'protocol');
  validateResult('config.effort.get', { state: 'warming', options: ['default'], selected: 'default', note: null, main_model_uuid: null }, {});

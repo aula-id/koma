@@ -570,6 +570,8 @@ pub(crate) fn start_stream_task(
         }
     }
     apply_plan_policy(&mut advertise, state.rest.sessions[sess_idx].policy.plan);
+    // Hard deny list last, so lifecycle tools and MCP names cannot slip back in.
+    crate::tool::policy::retain_allowed(&mut advertise);
     // Provider schema generation requires unique function names. Preserve the
     // first definition while deduplicating the fully composed built-in + MCP +
     // lifecycle allow-list.

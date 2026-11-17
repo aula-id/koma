@@ -651,6 +651,21 @@ class RoleUnassignResult:
                    _optional_session_info(d))
 
 @dataclass(frozen=True)
+class ToolPolicyResult:
+    """`deny` is the stored list, in order. `changed` is false when the list already matched."""
+    changed: bool
+    deny: tuple[str, ...]
+    config: ConfigView
+    propagation: Propagation
+    session_info: SessionInfo | None
+    @classmethod
+    def from_wire(cls, value: Any) -> ToolPolicyResult:
+        d = _object(value, "result")
+        return cls(_flag(d, "changed"), _texts(d["deny"], "deny", 256),
+                   ConfigView.from_wire(d["config"]), Propagation.from_wire(d["propagation"]),
+                   _optional_session_info(d))
+
+@dataclass(frozen=True)
 class SkillRootsResult:
     """`roots` are the stored paths, in order. `changed` is false when the list already matched."""
     changed: bool

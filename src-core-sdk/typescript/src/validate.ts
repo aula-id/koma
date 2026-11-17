@@ -397,6 +397,9 @@ export function validateResult(method: Method, result: unknown, params: Record<s
     bool(result.changed); nullableString(result.previous_model_uuid);
     validateMutation(result, params.scope ?? 'global'); return;
   }
+  if (method === 'config.tool_policy.set') {
+    bool(result.changed); strings(result.deny, true); validateMutation(result, 'global'); return;
+  }
   if (method === 'config.skill_roots.set') {
     bool(result.changed); strings(result.roots, true); validateMutation(result, 'global'); return;
   }

@@ -34,7 +34,7 @@ MODEL_ID = 'smoke-model'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 # Port 9 (discard) on loopback: connections are refused and never leave the machine.
 CLOSED = 'http://127.0.0.1:9'
 # Hosts of koma's public catalogues; the daemon's log must never name them.
@@ -282,6 +282,21 @@ def run_unbound(adapter):
            'stale delete removed nothing')
     step('7 config.providers.delete with a stale if_revision: invalid_state/stale, not_sent')
 
+    before = global_view(adapter)['revision']
+    result = adapter.result('config.tool_policy.set', deny=['web_fetch', 'computer_*'])
+    expect(result['changed'] is True and result['deny'] == ['web_fetch', 'computer_*'], f'deny list stored: {result}')
+    expect(result['config']['revision'] != before, 'setting a deny list changes config.json')
+    kept = global_view(adapter)
+    expect(any(p['name'] == PROVIDER for p in kept['providers']), 'the provider survives a deny list write')
+    again = adapter.result('config.tool_policy.set', deny=['web_fetch', 'computer_*'])
+    expect(again['changed'] is False and again['config']['revision'] == result['config']['revision'],
+           f'the same list writes nothing: {again}')
+    error = adapter.error('config.tool_policy.set', deny=['two words'])
+    expect((error['code'], error.get('reason'), error['delivery']) == ('invalid_request', 'out_of_range', 'not_sent'),
+           f'a bad pattern is refused: {error}')
+    cleared = adapter.result('config.tool_policy.set', deny=[])
+    expect(cleared['changed'] is True and cleared['deny'] == [], f'deny list cleared: {cleared}')
+    step('7c config.tool_policy.set: stored, idempotent, a bad pattern refused, cleared')
     root = os.path.realpath(short_temp_dir())
     try:
         before = global_view(adapter)['revision']

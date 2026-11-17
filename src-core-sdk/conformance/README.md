@@ -84,7 +84,9 @@ the binding; mutations then check `stale`
 `dry_run` returns the computed effect with the current view and empty
 `propagation`; `config.models.delete` with any `scope` other than `"global"` is
 `out_of_range`; session-scope `config.roles.unassign` clears the Main pin (effort
-resets to `default`). An unassigned `compactor`, `awareness` or `planner` reports
+resets to `default`). `config.tool_policy.set` validates `deny` (`missing_params`, then
+`out_of_range` per entry), then `if_revision`, then `stale`; an equal list is
+`changed:false` with empty `propagation`. An unassigned `compactor`, `awareness` or `planner` reports
 `origin:"inherit_main"` with Main's route and `model_uuid:null`; an unassigned
 `safeguard` never inherits Main and reports `origin:"default"`,
 `reason:"unassigned"`. An adapter-side delete always reports `rebind:"done"`. `config.effort.get{wait_ms:0}`

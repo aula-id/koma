@@ -320,6 +320,17 @@ pub(crate) fn process_tools(
         let call = state.rest.sessions[sess_idx].pending_tool_calls
             [state.rest.sessions[sess_idx].tool_idx]
             .clone();
+        // Hard deny list: refuse before any intercept, bridge or approval
+        // prompt sees the call. This covers calls the model streamed natively
+        // and calls harvested from its text, because both wait in
+        // `pending_tool_calls`. The model gets a tool error and the turn goes on.
+        if crate::tool::policy::is_denied(&call.function.name) {
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), crate::tool::policy::refusal(&call.function.name)));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
         if call.function.name == "plan_enter" {
             match intercepts::intercept_plan_enter(state, sess_idx, &call, mode) {
                 InterceptFlow::Continue => continue,

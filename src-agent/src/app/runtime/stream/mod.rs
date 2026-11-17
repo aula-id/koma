@@ -7,6 +7,10 @@ pub(crate) mod stall;
 mod tools;
 mod turn;
 
+#[cfg(test)]
+#[path = "tool_deny_tests.rs"]
+mod tool_deny_tests;
+
 pub(crate) use stall::is_stall;
 
 pub(super) use run::{abort_current, start_stream_task};
