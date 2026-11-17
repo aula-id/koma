@@ -37,7 +37,7 @@ import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, EmptyState, IconBtn, NoProjectState, NoWorkspaceState } from './helpers'
 import { Segmented, Select } from './form'
 import { CodingSearchPanel } from './CodingSearchPanel'
-import { pathBasename as rootLabel } from '../../lib/pathDisplay'
+import { pathBasename as rootLabel, relativeUnder, stripVerbatim } from '../../lib/pathDisplay'
 
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
@@ -533,9 +533,8 @@ export function CodingPanel() {
   }, [activeRoot, refreshCodingDir])
 
   const gitRoot = useKoma(s => s.git.root)
-  const contextAbsolute = activeRoot && ctxMenu ? `${activeRoot.replace(/[\\/]$/, '')}/${ctxMenu.path}`.replace(/\\/g, '/') : ''
-  const gitPrefix = gitRoot ? gitRoot.replace(/\\/g, '/').replace(/\/$/, '') + '/' : ''
-  const contextGitPath = gitPrefix && contextAbsolute.startsWith(gitPrefix) ? contextAbsolute.slice(gitPrefix.length) : null
+  const contextAbsolute = activeRoot && ctxMenu ? `${stripVerbatim(activeRoot).replace(/[\\/]$/, '')}/${ctxMenu.path}` : ''
+  const contextGitPath = gitRoot && contextAbsolute ? (relativeUnder(gitRoot, contextAbsolute) || null) : null
   const rootKey = activeRoot ? fileKey(activeRoot, '') : null
   const rootDir = rootKey ? dirs[rootKey] : null
   const roots = useMemo(() => workdir.slice(), [workdir])

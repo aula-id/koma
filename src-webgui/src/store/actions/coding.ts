@@ -1,7 +1,7 @@
 import { backupCodingDocument, forgetCodingDraft, recordCodingHistory } from '../../lib/coding-recovery'
 import { formatBeforeSave } from '../../lib/coding-save'
 import { codingRequest } from '../../lib/coding-service'
-import { queueReveal, uriToPath } from '../../lib/lsp-bridge'
+import { queueReveal, splitRootPath, uriToPath } from '../../lib/lsp-bridge'
 import { localFileTabId } from '../../lib/composerChipOpen'
 import { codingTabId, isMarkdownPath } from '../../lib/markdownPreview'
 import type { StoreGet, StoreSet } from '../api'
@@ -38,27 +38,18 @@ export function codingActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'se
   openDiagnostic: (uri, line, character) => {
     const abs = uriToPath(uri)
     if (!abs) return
-    const aa = abs.replace(/\\/g, '/')
     const roots = (get().settingsValues?.workdir ?? []).filter(Boolean)
-    const candidates = [
-      ...[...roots].sort((a, b) => b.length - a.length),
+    const candidateRoots = [
+      ...roots,
       ...get()
         .ui.tabs.filter((t): t is Extract<Tab, { kind: 'codingFile' }> => t.kind === 'codingFile')
         .map((t) => t.root),
       get().coding.activeRoot,
     ].filter((r): r is string => !!r)
 
-    let root: string | null = null
-    let rel = ''
-    for (const r of candidates) {
-      const rr = r.replace(/\\/g, '/').replace(/\/$/, '')
-      if (aa === rr || aa.startsWith(rr + '/')) {
-        root = r
-        rel = aa === rr ? '' : aa.slice(rr.length + 1)
-        break
-      }
-    }
-    if (!root) return
+    const hit = splitRootPath(abs, candidateRoots)
+    if (!hit) return
+    const { root, path: rel } = hit
 
     const targetLine = line + 1
     const targetCol = Math.max(1, character + 1)

@@ -4,6 +4,7 @@ import { InlineNameInput } from './panels/helpers'
 import { Select } from './panels/form'
 import { useKoma } from '../store/koma'
 import { fileKey } from '../store/coding'
+import { pathBasename } from '../lib/pathDisplay'
 import { designFileName, isDesignPath } from '../lib/design'
 import { diagramFileName, isDiagramPath } from '../lib/diagram'
 import { importFigFile } from '../lib/design/importFigFile'
@@ -35,7 +36,7 @@ const COPY = {
   },
 } as const
 
-const rootLabel = (root: string): string => root.split('/').filter(Boolean).pop() || root
+const rootLabel = pathBasename
 const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 
 const BTN = 'rounded border border-koma-border px-3 py-1 text-[12px] text-koma-fg hover:bg-koma-hover disabled:cursor-not-allowed disabled:opacity-50'
