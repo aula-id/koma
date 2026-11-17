@@ -151,7 +151,7 @@ export function ConnectorPanel() {
                     ? 'Add provider'
                     : 'Edit provider'
                   : view.kind === 'oauth'
-                    ? 'Connect account'
+                    ? 'Sign in with an account'
                     : view.isNew
                       ? 'Add model'
                       : 'Edit model'
