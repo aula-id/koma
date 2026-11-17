@@ -566,8 +566,6 @@ mod safe_rel_path_tests {
             }
         }
         for bad in [
-            "C:/Windows/win.ini",
-            "C:x",
             "a.txt:s",
             "con",
             "a/NUL.txt",
@@ -582,6 +580,17 @@ mod safe_rel_path_tests {
                 "{bad} must stay legal off Windows"
             );
         }
+        // Production passes cfg!(windows), so windows=false only runs on POSIX hosts;
+        // a Windows host parses these as drive prefixes whatever the flag says.
+        for drive in ["C:/Windows/win.ini", "C:x"] {
+            assert_eq!(safe_rel_path_for(drive, true), None, "{drive}");
+            #[cfg(not(windows))]
+            assert!(
+                safe_rel_path_for(drive, false).is_some(),
+                "{drive} must stay legal off Windows"
+            );
+        }
+        #[cfg(not(windows))]
         assert_eq!(
             safe_rel_path_for("a:b.css", false),
             Some(PathBuf::from("a:b.css"))

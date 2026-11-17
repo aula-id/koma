@@ -11,7 +11,13 @@ fn rejects_traversal_and_separators_on_both() {
 
 #[test]
 fn windows_only_rules() {
-    for bad in ["C:evil.txt", "a:s", "nul", "Con.txt"] {
+    for bad in ["C:evil.txt", "a:s"] {
+        assert!(check_save_name(bad, true).is_err(), "{bad:?}");
+        // Production passes cfg!(windows), so windows=false only runs on POSIX hosts.
+        #[cfg(not(windows))]
+        assert!(check_save_name(bad, false).is_ok(), "{bad:?}");
+    }
+    for bad in ["nul", "Con.txt"] {
         assert!(check_save_name(bad, true).is_err(), "{bad:?}");
         assert!(check_save_name(bad, false).is_ok(), "{bad:?}");
     }

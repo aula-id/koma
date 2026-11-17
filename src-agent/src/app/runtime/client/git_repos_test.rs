@@ -201,7 +201,7 @@ fn discover_ordering_and_dedup() {
     fake_repo(&r.join("Alpha"));
     fake_repo(&r.join("mid"));
     let infos = discover_repos_uncached(&[r.clone(), r.clone()]);
-    let canon = std::fs::canonicalize(&r).unwrap();
+    let canon = crate::tool::winpath::canonical(&r).unwrap();
     assert_eq!(PathBuf::from(&infos[0].root), canon);
     assert_eq!(infos[0].rel, ".");
     let rels: Vec<&str> = infos.iter().map(|i| i.rel.as_str()).collect();

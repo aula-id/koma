@@ -204,10 +204,18 @@ fn safe_single_component_all_platforms() {
 
 #[test]
 fn safe_single_component_windows_only_rules() {
-    for name in [
-        "C:evil", "a:stream", "CON", "con.txt", "com1", "name.", "name ", "Lpt9", "nul",
-    ] {
+    for name in ["CON", "con.txt", "com1", "name.", "name ", "Lpt9", "nul"] {
         assert!(safe_single_component(name, true).is_err(), "{name:?}");
+        assert_eq!(safe_single_component(name, false), Ok(name), "{name:?}");
+    }
+}
+
+#[test]
+fn safe_single_component_drive_names_windows_rules() {
+    for name in ["C:evil", "a:stream"] {
+        assert!(safe_single_component(name, true).is_err(), "{name:?}");
+        // Production passes cfg!(windows), so windows=false only runs on POSIX hosts.
+        #[cfg(not(windows))]
         assert_eq!(safe_single_component(name, false), Ok(name), "{name:?}");
     }
 }

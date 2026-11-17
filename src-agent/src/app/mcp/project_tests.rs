@@ -219,7 +219,11 @@ fn stdio_cwd_defaults_to_root() {
             .clone()
     };
     assert_eq!(cwd("fs").as_deref(), Some("/proj"));
-    assert_eq!(cwd("rel").as_deref(), Some("/proj/sub"));
+    let sub = Path::new("/proj")
+        .join("sub")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(cwd("rel").as_deref(), Some(sub.as_str()));
     assert_eq!(cwd("var").as_deref(), Some("${HOME}/p"));
     assert_eq!(cwd("web"), None);
 }

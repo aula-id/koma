@@ -44,7 +44,13 @@ fn rejects_escaping_names_on_both() {
 #[test]
 fn windows_only_names() {
     let base = Path::new("/wt");
-    for bad in ["C:x", "a:b", "con", "Nul.txt", "x."] {
+    for bad in ["C:x", "a:b"] {
+        assert!(worktree_path(base, bad, true).is_err(), "{bad:?}");
+        // Production passes cfg!(windows), so windows=false only runs on POSIX hosts.
+        #[cfg(not(windows))]
+        assert_eq!(worktree_path(base, bad, false).unwrap(), base.join(bad));
+    }
+    for bad in ["con", "Nul.txt", "x."] {
         assert!(worktree_path(base, bad, true).is_err(), "{bad:?}");
         assert_eq!(worktree_path(base, bad, false).unwrap(), base.join(bad));
     }

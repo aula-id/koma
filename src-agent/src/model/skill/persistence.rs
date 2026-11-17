@@ -958,10 +958,14 @@ mod tests {
             assert!(zip_entry_name_ok(Path::new(ok), true), "{ok}");
             assert!(zip_entry_name_ok(Path::new(ok), false), "{ok}");
         }
-        for bad in ["con.txt", "a/NUL", "a:b", "x.", "d/y ", "a/com1.md", "lpt9"] {
+        for bad in ["con.txt", "a/NUL", "x.", "d/y ", "a/com1.md", "lpt9"] {
             assert!(!zip_entry_name_ok(Path::new(bad), true), "{bad}");
             assert!(zip_entry_name_ok(Path::new(bad), false), "{bad}");
         }
+        assert!(!zip_entry_name_ok(Path::new("a:b"), true));
+        // Production passes cfg!(windows), so windows=false only runs on POSIX hosts.
+        #[cfg(not(windows))]
+        assert!(zip_entry_name_ok(Path::new("a:b"), false));
         assert!(!zip_entry_name_ok(Path::new("../x"), false));
         assert!(!zip_entry_name_ok(Path::new("/x"), false));
         assert!(is_windows_reserved_name_for("COM1.txt"));

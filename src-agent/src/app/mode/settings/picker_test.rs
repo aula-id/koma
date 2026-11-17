@@ -104,7 +104,7 @@ fn tilde_lists_home_and_a_second_level_stays_tilde() {
         list_dirs_in("@~/Documents/", &cwd, Some(&home), 10),
         vec!["~/Documents/Projects".to_string()]
     );
-    let docs = home.join("Documents").canonicalize().unwrap();
+    let docs = crate::tool::winpath::canonical(&home.join("Documents")).unwrap();
     assert_eq!(
         materialize_in("~/Documents/", &cwd, Some(&home)),
         docs.display().to_string()
@@ -113,7 +113,10 @@ fn tilde_lists_home_and_a_second_level_stays_tilde() {
     std::fs::create_dir_all(&lib).unwrap();
     assert_eq!(
         materialize_in("./src", &cwd, Some(&home)),
-        lib.canonicalize().unwrap().display().to_string()
+        crate::tool::winpath::canonical(&lib)
+            .unwrap()
+            .display()
+            .to_string()
     );
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&cwd);
