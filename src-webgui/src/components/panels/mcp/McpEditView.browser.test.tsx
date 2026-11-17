@@ -19,7 +19,7 @@ const noOverflow = () => {
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(document.documentElement.clientWidth)
 }
 const save = () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Save')!
-const segmented = () => [...document.querySelectorAll<HTMLElement>('button[aria-pressed]')]
+const segmented = () => [...document.querySelectorAll<HTMLElement>('section[aria-label="Essentials"] button[aria-pressed]')]
 
 describe('McpEditView tab layout', () => {
   it('at 1000px keeps the segmented choice on one line, never truncates titles, and Save stays visible', async () => {

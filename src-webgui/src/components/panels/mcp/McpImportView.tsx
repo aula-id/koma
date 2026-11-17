@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { FileJson } from 'lucide-react'
-import { TextArea } from '../form'
+import { EmbeddedCodeEditor } from '../../editor/EmbeddedCodeEditor'
 import { HelpTip } from '../helpers'
 import { FormRow, McpFooter } from './McpGroup'
+import { MCP_JSON_SCHEMA, checkImportJson } from './mcpJson'
 
 type Props = {
   onImport: (text: string) => void
@@ -22,6 +23,17 @@ const EXAMPLE = `{
 /** Full-height import page: paste area in a centred column, sticky Import/Cancel bar. */
 export function McpImportView({ onImport, onCancel }: Props) {
   const [text, setText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const submit = () => {
+    if (!text.trim()) return
+    const check = checkImportJson(text)
+    if (!check.ok) {
+      setError(check.error)
+      return
+    }
+    setError(null)
+    onImport(text)
+  }
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col bg-koma-bg text-koma-fg">
       <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -41,25 +53,30 @@ export function McpImportView({ onImport, onCancel }: Props) {
           <section className="flex min-w-0 flex-col gap-5 rounded-lg border border-koma-border bg-koma-panel p-4 @lg:p-5">
             <FormRow
               label="MCP servers JSON"
-              htmlFor="mcp-import-json"
-              help="Paste the mcpServers snippet from a server's README (Claude Code, Cursor or VS Code format)."
+              error={error ?? undefined}
+              help="Paste the mcpServers snippet from a server's README (Claude Code, Cursor or VS Code format). Ctrl/Cmd+Enter imports; Esc then Tab leaves the editor."
             >
-              <TextArea
-                id="mcp-import-json"
-                className="whitespace-pre overflow-x-auto leading-relaxed"
-                wrap="off"
+              <EmbeddedCodeEditor
+                testId="mcp-import-editor"
+                ariaLabel="MCP servers JSON"
+                language="json"
+                jsonSchema={MCP_JSON_SCHEMA}
                 value={text}
-                rows={20}
-                autoFocus
-                spellCheck={false}
+                height="clamp(320px, 52vh, 560px)"
                 placeholder={EXAMPLE}
-                onChange={(e) => setText(e.target.value)}
+                autoFocus
+                lineNumbers
+                onChange={(v) => {
+                  setText(v)
+                  if (error) setError(null)
+                }}
+                onSubmit={submit}
               />
             </FormRow>
           </section>
         </div>
       </div>
-      <McpFooter onCancel={onCancel} onSave={() => onImport(text)} saveDisabled={!text.trim()} saveLabel="Import" />
+      <McpFooter onCancel={onCancel} onSave={submit} saveDisabled={!text.trim()} saveLabel="Import" />
     </div>
   )
 }

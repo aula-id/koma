@@ -62,11 +62,12 @@ function EditBody({ tab }: { tab: Extract<Tab, { kind: 'mcp'; mode: 'new' | 'edi
       server={server}
       onChange={(p) => setDraft((d) => (d ? { ...d, ...p } : d))}
       onCancel={close}
-      onSave={() => {
-        if (!draft.name.trim()) return
+      onSave={(fromJson) => {
+        const d = fromJson ?? draft
+        if (!d.name.trim()) return
         // `uuid` null makes the daemon mint one, so a saved new server has no tab id to
         // adopt: the tab closes and the new row appears in the list.
-        req(draftToRequest(draft, isNew))
+        req(draftToRequest(d, isNew))
         close()
       }}
     />

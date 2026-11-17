@@ -1,7 +1,8 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { VectorSquare } from 'lucide-react'
 import { TextArea, TextInput, Toggle, Segmented } from '../form'
 import { HelpTip } from '../helpers'
+import { EmbeddedCodeEditor } from '../../editor/EmbeddedCodeEditor'
 import type { McpServer } from '../../../types/config'
 import { FormGroup, FormRow, McpFooter } from './McpGroup'
 import {
@@ -16,6 +17,7 @@ import {
   splitList,
   type McpDraft,
 } from './mcpForm'
+import { MCP_JSON_SCHEMA, draftToJson, jsonToDraft } from './mcpJson'
 
 const VarNote = () => (
   <>
@@ -38,7 +40,8 @@ type Props = {
   /** The saved server, for the header's status line. Absent on a new server. */
   server?: McpServer
   onChange: (patch: Partial<McpDraft>) => void
-  onSave: () => void
+  /** Called with the draft to save when it came from the JSON view; otherwise no argument. */
+  onSave: (draft?: McpDraft) => void
   onCancel: () => void
 }
 
@@ -53,6 +56,51 @@ export function McpEditView({ draft, isNew, server, onChange, onSave, onCancel }
   const [toolsOpen, setToolsOpen] = useState(
     () => splitList(draft.allowedText).length + splitList(draft.disabledText).length > 0,
   )
+  const [view, setView] = useState<'form' | 'json'>('form')
+  const [jsonText, setJsonText] = useState('')
+  const [jsonError, setJsonError] = useState<string | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const jsonRef = useRef(jsonText)
+  jsonRef.current = jsonText
+  const json = view === 'json'
+
+  // The sidebar switch flips `enabled` while this tab is open; keep the JSON text in step.
+  const prevEnabled = useRef(draft.enabled)
+  useEffect(() => {
+    if (prevEnabled.current === draft.enabled) return
+    prevEnabled.current = draft.enabled
+    if (view !== 'json') return
+    const r = jsonToDraft(jsonRef.current, draftRef.current)
+    if (r.ok) setJsonText(draftToJson({ ...r.draft, enabled: draft.enabled }))
+  }, [draft.enabled, view])
+
+  const switchView = (next: 'form' | 'json') => {
+    if (next === view) return
+    if (next === 'json') {
+      setJsonText(draftToJson(draft))
+      setJsonError(null)
+      setView('json')
+      return
+    }
+    const r = jsonToDraft(jsonText, draft)
+    if (!r.ok) {
+      setJsonError(r.error)
+      return
+    }
+    onChange(r.draft)
+    setJsonError(null)
+    setView('form')
+  }
+  const saveJson = () => {
+    const r = jsonToDraft(jsonRef.current, draftRef.current)
+    if (!r.ok) {
+      setJsonError(r.error)
+      return
+    }
+    onChange(r.draft)
+    onSave(r.draft)
+  }
   const startupBad = badSeconds(draft.startupSec)
   const toolBad = badSeconds(draft.toolSec)
   const stdio = draft.transport === 'stdio'
@@ -67,6 +115,16 @@ export function McpEditView({ draft, isNew, server, onChange, onSave, onCancel }
               <h1 className="min-w-0 break-words text-[18px] font-semibold leading-tight">
                 {isNew ? 'New MCP server' : draft.name.trim() || '(unnamed)'}
               </h1>
+              <div className="ml-auto w-36 flex-none" data-testid="mcp-view-toggle">
+                <Segmented
+                  value={view}
+                  onChange={switchView}
+                  options={[
+                    { value: 'form', label: 'Form' },
+                    { value: 'json', label: 'JSON' },
+                  ]}
+                />
+              </div>
               {!isNew && (
                 <span className="flex-none rounded bg-koma-head px-1.5 py-px text-[10px] uppercase tracking-wide opacity-70">
                   {draft.transport}
@@ -87,6 +145,33 @@ export function McpEditView({ draft, isNew, server, onChange, onSave, onCancel }
             </p>
           </header>
 
+          {json && (
+            <section aria-label="Server JSON" className="flex min-w-0 flex-col gap-3 rounded-lg border border-koma-border bg-koma-panel p-4 @lg:p-5">
+              <FormRow
+                label="Server JSON"
+                error={jsonError ?? undefined}
+                help="One server in Claude Code format: { &quot;name&quot;: { ... } }. Saved header values stay hidden; leave a value as is to keep it. Ctrl/Cmd+Enter saves; Esc then Tab leaves the editor."
+              >
+                <EmbeddedCodeEditor
+                  testId="mcp-server-json"
+                  ariaLabel="Server JSON"
+                  language="json"
+                  jsonSchema={MCP_JSON_SCHEMA}
+                  value={jsonText}
+                  height="clamp(280px, 50vh, 520px)"
+                  lineNumbers
+                  autoFocus
+                  onChange={(v) => {
+                    setJsonText(v)
+                    if (jsonError) setJsonError(null)
+                  }}
+                  onSubmit={saveJson}
+                />
+              </FormRow>
+            </section>
+          )}
+
+          {!json && <>
           <section aria-label="Essentials" className="flex min-w-0 flex-col gap-5 rounded-lg border border-koma-border bg-koma-panel p-4 @lg:p-5">
             <FormRow label="Name" htmlFor={id('name')}>
               <TextInput
@@ -302,9 +387,14 @@ export function McpEditView({ draft, isNew, server, onChange, onSave, onCancel }
               </FormGroup>
             </div>
           </div>
+          </>}
         </div>
       </div>
-      <McpFooter onCancel={onCancel} onSave={onSave} saveDisabled={!draft.name.trim()} />
+      <McpFooter
+        onCancel={onCancel}
+        onSave={json ? saveJson : () => onSave()}
+        saveDisabled={json ? !jsonText.trim() : !draft.name.trim()}
+      />
     </div>
   )
 }
