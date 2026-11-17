@@ -1248,6 +1248,45 @@
               "minLength": 1
             },
             "method": {
+              "const": "sessions.transcript"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "since": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
               "const": "usage.query"
             },
             "params": {
@@ -3888,6 +3927,73 @@
         "was_live"
       ]
     },
+    "transcript_message": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "text",
+        "created_at"
+      ]
+    },
+    "session_transcript_result": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transcript_message"
+          },
+          "maxItems": 500
+        },
+        "next_since": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      },
+      "required": [
+        "session_id",
+        "live",
+        "messages",
+        "next_since"
+      ]
+    },
     "usage_totals": {
       "type": "object",
       "properties": {
@@ -6143,6 +6249,9 @@
                 },
                 {
                   "$ref": "#/$defs/session_stop_result"
+                },
+                {
+                  "$ref": "#/$defs/session_transcript_result"
                 },
                 {
                   "$ref": "#/$defs/usage_result"

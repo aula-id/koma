@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import unittest
 
-from koma_sdk import Client, DeliveryUnknown, IncompatibleAdapter, RemoteError, SessionKind, SessionPage
+from koma_sdk import Client, DeliveryUnknown, IncompatibleAdapter, RemoteError, Role, SessionKind, SessionPage, SessionTranscript
 
 FAKE = Path(__file__).resolve().parents[2] / 'conformance' / 'fake_adapter.py'
 
@@ -93,6 +93,38 @@ class SessionsConformance(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(DeliveryUnknown) as ctx:
                 await host.sessions_stop('sess-stuck')
             self.assertEqual(ctx.exception.cause.reason, 'still_running')
+
+    async def test_transcript_reads_a_stopped_session_in_pages(self):
+        async with self.client().host() as host:
+            whole = await host.sessions_transcript('sess-coding-b')
+            self.assertIsInstance(whole, SessionTranscript)
+            self.assertEqual((whole.session_id, whole.live, whole.next_since), ('sess-coding-b', False, None))
+            self.assertEqual([m.id for m in whole.messages], [1, 2, 3, 4])
+            self.assertEqual([m.role for m in whole.messages], [Role.USER, Role.TOOL, Role.TOOL, Role.ASSISTANT])
+            self.assertEqual([m.truncated for m in whole.messages], [False, False, True, False])
+            first = await host.sessions_transcript('sess-coding-b', limit=3)
+            self.assertEqual((len(first.messages), first.next_since), (3, 3))
+            rest = await host.sessions_transcript('sess-coding-b', since=first.next_since)
+            self.assertEqual(([m.id for m in rest.messages], rest.next_since), ([4], None))
+            self.assertTrue((await host.sessions_transcript('sess-coding-a')).live)
+            self.assertEqual((await host.sessions_transcript('sess-coding-c')).messages, ())
+
+    async def test_transcript_errors_and_arguments(self):
+        async with self.client().host() as host:
+            for session_id, code, reason in (('nope', 'not_found', 'not_found'),
+                                             ('sess-busy', 'unavailable', 'sqlite_busy')):
+                with self.assertRaises(RemoteError) as ctx:
+                    await host.sessions_transcript(session_id)
+                self.assertEqual((ctx.exception.code, ctx.exception.reason), (code, reason))
+            room = (await host.sessions_list(kind='room')).sessions[0].session_id
+            with self.assertRaises(RemoteError) as ctx:
+                await host.sessions_transcript(room)
+            self.assertEqual(ctx.exception.reason, 'out_of_range')
+            for call in (host.sessions_transcript(''), host.sessions_transcript('s', since=-1),
+                         host.sessions_transcript('s', since=True), host.sessions_transcript('s', limit=0),
+                         host.sessions_transcript('s', limit=501)):
+                with self.assertRaises(ValueError):
+                    await call
 
     async def test_create_name(self):
         c = self.client()

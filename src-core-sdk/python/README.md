@@ -109,9 +109,13 @@ while page.next_cursor:                                               # cursors 
 await host.sessions_rename(session_id, "nightly build")               # a room, or a session that is not live
 await host.sessions_stop(session_id)                                  # disconnects every client of that daemon
 await host.sessions_delete(session_id)                                # refused while live, locked or bound
+page = await host.sessions_transcript(session_id, since=0, limit=100) # SessionTranscript: stored messages, no daemon started
+more = await host.sessions_transcript(session_id, since=page.messages[-1].id)  # read on from the last id you saw
 ```
 
 A `SessionRow` has `kind` (`coding` or `room`), `live`, `working` (`None` for rooms), `locked`, `bound`, and for linked sessions `parent_session_id` / `room_session_id` / `room_live`. Renaming another *live* coding session is refused with `reason == "live"`: rename it from the adapter bound to it, or stop it first. A delete or stop whose outcome is unknown raises `DeliveryUnknown`; list again before retrying. A delete keeps usage rows and a child room (`orphaned_room_session_id`).
+
+`sessions_transcript` reads the stored messages of a coding session (`id`, `role`, `text`, `created_at`, and `truncated` when `text` was cut) from disk, oldest first, with secrets scrubbed. It starts no daemon, so a session that is not live reads the same as a running one (`live` says which). `since` is the last message `id` you saw; `next_since` is set when more follow. A room is refused (`out_of_range`): use `Room.history`.
 
 `client.create(cwd, name="nightly build")` names the session. It needs the `create.name` feature (otherwise `IncompatibleAdapter`, before anything starts). If naming fails the session still exists: check `session.warnings` for `rename_failed`. See [`examples/sessions.py`](examples/sessions.py).
 

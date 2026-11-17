@@ -165,7 +165,8 @@ def main():
     try:
         a = Adapter(binary, env, validator, stdout_log)
         hello = a.hello
-        for method in ("sessions.list", "sessions.rename", "sessions.delete", "sessions.stop"):
+        for method in ("sessions.list", "sessions.rename", "sessions.delete", "sessions.stop",
+                       "sessions.transcript"):
             check(method in hello["methods"], f"hello.methods lacks {method}")
         check("create.name" in hello["features"], "hello.features lacks create.name")
         check(hello["limits"]["list"]["sessions"] == 500, "limits.list.sessions")
@@ -229,6 +230,20 @@ def main():
         again = b.ok("sessions.stop", {"session_id": sid})
         check(again == {"stopped": True, "was_live": False}, f"second stop {again}")
         step(f"A: detach; B: sessions.stop (was_live={stopped['was_live']}), a second stop is a no-op")
+
+        # A stopped session reads from disk: nothing is started, and nothing is created for a session
+        # that has stored no message yet.
+        socks = list((data / "run").glob("*.sock"))
+        tr = b.ok("sessions.transcript", {"session_id": sid})
+        check(tr["session_id"] == sid and tr["live"] is False and tr["messages"] == [] and tr["next_since"] is None,
+              f"transcript {tr}")
+        check(list((data / "run").glob("*.sock")) == socks, "sessions.transcript started a daemon")
+        reason(b.err_of("sessions.transcript", {"session_id": "../../etc"}), "not_found", "not_found")
+        reason(b.err_of("sessions.transcript", {"session_id": sid, "limit": 501}, False),
+               "invalid_request", "out_of_range")
+        reason(b.err_of("sessions.transcript", {"session_id": sid, "since": -1}, False),
+               "invalid_request", "out_of_range")
+        step("B: sessions.transcript of the stopped session is empty and starts no daemon; bad ids and bounds refused")
 
         deleted = b.ok("sessions.delete", {"session_id": sid})
         check(deleted == {"deleted": True, "kind": "coding", "orphaned_room_session_id": None},
