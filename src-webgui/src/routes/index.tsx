@@ -4,7 +4,7 @@ import { isNotebookPath } from '../lib/notebook-workspace'
 import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -32,6 +32,7 @@ import { UsageFooter } from '../components/UsageFooter'
 import { BottomPanel } from '../components/BottomPanel'
 import { useKoma } from '../store/koma'
 import { resolveViewSelection } from '../lib/sidebarSelect'
+import { useSidebarFollowsActiveTab } from '../lib/useSidebarFollow'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
@@ -128,6 +129,14 @@ function RootLayout() {
     setSidebarOpen(true)
     useKoma.getState().activateTab('chat')
   }, [focusPlanTick])
+
+  // The sidebar follows the active tab: a diagram/design editor or Welcome tab
+  // becoming active switches to that view and always re-opens the sidebar.
+  const followTab = useCallback((view: SidebarView) => {
+    setActiveView(view)
+    setSidebarOpen(true)
+  }, [])
+  useSidebarFollowsActiveTab(followTab)
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
   // Host opens a remote shell (ssh -t) when remote hub/session is live; local otherwise.
