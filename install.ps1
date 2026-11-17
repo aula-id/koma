@@ -20,7 +20,7 @@
 # settings and variables. Windows PowerShell 5.1 syntax only.
 
 $komaBody = {
-    param([switch]$DefineOnly)
+    param([switch]$DefineOnly, [switch]$AllowExit)
 
     # ---------------------------------------------------------------------
     # Pure functions (no I/O; unit-tested in tests/windows/install.Tests.ps1)
@@ -83,7 +83,7 @@ $komaBody = {
         param([string]$Text)
         $map = @{}
         if (-not $Text) { return $map }
-        foreach ($line in ($Text -split "`n")) {
+        foreach ($line in (($Text.TrimStart([char]0xFEFF)) -split "`n")) {
             $m = [regex]::Match($line.Trim(), '^([0-9a-fA-F]{64})\s+\*?(.+)$')
             if ($m.Success) {
                 $name = $m.Groups[2].Value.Trim()
@@ -239,8 +239,13 @@ $pcode = @@PCODE@@
 $safe = Join-Path $env:windir ('Temp\koma-install-' + @@ID@@)
 $code = 90002
 try {
-    New-Item -ItemType Directory -Path $safe -Force | Out-Null
-    try { & icacls.exe $safe /grant '*S-1-5-32-545:(OI)(CI)R' | Out-Null } catch { }
+    # A fresh directory only: refusing an existing one stops a standard user pre-creating it.
+    Get-ChildItem -LiteralPath (Join-Path $env:windir 'Temp') -Directory -Filter 'koma-install-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-14) } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $safe | Out-Null
+    & icacls.exe $safe /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' /grant:r '*S-1-5-32-545:(OI)(CI)R' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'could not secure the install folder' }
     $log = Join-Path $safe 'koma-msi.log'
     if ($stop -eq '1') {
         Get-Process -Name koma -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -262,7 +267,7 @@ try {
                 $b = Join-Path $safe 'MicrosoftEdgeWebview2Setup.exe'
                 Copy-Item -LiteralPath $boot -Destination $b -Force
                 $sig = Get-AuthenticodeSignature -LiteralPath $b
-                if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match 'Microsoft Corporation') {
+                if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match '(^|, )CN=Microsoft Corporation(,|$)') {
                     Start-Process -FilePath $b -ArgumentList '/silent', '/install' -Wait -WindowStyle Hidden | Out-Null
                 }
             } catch { }
@@ -280,7 +285,7 @@ try {
 } finally {
     Remove-Item -LiteralPath (Join-Path $safe 'koma-x64.msi') -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $safe 'MicrosoftEdgeWebview2Setup.exe') -Force -ErrorAction SilentlyContinue
-    if ($code -eq 0 -or $code -eq 3010 -or $code -eq 1641) {
+    if ($code -eq 0 -or $code -eq 3010 -or $code -eq 1641 -or -not (Test-Path -LiteralPath (Join-Path $safe 'koma-msi.log'))) {
         Remove-Item -LiteralPath $safe -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -288,15 +293,15 @@ return [int]$code
 '@
         $stopFlag = '0'
         if ($StopKoma) { $stopFlag = '1' }
-        return $body.
-            Replace('@@MODE@@', (Format-KomaLiteral $Mode)).
-            Replace('@@MSI@@', (Format-KomaLiteral $MsiPath)).
-            Replace('@@SHA@@', (Format-KomaLiteral $Sha256)).
-            Replace('@@STOP@@', (Format-KomaLiteral $stopFlag)).
-            Replace('@@BOOT@@', (Format-KomaLiteral $Bootstrapper)).
-            Replace('@@MSIEXEC@@', (Format-KomaLiteral $Msiexec)).
-            Replace('@@PCODE@@', (Format-KomaLiteral $ProductCode)).
-            Replace('@@ID@@', (Format-KomaLiteral $SafeId))
+        $body = $body.Replace('@@MODE@@', (Format-KomaLiteral $Mode))
+        $body = $body.Replace('@@MSI@@', (Format-KomaLiteral $MsiPath))
+        $body = $body.Replace('@@SHA@@', (Format-KomaLiteral $Sha256))
+        $body = $body.Replace('@@STOP@@', (Format-KomaLiteral $stopFlag))
+        $body = $body.Replace('@@BOOT@@', (Format-KomaLiteral $Bootstrapper))
+        $body = $body.Replace('@@MSIEXEC@@', (Format-KomaLiteral $Msiexec))
+        $body = $body.Replace('@@PCODE@@', (Format-KomaLiteral $ProductCode))
+        $body = $body.Replace('@@ID@@', (Format-KomaLiteral $SafeId))
+        return $body
     }
 
     # ---------------------------------------------------------------------
@@ -504,12 +509,16 @@ return [int]$code
         if (Test-KomaAdmin) {
             $sb = [scriptblock]::Create($Text)
             $out = @(& $sb)
+            if ($out.Count -eq 0) { return 90002 }
             return [int]$out[$out.Count - 1]
         }
         # -EncodedCommand keeps the elevated code off disk, so nothing can swap it before it runs.
-        $wrapped = '$komaR = @(& {' + "`n" + $Text + "`n" + '})' + "`n" + 'exit ([int]$komaR[$komaR.Count - 1])'
+        $wrapped = '$komaR = @(& {' + "`n" + $Text + "`n" + '})' + "`n" + 'if ($komaR.Count -eq 0) { exit 90002 }' + "`n" + 'exit ([int]$komaR[$komaR.Count - 1])'
         $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrapped))
-        $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        # Not the host's own exe: ISE or an embedding app cannot run -EncodedCommand.
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $PSHOME 'pwsh.exe' }
+        if (-not (Test-Path -LiteralPath $exe)) { $exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName }
         $p = $null
         try {
             $p = Start-Process -FilePath $exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
@@ -632,6 +641,8 @@ return [int]$code
 
         $action = 'install'
         if ($prev) { $action = 'upgrade' }
+        # Ask about a running koma before the permission prompt text, so the questions come in order.
+        $stop = Resolve-KomaRunning -Options $Options -Action $action
         Write-KomaStep '[4/5] Installing'
         if (Test-KomaAdmin) {
             Write-KomaResult 'already administrator, no prompt'
@@ -651,7 +662,6 @@ return [int]$code
             }
         }
 
-        $stop = Resolve-KomaRunning -Options $Options -Action $action
         $msiexec = Get-KomaMsiexecPath -WinDir $env:windir -Is64Process ([Environment]::Is64BitProcess) -Is64OS ([Environment]::Is64BitOperatingSystem)
         $text = New-KomaElevatedScript -Mode 'install' -MsiPath $msi -Sha256 $hash -StopKoma $stop -Bootstrapper $boot -Msiexec $msiexec -SafeId $id
         $code = Invoke-KomaElevated -Text $text
@@ -704,15 +714,17 @@ return [int]$code
             return
         }
         Write-KomaResult "koma $($prev.Version)"
-        $dir = $prev.InstallLocation
+        # The MSI does not write InstallLocation, so look the folder up before it is removed.
+        $dir = Find-KomaInstallDir
+        if (-not $dir) { $dir = $prev.InstallLocation }
         $id = [guid]::NewGuid().ToString('N')
+        $stop = Resolve-KomaRunning -Options $Options -Action 'uninstall'
         Write-KomaStep '[2/2] Removing'
         if (Test-KomaAdmin) {
             Write-KomaResult 'already administrator, no prompt'
         } else {
             Write-KomaResult 'Windows will ask for permission once (click Yes)' 'Yellow'
         }
-        $stop = Resolve-KomaRunning -Options $Options -Action 'uninstall'
         $msiexec = Get-KomaMsiexecPath -WinDir $env:windir -Is64Process ([Environment]::Is64BitProcess) -Is64OS ([Environment]::Is64BitOperatingSystem)
         $text = New-KomaElevatedScript -Mode 'uninstall' -StopKoma $stop -Msiexec $msiexec -SafeId $id -ProductCode $prev.ProductCode
         $code = Invoke-KomaElevated -Text $text
@@ -747,7 +759,11 @@ return [int]$code
     Write-Host ''
     try {
         # Add TLS 1.2 to what the process already allows (older Windows PowerShell defaults to TLS 1.0).
-        try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+        # Leave SystemDefault (0) alone: it already lets Windows pick TLS 1.2 or 1.3.
+        try {
+            $sp = [int][Net.ServicePointManager]::SecurityProtocol
+            if (($sp -ne 0) -and (($sp -band 3072) -eq 0)) { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]($sp -bor 3072) }
+        } catch { }
         $envTable = @{}
         foreach ($n in 'KOMA_VERSION', 'KOMA_RELEASE_BASE', 'KOMA_SKIP_CHECKSUM', 'KOMA_UNINSTALL', 'KOMA_FORCE_CLOSE', 'KOMA_WAIT_PID') {
             $envTable[$n] = [Environment]::GetEnvironmentVariable($n)
@@ -770,8 +786,13 @@ return [int]$code
     # Callers such as `koma update` read the result from LASTEXITCODE.
     if ($failed) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
     # Never exit under iex (it would close the user's window); only a script file may.
-    $cmdPath = Get-Variable -Name PSCommandPath -ErrorAction SilentlyContinue
-    if ($failed -and $cmdPath -and $cmdPath.Value) { exit 1 }
+    if ($failed -and $AllowExit) { exit 1 }
 }
 
-if ($env:KOMA_INSTALL_NO_RUN -eq '1') { . $komaBody -DefineOnly } else { & $komaBody }
+if ($env:KOMA_INSTALL_NO_RUN -eq '1') {
+    . $komaBody -DefineOnly
+} else {
+    # Only a script file run directly (not dot-sourced, not iex) may end the process.
+    $komaCanExit = [bool]$PSCommandPath -and ($MyInvocation.InvocationName -ne '.')
+    try { & $komaBody -AllowExit:$komaCanExit } finally { Remove-Variable -Name komaBody, komaCanExit -ErrorAction SilentlyContinue }
+}

@@ -77,6 +77,9 @@ Describe 'ConvertFrom-KomaSums' {
         (ConvertFrom-KomaSums "$($script:h) *koma-x64.msi")['koma-x64.msi'] | Should -Be $script:h
         (ConvertFrom-KomaSums "$($script:h)  ./koma-x64.msi")['koma-x64.msi'] | Should -Be $script:h
     }
+    It 'tolerates a UTF-8 BOM on the first line' {
+        (ConvertFrom-KomaSums ([string][char]0xFEFF + "$($script:h)  koma-x64.msi"))['koma-x64.msi'] | Should -Be $script:h
+    }
     It 'ignores malformed lines' {
         (ConvertFrom-KomaSums 'zzz  koma-x64.msi').ContainsKey('koma-x64.msi') | Should -BeFalse
     }
