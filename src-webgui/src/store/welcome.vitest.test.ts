@@ -1,21 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { useKoma } from './koma'
 import { fileKey } from './coding'
 
 const root = '/w'
 
-function setDir(entries: { name: string; path: string; isDir: boolean }[], extra: { loading?: boolean; error?: string | null } = {}) {
+function setDir(entries: { name: string; path: string; isDir: boolean }[]) {
   useKoma.setState((state) => ({
     coding: {
       ...state.coding,
       activeRoot: root,
-      dirs: { ...state.coding.dirs, [fileKey(root, '.koma')]: { entries, loading: false, error: null, ...extra } },
+      dirs: { ...state.coding.dirs, [fileKey(root, '.koma')]: { entries, loading: false, error: null } },
     },
   }))
 }
 
 beforeEach(() => {
-  vi.useFakeTimers()
   useKoma.setState((state) => ({
     coding: { ...state.coding, activeRoot: null, dirs: {} },
     ui: {
@@ -31,7 +30,6 @@ beforeEach(() => {
     },
   }))
 })
-afterEach(() => vi.useRealTimers())
 
 const welcomeTabs = () => useKoma.getState().ui.tabs.filter((t) => t.kind === 'welcome')
 
@@ -64,34 +62,29 @@ describe('openWelcomeTab', () => {
 })
 
 describe('maybeOpenWelcomeTab', () => {
-  it('opens nothing when files of the kind exist', () => {
+  it('opens with no workspace root and no listing', () => {
+    useKoma.getState().maybeOpenWelcomeTab('design')
+    expect(welcomeTabs()).toHaveLength(1)
+    expect(useKoma.getState().ui.activeTabId).toBe('welcome-design')
+  })
+  it('opens even when files of the kind exist', () => {
     setDir([{ name: 'a.kdsgn', path: '.koma/a.kdsgn', isDir: false }])
     useKoma.getState().maybeOpenWelcomeTab('design')
-    expect(welcomeTabs()).toHaveLength(0)
-  })
-  it('opens one tab when the listing is known and empty', () => {
-    setDir([])
-    useKoma.getState().maybeOpenWelcomeTab('design')
     expect(welcomeTabs()).toHaveLength(1)
   })
-  it('treats a missing .koma directory as no files', () => {
-    setDir([], { error: 'No such file or directory (os error 2)' })
+  it('focuses the existing welcome tab instead of opening a second', () => {
+    useKoma.getState().maybeOpenWelcomeTab('diagram')
+    useKoma.getState().activateTab('chat')
     useKoma.getState().maybeOpenWelcomeTab('diagram')
     expect(welcomeTabs()).toHaveLength(1)
+    expect(useKoma.getState().ui.activeTabId).toBe('welcome-diagram')
   })
-  it('does not open on an unrelated listing error', () => {
-    setDir([], { error: 'permission denied' })
+  it('does not steal focus from an active editor tab of the same kind', () => {
+    useKoma.setState((state) => ({
+      ui: { ...state.ui, tabs: [...state.ui.tabs, { id: 'd1', kind: 'diagram' } as never], activeTabId: 'd1' },
+    }))
     useKoma.getState().maybeOpenWelcomeTab('diagram')
     expect(welcomeTabs()).toHaveLength(0)
-  })
-  it('waits for an unknown listing instead of treating it as empty', () => {
-    const refresh = vi.fn()
-    useKoma.setState((state) => ({ refreshCodingDir: refresh, coding: { ...state.coding, activeRoot: root, dirs: {} } }))
-    useKoma.getState().maybeOpenWelcomeTab('diagram')
-    expect(refresh).toHaveBeenCalledWith(root, '.koma')
-    expect(welcomeTabs()).toHaveLength(0)
-    setDir([{ name: 'a.diag', path: '.koma/a.diag', isDir: false }])
-    vi.advanceTimersByTime(200)
-    expect(welcomeTabs()).toHaveLength(0)
+    expect(useKoma.getState().ui.activeTabId).toBe('d1')
   })
 })

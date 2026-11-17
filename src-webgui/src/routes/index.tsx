@@ -367,7 +367,7 @@ function RootLayout() {
     if (r.activateChat) st.activateTab('chat')
     setActiveView(r.view)
     setSidebarOpen(r.sidebarOpen)
-    if (r.view !== activeView && (r.view === 'diagram' || r.view === 'design')) st.maybeOpenWelcomeTab(r.view)
+    if (r.sidebarOpen && (r.view === 'diagram' || r.view === 'design')) st.maybeOpenWelcomeTab(r.view)
   }
 
   // Drag the divider between the sidebar and the terminal to resize. Tracks the
