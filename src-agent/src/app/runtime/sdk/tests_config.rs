@@ -553,6 +553,112 @@ async fn endpoint_userinfo_and_query_are_stripped() {
     assert_eq!(view["roles"][0]["provider_name"], "local");
 }
 
+// ── config.subagent_risky.set ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn subagent_risky_set_replaces_only_that_key_and_is_idempotent() {
+    use crate::model::app_config::SubagentRisky;
+    let (dir, store) = store_with_fixture();
+    let mut adapter = unbound(&store);
+    let before = store.read().unwrap();
+    assert_eq!(before.config.subagent_risky, SubagentRisky::Classifier);
+
+    let first = call(
+        &mut adapter,
+        "config.subagent_risky.set",
+        json!({"mode":"parent"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["mode"], "parent");
+    assert_eq!(first["config"]["view"], "global");
+    assert_no_secret(&first.to_string());
+    let after = store.read().unwrap();
+    assert_eq!(after.config.subagent_risky, SubagentRisky::Parent);
+    assert_eq!(after.config.providers.len(), before.config.providers.len());
+    assert_eq!(after.config.providers[0].api_key, PLANTED_KEY);
+
+    let bytes = dir.bytes();
+    let again = call(
+        &mut adapter,
+        "config.subagent_risky.set",
+        json!({"mode":"parent", "if_revision": after.revision}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["changed"], false);
+    assert_eq!(dir.bytes(), bytes);
+
+    let denied = call(&mut adapter, "config.subagent_risky.set", json!({"mode":"deny"}))
+        .await
+        .unwrap();
+    assert_eq!(denied["changed"], true);
+    assert_eq!(store.read().unwrap().config.subagent_risky, SubagentRisky::Deny);
+
+    // Back to the default: the key leaves the file again.
+    call(&mut adapter, "config.subagent_risky.set", json!({"mode":"classifier"}))
+        .await
+        .unwrap();
+    assert_eq!(store.read().unwrap().config.subagent_risky, SubagentRisky::Classifier);
+    assert!(!String::from_utf8_lossy(&dir.bytes().unwrap()).contains("subagent_risky"));
+}
+
+#[tokio::test]
+async fn subagent_risky_set_keeps_a_key_another_writer_saved() {
+    let (dir, store) = store_with_fixture();
+    let mut adapter = unbound(&store);
+    let mut other = store.read().unwrap().config;
+    other
+        .providers
+        .push(provider("p-late", "late", "http://127.0.0.1:10/v1"));
+    write_config(&dir.config(), &other);
+    call(&mut adapter, "config.subagent_risky.set", json!({"mode":"deny"}))
+        .await
+        .unwrap();
+    let after = store.read().unwrap().config;
+    assert!(after.providers.iter().any(|p| p.uuid == "p-late"));
+    assert_eq!(after.subagent_risky, crate::model::app_config::SubagentRisky::Deny);
+}
+
+#[tokio::test]
+async fn subagent_risky_set_refuses_bad_modes_before_writing() {
+    let (dir, store) = store_with_fixture();
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let cases = [
+        (json!({}), "missing_params"),
+        (json!({"mode":1}), "out_of_range"),
+        (json!({"mode":""}), "out_of_range"),
+        (json!({"mode":"Parent"}), "out_of_range"),
+        (json!({"mode":"allow"}), "out_of_range"),
+    ];
+    for (params, expected) in cases {
+        let error = call(&mut adapter, "config.subagent_risky.set", params.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(reason(&error), Some(expected), "{params}");
+        assert_eq!(error.delivery, "not_sent", "{params}");
+    }
+    assert_eq!(dir.bytes(), bytes);
+}
+
+#[tokio::test]
+async fn subagent_risky_set_refuses_a_stale_revision() {
+    let (dir, store) = store_with_fixture();
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let error = call(
+        &mut adapter,
+        "config.subagent_risky.set",
+        json!({"mode":"deny", "if_revision":"0000000000000000"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&error), Some("stale"));
+    assert_eq!(dir.bytes(), bytes);
+}
+
 // ── session_info ───────────────────────────────────────────────────────────
 
 fn routes(main_origin: &str, main_uuid: &str) -> Value {
@@ -1334,6 +1440,34 @@ mod bound {
         let session = call(&mut adapter, "config.get", json!({})).await.unwrap();
         assert_eq!(session["view"], "session");
         assert_eq!(session["roles"][0]["provider_name"], "local");
+        let seen = requests(adapter, peer).await;
+        assert!(seen
+            .iter()
+            .any(|r| matches!(r, ClientRequest::ReloadGlobalCatalogue)));
+    }
+
+    #[tokio::test]
+    async fn subagent_risky_in_a_coding_binding_is_written_here_and_reloaded_by_the_daemon() {
+        let (_dir, store) = store_with_fixture();
+        let (c, peer) = fake_daemon(Box::new(|request| match request {
+            ClientRequest::ReloadGlobalCatalogue => vec![E::Ack],
+            _ => readback(request, "").unwrap_or_default(),
+        }));
+        let mut adapter = coding(c, &store).await;
+        let result = call(
+            &mut adapter,
+            "config.subagent_risky.set",
+            json!({"mode":"parent"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["changed"], true);
+        assert_eq!(result["propagation"]["bound"], "reloaded");
+        assert!(result.get("session_info").is_some());
+        assert_eq!(
+            store.read().unwrap().config.subagent_risky,
+            crate::model::app_config::SubagentRisky::Parent
+        );
         let seen = requests(adapter, peer).await;
         assert!(seen
             .iter()

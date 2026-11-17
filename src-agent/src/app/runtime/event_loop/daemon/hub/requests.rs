@@ -571,7 +571,7 @@ impl DaemonHub {
             // Answer the foreground session's pending tool-approval prompt via the
             // local approve/deny handlers.
             ClientRequest::ApproveTool { approve, call_id } => {
-                if call_id.as_ref().is_some_and(|id| state.rest.fg().pending_tool_calls.get(state.rest.fg().tool_idx).is_none_or(|call| &call.id != id)) {
+                if call_id.as_ref().is_some_and(|id| state.rest.fg().approval_call().is_none_or(|call| &call.id != id)) {
                     self.send_to(idx, DaemonEvent::Error("approval refers to a cancelled or superseded call".into()));
                     return;
                 }

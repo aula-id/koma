@@ -898,6 +898,42 @@
               "minLength": 1
             },
             "method": {
+              "const": "config.subagent_risky.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "classifier",
+                    "parent",
+                    "deny"
+                  ]
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
               "const": "config.effort.get"
             },
             "params": {
@@ -3567,6 +3603,36 @@
         "propagation"
       ]
     },
+    "subagent_risky_result": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "classifier",
+            "parent",
+            "deny"
+          ]
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "changed",
+        "mode",
+        "config",
+        "propagation"
+      ]
+    },
     "effort_options_result": {
       "type": "object",
       "properties": {
@@ -6039,6 +6105,9 @@
                 },
                 {
                   "$ref": "#/$defs/role_unassign_result"
+                },
+                {
+                  "$ref": "#/$defs/subagent_risky_result"
                 },
                 {
                   "$ref": "#/$defs/effort_options_result"

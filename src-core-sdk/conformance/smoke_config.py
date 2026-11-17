@@ -34,7 +34,7 @@ MODEL_ID = 'smoke-model'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.subagent_risky.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 # Port 9 (discard) on loopback: connections are refused and never leave the machine.
 CLOSED = 'http://127.0.0.1:9'
 # Hosts of koma's public catalogues; the daemon's log must never name them.
@@ -281,6 +281,22 @@ def run_unbound(adapter):
                                               for p in after['providers']),
            'stale delete removed nothing')
     step('7 config.providers.delete with a stale if_revision: invalid_state/stale, not_sent')
+
+    before = global_view(adapter)['revision']
+    result = adapter.result('config.subagent_risky.set', mode='parent')
+    expect(result['changed'] is True and result['mode'] == 'parent', f'mode stored: {result}')
+    expect(result['config']['revision'] != before, 'setting the mode changes config.json')
+    kept = global_view(adapter)
+    expect(any(p['name'] == PROVIDER for p in kept['providers']), 'the provider survives a mode write')
+    again = adapter.result('config.subagent_risky.set', mode='parent')
+    expect(again['changed'] is False and again['config']['revision'] == result['config']['revision'],
+           f'the same mode writes nothing: {again}')
+    error = adapter.error('config.subagent_risky.set', mode='allow')
+    expect((error['code'], error.get('reason'), error['delivery']) == ('invalid_request', 'out_of_range', 'not_sent'),
+           f'an unknown mode is refused: {error}')
+    reset = adapter.result('config.subagent_risky.set', mode='classifier')
+    expect(reset['changed'] is True and reset['mode'] == 'classifier', f'mode reset: {reset}')
+    step('7b config.subagent_risky.set: stored, idempotent, an unknown mode refused, reset')
 
     code = adapter.wait_exit()
     expect(code == 0, f'{adapter.name}: exit 0 on stdin EOF, got {code}')

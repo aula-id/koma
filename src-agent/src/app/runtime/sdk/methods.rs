@@ -137,6 +137,12 @@ pub const ROUTES: &[Route] = &[
         config::handle_roles_unassign,
     ),
     route(
+        "config.subagent_risky.set",
+        Family::Host,
+        ANY,
+        config::handle_subagent_risky_set,
+    ),
+    route(
         "config.effort.get",
         Family::Coding,
         CODING,

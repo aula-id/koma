@@ -1,7 +1,7 @@
 export const METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure', 'detach'] as const;
 /** The ten v1 methods. hello `capabilities` always lists exactly these. */
 export type V1Method = typeof METHODS[number];
-export const CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set'] as const;
+export const CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.subagent_risky.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set'] as const;
 export type ConfigMethod = typeof CONFIG_METHODS[number];
 export const SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop'] as const;
 export const USAGE_METHODS = ['usage.query'] as const;
@@ -145,6 +145,9 @@ export interface ConfigGetParams { view?: ConfigViewName }
 export interface ProviderDeleteParams { provider_uuid: string; if_revision?: string; dry_run?: boolean }
 export interface ModelDeleteParams { model_uuid: string; if_revision?: string; dry_run?: boolean }
 export interface RoleUnassignParams { role: PublicRole; scope?: ConfigViewName; if_revision?: string }
+/** What a sub-agent's risky tool call goes through: the classifier (default), the parent session's approval, or a refusal. */
+export type SubagentRiskyMode = 'classifier' | 'parent' | 'deny';
+export interface SubagentRiskySetParams { mode: SubagentRiskyMode; if_revision?: string }
 export interface EffortGetParams { wait_ms?: number }
 export interface EffortSetParams { effort: string; if_main_model?: string | null }
 export interface LimitsSetParams { max_output_tokens?: number; context_window_limit?: number; context_model_alias?: string }
@@ -153,6 +156,7 @@ export interface MutationResult { config: ConfigView; propagation: Propagation; 
 export interface ProviderDeleteResult extends MutationResult { dry_run: boolean; removed: { provider_uuid: string; models_removed: string[]; main_reset: boolean } }
 export interface ModelDeleteResult extends MutationResult { dry_run: boolean; removed: { model_uuid: string; roles_released: PublicRole[]; main_reset: boolean } }
 export interface RoleUnassignResult extends MutationResult { changed: boolean; previous_model_uuid: string | null }
+export interface SubagentRiskyResult extends MutationResult { changed: boolean; mode: string }
 export interface EffortOptions { state: Open<'ready' | 'loading' | 'unsupported'>; options: string[]; selected: string; note: string | null; main_model_uuid: string | null }
 export interface EffortResult { effort: string; main_model_uuid: string | null; superseded: boolean; session_info?: SessionInfo }
 export type LimitsResult = Limits & { session_info?: SessionInfo };

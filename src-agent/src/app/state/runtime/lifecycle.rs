@@ -8,6 +8,18 @@ use std::path::{Path, PathBuf};
 
 use super::SessionRuntime;
 
+/// Call ids of a sub-agent's parked call start with this, then the sub-agent id
+/// and the model's own call id: `subagent-<id>:<call_id>`.
+pub const SUBAGENT_CALL_PREFIX: &str = "subagent-";
+
+/// A sub-agent's risky call waiting on the owner, as projected to clients.
+pub struct SubagentGate {
+    pub agent_id: usize,
+    /// The call with its id rewritten to `subagent-<id>:<call_id>`.
+    pub call: crate::dto::chat::ToolCall,
+    pub reason: String,
+}
+
 impl SessionRuntime {
     /// Mint only for a fresh user turn, never for a tool round or synthetic wake.
     pub fn begin_turn(&mut self) -> String {
@@ -28,6 +40,110 @@ impl SessionRuntime {
             turn.error = error;
             self.last_turn = Some(turn);
         }
+    }
+
+    /// The next risky call a running sub-agent has parked on this session's
+    /// approval prompt (`subagent_risky = parent`), lowest sub-agent id first.
+    /// `None` while the session itself waits on an approval: its own call is
+    /// answered first and the sub-agent keeps waiting.
+    pub fn subagent_gate(&self) -> Option<SubagentGate> {
+        if self.awaiting_approval {
+            return None;
+        }
+        self.subagents
+            .iter()
+            .filter(|sa| matches!(sa.status, crate::app::subagent::SubAgentStatus::Running))
+            .filter_map(|sa| sa.pending_approval.as_ref().map(|p| (sa, p)))
+            .min_by_key(|(sa, _)| sa.id)
+            .map(|(sa, pending)| {
+                let args = crate::dto::chat::sanitize_tool_arguments(&pending.call.function.arguments);
+                let shown: String = args.chars().take(200).collect();
+                SubagentGate {
+                    agent_id: sa.id,
+                    call: crate::dto::chat::ToolCall {
+                        id: format!("{SUBAGENT_CALL_PREFIX}{}:{}", sa.id, pending.call.id),
+                        kind: pending.call.kind.clone(),
+                        function: pending.call.function.clone(),
+                    },
+                    reason: format!(
+                        "sub-agent #{} ({}) wants to run {}: {shown}",
+                        sa.id, sa.agent_name, pending.call.function.name
+                    ),
+                }
+            })
+    }
+
+    /// True while this session needs an answer from its owner: its own parked
+    /// call, or a sub-agent's.
+    pub fn approval_parked(&self) -> bool {
+        self.awaiting_approval || self.subagent_gate().is_some()
+    }
+
+    /// `(awaiting, reason, calls, idx)` as shown to clients. A sub-agent's call
+    /// is projected as the one pending call, with an id naming its sub-agent.
+    pub fn approval_view(&self) -> (bool, Option<String>, Vec<crate::dto::chat::ToolCall>, usize) {
+        match self.subagent_gate() {
+            Some(gate) => (true, Some(gate.reason), vec![gate.call], 0),
+            None => (
+                self.awaiting_approval,
+                self.approval_reason.clone(),
+                self.pending_tool_calls.clone(),
+                self.tool_idx,
+            ),
+        }
+    }
+
+    /// The call an `ApproveTool`/`DenyTool` answers right now.
+    pub fn approval_call(&self) -> Option<crate::dto::chat::ToolCall> {
+        match self.subagent_gate() {
+            Some(gate) => Some(gate.call),
+            None => self.pending_tool_calls.get(self.tool_idx).cloned(),
+        }
+    }
+
+    /// Tool result a sub-agent gets when the owner's session rejects approvals.
+    pub fn subagent_reject_result() -> String {
+        serde_json::json!({
+            "error": "approval_rejected", "executed": false,
+            "reason": "session policy rejects human approval requests"
+        })
+        .to_string()
+    }
+
+    /// Answer the parked sub-agent call [`Self::subagent_gate`] shows. Approving
+    /// lets that one call run; denying refuses only that call, and the sub-agent
+    /// carries on. Returns false when no sub-agent call is parked.
+    pub fn answer_subagent_approval(&mut self, approve: bool, denial: &str) -> bool {
+        let Some(gate) = self.subagent_gate() else {
+            return false;
+        };
+        let Some(sa) = self.subagents.iter_mut().find(|sa| sa.id == gate.agent_id) else {
+            return false;
+        };
+        let Some(pending) = sa.pending_approval.take() else {
+            return false;
+        };
+        let call_id = pending.call.id;
+        let decision = if approve {
+            crate::app::subagent::ApprovalDecision::Approve { call_id }
+        } else {
+            crate::app::subagent::ApprovalDecision::Deny {
+                call_id,
+                result: denial.to_string(),
+            }
+        };
+        let _ = sa.approval_tx.send(decision);
+        sa.transcript.push(if approve {
+            "» approved by the parent".to_string()
+        } else {
+            "» denied by the parent".to_string()
+        });
+        true
+    }
+
+    /// Deny every sub-agent call parked on this session.
+    pub fn deny_all_subagent_approvals(&mut self, denial: &str) {
+        while self.answer_subagent_approval(false, denial) {}
     }
 
     /// Kill running sub-agents that belong to THIS session, drop model-delegated

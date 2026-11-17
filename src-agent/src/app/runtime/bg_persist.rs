@@ -152,6 +152,7 @@ pub(crate) fn restore_bg_records(
         // loop drains it), so `inject_into_subagent` reports `Terminal` and never
         // sends — this channel is only here to satisfy the field's type.
         let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (approval_tx, _approval_rx) = tokio::sync::mpsc::unbounded_channel();
         rt.subagents.push(SubAgent {
             id,
             agent_name: rec.name,
@@ -161,6 +162,8 @@ pub(crate) fn restore_bg_records(
             abort,
             rx,
             inject_tx,
+            approval_tx,
+            pending_approval: None,
             // The live transcript/report is NOT persisted (record + status only), so a
             // restored agent shows an empty history — honest for a dead worker.
             transcript: Vec::new(),

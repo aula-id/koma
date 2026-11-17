@@ -18,7 +18,7 @@ from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseRes
 from .types import (ApprovalResult, Attachment, Binary, DetachResult, Hello, Policy,
                     ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy,
                     ConfigView, EffortOptions, EffortResult, Limits, ModelDeleteResult, ProviderDeleteResult,
-                    PublicRole, RoleUnassignResult, SessionInfo, CreateWarning, _create_warnings,
+                    PublicRole, RoleUnassignResult, SubagentRiskyResult, SessionInfo, CreateWarning, _create_warnings,
                     SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SkillDetail,
                     SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult, UsageReport)
 
@@ -28,6 +28,15 @@ _ROLES = ("main", "awareness", "safeguard", "compactor", "planner")
 
 def _unassign_params(role: PublicRole | str, if_revision: str | None) -> dict[str, Any]:
     params: dict[str, Any] = {"role": _role_param(role), "scope": "global"}
+    if if_revision is not None:
+        params["if_revision"] = if_revision
+    return params
+
+
+def _subagent_risky_params(mode: str, if_revision: str | None) -> dict[str, Any]:
+    if not isinstance(mode, str):
+        raise TypeError("mode must be 'classifier', 'parent' or 'deny'")
+    params: dict[str, Any] = {"mode": mode}
     if if_revision is not None:
         params["if_revision"] = if_revision
     return params
@@ -264,6 +273,7 @@ _RESULTS: dict[str, Any] = {
     "config.providers.delete": ProviderDeleteResult.from_wire,
     "config.models.delete": ModelDeleteResult.from_wire,
     "config.roles.unassign": RoleUnassignResult.from_wire,
+    "config.subagent_risky.set": SubagentRiskyResult.from_wire,
     "config.effort.get": EffortOptions.from_wire,
     "config.effort.set": EffortResult.from_wire,
     "config.limits.get": _validate_limits,
@@ -598,6 +608,16 @@ class Host(HostCalls):
         return RoleUnassignResult.from_wire(
             await self._call("config.roles.unassign", _unassign_params(role, if_revision), mutation=True))
 
+    async def config_subagent_risky_set(self, mode: str, *,
+                                        if_revision: str | None = None) -> SubagentRiskyResult:
+        """Choose what a sub-agent's risky tool call (write, edit, delete, bash and the like) goes through:
+        `"classifier"` (the default), `"parent"` (the call parks on the parent session's approval, answered with
+        `approve`) or `"deny"` (refused). Only that key of config.json changes. Sub-agents started after the
+        daemon has loaded the new value use it."""
+        return SubagentRiskyResult.from_wire(
+            await self._call("config.subagent_risky.set", _subagent_risky_params(mode, if_revision),
+                             mutation=True))
+
     async def close(self) -> None:
         async with self._lock:
             t, self._transport = self._transport, None
@@ -722,6 +742,14 @@ class Session(HostCalls):
         result = await self._request("config.roles.unassign", _unassign_params(role, if_revision), mutation=True)
         self._apply_info(result)
         return RoleUnassignResult.from_wire(result)
+
+    async def config_subagent_risky_set(self, mode: str, *,
+                                        if_revision: str | None = None) -> SubagentRiskyResult:
+        """Set the sub-agent risky-tool mode, as `Host.config_subagent_risky_set` does."""
+        result = await self._request("config.subagent_risky.set", _subagent_risky_params(mode, if_revision),
+                                     mutation=True)
+        self._apply_info(result)
+        return SubagentRiskyResult.from_wire(result)
 
     async def clear_main_pin(self) -> RoleUnassignResult:
         """Clear this session's Main pin, so Main follows the global assignment. Resets effort."""

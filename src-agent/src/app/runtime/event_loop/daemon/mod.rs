@@ -145,7 +145,7 @@ fn service_approval_park_timeouts(state: &mut AppState, client_attached: bool) -
         if state.rest.sessions[idx].closed {
             continue;
         }
-        let parked_detached = state.rest.sessions[idx].awaiting_approval && !client_attached;
+        let parked_detached = state.rest.sessions[idx].approval_parked() && !client_attached;
         if !parked_detached {
             // Not parked, or a client is attached → no timeout; reset the clock.
             state.rest.sessions[idx].park_started_at = None;
@@ -159,11 +159,17 @@ fn service_approval_park_timeouts(state: &mut AppState, client_attached: bool) -
             // the conversation stays API-valid). `deny_all_pending` clears
             // `awaiting_approval`; clear the timer too so a fresh park (should the model
             // somehow re-enter approval) re-stamps from now.
-            deny_all_pending(
-                state,
-                idx,
-                "auto-denied: approval request timed out while detached",
-            );
+            if state.rest.sessions[idx].awaiting_approval {
+                deny_all_pending(
+                    state,
+                    idx,
+                    "auto-denied: approval request timed out while detached",
+                );
+            } else {
+                state.rest.sessions[idx].deny_all_subagent_approvals(
+                    "auto-denied: approval request timed out while detached",
+                );
+            }
             state.rest.sessions[idx].park_started_at = None;
             denied_any = true;
         }

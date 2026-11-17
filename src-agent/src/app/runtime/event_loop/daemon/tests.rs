@@ -1386,3 +1386,92 @@ fn owned_attachments_are_explicit_and_never_capture_composer_media() {
     assert!(!f.path.join("pastes").exists());
     assert!(f.state.rest.fg().active_turn.is_none());
 }
+
+// ─── subagent_risky = parent: a sub-agent's parked call over the daemon ──
+
+/// Park one sub-agent call on session 0; returns the receiver the sub-agent
+/// would read the owner's answer from.
+fn park_subagent_call(
+    state: &mut AppState,
+    runtime: &tokio::runtime::Runtime,
+) -> tokio::sync::mpsc::UnboundedReceiver<crate::app::subagent::ApprovalDecision> {
+    use crate::app::subagent::{SubAgent, SubAgentApproval, SubAgentStatus};
+    use crate::dto::chat::{FunctionCall, ToolCall};
+    let abort = runtime.spawn(std::future::pending::<()>()).abort_handle();
+    let (_events, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (approval_tx, decisions) = tokio::sync::mpsc::unbounded_channel();
+    state.rest.sessions[0].subagents.push(SubAgent {
+        id: 3,
+        agent_name: "general".into(),
+        label: "task".into(),
+        model_id: String::new(),
+        status: SubAgentStatus::Running,
+        abort,
+        rx,
+        inject_tx,
+        approval_tx,
+        pending_approval: Some(SubAgentApproval {
+            call: ToolCall {
+                id: "w1".into(),
+                kind: "function".into(),
+                function: FunctionCall { name: "write".into(), arguments: "{}".into() },
+            },
+        }),
+        transcript: Vec::new(),
+        messages: Vec::new(),
+        live_text: String::new(),
+        tool_call_id: None,
+        detached: true,
+        nudged: true,
+        ext_owned: false,
+        usage_tokens_in: 0,
+        usage_tokens_out: 0,
+        usage_cost: 0.0,
+        sdlc_active_node_id: None,
+    });
+    decisions
+}
+
+#[test]
+fn approve_tool_answers_a_parked_sub_agent_call_by_its_projected_id() {
+    use crate::app::subagent::ApprovalDecision;
+    let mut f = TurnFixture::new();
+    let mut decisions = park_subagent_call(&mut f.state, &f.runtime);
+    // The model's own call id is not what the session shows; a stale or
+    // foreign id is refused and leaves the call parked.
+    for wrong in ["w1", "subagent-9:w1", "other"] {
+        f.request(1, ClientRequest::ApproveTool { approve: true, call_id: Some(wrong.into()) });
+        assert!(matches!(f.result(), DaemonEvent::Error(_)), "{wrong}");
+        assert!(decisions.try_recv().is_err(), "{wrong}");
+    }
+    f.request(1, ClientRequest::ApproveTool { approve: true, call_id: Some("subagent-3:w1".into()) });
+    assert_eq!(f.result(), DaemonEvent::Ack);
+    assert!(matches!(decisions.try_recv(), Ok(ApprovalDecision::Approve { call_id }) if call_id == "w1"));
+    assert!(!f.state.rest.fg().approval_parked());
+}
+
+#[test]
+fn detached_park_timeout_denies_a_sub_agent_call_and_keeps_the_agent_running() {
+    use crate::app::subagent::{ApprovalDecision, SubAgentStatus};
+    let mut state = AppState::new(Mode::Chat);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let mut decisions = park_subagent_call(&mut state, &runtime);
+
+    // Attached: never denied. Detached and inside the window: stamped, not denied.
+    assert!(!service_approval_park_timeouts(&mut state, true));
+    assert!(!service_approval_park_timeouts(&mut state, false));
+    assert!(state.rest.sessions[0].park_started_at.is_some());
+    assert!(decisions.try_recv().is_err());
+
+    let past = Instant::now()
+        .checked_sub(APPROVAL_PARK_TIMEOUT + Duration::from_secs(1))
+        .expect("instant far enough in the past");
+    state.rest.sessions[0].park_started_at = Some(past);
+    assert!(service_approval_park_timeouts(&mut state, false));
+    assert!(matches!(decisions.try_recv(), Ok(ApprovalDecision::Deny { .. })));
+    let s = &state.rest.sessions[0];
+    assert!(!s.approval_parked());
+    assert!(s.park_started_at.is_none());
+    assert!(matches!(s.subagents[0].status, SubAgentStatus::Running));
+}

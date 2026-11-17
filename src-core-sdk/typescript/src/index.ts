@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { Transport, isRoomEvent, type Incoming } from './transport.js';
 import { configureParams, local, object, string, textId, validateInput, validatePolicy } from './validate.js';
-import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method, type SessionInfo, type ConfigView, type ConfigGetParams, type ProviderDeleteParams, type ProviderDeleteResult, type ModelDeleteParams, type ModelDeleteResult, type RoleUnassignParams, type RoleUnassignResult, type EffortGetParams, type EffortOptions, type EffortSetParams, type EffortResult, type Limits, type LimitsSetParams, type LimitsResult, type HelloLimits, type Warning, type SessionsListParams, type SessionsListResult, type SessionRenameParams, type SessionRenameResult, type SessionDeleteResult, type SessionStopResult, type UsageQueryParams, type UsageResult, type SkillsListParams, type SkillsListResult, type SkillGetParams, type SkillDetail, type SkillReadFileParams, type SkillFileResult, type SkillCreateParams, type SkillWriteResult, type SkillUpdateParams, type SkillUpdateResult, type SkillInstallParams, type SkillRemoveParams, type SkillRemoveResult, type RoomsListParams, type RoomsListResult, type RoomOpenParams, type RoomAttachParams, type AttachResult, type RoomCloseResult, type RoomSendParams, type RoomSendResult, type RoomControlParams, type RoomStatus, type RoomHistoryParams, type RoomHistoryResult, type ShelfListParams, type ShelfListResult, type ShelfItem, type GoalParams, type TrajectoryResult, type ReportsParams, type ReportsResult, type SpendResult, type Team, type TeamGetParams, type TeamModelParams, type TeamAvatarUpsertParams, type TeamAvatarRemoveParams, type TeamWriteResult, type TeamAvatarRemoveResult, type TeamTarget, type RoomEvent } from './types.js';
+import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method, type SessionInfo, type ConfigView, type ConfigGetParams, type ProviderDeleteParams, type ProviderDeleteResult, type ModelDeleteParams, type ModelDeleteResult, type RoleUnassignParams, type RoleUnassignResult, type SubagentRiskySetParams, type SubagentRiskyResult, type EffortGetParams, type EffortOptions, type EffortSetParams, type EffortResult, type Limits, type LimitsSetParams, type LimitsResult, type HelloLimits, type Warning, type SessionsListParams, type SessionsListResult, type SessionRenameParams, type SessionRenameResult, type SessionDeleteResult, type SessionStopResult, type UsageQueryParams, type UsageResult, type SkillsListParams, type SkillsListResult, type SkillGetParams, type SkillDetail, type SkillReadFileParams, type SkillFileResult, type SkillCreateParams, type SkillWriteResult, type SkillUpdateParams, type SkillUpdateResult, type SkillInstallParams, type SkillRemoveParams, type SkillRemoveResult, type RoomsListParams, type RoomsListResult, type RoomOpenParams, type RoomAttachParams, type AttachResult, type RoomCloseResult, type RoomSendParams, type RoomSendResult, type RoomControlParams, type RoomStatus, type RoomHistoryParams, type RoomHistoryResult, type ShelfListParams, type ShelfListResult, type ShelfItem, type GoalParams, type TrajectoryResult, type ReportsParams, type ReportsResult, type SpendResult, type Team, type TeamGetParams, type TeamModelParams, type TeamAvatarUpsertParams, type TeamAvatarRemoveParams, type TeamWriteResult, type TeamAvatarRemoveResult, type TeamTarget, type RoomEvent } from './types.js';
 export * from './types.js';
 
 /** A stateless adapter is replaced once this many requests were sent, well before the per-process cap. */
@@ -27,6 +27,13 @@ function plain(params: object | undefined, ids: readonly string[] = []): Record<
 function unassignParams(params: RoleUnassignParams): Record<string, unknown> {
   const out = plain(params, ['role']);
   out.scope ??= 'global';
+  return out;
+}
+
+/** `mode` must be a string; the adapter checks which one. */
+function subagentRiskyParams(params: SubagentRiskySetParams): Record<string, unknown> {
+  const out = plain(params);
+  local(() => string(out.mode, true));
   return out;
 }
 
@@ -278,6 +285,10 @@ export class Host extends HostCalls {
   async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
     return this.request('config.roles.unassign', unassignParams(params), request);
   }
+  /** Choose what a sub-agent's risky tool call goes through: `classifier` (default), `parent` (it parks on the parent session's approval, answered with `approve`) or `deny`. Only that key of config.json changes. */
+  async setSubagentRisky(params: SubagentRiskySetParams, request?: RequestOptions): Promise<SubagentRiskyResult> {
+    return this.request('config.subagent_risky.set', subagentRiskyParams(params), request);
+  }
   async close(): Promise<void> {
     this.closed = true;
     const current = this.current; this.current = undefined;
@@ -340,6 +351,10 @@ export class Session extends HostCalls {
   /** Clear a role globally, as Host.unassignRole does (scope "global" unless given). To drop this session's own Main pin, use clearMainPin. */
   async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
     return this.observe(await this.request<RoleUnassignResult>('config.roles.unassign', unassignParams(params), request));
+  }
+  /** Set the sub-agent risky-tool mode, as Host.setSubagentRisky does. */
+  async setSubagentRisky(params: SubagentRiskySetParams, request?: RequestOptions): Promise<SubagentRiskyResult> {
+    return this.observe(await this.request<SubagentRiskyResult>('config.subagent_risky.set', subagentRiskyParams(params), request));
   }
   /** Clear this session's Main pin, so Main follows the global assignment. Resets effort. */
   async clearMainPin(request?: RequestOptions): Promise<RoleUnassignResult> {

@@ -16,7 +16,7 @@ use crate::app::runtime::sdk::{
     Adapter,
 };
 use crate::ipc::proto::{ClientRequest, RunState};
-use crate::model::app_config::{ApiType, AppConfig, ModelRole};
+use crate::model::app_config::{ApiType, AppConfig, ModelRole, SubagentRisky};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -315,6 +315,8 @@ pub enum Change {
     DeleteProvider(String),
     DeleteModel(String),
     UnassignRole(ModelRole),
+    /// Replace `subagent_risky`.
+    SetSubagentRisky(SubagentRisky),
 }
 
 /// What a write did, or would do on a dry run.
@@ -323,6 +325,8 @@ pub enum Effect {
     Removed(Removal),
     /// The entry that held the role, or `None` when nobody did.
     Released(Option<String>),
+    /// Whether `subagent_risky` differed from the one stored.
+    SubagentRisky { changed: bool },
 }
 
 impl Change {
@@ -348,6 +352,11 @@ impl Change {
             Change::UnassignRole(role) => {
                 Ok(Effect::Released(configure::unassign_role(config, *role)))
             }
+            Change::SetSubagentRisky(mode) => {
+                let changed = config.subagent_risky != *mode;
+                config.subagent_risky = *mode;
+                Ok(Effect::SubagentRisky { changed })
+            }
         }
     }
 
@@ -366,6 +375,7 @@ impl Change {
                 .models
                 .iter()
                 .any(|m| m.effective_roles().contains(role)),
+            (Change::SetSubagentRisky(mode), _) => config.subagent_risky == *mode,
             _ => false,
         }
     }
@@ -442,7 +452,10 @@ pub fn commit(
         after,
         effect,
     } = prepared;
-    if matches!(effect, Effect::Released(None)) {
+    if matches!(
+        effect,
+        Effect::Released(None) | Effect::SubagentRisky { changed: false }
+    ) {
         return Ok(Committed {
             lock,
             effect,
@@ -663,6 +676,9 @@ pub fn handle_models_delete(r: Request, adapter: &mut Adapter) -> HandlerFuture<
 pub fn handle_roles_unassign(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(roles_unassign(r.params, adapter))
 }
+pub fn handle_subagent_risky_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
+    Box::pin(subagent_risky_set(r.params, adapter))
+}
 pub fn handle_effort_get(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(effort_get(r.params, adapter))
 }
@@ -793,11 +809,36 @@ async fn roles_unassign(params: Value, adapter: &mut Adapter) -> Result<Value, R
         write(adapter, Change::UnassignRole(role), if_revision, false).await?;
     let previous = match effect {
         Effect::Released(previous) => previous,
-        Effect::Removed(_) => None,
+        Effect::Removed(_) | Effect::SubagentRisky { .. } => None,
     };
     let result = json!({
         "changed": previous.is_some(),
         "previous_model_uuid": previous,
+        "config": to_value(&view)?,
+        "propagation": to_value(&propagation)?,
+    });
+    Ok(with_session_info(result, adapter))
+}
+
+/// `config.subagent_risky.set`: choose what a sub-agent's risky tool call goes
+/// through. Only that key changes, under the SDK lock on a fresh read of the
+/// file. Running daemons pick it up through the catalogue reload broadcast, and
+/// it applies to sub-agents spawned after that.
+async fn subagent_risky_set(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let map = object(params)?;
+    let mode = match map.get("mode") {
+        None => return Err(RpcError::reason(Reason::MissingParams, "mode is required")),
+        Some(Value::String(value)) => SubagentRisky::parse(value)
+            .ok_or_else(|| out_of_range("mode must be 'classifier', 'parent' or 'deny'"))?,
+        Some(_) => return Err(out_of_range("mode must be a string")),
+    };
+    let if_revision = revision_param(&map)?;
+    let (effect, view, propagation) =
+        write(adapter, Change::SetSubagentRisky(mode), if_revision, false).await?;
+    let changed = matches!(effect, Effect::SubagentRisky { changed: true });
+    let result = json!({
+        "changed": changed,
+        "mode": mode.as_str(),
         "config": to_value(&view)?,
         "propagation": to_value(&propagation)?,
     });
@@ -934,10 +975,10 @@ async fn daemon_write(
             uuid: uuid.clone(),
             scope: "global".into(),
         },
-        Change::UnassignRole(_) => {
+        Change::UnassignRole(_) | Change::SetSubagentRisky(_) => {
             return Err(RpcError::new(
                 "internal",
-                "role release has no daemon request",
+                "this change has no daemon request",
             ))
         }
     };

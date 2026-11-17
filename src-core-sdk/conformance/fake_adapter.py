@@ -18,7 +18,7 @@ MAX_LINE = 40 * 1024 * 1024
 V1_METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt',
               'interrupt_and_submit', 'approve', 'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.subagent_risky.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop']
 SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
                  'skills.update']
@@ -123,6 +123,7 @@ if a.scenario == 'config':
 else:
     catalogue = dict(file='missing', providers=[], oauth=[], models=[])
 effort_ready = set()
+subagent_risky = ['classifier']
 info_clock = 0
 
 def event():
@@ -149,7 +150,8 @@ def invalid(rid, reason, message):
 def revision():
     if catalogue['file'] == 'missing':
         return 'absent'
-    raw = json.dumps(catalogue, sort_keys=True, separators=(',', ':')).encode()
+    document = dict(catalogue, subagent_risky=subagent_risky[0]) if subagent_risky[0] != 'classifier' else catalogue
+    raw = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
     return hashlib.sha256(raw).hexdigest()[:16]
 
 def strip_endpoint(endpoint):
@@ -435,6 +437,30 @@ def roles_unassign(rid, params):
     return response(rid, with_info(dict(changed=True, previous_model_uuid=model['model_uuid'],
                                          config=config_view('global'), propagation=propagation)))
 
+def subagent_risky_set(rid, params):
+    if 'mode' not in params:
+        return invalid(rid, 'missing_params', 'mode is required')
+    mode = params['mode']
+    if mode not in ('classifier', 'parent', 'deny'):
+        return invalid(rid, 'out_of_range', 'mode must be classifier, parent or deny')
+    error = check_common(rid, params)
+    if error:
+        return error
+    error = check_stale(rid, params)
+    if error:
+        return error
+    if mode == subagent_risky[0]:
+        return response(rid, with_info(dict(changed=False, mode=mode, config=config_view('global'),
+                                             propagation={})))
+    subagent_risky[0] = mode
+    catalogue['file'] = 'ok'
+    if session is not None:
+        touch()
+    propagation = dict(bound='reloaded' if binding == 'coding' else 'not_bound', broadcast='sent',
+                       rebind='not_needed', rooms='next_start')
+    return response(rid, with_info(dict(changed=True, mode=mode, config=config_view('global'),
+                                         propagation=propagation)))
+
 def effort_get(rid, params):
     wait_ms = params.get('wait_ms', 3000)
     if not is_int(wait_ms) or not 0 <= wait_ms <= 10000:
@@ -499,6 +525,8 @@ def config_call(rid, method, params):
         return models_delete(rid, params)
     if method == 'config.roles.unassign':
         return roles_unassign(rid, params)
+    if method == 'config.subagent_risky.set':
+        return subagent_risky_set(rid, params)
     denied = binding_denial(rid, method, params)
     if denied:
         return denied

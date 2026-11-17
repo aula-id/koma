@@ -211,6 +211,10 @@ pub fn spawn_subagent(
     for msg in initial_injects {
         let _ = inject_tx.send(msg);
     }
+    // The APPROVAL channel: the parent answers a parked risky call on
+    // `approval_tx` (kept on the `SubAgent`); the loop reads `approval_rx`.
+    let (approval_tx, approval_rx) = mpsc::unbounded_channel();
+    let risky = config.subagent_risky;
     let jh = handle.spawn(run_agent_loop(
         client_arc,
         resolved,
@@ -228,6 +232,8 @@ pub fn spawn_subagent(
         id,
         context_window,
         mode == AgentMode::Plan,
+        risky,
+        approval_rx,
     ));
 
     Some(SubAgent {
@@ -239,6 +245,8 @@ pub fn spawn_subagent(
         abort: jh.abort_handle(),
         rx,
         inject_tx,
+        approval_tx,
+        pending_approval: None,
         transcript: Vec::new(),
         messages: Vec::new(),
         live_text: String::new(),

@@ -43,6 +43,11 @@ pub enum AgentEvent {
     /// always holds the sub-agent's complete structured history for later
     /// viewing. Bounded by `max_steps`, so cloning per turn is cheap.
     Snapshot(Vec<crate::dto::chat::ChatMessage>),
+    /// Under `subagent_risky = parent`: the sub-agent wants to run a risky tool
+    /// and is waiting for the parent session's owner. The orchestrator parks it
+    /// on the parent's approval prompt and answers on the agent's
+    /// [`ApprovalDecision`](super::ApprovalDecision) channel.
+    ApprovalRequest { call_id: String, name: String, args: String },
     /// The loop finished cleanly; `String` is the final assistant answer (or a
     /// "(stopped: …)" note when the step budget was exhausted).
     Done(String),

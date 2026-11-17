@@ -74,7 +74,7 @@ async with Client("/absolute/path/to/koma") as client:
                 ...
 ```
 
-`Host` also has `configure(providers=, models=)`, `config_models_delete(model_uuid, if_revision=, dry_run=)` and `config_roles_unassign(role, if_revision=)` (global scope; an unassigned `compactor`, `awareness` or `planner` then inherits Main, while `safeguard` never does). Mutations return the fresh `config` plus `propagation`, which reports what happened after the commit (`bound`, `broadcast`, `rebind`, `rooms`); a `failed` value there does not mean the write failed. See [`examples/config.py`](examples/config.py).
+`Host` also has `configure(providers=, models=)`, `config_models_delete(model_uuid, if_revision=, dry_run=)` and `config_roles_unassign(role, if_revision=)` (global scope; an unassigned `compactor`, `awareness` or `planner` then inherits Main, while `safeguard` never does). `config_subagent_risky_set(mode, if_revision=)` chooses what a sub-agent's risky tool call goes through: `"classifier"` (the default), `"parent"` (the call parks on the parent session's approval and is answered with `approve`) or `"deny"`. Mutations return the fresh `config` plus `propagation`, which reports what happened after the commit (`bound`, `broadcast`, `rebind`, `rooms`); a `failed` value there does not mean the write failed. See [`examples/config.py`](examples/config.py).
 
 `endpoint` values have URL credentials, query and fragment removed (`endpoint_redacted`); never pass one back to `configure`. A list with `*_truncated` set is incomplete.
 

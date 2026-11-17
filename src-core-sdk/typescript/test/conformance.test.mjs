@@ -175,7 +175,7 @@ function noSecrets(value) { const text = JSON.stringify(value); for (const s of 
 const SILENT = `import json,sys
 v1=['create','resume','state','submit','enqueue','interrupt','interrupt_and_submit','approve','configure','detach']
 print(json.dumps(dict(type='hello',protocol=1,binary=dict(path='/silent',version='0'),diagnostics=[],capabilities=v1,
- methods=v1+['config.get','config.providers.delete','config.models.delete','config.roles.unassign'],features=[],events=[],limits={})),flush=True)
+ methods=v1+['config.get','config.providers.delete','config.models.delete','config.roles.unassign','config.subagent_risky.set'],features=[],events=[],limits={})),flush=True)
 for _ in sys.stdin: pass`;
 
 test('hello carries methods features events limits and requires only the v1 capabilities', async () => {
@@ -239,6 +239,27 @@ test('host deletes: dry run, stale revision, managed, not found, committed', asy
  } finally { await host.close(); await c.close(); }
 });
 
+test('setSubagentRisky sets the sub-agent risky-tool mode on a host and on a session', async () => {
+ const c = client('config'); const host = c.host();
+ try {
+  const before = await host.getConfig();
+  const first = await host.setSubagentRisky({ mode: 'parent' });
+  assert.equal(first.changed, true); assert.equal(first.mode, 'parent'); assert.equal(first.config.view, 'global');
+  assert.equal(first.propagation.bound, 'not_bound'); assert.notEqual(first.config.revision, before.revision);
+  const again = await host.setSubagentRisky({ mode: 'parent', if_revision: first.config.revision });
+  assert.equal(again.changed, false);
+  await assert.rejects(host.setSubagentRisky({ mode: 'deny', if_revision: '0000000000000000' }), e => e.reason === 'stale');
+  await assert.rejects(host.setSubagentRisky({ mode: 'allow' }), e => e.reason === 'out_of_range');
+  await assert.rejects(host.setSubagentRisky({ mode: 1 }), e => e.code === 'invalid_input');
+  const reset = await host.setSubagentRisky({ mode: 'classifier' });
+  assert.equal(reset.changed, true); assert.equal(reset.mode, 'classifier');
+  noSecrets([first, again, reset]);
+  const s = await c.create({ cwd: '/fake/work' });
+  const set = await s.setSubagentRisky({ mode: 'deny' });
+  assert.equal(set.changed, true); assert.equal(set.propagation.bound, 'reloaded'); assert.ok(set.session_info);
+ } finally { await host.close(); await c.close(); }
+});
+
 test('an unverified delete is a lost mutation with written and detail; the host stays usable', async () => {
  const c = client('config'); const host = c.host();
  try {
@@ -258,6 +279,7 @@ test('a lost reply is a lost mutation only for calls that write', async () => {
   await assert.rejects(host.deleteProvider({ provider_uuid: 'p' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
   await assert.rejects(host.deleteModel({ model_uuid: 'm', dry_run: false }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
   await assert.rejects(host.unassignRole({ role: 'main' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
+  await assert.rejects(host.setSubagentRisky({ mode: 'deny' }, { timeoutMs: 30 }), e => e instanceof DeliveryUnknownError);
  } finally { await host.close(); await c.close(); }
 });
 
@@ -384,6 +406,8 @@ test('new enum-like strings are open; v1 enums and public roles stay closed', as
   models_truncated: false, roles: ['main', 'awareness', 'safeguard', 'compactor', 'planner'].map(route), main_fallback: 'future' };
  validateResult('config.get', view, {});
  validateResult('config.roles.unassign', { changed: false, previous_model_uuid: null, config: view, propagation: { bound: 'later', extra: 'x' } }, { role: 'main' });
+ validateResult('config.subagent_risky.set', { changed: true, mode: 'later', config: view, propagation: { bound: 'later' } }, { mode: 'parent' });
+ assert.throws(() => validateResult('config.subagent_risky.set', { changed: true, mode: 1, config: view, propagation: {} }, {}), e => e.code === 'protocol');
  validateResult('config.effort.get', { state: 'warming', options: ['default'], selected: 'default', note: null, main_model_uuid: null }, {});
  assert.throws(() => validateResult('config.get', { ...view, models: [{ ...view.models[0], roles: ['cyber-red'] }] }, {}), e => e.code === 'protocol');
  assert.throws(() => validateResult('config.get', { ...view, providers: [{ ...view.providers[0], api_key: 'x' }] }, {}), e => e.code === 'protocol');
