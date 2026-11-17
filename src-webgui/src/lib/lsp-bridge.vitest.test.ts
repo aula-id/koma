@@ -28,3 +28,13 @@ it('foldDrive only touches a leading drive letter', () => {
   expect(foldDrive('/c:/a')).toBe('/c:/a')
   expect(foldDrive('abc')).toBe('abc')
 })
+
+it('pathToUri keeps a POSIX backslash as one encoded segment', () => {
+  expect(pathToUri('/w', 'a\\b.ts')).toBe('file:///w/a%5Cb.ts')
+})
+
+it('splitRootPath resolves diagnostics for Windows roots and not across /var vs /private/var', () => {
+  expect(splitRootPath('C:/proj/src/a.ts', ['c:\\proj'])).toEqual({ root: 'c:\\proj', path: 'src/a.ts' })
+  expect(splitRootPath('C:/proj/src/a.ts', ['\\\\?\\C:\\proj'])).toEqual({ root: '\\\\?\\C:\\proj', path: 'src/a.ts' })
+  expect(splitRootPath('/private/var/x/a.ts', ['/var/x'])).toBeNull()
+})

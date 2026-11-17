@@ -7,6 +7,7 @@ import type { RemoteHandoff } from "./protocol.ts"
 import { SessionScreen } from "./session.tsx"
 import { SuspendedScreen } from "./suspended.tsx"
 import type { Theme } from "./theme.ts"
+import { parentOf } from "./remote-path.ts"
 
 type Stage = "progress" | "auth" | "sessions" | "directories" | "live" | "error"
 export function RemoteScreen({ remote, theme, palette = "dark", syntaxStyle, onHome, onExit, onRemote, onPalette, ctrlC }: {
@@ -93,7 +94,7 @@ export function RemoteScreen({ remote, theme, palette = "dark", syntaxStyle, onH
   const actions = <box flexDirection="row" flexWrap="wrap" flexShrink={0}>
     {stage === "auth" ? <Action label="Authenticate (enter)" primary theme={theme} onPress={authenticate} /> : null}
     {stage === "sessions" ? <><Action label={armed ? `Confirm ${armed.group === "live" ? "kill" : "delete"} (enter)` : "Open (enter)"} theme={theme} onPress={() => { if (armed) remove(); else if (current) open(current.session_id) }} /><Action label="New session" theme={theme} onPress={() => loadDirs("/")} /><Action label={group === "live" ? "History (tab)" : "Live (tab)"} theme={theme} onPress={() => setGroup((g) => g === "live" ? "history" : "live")} /><Action label={group === "live" ? "Kill (ctrl+x)" : "Delete (ctrl+x)"} theme={theme} onPress={remove} /></> : null}
-    {stage === "directories" ? <><Action label="Inspect path" theme={theme} onPress={() => loadDirs(path)} /><Action label="Parent" theme={theme} onPress={() => loadDirs(loadedPath.split("/").slice(0, -1).join("/") || "/")} /><Action label="Select folder" primary={directoryFocus} theme={theme} onPress={() => open(null, loadedPath)} /></> : null}
+    {stage === "directories" ? <><Action label="Inspect path" theme={theme} onPress={() => loadDirs(path)} /><Action label="Parent" theme={theme} onPress={() => loadDirs(parentOf(loadedPath))} /><Action label="Select folder" primary={directoryFocus} theme={theme} onPress={() => open(null, loadedPath)} /></> : null}
     <Action label="Back (esc)" theme={theme} onPress={() => { if (armed) setArmed(null); else onHome() }} />
   </box>
   const rows: Line[] = list.map((s) => ({ label: s.name || s.session_id, detail: `${s.pwd} · ${s.session_id.slice(0, 8)}`, badge: { text: s.working ? "working" : group === "live" ? "ready" : "saved", role: s.working ? "success" : "info" } }))

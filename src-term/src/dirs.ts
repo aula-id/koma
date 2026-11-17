@@ -18,13 +18,22 @@ export function addDirArgument(input: string): string | null {
  * `~/Project` lists Project. A path that is not a directory candidate is unchanged
  * here; the reader drops it when it is not a folder.
  */
-export function directoryToList(arg: string, cwd: string, home = homedir()): string | null {
-  if (arg === "~" || arg === "~/" || arg === "~\\") return home
+export function directoryToList(arg: string, cwd: string, home = homedir(), platform: NodeJS.Platform = process.platform): string | null {
+  if (arg === "~" || arg === "~/" || (platform === "win32" && arg === "~\\")) return home
   if (arg.startsWith("~")) {
-    if (!/^~[\\/]/.test(arg)) return null
+    if (!tildeSep(arg, platform)) return null
     return resolve(join(home, arg.slice(2)))
   }
   return resolve(cwd || ".", arg)
+}
+
+/** Index of the last path separator; backslash counts only on Windows, where it is one. */
+export function lastSep(arg: string, platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? Math.max(arg.lastIndexOf("/"), arg.lastIndexOf("\\")) : arg.lastIndexOf("/")
+}
+
+function tildeSep(arg: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" ? /^~[\\/]/.test(arg) : arg.startsWith("~/")
 }
 
 /**
@@ -33,10 +42,10 @@ export function directoryToList(arg: string, cwd: string, home = homedir()): str
  * whose names start with `U`, so the guide stays up while typing.
  */
 export async function guideFolders(arg: string, cwd: string, home = homedir()): Promise<string[] | null> {
-  if (arg.startsWith("~") && arg !== "~" && !/^~[\\/]/.test(arg)) return null
+  if (arg.startsWith("~") && arg !== "~" && !tildeSep(arg, process.platform)) return null
   const full = directoryToList(arg, cwd, home)
   if (full && await isDirectory(full)) return listChildFolders(full, "")
-  const slash = Math.max(arg.lastIndexOf("/"), arg.lastIndexOf("\\"))
+  const slash = lastSep(arg)
   const parentArg = slash < 0 ? "." : arg.slice(0, slash + 1)
   const prefix = slash < 0 ? arg : arg.slice(slash + 1)
   const parent = directoryToList(parentArg, cwd, home)

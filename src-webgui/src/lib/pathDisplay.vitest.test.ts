@@ -30,5 +30,36 @@ describe('fileUrl', () => {
     expect(fileUrl('\\\\?\\C:\\a\\x.png')).toBe('file:///C:/a/x.png')
     expect(fileUrl('\\\\srv\\share\\x')).toBe('file://srv/share/x')
     expect(fileUrl('/home/a/x.png')).toBe('file:///home/a/x.png')
+    expect(fileUrl('/home/a/b\\c.png')).toBe('file:///home/a/b%5Cc.png')
+  })
+})
+
+import { isWindowsPath, pathKey, pathsEqual, relativeUnder, rootLabel, toSlashIfWindows } from './pathDisplay'
+
+describe('platform-gated path helpers', () => {
+  it('detects Windows shapes only', () => {
+    for (const p of ['C:\\x', 'c:/x', '\\\\?\\C:\\x', '\\\\srv\\sh']) expect(isWindowsPath(p)).toBe(true)
+    for (const p of ['/home/x', 'a\\b', './x']) expect(isWindowsPath(p)).toBe(false)
+  })
+  it('keeps backslashes in POSIX paths', () => {
+    expect(toSlashIfWindows('/home/u/a\\b.ts')).toBe('/home/u/a\\b.ts')
+    expect(toSlashIfWindows('C:\\u\\a.ts')).toBe('C:/u/a.ts')
+    expect(pathKey('/home/u/a\\b/')).toBe('/home/u/a\\b')
+  })
+  it('folds case only for Windows', () => {
+    expect(pathsEqual('c:\\Proj', 'C:/proj/')).toBe(true)
+    expect(pathsEqual('/Home/x', '/home/x')).toBe(false)
+  })
+  it('relativeUnder is boundary safe and keeps tail case', () => {
+    expect(relativeUnder('C:\\proj', 'c:/PROJ/src/a.ts')).toBe('src/a.ts')
+    expect(relativeUnder('\\\\?\\C:\\proj', 'C:/proj/Src/A.ts')).toBe('Src/A.ts')
+    expect(relativeUnder('/w', '/w-secret/x')).toBeNull()
+    expect(relativeUnder('/w', '/w')).toBe('')
+    expect(relativeUnder('/w', '/W/x')).toBeNull()
+    expect(relativeUnder('/w', '/w/a\\b.ts')).toBe('a\\b.ts')
+  })
+  it('rootLabel handles both separators', () => {
+    expect(rootLabel('C:\\Users\\me\\proj')).toBe('proj')
+    expect(rootLabel('/a/b')).toBe('b')
   })
 })

@@ -1,3 +1,6 @@
+import { foldDrive, relativeUnder, stripVerbatim, toSlashIfWindows } from './pathDisplay'
+
+export { foldDrive }
 // Monaco-free LSP types + pending-request map + URI helpers.
 // The boot store and Problems drawer import THIS file so the main bundle
 // never pulls monaco-editor. monaco-lsp.ts (lazy editor path) re-exports these.
@@ -236,24 +239,12 @@ export function resolveLspFileText(
   settle(pendingFileText, requestId, content ?? '', null)
 }
 
-/** Drop the Windows verbatim prefix: `\\?\C:\x` -> `C:\x`, `\\?\UNC\h\s` -> `\\h\s`. */
-function stripVerbatim(p: string): string {
-  if (p.startsWith('\\\\?\\UNC\\')) return `\\\\${p.slice(8)}`
-  if (/^\\\\\?\\[A-Za-z]:/.test(p)) return p.slice(4)
-  return p
-}
-
-/** Upper-case a leading Windows drive letter ("c:/x" -> "C:/x"); no-op for anything else. */
-export function foldDrive(p: string): string {
-  return /^[A-Za-z]:/.test(p) ? p[0].toUpperCase() + p.slice(1) : p
-}
-
 /** file:// URI matching the host's path_to_uri. */
 export function pathToUri(root: string, path: string): string {
   const abs = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
     ? path
     : `${stripVerbatim(root).replace(/[\\/]$/, '')}/${path.replace(/^[\\/]/, '')}`
-  const norm = stripVerbatim(abs).replace(/\\/g, '/')
+  const norm = toSlashIfWindows(abs)
   const encoded = norm.split('/').map((segment, index) => index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)).join('/')
   if (norm.startsWith('//')) return `file:${encoded}`
   if (norm.startsWith('/')) return `file://${encoded}`
@@ -277,14 +268,10 @@ export function splitRootPath(
   absPath: string,
   roots: string[],
 ): { root: string; path: string } | null {
-  const norm = foldDrive(stripVerbatim(absPath).replace(/\\/g, '/'))
   const sorted = [...roots].sort((a, b) => b.length - a.length)
   for (const root of sorted) {
-    const r = foldDrive(stripVerbatim(root).replace(/\\/g, '/').replace(/\/$/, ''))
-    if (norm === r) return { root, path: '' }
-    if (norm.startsWith(r + '/')) {
-      return { root, path: norm.slice(r.length + 1) }
-    }
+    const rel = relativeUnder(root, absPath)
+    if (rel !== null) return { root, path: rel }
   }
   return null
 }

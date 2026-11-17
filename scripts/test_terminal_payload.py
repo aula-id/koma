@@ -133,3 +133,31 @@ class PayloadValidation(unittest.TestCase):
         finally:
             payload._fetch_url = original_fetch
             payload.time.sleep = original_sleep
+
+
+class InputsManifest(unittest.TestCase):
+    def test_inputs_skip_ds_store(self):
+        original = payload.ROOT
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                payload.ROOT = Path(temporary)
+                (payload.ROOT / 'scripts').mkdir()
+                (payload.ROOT / 'scripts/prepare-terminal.py').write_text('x')
+                term = payload.ROOT / 'src-term'
+                (term / 'src/sub').mkdir(parents=True)
+                (term / 'assets').mkdir()
+                for name in ['package.json', 'bun.lock', 'tsconfig.json']:
+                    (term / name).write_text('{}')
+                (term / 'src/a.ts').write_text('a')
+                (term / 'src/.DS_Store').write_text('junk')
+                (term / 'src/sub/.DS_Store').write_text('junk')
+                (term / 'assets/.DS_Store').write_text('junk')
+                keys = payload.inputs()
+                self.assertIn('src-term/src/a.ts', keys)
+                self.assertFalse([k for k in keys if k.endswith('.DS_Store')])
+        finally:
+            payload.ROOT = original
+
+
+if __name__ == '__main__':
+    unittest.main()
