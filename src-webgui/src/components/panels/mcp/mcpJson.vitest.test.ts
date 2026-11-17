@@ -152,3 +152,10 @@ describe('schema', () => {
     expect(anyOf.some((s) => s.additionalProperties?.anyOf)).toBe(true)
   })
 })
+
+describe('import pre-check follows the host on multi-line values', () => {
+  it('accepts a line break in an env value and an upper-case transport', () => {
+    const r = checkImportJson('{"a":{"command":"x","env":{"K":"a\\nb"}},"b":{"type":"HTTP","url":"https://h"}}')
+    expect(r.ok && r.names).toEqual(['a', 'b'])
+  })
+})

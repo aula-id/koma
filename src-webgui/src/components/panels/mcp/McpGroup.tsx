@@ -48,7 +48,7 @@ export function FormRow({
         </div>
       )}
       {error && (
-        <span id={errorId} className="text-[11px] text-koma-error">
+        <span id={errorId} role="alert" className="text-[11px] text-koma-error">
           {error}
         </span>
       )}

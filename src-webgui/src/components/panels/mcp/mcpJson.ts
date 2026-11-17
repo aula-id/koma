@@ -91,14 +91,14 @@ function strField(o: Json, key: string): string | null | { error: string } {
   return typeof v === 'string' ? v : { error: `"${key}" must be a string` }
 }
 
-function mapField(o: Json, key: string): [string, string][] | { error: string } {
+function mapField(o: Json, key: string, lineBased: boolean): [string, string][] | { error: string } {
   const v = o[key]
   if (v === undefined || v === null) return []
   if (!isObj(v)) return { error: `"${key}" must be an object of strings` }
   const out: [string, string][] = []
   for (const [k, val] of Object.entries(v)) {
     if (typeof val !== 'string') return { error: `"${key}.${k}" must be a string` }
-    if (/[\r\n]/.test(k) || /[\r\n]/.test(val)) return { error: `"${key}.${k}" cannot contain a line break` }
+    if (lineBased && (/[\r\n]/.test(k) || /[\r\n]/.test(val))) return { error: `"${key}.${k}" cannot contain a line break` }
     out.push([k, val])
   }
   return out
@@ -123,7 +123,7 @@ const bad = (v: unknown): v is { error: string } => typeof v === 'object' && v !
 
 /** One entry object onto a draft. Fields that do not apply to the chosen transport keep the
  *  base draft's values, like the form does when you flip the transport. */
-function entryToDraft(name: string, raw: unknown, base: McpDraft): JsonDraftResult {
+function entryToDraft(name: string, raw: unknown, base: McpDraft, lineBased = true): JsonDraftResult {
   const label = name ? `'${name}': ` : ''
   if (!isObj(raw)) return fail(`${label}a server must be a JSON object`)
   const warnings: string[] = []
@@ -135,12 +135,12 @@ function entryToDraft(name: string, raw: unknown, base: McpDraft): JsonDraftResu
   const args = listField(raw, 'args')
   const allowed = listField(raw, 'allowedTools', 'enabledTools')
   const disabledTools = listField(raw, 'disabledTools')
-  const env = mapField(raw, 'env')
-  const headers = mapField(raw, 'headers')
+  const env = mapField(raw, 'env', lineBased)
+  const headers = mapField(raw, 'headers', lineBased)
   const startup = msField(raw, 'startupTimeoutMs')
   const tool = msField(raw, 'toolTimeoutMs')
   for (const v of [args, allowed, disabledTools, env, headers, startup, tool]) if (bad(v)) return fail(label + v.error)
-  if ((args as string[]).some((a) => /[\r\n]/.test(a))) return fail(`${label}"args" cannot contain a line break`)
+  if (lineBased && (args as string[]).some((a) => /[\r\n]/.test(a))) return fail(`${label}"args" cannot contain a line break`)
 
   const cmd = ((command as string | null) ?? '').trim()
   const link = ((url as string | null) ?? '').trim()
@@ -212,7 +212,7 @@ export function checkImportJson(text: string): ImportCheck {
       errors.push('empty server name')
       continue
     }
-    const r = entryToDraft(n, raw, blankDraft())
+    const r = entryToDraft(n, raw, blankDraft(), false)
     if (!r.ok) errors.push(r.error)
     else if (r.draft.transport === 'stdio' && !r.draft.command.trim()) warnings.push(`'${n}': no command; skipped`)
     else if (r.draft.transport === 'http' && !r.draft.url.trim()) warnings.push(`'${n}': no url; skipped`)
@@ -230,8 +230,8 @@ const strMap = { type: 'object', additionalProperties: str }
 const strList = { type: 'array', items: str }
 
 const timing = {
-  startupTimeoutMs: { type: 'number', exclusiveMinimum: 0, description: 'Startup timeout in milliseconds.' },
-  toolTimeoutMs: { type: 'number', exclusiveMinimum: 0, description: 'Tool call timeout in milliseconds.' },
+  startupTimeoutMs: { type: 'number', minimum: 0, description: 'Startup timeout in milliseconds.' },
+  toolTimeoutMs: { type: 'number', minimum: 0, description: 'Tool call timeout in milliseconds.' },
   allowedTools: { ...strList, description: 'Only these tools are offered; * matches any text.' },
   disabledTools: { ...strList, description: 'These tools are hidden; wins over allowedTools.' },
   disabled: { type: 'boolean', description: 'true keeps the server saved but unused.' },
@@ -242,7 +242,7 @@ const stdioServer = {
   type: 'object',
   description: 'A server started as a local command.',
   properties: {
-    type: { enum: ['stdio'] },
+    type: { type: 'string', examples: ['stdio'], description: 'stdio (default when there is a command).' },
     command: { ...str, description: 'Program to run, e.g. npx.' },
     args: { ...strList, description: 'Arguments, one list item each.' },
     env: { ...strMap, description: 'Environment variables. ${VAR} reads from the environment.' },
@@ -256,7 +256,7 @@ const httpServer = {
   type: 'object',
   description: 'A server reached over a URL.',
   properties: {
-    type: { enum: ['http', 'sse', 'streamable-http', 'streamableHttp'] },
+    type: { type: 'string', examples: ['http', 'sse', 'streamable-http'], description: 'Case-insensitive; sse connects as streamable HTTP.' },
     url: { ...str, description: 'Server URL.' },
     headers: { ...strMap, description: 'Request headers. ${VAR} reads from the environment.' },
     ...timing,
