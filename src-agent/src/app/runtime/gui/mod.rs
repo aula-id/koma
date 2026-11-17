@@ -539,8 +539,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // own tao example (github.com/tauri-apps/muda examples/tao.rs): build the
     // `Menu` + submenus after the window exists, then `init_for_nsapp()` (main
     // thread only — `run_gui` never leaves the main thread before this point).
+    //
+    // The `Menu` must outlive the event loop: muda's About item (the only one
+    // here that is not a bare AppKit selector) stores a raw pointer to its
+    // Rust-side `MenuChild` and dereferences it on click. Dropping the menu at
+    // the end of this block freed that child, so clicking About hit a dead
+    // pointer and aborted the whole app. `native_menu` is held by the event
+    // loop closure below.
     #[cfg(target_os = "macos")]
-    {
+    let native_menu = {
         use muda::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
 
         let menu_bar = Menu::new();
@@ -577,7 +584,8 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         ]);
 
         menu_bar.init_for_nsapp();
-    }
+        menu_bar
+    };
 
     // --- 2. Host-relay wiring --------------------------------------------------
     // The GUI host IS the daemon client, but this main thread is owned by tao/GTK
@@ -834,6 +842,8 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut launcher_install = Some(proxy.clone());
     event_loop.run(move |event, target, control_flow| {
+        #[cfg(target_os = "macos")]
+        let _keep_menu_alive = &native_menu;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(install_proxy) = launcher_install.take() {
             if let Err(e) = std::thread::Builder::new()

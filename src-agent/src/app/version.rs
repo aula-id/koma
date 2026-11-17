@@ -500,6 +500,25 @@ mod tests {
         assert_eq!(v["channel"], "preview");
     }
 
+    #[test]
+    fn build_info_json_escapes_hostile_values() {
+        let raw = build_info_json_from(
+            "1.0\"\\\n",
+            "zz",
+            "tar\"get\\\r\n\u{2028}",
+            "-5",
+            "o\"s",
+        );
+        // Raw newlines or quotes would end the JS string/statement early in
+        // `window.__komaBuild=<json>;`.
+        assert!(!raw.contains('\n') && !raw.contains('\r'));
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["target"], "tar\"get\\\r\n\u{2028}");
+        assert_eq!(v["os"], "o\"s");
+        assert!(v["buildDate"].is_null());
+        assert_eq!(v["sha"], "unknown");
+    }
+
     fn release(tag: &str, prerelease: bool) -> GhRelease {
         GhRelease {
             tag_name: tag.into(),
