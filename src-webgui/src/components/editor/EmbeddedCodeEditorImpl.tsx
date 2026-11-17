@@ -115,7 +115,9 @@ export default function EmbeddedCodeEditorImpl(props: EmbeddedCodeEditorProps) {
     const model = modelRef.current
     const editor = editorRef.current
     if (!model || !editor || model.getValue(monaco.editor.EndOfLinePreference.LF) === value) return
-    editor.executeEdits('embedded-value', [{ range: model.getFullModelRange(), text: value }])
+    // Model edits, not editor.executeEdits: that silently no-ops while the editor is read-only.
+    editor.pushUndoStop()
+    model.pushEditOperations(null, [{ range: model.getFullModelRange(), text: value }], () => null)
     editor.pushUndoStop()
   }, [value])
 

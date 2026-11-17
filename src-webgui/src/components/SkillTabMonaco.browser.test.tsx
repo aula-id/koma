@@ -56,7 +56,7 @@ describe('SkillTab Monaco editors', () => {
     await mount()
     await ready()
     model().setValue('# changed')
-    await userEvent.click(document.querySelector<HTMLElement>('[data-testid="skill-instruction-editor"] .view-lines')!)
+    monaco.editor.getEditors().find((e) => e.getModel() === model())!.focus()
     await until(() => !!document.activeElement?.closest('[data-testid="skill-instruction-editor"]'))
     const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? 'Meta' : 'Control'
     await userEvent.keyboard(`{${mod}>}s{/${mod}}`)
@@ -73,6 +73,16 @@ describe('SkillTab Monaco editors', () => {
     expect(model().getLanguageId()).toBe('python')
     expect(model().getValue()).toBe('print(1)\n')
     expect(document.querySelector('[data-testid="skill-companion-editor"] textarea')?.hasAttribute('readonly')).toBe(true)
+  })
+
+  it('a read-only editor still follows content changes from outside', async () => {
+    await mount()
+    await userEvent.click([...document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'scripts/run.py')!)
+    const key = `${tab.id}:scripts/run.py`
+    useKoma.setState((s) => ({ skillFiles: { ...s.skillFiles, [key]: { content: 'print(1)\n' } as never } }))
+    await until(() => !!document.querySelector('[data-testid="skill-companion-editor"][data-editor-state="ready"]'))
+    useKoma.setState((s) => ({ skillFiles: { ...s.skillFiles, [key]: { content: 'print(2)\n' } as never } }))
+    await until(() => model().getValue() === 'print(2)\n')
   })
 
   it('an external skill editor is read-only and cannot be saved', async () => {
