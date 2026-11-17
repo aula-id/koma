@@ -34,7 +34,7 @@ MODEL_ID = 'smoke-model'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.tool_policy.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 # Port 9 (discard) on loopback: connections are refused and never leave the machine.
 CLOSED = 'http://127.0.0.1:9'
 # Hosts of koma's public catalogues; the daemon's log must never name them.
@@ -296,7 +296,27 @@ def run_unbound(adapter):
            f'a bad pattern is refused: {error}')
     cleared = adapter.result('config.tool_policy.set', deny=[])
     expect(cleared['changed'] is True and cleared['deny'] == [], f'deny list cleared: {cleared}')
-    step('7b config.tool_policy.set: stored, idempotent, a bad pattern refused, cleared')
+    step('7c config.tool_policy.set: stored, idempotent, a bad pattern refused, cleared')
+    root = os.path.realpath(short_temp_dir())
+    try:
+        before = global_view(adapter)['revision']
+        result = adapter.result('config.skill_roots.set', roots=[root])
+        expect(result['changed'] is True and result['roots'] == [root], f'skill root stored: {result}')
+        expect(result['config']['revision'] != before, 'setting a skill root changes config.json')
+        kept = global_view(adapter)
+        expect(any(p['name'] == PROVIDER for p in kept['providers']), 'the provider survives a skill root write')
+        again = adapter.result('config.skill_roots.set', roots=[root])
+        expect(again['changed'] is False and again['config']['revision'] == result['config']['revision'],
+               f'the same roots write nothing: {again}')
+        error = adapter.error('config.skill_roots.set', roots=[os.path.join(root, 'absent')])
+        expect((error['code'], error.get('reason'), error['delivery']) == ('invalid_request', 'out_of_range',
+                                                                           'not_sent'),
+               f'a missing directory is refused: {error}')
+        cleared = adapter.result('config.skill_roots.set', roots=[])
+        expect(cleared['changed'] is True and cleared['roots'] == [], f'roots cleared: {cleared}')
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    step('7b config.skill_roots.set: stored, idempotent, a missing directory refused, cleared')
 
     code = adapter.wait_exit()
     expect(code == 0, f'{adapter.name}: exit 0 on stdin EOF, got {code}')

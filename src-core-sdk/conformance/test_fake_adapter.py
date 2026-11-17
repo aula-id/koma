@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,7 +15,7 @@ PROTOCOL = HERE.parent / 'protocol'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-          'config.tool_policy.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
             'sessions.transcript']
 SKILLS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
@@ -250,6 +251,42 @@ class Conformance(unittest.TestCase):
         if schema is not None:
             for number in '89':
                 schema.validate(replies[number])
+
+    def test_skill_roots_set(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            one, two = os.path.realpath(tmp), os.path.realpath(os.path.join(tmp, 'sub'))
+            os.mkdir(two)
+            _, replies = self.replies('config', [
+                call(1, 'config.get'),
+                call(2, 'config.skill_roots.set'),
+                call(3, 'config.skill_roots.set', roots='x'),
+                call(4, 'config.skill_roots.set', roots=['relative']),
+                call(5, 'config.skill_roots.set', roots=[os.path.join(tmp, 'absent')]),
+                call(6, 'config.skill_roots.set', roots=[one, one]),
+                call(7, 'config.skill_roots.set', roots=[one], if_revision='0000000000000000'),
+                call(8, 'config.skill_roots.set', roots=[one, two]),
+                call(9, 'config.skill_roots.set', roots=[one, two]),
+                call(10, 'config.get'),
+                call(11, 'config.skill_roots.set', roots=[]),
+                call(12, 'config.skill_roots.set', roots=[]),
+                call(13, 'config.skill_roots.set', roots=[one], if_revision='0000000000000000')])
+            self.assertReason(replies['2'], 'invalid_request', 'missing_params')
+            for number in '3456':
+                self.assertReason(replies[number], 'invalid_request', 'out_of_range')
+            self.assertReason(replies['7'], 'invalid_state', 'stale')
+            first = replies['8']['result']
+            self.assertEqual((first['changed'], first['roots'], first['config']['view']), (True, [one, two], 'global'))
+            self.assertEqual(first['propagation']['bound'], 'not_bound')
+            self.assertEqual((replies['9']['result']['changed'], replies['9']['result']['propagation']), (False, {}))
+            self.assertNotEqual(replies['1']['result']['revision'], replies['10']['result']['revision'])
+            self.assertEqual((replies['11']['result']['changed'], replies['11']['result']['roots']), (True, []))
+            self.assertEqual(replies['12']['result']['changed'], False)
+            self.assertReason(replies['13'], 'invalid_state', 'stale')
+            schema = validator()
+            if schema is not None:
+                for number in '89':
+                    schema.validate(replies[number])
 
     def test_config_unbound(self):
         result, replies = self.replies('config', [

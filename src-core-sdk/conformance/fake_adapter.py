@@ -18,7 +18,7 @@ MAX_LINE = 40 * 1024 * 1024
 V1_METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt',
               'interrupt_and_submit', 'approve', 'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-                  'config.tool_policy.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
                    'sessions.transcript']
 SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
@@ -125,6 +125,7 @@ else:
     catalogue = dict(file='missing', providers=[], oauth=[], models=[])
 effort_ready = set()
 tool_deny = []
+skill_roots = []
 info_clock = 0
 
 def event():
@@ -151,7 +152,11 @@ def invalid(rid, reason, message):
 def revision():
     if catalogue['file'] == 'missing':
         return 'absent'
-    document = dict(catalogue, tool_policy=dict(deny=tool_deny)) if tool_deny else catalogue
+    document = dict(catalogue)
+    if tool_deny:
+        document['tool_policy'] = dict(deny=tool_deny)
+    if skill_roots:
+        document['skill_roots'] = skill_roots
     raw = json.dumps(document, sort_keys=True, separators=(',', ':')).encode()
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -466,6 +471,42 @@ def tool_policy_set(rid, params):
     return response(rid, with_info(dict(changed=True, deny=stored, config=config_view('global'),
                                          propagation=propagation)))
 
+def skill_roots_set(rid, params):
+    if 'roots' not in params:
+        return invalid(rid, 'missing_params', 'roots is required')
+    roots = params['roots']
+    if not isinstance(roots, list) or len(roots) > 64:
+        return invalid(rid, 'out_of_range', 'roots must be a list of at most 64 paths')
+    for root in roots:
+        if not isinstance(root, str) or not 1 <= len(root) <= 4096 or CONTROL.search(root):
+            return invalid(rid, 'out_of_range', 'a root must be a path of 1 to 4096 characters')
+        if not os.path.isabs(root):
+            return invalid(rid, 'out_of_range', 'root %s must be an absolute path' % root)
+    error = check_common(rid, params)
+    if error:
+        return error
+    resolved = []
+    for root in roots:
+        real = os.path.realpath(root)
+        if not os.path.isdir(real) or real in resolved:
+            return invalid(rid, 'out_of_range', 'root %s must be an existing directory, listed once' % root)
+        resolved.append(real)
+    error = check_stale(rid, params)
+    if error:
+        return error
+    changed = resolved != skill_roots
+    if not changed:
+        return response(rid, with_info(dict(changed=False, roots=list(resolved), config=config_view('global'),
+                                             propagation={})))
+    skill_roots[:] = resolved
+    catalogue['file'] = 'ok'
+    if session is not None:
+        touch()
+    propagation = dict(bound='reloaded' if binding == 'coding' else 'not_bound', broadcast='sent',
+                       rebind='not_needed', rooms='next_start')
+    return response(rid, with_info(dict(changed=True, roots=list(resolved), config=config_view('global'),
+                                         propagation=propagation)))
+
 def effort_get(rid, params):
     wait_ms = params.get('wait_ms', 3000)
     if not is_int(wait_ms) or not 0 <= wait_ms <= 10000:
@@ -532,6 +573,8 @@ def config_call(rid, method, params):
         return roles_unassign(rid, params)
     if method == 'config.tool_policy.set':
         return tool_policy_set(rid, params)
+    if method == 'config.skill_roots.set':
+        return skill_roots_set(rid, params)
     denied = binding_denial(rid, method, params)
     if denied:
         return denied

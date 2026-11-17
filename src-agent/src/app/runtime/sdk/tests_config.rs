@@ -201,7 +201,13 @@ async fn an_unreadable_config_error_never_quotes_the_file() {
     for (method, params) in calls {
         let error = call(&mut adapter, method, params).await.unwrap_err();
         assert_eq!(reason(&error), Some("config_unreadable"), "{method}");
-        assert!(error.message.starts_with("config.json is not valid (data error"), "{}", error.message);
+        assert!(
+            error
+                .message
+                .starts_with("config.json is not valid (data error"),
+            "{}",
+            error.message
+        );
         let wire = serde_json::to_string(&error).unwrap();
         assert!(!wire.contains("MCPENVSECRET"), "{method}: {wire}");
     }
@@ -551,6 +557,130 @@ async fn endpoint_userinfo_and_query_are_stripped() {
     assert_eq!(view["roles"][0]["origin"], "global");
     assert_eq!(view["roles"][0]["model_uuid"], "m-main");
     assert_eq!(view["roles"][0]["provider_name"], "local");
+}
+
+// ── config.skill_roots.set ─────────────────────────────────────────────────
+
+fn skill_root_dir(parent: &TempDir, name: &str) -> PathBuf {
+    let dir = parent.0.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(dir).unwrap()
+}
+
+#[tokio::test]
+async fn skill_roots_set_replaces_only_that_key_and_is_idempotent() {
+    let (dir, store) = store_with_fixture();
+    let one = skill_root_dir(&dir, "team-skills");
+    let two = skill_root_dir(&dir, "more-skills");
+    let mut adapter = unbound(&store);
+    let before = store.read().unwrap();
+
+    let first = call(
+        &mut adapter,
+        "config.skill_roots.set",
+        json!({"roots":[one, two]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["roots"], json!([one, two]));
+    assert_eq!(first["config"]["view"], "global");
+    assert_no_secret(&first.to_string());
+    let after = store.read().unwrap();
+    assert_eq!(
+        after.config.extra_skill_roots,
+        vec![one.clone(), two.clone()]
+    );
+    assert_eq!(after.config.providers.len(), before.config.providers.len());
+    assert_eq!(after.config.models.len(), before.config.models.len());
+    assert_eq!(after.config.providers[0].api_key, PLANTED_KEY);
+
+    let bytes = dir.bytes();
+    let again = call(
+        &mut adapter,
+        "config.skill_roots.set",
+        json!({"roots":[one, two], "if_revision": after.revision}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["changed"], false);
+    assert_eq!(dir.bytes(), bytes);
+
+    let cleared = call(&mut adapter, "config.skill_roots.set", json!({"roots":[]}))
+        .await
+        .unwrap();
+    assert_eq!(cleared["changed"], true);
+    assert_eq!(cleared["roots"], json!([]));
+    assert!(store.read().unwrap().config.extra_skill_roots.is_empty());
+}
+
+#[tokio::test]
+async fn skill_roots_set_keeps_a_key_another_writer_saved() {
+    let (dir, store) = store_with_fixture();
+    let root = skill_root_dir(&dir, "team-skills");
+    let mut adapter = unbound(&store);
+    // Another writer saves a new provider after the adapter started.
+    let mut other = store.read().unwrap().config;
+    other
+        .providers
+        .push(provider("p-late", "late", "http://127.0.0.1:10/v1"));
+    write_config(&dir.config(), &other);
+    call(
+        &mut adapter,
+        "config.skill_roots.set",
+        json!({"roots":[root]}),
+    )
+    .await
+    .unwrap();
+    let after = store.read().unwrap().config;
+    assert!(after.providers.iter().any(|p| p.uuid == "p-late"));
+    assert_eq!(after.extra_skill_roots, vec![root]);
+}
+
+#[tokio::test]
+async fn skill_roots_set_refuses_bad_roots_before_writing() {
+    let (dir, store) = store_with_fixture();
+    let good = skill_root_dir(&dir, "team-skills");
+    let file = dir.0.join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let cases = [
+        (json!({}), "missing_params"),
+        (json!({"roots":"/x"}), "out_of_range"),
+        (json!({"roots":[1]}), "out_of_range"),
+        (json!({"roots":[""]}), "out_of_range"),
+        (json!({"roots":["relative/skills"]}), "out_of_range"),
+        (json!({"roots":["~/skills"]}), "out_of_range"),
+        (json!({"roots":[dir.0.join("absent")]}), "out_of_range"),
+        (json!({"roots":[file]}), "out_of_range"),
+        (json!({"roots":[good, good]}), "out_of_range"),
+    ];
+    for (params, expected) in cases {
+        let error = call(&mut adapter, "config.skill_roots.set", params.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(reason(&error), Some(expected), "{params}");
+        assert_eq!(error.delivery, "not_sent", "{params}");
+    }
+    assert_eq!(dir.bytes(), bytes);
+}
+
+#[tokio::test]
+async fn skill_roots_set_refuses_a_stale_revision() {
+    let (dir, store) = store_with_fixture();
+    let root = skill_root_dir(&dir, "team-skills");
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let error = call(
+        &mut adapter,
+        "config.skill_roots.set",
+        json!({"roots":[root], "if_revision":"0000000000000000"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&error), Some("stale"));
+    assert_eq!(dir.bytes(), bytes);
 }
 
 // ── config.tool_policy.set ─────────────────────────────────────────────────
@@ -1439,6 +1569,35 @@ mod bound {
         assert!(seen
             .iter()
             .any(|r| matches!(r, ClientRequest::ReloadGlobalCatalogue)));
+    }
+
+    #[tokio::test]
+    async fn skill_roots_in_a_coding_binding_are_written_here_and_reloaded_by_the_daemon() {
+        let (dir, store) = store_with_fixture();
+        let root = skill_root_dir(&dir, "team-skills");
+        let (c, peer) = fake_daemon(Box::new(|request| match request {
+            ClientRequest::ReloadGlobalCatalogue => vec![E::Ack],
+            _ => readback(request, "").unwrap_or_default(),
+        }));
+        let mut adapter = coding(c, &store).await;
+        let result = call(
+            &mut adapter,
+            "config.skill_roots.set",
+            json!({"roots":[root]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["changed"], true);
+        assert_eq!(result["propagation"]["bound"], "reloaded");
+        assert!(result.get("session_info").is_some());
+        assert_eq!(store.read().unwrap().config.extra_skill_roots, vec![root]);
+        let seen = requests(adapter, peer).await;
+        assert!(seen
+            .iter()
+            .any(|r| matches!(r, ClientRequest::ReloadGlobalCatalogue)));
+        assert!(!seen
+            .iter()
+            .any(|r| matches!(r, ClientRequest::SetExtraSkillRoots { .. })));
     }
 
     #[tokio::test]
