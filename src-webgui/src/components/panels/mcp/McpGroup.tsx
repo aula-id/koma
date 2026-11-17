@@ -89,7 +89,7 @@ export function FormGroup({
             className={`flex-none text-koma-fg opacity-70 transition-transform ${open ? 'rotate-90' : ''}`}
           />
           <span className="flex min-w-0 flex-col">
-            <span className="truncate text-[12px] font-semibold text-koma-fg">{title}</span>
+            <span className="text-[12px] font-semibold leading-snug text-koma-fg">{title}</span>
             <span className="truncate text-[11px] text-koma-fg opacity-60">{summary}</span>
           </span>
         </button>
@@ -101,5 +101,42 @@ export function FormGroup({
         </div>
       )}
     </section>
+  )
+}
+
+/** Sticky bottom bar of the MCP tabs; its content lines up with the page column. */
+export function McpFooter({
+  onCancel,
+  onSave,
+  saveDisabled,
+  saveLabel = 'Save',
+}: {
+  onCancel: () => void
+  onSave: () => void
+  saveDisabled?: boolean
+  saveLabel?: string
+}) {
+  return (
+    <div className="flex-none border-t border-koma-border bg-koma-bg px-6 py-2.5" data-tour="form-actions">
+      <div className="mx-auto flex max-w-3xl items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          data-tour="form-cancel"
+          className="rounded px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saveDisabled}
+          data-tour="form-save"
+          className="rounded border border-koma-border bg-koma-hover px-3.5 py-1.5 text-[12px] font-medium text-koma-fg transition-colors enabled:hover:bg-koma-head disabled:opacity-40"
+        >
+          {saveLabel}
+        </button>
+      </div>
+    </div>
   )
 }

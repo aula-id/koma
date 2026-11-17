@@ -432,6 +432,8 @@ export type KomaState = {
   requestSkillDetail: (tabId: string, skillId: string, generation: string) => void
   readSkillFile: (tabId: string, skillId: string, generation: string, path: string) => void
   openAgentTab: (agentId: string | null) => void
+  // Open (or focus) the MCP editor tab: one 'new', one 'import', one 'edit' per server uuid.
+  openMcpTab: (target: { mode: 'new' } | { mode: 'import' } | { mode: 'edit'; uuid: string; title: string }) => void
   // Rebind an already-open agent tab's identity after a successful
   // create/rename (fired optimistically right after the SetAgent req, since
   // the wire gives no dedicated ack — just a fresh AgentsValues push). Updates

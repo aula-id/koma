@@ -1,28 +1,20 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { McpListView } from "./mcp/McpListView";
-import { McpEditView } from "./mcp/McpEditView";
-import { McpImportView } from "./mcp/McpImportView";
-import {
-  blankDraft,
-  draftToRequest,
-  toDraft,
-  type McpDraft,
-} from "./mcp/mcpForm";
 import { useKoma } from "../../store/koma";
-import type { McpServer } from "../../types/config";
+import { mcpEditTabId } from "../../store/actions/mcp";
 
-// Design reference: master -> detail swap, inline form, inline arm-delete — no
-// popups. `servers` is the authoritative config slice (pushed by the host);
-// add/edit/delete/enable emit GuiReqs and wait for the host's Config push to
+// Design reference: master list in the sidebar; the add/edit form and the JSON import
+// open as editor tabs (McpTab). `servers` is the authoritative config slice (pushed by
+// the host); enable/delete/etc. emit GuiReqs and wait for the host's Config push to
 // reflect back, rather than mutating local state optimistically.
 export function McpPanel() {
   const servers = useKoma((s) => s.config.mcp);
   const project = useKoma((s) => s.config.mcpProject);
   const req = useKoma((s) => s.req);
   const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus);
-  const [draft, setDraft] = useState<McpDraft | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [isNew, setIsNew] = useState(false);
+  const openMcpTab = useKoma((s) => s.openMcpTab);
+  const closeTab = useKoma((s) => s.closeTab);
+  const activeTabId = useKoma((s) => s.ui.activeTabId);
   const [armed, setArmed] = useState<string | null>(null);
 
   // Refresh live connection status each time the MCP sidebar is opened.
@@ -31,37 +23,14 @@ export function McpPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const openAdd = () => {
-    setDraft(blankDraft());
-    setIsNew(true);
-  };
-  const openEdit = (s: McpServer) => {
-    setDraft(toDraft(s));
-    setIsNew(false);
-  };
-  const patch = (p: Partial<McpDraft>) =>
-    setDraft((d) => (d ? { ...d, ...p } : d));
-  const cancel = () => setDraft(null);
-  const save = () => {
-    if (!draft || !draft.name.trim()) return;
-    // Flat payload matching the daemon's GuiReq::SetMcpServer. `uuid` is the
-    // daemon config uuid on edit; `null` for a new server (the client-side
-    // `draft.id` is a synthetic placeholder, so the daemon mints a real uuid).
-    req(draftToRequest(draft, isNew));
-    setDraft(null);
-  };
-  const importJson = (text: string) => {
-    req({ r: "ImportMcpJson", text });
-    setImporting(false);
-  };
   const remove = (id: string) => {
     req({ r: "DeleteMcpServer", uuid: id });
+    closeTab(mcpEditTabId(id));
     setArmed(null);
   };
   const toggleEnable = (id: string, enabled: boolean) => {
     req({ r: "EnableMcpServer", uuid: id, enabled });
   };
-
   const restart = (id: string) => {
     req({ r: "RestartMcpServer", uuid: id });
     setTimeout(refreshMcpStatus, 1500);
@@ -73,41 +42,23 @@ export function McpPanel() {
 
   return (
     <div className="relative h-full overflow-hidden">
-      {importing ? (
-        <div className="absolute inset-0 flex flex-col bg-koma-panel">
-          <McpImportView
-            onImport={importJson}
-            onCancel={() => setImporting(false)}
-          />
-        </div>
-      ) : draft ? (
-        <div className="absolute inset-0 flex flex-col bg-koma-panel">
-          <McpEditView
-            draft={draft}
-            isNew={isNew}
-            onChange={patch}
-            onSave={save}
-            onCancel={cancel}
-          />
-        </div>
-      ) : (
-        <div className="absolute inset-0 flex flex-col bg-koma-panel">
-          <McpListView
-            servers={servers}
-            project={project}
-            armed={armed}
-            onAdd={openAdd}
-            onImport={() => setImporting(true)}
-            onEdit={openEdit}
-            onArm={(id) => setArmed(id)}
-            onDisarm={() => setArmed(null)}
-            onConfirm={remove}
-            onToggleEnable={toggleEnable}
-            onRestart={restart}
-            onApprove={approve}
-          />
-        </div>
-      )}
+      <div className="absolute inset-0 flex flex-col bg-koma-panel">
+        <McpListView
+          servers={servers}
+          project={project}
+          armed={armed}
+          activeTabId={activeTabId}
+          onAdd={() => openMcpTab({ mode: "new" })}
+          onImport={() => openMcpTab({ mode: "import" })}
+          onEdit={(s) => openMcpTab({ mode: "edit", uuid: s.id, title: s.name })}
+          onArm={(id) => setArmed(id)}
+          onDisarm={() => setArmed(null)}
+          onConfirm={remove}
+          onToggleEnable={toggleEnable}
+          onRestart={restart}
+          onApprove={approve}
+        />
+      </div>
     </div>
   );
 }

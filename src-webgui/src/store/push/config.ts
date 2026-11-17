@@ -1,5 +1,6 @@
 import type { StoreGet, StoreSet } from '../api'
 import { applyPaletteVars, updateBootstrap } from '../initial'
+import { reconcileMcpTabs } from '../actions/mcp'
 import type { PushEnvelope } from '../types/envelope'
 
 export function pushConfig(set: StoreSet, get: StoreGet, env: PushEnvelope): boolean {
@@ -30,7 +31,11 @@ export function pushConfig(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
             palettes: env.palettes && env.palettes.length > 0 ? env.palettes : s.config.palettes,
           },
           ...(env.palette ? { palette: env.palette } : {}),
-          ...(s.ui.bootstrap ? { ui: updateBootstrap(s.ui, { config: 'done' }) } : {}),
+          // A deleted server's editor tab has nothing left to show; renames update titles.
+          ui: (() => {
+            const ui = reconcileMcpTabs(s.ui, env.mcp)
+            return ui.bootstrap ? updateBootstrap(ui, { config: 'done' }) : ui
+          })(),
         }))
         break
       case 'McpStatus': {

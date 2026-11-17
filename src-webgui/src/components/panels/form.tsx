@@ -38,11 +38,11 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
-export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({ className = '', ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
-      className="min-h-[56px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1 font-mono text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip"
+      className={`${className} min-h-[56px] w-full resize-y rounded border border-koma-border bg-koma-bg px-2 py-1 font-mono text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-35 focus:border-koma-grip`}
     />
   )
 }

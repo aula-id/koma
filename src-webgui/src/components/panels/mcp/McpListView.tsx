@@ -1,11 +1,14 @@
 import { Plug, Plus, FileJson, Pencil, Trash2, Check, X, RotateCw } from 'lucide-react'
 import type { McpProject, McpServer } from '../../../types/config'
 import { EmptyState } from '../helpers'
+import { mcpEditTabId } from '../../../store/actions/mcp'
 
 type Props = {
   servers: McpServer[]
   project?: McpProject
   armed: string | null
+  /** Id of the active editor tab; the row whose tab it is gets highlighted. */
+  activeTabId?: string
   onAdd: () => void
   onImport: () => void
   onEdit: (s: McpServer) => void
@@ -21,6 +24,7 @@ export function McpListView({
   servers: all,
   project,
   armed,
+  activeTabId,
   onAdd,
   onImport,
   onEdit,
@@ -39,7 +43,10 @@ export function McpListView({
     return (
       <div
         key={s.id}
-        className="group flex min-h-[38px] items-center gap-2.5 px-3 py-1.5 hover:bg-koma-hover"
+        aria-current={activeTabId === mcpEditTabId(s.id) ? 'true' : undefined}
+        className={`group flex min-h-[38px] items-center gap-2.5 px-3 py-1.5 hover:bg-koma-hover ${
+          activeTabId === mcpEditTabId(s.id) ? 'bg-koma-hover' : ''
+        }`}
       >
         {armed === s.id ? (
           <div className="flex flex-1 items-center gap-2">

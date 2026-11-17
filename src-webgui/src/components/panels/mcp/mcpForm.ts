@@ -210,3 +210,13 @@ export function badSeconds(text: string): boolean {
 export function limitsHasValues(d: McpDraft): boolean {
   return limitsSummary(d) !== 'default' || d.startupSec.trim() !== '' || d.toolSec.trim() !== ''
 }
+
+export type McpStatus = { label: string; tone: 'ok' | 'warn' | 'off' | 'wait' }
+
+/** One-line live state of a saved server, for the editor header. */
+export function serverStatus(s: McpServer): McpStatus {
+  if (!s.enabled) return { label: 'Disabled', tone: 'off' }
+  if (s.error) return { label: `Error: ${s.error}`, tone: 'warn' }
+  if (s.connected) return { label: `Connected, ${plural(s.toolCount, 'tool', 'tools')}`, tone: 'ok' }
+  return { label: 'Checking…', tone: 'wait' }
+}

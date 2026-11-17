@@ -28,6 +28,7 @@ import {
   Terminal,
   X,
   type LucideIcon,
+  VectorSquare,
 } from 'lucide-react'
 import {
   useCallback,
@@ -143,6 +144,8 @@ function tabVisual(
       return { Icon: Bot, label: tab.agentId ?? 'new agent', title: tab.agentId ?? 'new agent' }
     case 'skill':
       return { Icon: Library, label: tab.title, title: tab.title }
+    case 'mcp':
+      return { Icon: VectorSquare, label: tab.title, title: tab.title }
     case 'uploadSkill':
       return { Icon: Package, label: 'Upload skill', title: 'Upload skill (.zip or .skill)' }
     case 'subagent':

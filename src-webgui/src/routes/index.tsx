@@ -517,6 +517,7 @@ const TutorialTab = lazy(() => import('../components/TutorialTab'))
 // Per-agent editor — lazy so its chunk only loads when the Agents panel's
 // first row (or "+ Add agent") is clicked.
 const AgentTab = lazy(() => import('../components/AgentTab'))
+const McpTab = lazy(() => import('../components/McpTab'))
 const SkillTab = lazy(() => import('../components/SkillTab'))
 const UploadSkillTab = lazy(() => import('../components/UploadSkillTab'))
 
@@ -586,6 +587,8 @@ function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visibl
         <HelpTab />
       ) : tab.kind === 'agent' ? (
         <AgentTab tab={tab} />
+      ) : tab.kind === 'mcp' ? (
+        <McpTab tab={tab} />
       ) : tab.kind === 'skill' ? (
         <SkillTab tab={tab} />
       ) : tab.kind === 'uploadSkill' ? (
