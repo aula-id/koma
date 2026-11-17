@@ -223,11 +223,15 @@ fn discover_cached(session: Option<&str>, force: bool) -> Vec<RepoInfo> {
         }
     }
     let repos = discover_repos_uncached(&dirs);
-    REPO_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_or_insert_with(HashMap::new)
-        .insert(session.to_string(), (Instant::now(), repos.clone()));
+    // An empty result is not cached: a `git init` in a non-repo folder must be found
+    // on the next call, not after the TTL.
+    if !repos.is_empty() {
+        REPO_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .insert(session.to_string(), (Instant::now(), repos.clone()));
+    }
     repos
 }
 
