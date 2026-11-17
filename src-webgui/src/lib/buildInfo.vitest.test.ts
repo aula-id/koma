@@ -25,3 +25,18 @@ describe('formatBuildInfo', () => {
     )
   })
 })
+
+describe('readBuildInfo with malformed input', () => {
+  it.each([5, 'text', true, [], () => 1])('degrades %s to unknown', (raw) => {
+    expect(readBuildInfo(raw)).toEqual(FALLBACK)
+  })
+
+  it('replaces wrong types, empties and nulls field by field', () => {
+    const info = readBuildInfo({ version: '1.2.3', channel: 'preview', sha: '', target: null, os: 7, buildDate: { d: 1 } })
+    expect(info).toEqual({ ...FALLBACK, version: '1.2.3', channel: 'preview' })
+  })
+
+  it('treats an unknown channel as stable', () => {
+    expect(readBuildInfo({ channel: 'nightly' }).channel).toBe('stable')
+  })
+})

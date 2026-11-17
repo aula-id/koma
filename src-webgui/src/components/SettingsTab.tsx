@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { AboutPanel } from './AboutKoma'
+import { onSettingsSectionRequest, takePendingSection } from '../lib/settingsNav'
 import { CHAT_TURNS_DEFAULT, clampChatTurns } from '../lib/chatWindow'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
@@ -91,6 +92,23 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
     setActive(id)
     sectionRef(id).current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+
+  // Another tab asked for a section (About from Help, the palette): once this
+  // tab is visible, scroll there and move focus to the section.
+  const [requestTick, setRequestTick] = useState(0)
+  useEffect(() => onSettingsSectionRequest(() => setRequestTick((n) => n + 1)), [])
+  useEffect(() => {
+    if (!visible) return
+    const id = takePendingSection()
+    if (!id) return
+    const frame = requestAnimationFrame(() => {
+      setActive(id)
+      const el = sectionRef(id).current
+      el?.scrollIntoView({ block: 'start' })
+      el?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [visible, requestTick])
 
   // Scroll spy: highlight the nav item whose section is at the top of the pane.
   // Uses viewport rects (robust against layout offsets) — walking sections
@@ -227,7 +245,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
             <SshKeysSettings />
           </section>
 
-          <section ref={aboutRef} className="mt-12">
+          <section ref={aboutRef} id="settings-section-about" aria-label="About Koma" tabIndex={-1} className="mt-12 outline-none">
             <SectionHeader title="About" desc="Version and build details for this copy of koma." />
             <AboutPanel />
           </section>

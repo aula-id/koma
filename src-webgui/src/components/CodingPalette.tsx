@@ -12,7 +12,7 @@ import { showCodingHistory } from './CodingHistory'
 import { showCodingPacks } from './CodingPacks'
 import { showCodingTasks } from './CodingTasks'
 import { KomaSelect } from './KomaSelect'
-import { showAbout } from './AboutKoma'
+import { showAbout } from '../lib/settingsNav'
 
 type Command = { id: string; title: string; shortcut?: string; editor?: boolean }
 const commands: Command[] = [

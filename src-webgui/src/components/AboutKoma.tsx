@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Check, Copy, ExternalLink, X } from 'lucide-react'
+import { Check, Copy, ExternalLink } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { LICENSE_URL, REPO_URL, formatBuildInfo, readBuildInfo } from '../lib/buildInfo'
-
-export function showAbout() {
-  window.dispatchEvent(new CustomEvent('koma-about'))
-}
 
 export function AboutPanel() {
   const info = readBuildInfo(window.__komaBuild)
@@ -68,52 +63,5 @@ export function AboutPanel() {
         </button>
       </div>
     </div>
-  )
-}
-
-export function AboutDialog() {
-  const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    const onOpen = () => setOpen(true)
-    window.addEventListener('koma-about', onOpen)
-    return () => window.removeEventListener('koma-about', onOpen)
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
-
-  if (!open) return null
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
-      onMouseDown={() => setOpen(false)}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="About Koma"
-        onMouseDown={(event) => event.stopPropagation()}
-        className="relative w-full max-w-md rounded-md border border-koma-border bg-koma-panel p-5 shadow-lg"
-      >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label="Close"
-          className="absolute right-2 top-2 rounded p-1 text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-        >
-          <X size={12} />
-        </button>
-        <AboutPanel />
-      </div>
-    </div>,
-    document.body,
   )
 }
