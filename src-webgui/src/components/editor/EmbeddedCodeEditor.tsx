@@ -13,6 +13,8 @@ export type EmbeddedCodeEditorProps = {
   ariaLabel: string
   /** Ctrl/Cmd+Enter inside the editor. */
   onSubmit?: () => void
+  /** Ctrl/Cmd+S inside the editor (scoped to this instance). */
+  onSave?: () => void
   /** JSON schema for completion and squiggles; only used when language is 'json'. */
   jsonSchema?: object
   lineNumbers?: boolean
@@ -48,7 +50,7 @@ export function EmbeddedCodeEditor(props: EmbeddedCodeEditorProps) {
   )
 }
 
-function Fallback({ value, onChange, readOnly, height, placeholder, ariaLabel, onSubmit, wordWrap, className = '', testId }: EmbeddedCodeEditorProps) {
+function Fallback({ value, onChange, readOnly, height, placeholder, ariaLabel, onSubmit, onSave, wordWrap, className = '', testId }: EmbeddedCodeEditorProps) {
   return (
     <div className={`${EMBEDDED_BOX} ${className}`} style={embeddedHeightStyle(height)} data-testid={testId} data-editor-state="loading">
       <textarea
@@ -60,6 +62,11 @@ function Fallback({ value, onChange, readOnly, height, placeholder, ariaLabel, o
         wrap={wordWrap ? 'soft' : 'off'}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
+          if (onSave && (e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault()
+            onSave()
+            return
+          }
           if (onSubmit && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault()
             onSubmit()

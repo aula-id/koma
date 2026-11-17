@@ -71,6 +71,8 @@ export default function EmbeddedCodeEditorImpl(props: EmbeddedCodeEditorProps) {
     // Scoped to this editor instance (never a global keybinding).
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => live.current.onSubmit?.())
 
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => live.current.onSave?.())
+
     // Escape then Tab leaves the editor. Capturing on this host keeps it from reaching
     // Monaco and from affecting any other editor.
     let escaped = false
