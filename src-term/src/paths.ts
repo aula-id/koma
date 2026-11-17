@@ -56,11 +56,16 @@ export function launchPalette(kind: "hub" | "session" | "remote", saved: string)
   return kind === "hub" ? "dark" : saved || "dark"
 }
 
+/** File name of the cargo debug binary: Windows adds `.exe`, other platforms do not. */
+export function debugBinaryName(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "koma.exe" : "koma"
+}
+
 export function komaBin(): string {
   const fromEnv = process.env.KOMA_BIN
   if (fromEnv && existsSync(fromEnv)) return fromEnv
   const here = fileURLToPath(new URL(".", import.meta.url))
-  const debug = join(here, "../../target/debug/koma")
+  const debug = join(here, "../../target/debug", debugBinaryName())
   if (existsSync(debug)) return debug
   return fromEnv && fromEnv.length > 0 ? fromEnv : "koma"
 }
@@ -79,11 +84,26 @@ export function uuidV5Simple(namespaceUuid: string, name: string): string {
   return digest.subarray(0, 16).toString("hex")
 }
 
-/** The same data root and working-directory bucket used by the daemon. */
+/**
+ * The string Rust's `std::fs::canonicalize` returns. Only Windows differs: it yields a
+ * verbatim `\\?\` path. Other platforms are returned untouched.
+ */
+export function rustCanonicalForm(path: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return path
+  if (path.startsWith("\\\\?\\")) return path
+  if (path.startsWith("\\\\")) return "\\\\?\\UNC\\" + path.slice(2)
+  if (/^[A-Za-z]:[\\/]/.test(path)) return "\\\\?\\" + path.replace(/\//g, "\\")
+  return path
+}
+
+/**
+ * The same data root and working-directory bucket used by the daemon.
+ * Keep in sync with src-agent/src/model/store.rs pwd_hash.
+ */
 export function sessionDir(cwd: string, sessionId: string): string {
   let path = cwd
   try {
-    path = realpathSync(cwd)
+    path = rustCanonicalForm(realpathSync.native(cwd))
   } catch {
     // Missing dirs hash as given, same as the daemon.
   }

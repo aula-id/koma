@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { daemonReleased, dataDir, ensureDaemon, holdDaemon, releaseDaemon, savedPalette, sessionDir, socketPath } from "./paths.ts"
+import { daemonReleased, dataDir, debugBinaryName, rustCanonicalForm, uuidV5Simple, ensureDaemon, holdDaemon, releaseDaemon, savedPalette, sessionDir, socketPath } from "./paths.ts"
 import { DaemonLink } from "./socket.ts"
 import { encodeFrame, FrameReader } from "./protocol.ts"
 
@@ -113,3 +113,25 @@ async function attachFixture(capabilities: string[]): Promise<unknown[]> {
     rmSync(root, { recursive: true, force: true })
   }
 }
+
+test("rustCanonicalForm adds the verbatim prefix on win32 only", () => {
+  expect(rustCanonicalForm("C:\\proj", "win32")).toBe("\\\\?\\C:\\proj")
+  expect(rustCanonicalForm("C:/proj", "win32")).toBe("\\\\?\\C:\\proj")
+  expect(rustCanonicalForm("\\\\srv\\sh\\x", "win32")).toBe("\\\\?\\UNC\\srv\\sh\\x")
+  expect(rustCanonicalForm("\\\\?\\C:\\proj", "win32")).toBe("\\\\?\\C:\\proj")
+  expect(rustCanonicalForm("/Users/a", "darwin")).toBe("/Users/a")
+  expect(rustCanonicalForm("/home/a", "linux")).toBe("/home/a")
+  expect(rustCanonicalForm("C:\\x", "linux")).toBe("C:\\x")
+  expect(rustCanonicalForm("C:\\x", "darwin")).toBe("C:\\x")
+})
+
+test("the verbatim Windows path hashes to the bucket Rust uses", () => {
+  // Expected value from python: uuid.uuid5(uuid.NAMESPACE_OID, r"\\?\C:\proj").hex
+  expect(uuidV5Simple("6ba7b812-9dad-11d1-80b4-00c04fd430c8", "\\\\?\\C:\\proj")).toBe("0534155899eb5435aacb34c64d94687a")
+})
+
+test("debugBinaryName adds .exe on win32 only", () => {
+  expect(debugBinaryName("win32")).toBe("koma.exe")
+  expect(debugBinaryName("darwin")).toBe("koma")
+  expect(debugBinaryName("linux")).toBe("koma")
+})
