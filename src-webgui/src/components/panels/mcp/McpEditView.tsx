@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { TextArea, TextInput, Toggle, Segmented } from '../form'
-import { DetailHeader, FormActions } from '../helpers'
+import { DetailHeader, FormActions, HelpTip } from '../helpers'
 import { FormGroup, FormRow } from './McpGroup'
 import {
   badSeconds,
@@ -14,7 +14,11 @@ import {
   type McpDraft,
 } from './mcpForm'
 
-const VAR_HINT = 'Use ${VAR} to read a value from the environment.'
+const VarNote = () => (
+  <>
+    Use <code>{'${VAR}'}</code> to read a value from the environment.
+  </>
+)
 
 type Props = {
   draft: McpDraft
@@ -53,10 +57,11 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
           </FormRow>
           <FormRow
             label="How does it run?"
-            hint={
-              stdio
-                ? 'stdio: starts a program on this computer and talks to it directly.'
-                : 'http: connects to a server that is already running, by URL.'
+            help={
+              <>
+                <b>Run a command</b> (stdio) starts a program on this computer and talks to it directly.{' '}
+                <b>Connect to URL</b> (http) connects to a server that is already running.
+              </>
             }
           >
             <Segmented
@@ -81,7 +86,7 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
               <FormRow
                 label="Arguments"
                 htmlFor={id('args')}
-                hint="One argument per line, in order. Do not quote them."
+                help="One argument per line, in order. Do not quote them."
               >
                 <TextArea
                   id={id('args')}
@@ -103,11 +108,11 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
             </FormRow>
           )}
           <div className="flex items-center justify-between gap-3">
-            <span className="flex min-w-0 flex-col">
+            <span className="flex min-w-0 items-center gap-1">
               <span id={id('enabled')} className="text-[11px] font-semibold text-koma-fg opacity-75">
                 Enabled
               </span>
-              <span className="text-[11px] text-koma-fg opacity-55">Off keeps the server saved but unused.</span>
+              <HelpTip label="Enabled">Off keeps the server saved but unused.</HelpTip>
             </span>
             <Toggle labelledBy={id('enabled')} on={draft.enabled} onChange={(v) => onChange({ enabled: v })} />
           </div>
@@ -120,15 +125,16 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
           {stdio && (
             <FormGroup
               title="Environment variables"
+              help={
+                <>
+                  One <code>KEY=value</code> per line. <VarNote />
+                </>
+              }
               summary={envSummary(draft)}
               open={envOpen}
               onToggle={() => setEnvOpen((o) => !o)}
             >
-              <FormRow
-                label="Variables"
-                htmlFor={id('env')}
-                hint={`One KEY=value per line. ${VAR_HINT}`}
-              >
+              <FormRow label="Variables" htmlFor={id('env')}>
                 <TextArea
                   id={id('env')}
                   value={draft.envText}
@@ -142,15 +148,16 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
           {!stdio && (
             <FormGroup
               title="Headers"
+              help={
+                <>
+                  One <code>Name: value</code> per line. <VarNote /> Saved values are hidden; leave a value as is to keep it.
+                </>
+              }
               summary={headersSummary(draft)}
               open={headersOpen}
               onToggle={() => setHeadersOpen((o) => !o)}
             >
-              <FormRow
-                label="Request headers"
-                htmlFor={id('headers')}
-                hint={`One Name: value per line. ${VAR_HINT} Saved values are hidden; leave a value as is to keep it.`}
-              >
+              <FormRow label="Request headers" htmlFor={id('headers')}>
                 <TextArea
                   id={id('headers')}
                   value={draft.headersText}
@@ -168,11 +175,7 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
             onToggle={() => setLimitsOpen((o) => !o)}
           >
             {stdio && (
-              <FormRow
-                label="Working directory"
-                htmlFor={id('cwd')}
-                hint="Leave empty to use the session folder."
-              >
+              <FormRow label="Working directory" htmlFor={id('cwd')} help="Leave empty to use the session folder.">
                 <TextInput
                   id={id('cwd')}
                   value={draft.cwd}
@@ -185,7 +188,7 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
               label="Startup timeout"
               htmlFor={id('startup')}
               error={startupBad ? 'Enter a number above 0, or clear it to use the default.' : undefined}
-              hint="In seconds. Empty uses the default (20)."
+              help="In seconds. Empty uses the default (20)."
             >
               <TextInput
                 id={id('startup')}
@@ -199,7 +202,7 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
               label="Tool call timeout"
               htmlFor={id('tool')}
               error={toolBad ? 'Enter a number above 0, or clear it to use the default.' : undefined}
-              hint="In seconds. Empty uses the default (60)."
+              help="In seconds. Empty uses the default (60)."
             >
               <TextInput
                 id={id('tool')}
@@ -219,7 +222,11 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
             <FormRow
               label="Allowed tools"
               htmlFor={id('allowed')}
-              hint="Comma separated; * matches any text, e.g. read_*. Empty allows all."
+              help={
+                <>
+                  Comma separated; <code>*</code> matches any text, e.g. <code>read_*</code>. Empty allows all.
+                </>
+              }
             >
               <TextInput
                 id={id('allowed')}
@@ -231,7 +238,7 @@ export function McpEditView({ draft, isNew, onChange, onSave, onCancel }: Props)
             <FormRow
               label="Disabled tools"
               htmlFor={id('disabled')}
-              hint="Comma separated; * matches any text. Wins over the allowed list."
+              help="Comma separated; * matches any text. Wins over the allowed list."
             >
               <TextInput
                 id={id('disabled')}

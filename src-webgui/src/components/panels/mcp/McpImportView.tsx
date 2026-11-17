@@ -27,7 +27,7 @@ export function McpImportView({ onImport, onCancel }: Props) {
         <FormRow
           label="MCP servers JSON"
           htmlFor="mcp-import-json"
-          hint="Paste the mcpServers snippet from a server's README (Claude Code, Cursor or VS Code format)."
+          help="Paste the mcpServers snippet from a server's README (Claude Code, Cursor or VS Code format)."
         >
           <TextArea
             id="mcp-import-json"

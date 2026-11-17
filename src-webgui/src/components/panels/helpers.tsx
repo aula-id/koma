@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { useKoma } from '../../store/koma'
-import { Plus, Pencil, Trash2, Check, X, ChevronLeft, FolderOpen, Settings, type LucideIcon } from 'lucide-react'
+import { Plus, Pencil, Trash2, Check, X, ChevronLeft, CircleHelp, FolderOpen, Settings, type LucideIcon } from 'lucide-react'
 
 // Shared presentational atoms for sidebar CRUD panels.
 
@@ -366,5 +366,94 @@ export function WelcomeLink({ which }: { which: 'diagram' | 'design' }) {
     <button type="button" onClick={() => open(which)} className="self-center px-5 py-1 text-[12px] text-koma-accent hover:underline">
       See how it works
     </button>
+  )
+}
+
+const TIP_W = 240
+const TIP_GAP = 6
+const TIP_MARGIN = 8
+
+/** Small (?) button after a label; click toggles a popover with the help text. */
+export function HelpTip({ label, children }: { label: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const btn = useRef<HTMLButtonElement>(null)
+  const pop = useRef<HTMLDivElement>(null)
+  const popId = useId()
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    const place = () => {
+      const b = btn.current?.getBoundingClientRect()
+      const p = pop.current
+      if (!b || !p) return
+      const vw = document.documentElement.clientWidth
+      const vh = window.innerHeight
+      const w = Math.min(TIP_W, vw - TIP_MARGIN * 2)
+      const h = p.offsetHeight
+      const left = Math.max(TIP_MARGIN, Math.min(b.left, vw - w - TIP_MARGIN))
+      const below = b.bottom + TIP_GAP
+      const top = below + h > vh - TIP_MARGIN && b.top - TIP_GAP - h >= TIP_MARGIN ? b.top - TIP_GAP - h : below
+      setPos({ left, top })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (btn.current?.contains(t) || pop.current?.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setOpen(false)
+      btn.current?.focus()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label={`Help: ${label}`}
+        aria-expanded={open}
+        aria-controls={open ? popId : undefined}
+        className="inline-flex h-4 w-4 flex-none items-center justify-center rounded-full text-koma-fg opacity-50 transition hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-koma-grip"
+      >
+        <CircleHelp size={13} strokeWidth={2} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          ref={pop}
+          id={popId}
+          role="dialog"
+          aria-label={label}
+          style={{ position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, maxWidth: TIP_W, visibility: pos ? 'visible' : 'hidden' }}
+          className="z-50 w-max overflow-hidden whitespace-normal break-words rounded-md border border-koma-border bg-koma-panel px-2.5 py-2 text-[12px] font-normal normal-case leading-snug tracking-normal text-koma-fg shadow-lg"
+        >
+          {children}
+        </div>
+      )}
+    </>
   )
 }
