@@ -17,8 +17,9 @@ type AccordionSectionProps = {
   count?: number
 }
 
-// VSCode-style collapsible section. `action` (e.g. a + button) is always shown
-// at 70% and 100% on header hover. The header is an @container so actions can
+// VSCode-style collapsible section. `action` (e.g. a + button) is always shown;
+// the action sets its own dimming (a wrapper here would compound with it and
+// drop the label below 4.5:1). The header is an @container so actions can
 // drop their text label when the sidebar is narrow (see AddBtn).
 // An OPEN section FLEX-FILLS the remaining panel height (`flex-1 min-h-0`) and
 // scrolls its body internally, so there's no dead gap below the last section
@@ -49,7 +50,7 @@ export function AccordionSection({ title, open, onToggle, action, children, fill
           {count !== undefined && <span className="ml-1 flex-none font-normal normal-case opacity-75">{count}</span>}
         </button>
         {action && (
-          <div className="flex items-center opacity-70 group-hover:opacity-100">{action}</div>
+          <div className="flex items-center">{action}</div>
         )}
       </div>
       {open && <div id={bodyId} className={body}>{children}</div>}

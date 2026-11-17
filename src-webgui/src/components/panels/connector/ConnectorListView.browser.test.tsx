@@ -38,6 +38,16 @@ async function mount(width: number, providers: typeof provider[] = [], h = handl
 }
 
 describe('ConnectorListView', () => {
+  it('keeps the welcome block and section headers inside a 150px sidebar', async () => {
+    await mount(150)
+    const root = document.querySelector<HTMLElement>('[data-tour="connector-list"]')!
+    expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth)
+    const edge = root.getBoundingClientRect().right
+    for (const el of root.querySelectorAll<HTMLElement>('button')) {
+      if (el.getClientRects().length) expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(edge + 0.5)
+    }
+  })
+
   it('shows the Add word at 240px and hides it at 150px while keeping the full name', async () => {
     await mount(240)
     const wide = document.querySelector<HTMLElement>('[data-tour="connector-add-provider"] span')!

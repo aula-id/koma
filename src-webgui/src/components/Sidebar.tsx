@@ -41,7 +41,6 @@ const TITLES: Record<SidebarView, string> = {
   design: 'Design',
 }
 
-// Sidebar shell: header + the active view's panel. Width from RootLayout state.
 function HeaderRefresh({ label, busy, onClick }: { label: string; busy?: boolean; onClick: () => void }) {
   return (
     <button
@@ -57,6 +56,7 @@ function HeaderRefresh({ label, busy, onClick }: { label: string; busy?: boolean
   )
 }
 
+// Sidebar shell: header + the active view's panel. Width from RootLayout state.
 export function Sidebar({ width, view }: SidebarProps) {
   const usageScope = useKoma((s) => s.ui.usageScope)
   const setUsageScope = useKoma((s) => s.setUsageScope)

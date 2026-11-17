@@ -184,7 +184,7 @@ export function RemotePanel() {
             className="flex w-full items-center justify-center gap-1.5 rounded bg-koma-accent text-koma-bg py-1.5 text-[12px] hover:opacity-90"
             onClick={handleSave}
           >
-            {isNew ? 'Add Host' : 'Save'}
+            {isNew ? 'Add host' : 'Save'}
           </button>
         </div>
       </div>
