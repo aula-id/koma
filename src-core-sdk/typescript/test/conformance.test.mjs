@@ -240,7 +240,7 @@ test('host deletes: dry run, stale revision, managed, not found, committed', asy
 });
 
 test('setSkillRoots replaces the external skill roots on a host and on a session', async () => {
- const dir = realpathSync(mkdtempSync(join(tmpdir(), 'koma-roots-')));
+ const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'koma-roots-')));
  const c = client('config'); const host = c.host();
  try {
   const before = await host.getConfig();
