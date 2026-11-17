@@ -35,18 +35,20 @@ fn config_with_secrets() -> AppConfig {
         uuid: "m1".into(),
         name: "github".into(),
         env: vec![("GITHUB_TOKEN".into(), "ghp_MCP".into())],
+        headers: vec![("Authorization".into(), "Bearer hdr_MCP".into())],
         ..McpServerEntry::default()
     });
     config
 }
 
-const SECRETS: [&str; 6] = [
+const SECRETS: [&str; 7] = [
     "sk-or-PROVIDER",
     "ACCESS-tok",
     "REFRESH-tok",
     "ID-tok",
     "EXA-key",
     "ghp_MCP",
+    "Bearer hdr_MCP",
 ];
 
 #[test]

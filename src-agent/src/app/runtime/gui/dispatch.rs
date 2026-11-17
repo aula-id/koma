@@ -272,6 +272,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             args,
             env,
             url,
+            extras,
         } => {
             forward_config_req(
                 &ctx.req,
@@ -285,8 +286,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     args,
                     env,
                     url,
+                    extras,
                 },
             );
+        }
+        GuiReq::ImportMcpJson { text } => {
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::ImportMcpJson { text });
         }
         GuiReq::DeleteMcpServer { uuid } => {
             forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteMcpServer { uuid });
@@ -302,6 +307,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
                     let _ = tx.send(ClientRequest::GetMcpStatus { request_id });
+                }
+            }
+        }
+        GuiReq::RestartMcpServer { uuid } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::RestartMcpServer { uuid });
+                }
+            }
+        }
+        GuiReq::ApproveMcpProjectServer { uuid, approved } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ApproveMcpProjectServer { uuid, approved });
                 }
             }
         }

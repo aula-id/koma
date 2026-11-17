@@ -582,6 +582,26 @@ pub struct McpServerEntry {
     /// Http transport: the streamable-HTTP MCP endpoint URL.
     #[serde(default)]
     pub url: String,
+    /// Http transport: extra request headers (`[["Authorization","Bearer ${TOKEN}"], …]`).
+    /// Values may use `${VAR}`; sealed on disk like `env`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(String, String)>,
+    /// Stdio transport: working directory for the child (may use `${VAR}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Connect budget (spawn + initialize + first tool list). None = 20 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_timeout_ms: Option<u64>,
+    /// Per tool-call budget. None = 60 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_timeout_ms: Option<u64>,
+    /// When non-empty, only tools whose ORIGINAL name matches one of these globs are offered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
+    /// Tools whose original name matches one of these globs are never offered
+    /// (applied after `allowed_tools`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_tools: Vec<String>,
     /// Provenance: the reverse-DNS id of the extension that registered this server, or
     /// `None` for a user-configured / hand-written one. Added for FUTURE provenance so
     /// [`AppConfig::remove_ext_mcp_servers`] can deregister exactly an extension's rows on
@@ -590,6 +610,16 @@ pub struct McpServerEntry {
     /// user-configured row's on-disk JSON byte-identical to before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ext_id: Option<String>,
+}
+
+/// A project `.mcp.json` server the user allowed to run, for one workspace root.
+/// `fingerprint` covers what runs (transport, command, args, env, url, headers, cwd), so
+/// an edited file needs a fresh approval.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpProjectApproval {
+    pub root: String,
+    pub name: String,
+    pub fingerprint: String,
 }
 
 /// Whether an installed extension is exposed to every session or selected locally.
@@ -728,6 +758,9 @@ pub struct AppConfig {
     /// load with an empty vec, so behaviour is unchanged until a server is added.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
+    /// Project `.mcp.json` servers the user approved, per workspace root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_project_approvals: Vec<McpProjectApproval>,
     /// OAuth-authenticated connections (Codex / Kilo Code). Empty by default;
     /// old config files (no such key) load with an empty vec.
     #[serde(default)]
@@ -777,6 +810,7 @@ pub(crate) enum SecretId {
     Tavily,
     Exa,
     Mcp { server: String, name: String },
+    McpHeader { server: String, name: String },
 }
 
 impl Default for AppConfig {
@@ -789,6 +823,7 @@ impl Default for AppConfig {
             providers: Vec::new(),
             models: Vec::new(),
             mcp_servers: Vec::new(),
+            mcp_project_approvals: Vec::new(),
             oauth_conns: Vec::new(),
             // Mint a stable install id even on the missing/corrupt-config fallback
             // path, so the koma-free `X-Koma` header is never empty; it is
@@ -952,6 +987,15 @@ impl AppConfig {
                     value,
                 );
             }
+            for (name, value) in &mut server.headers {
+                visit(
+                    SecretId::McpHeader {
+                        server: uuid.clone(),
+                        name: name.clone(),
+                    },
+                    value,
+                );
+            }
         }
     }
 
@@ -1028,6 +1072,17 @@ impl AppConfig {
                 .and_then(|entry| {
                     entry
                         .env
+                        .iter_mut()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value)
+                }),
+            SecretId::McpHeader { server, name } => self
+                .mcp_servers
+                .iter_mut()
+                .find(|entry| entry.uuid == *server)
+                .and_then(|entry| {
+                    entry
+                        .headers
                         .iter_mut()
                         .find(|(key, _)| key == name)
                         .map(|(_, value)| value)
@@ -1570,6 +1625,10 @@ pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEnt
         None => list.push(entry),
     }
 }
+
+#[cfg(test)]
+#[path = "app_config_mcp_serde_tests.rs"]
+mod mcp_serde_tests;
 
 #[cfg(test)]
 #[path = "app_config_oauth_provider_wire_tests.rs"]

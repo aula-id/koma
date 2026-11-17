@@ -291,6 +291,12 @@ pub(super) enum GuiReq {
         args: String,
         env: String,
         url: String,
+        #[serde(default)]
+        extras: crate::ipc::proto::McpServerExtras,
+    },
+    /// Import MCP servers from pasted JSON (McpPanel "Import JSON").
+    ImportMcpJson {
+        text: String,
     },
     /// Remove an MCP server by uuid (McpPanel arm-delete).
     DeleteMcpServer {
@@ -307,6 +313,15 @@ pub(super) enum GuiReq {
     GetMcpStatus {
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    /// Restart one MCP server by uuid (McpPanel row Restart button).
+    RestartMcpServer {
+        uuid: String,
+    },
+    /// Approve or revoke a project `.mcp.json` server by uuid.
+    ApproveMcpProjectServer {
+        uuid: String,
+        approved: bool,
     },
     /// Upsert a provider (Connector ProviderForm). `uuid` is absent for a new provider.
     SetProvider {

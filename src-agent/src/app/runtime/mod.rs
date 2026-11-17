@@ -102,7 +102,7 @@ pub use client::client_run;
 pub use manage::ensure_linker_daemon_running;
 pub use manage::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
-    run_daemon_subcommand, run_doctor,
+    run_daemon_subcommand, run_doctor, run_mcp_cli,
 };
 
 // Re-export the live-session discovery + cross-daemon spawn transport at the `runtime` level

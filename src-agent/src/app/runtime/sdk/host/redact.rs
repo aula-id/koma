@@ -203,7 +203,7 @@ pub fn secret_values(config: &AppConfig) -> Vec<String> {
     push(&config.web_search.tavily_key.0);
     push(&config.web_search.exa_key.0);
     for server in &config.mcp_servers {
-        for (_, value) in &server.env {
+        for (_, value) in server.env.iter().chain(&server.headers) {
             push(value);
         }
     }
@@ -253,6 +253,18 @@ fn scrub_userinfo(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_header_values_are_secrets() {
+        let mut config = AppConfig::default();
+        config
+            .mcp_servers
+            .push(crate::model::app_config::McpServerEntry {
+                headers: vec![("Authorization".into(), "Bearer hdr-token-1234".into())],
+                ..Default::default()
+            });
+        assert!(secret_values(&config).contains(&"Bearer hdr-token-1234".to_string()));
+    }
 
     #[test]
     fn endpoint_credentials_query_and_fragment_are_removed() {

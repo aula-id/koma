@@ -928,6 +928,7 @@ fn check_mcp_servers(config_ok: bool) -> CheckResult {
     let enabled = config.mcp_servers.iter().filter(|s| s.enabled).count();
 
     let mut details = Vec::new();
+    let mut unresolved = Vec::new();
     for s in &config.mcp_servers {
         details.push(format!(
             "{} ({:?}, {})",
@@ -935,7 +936,14 @@ fn check_mcp_servers(config_ok: bool) -> CheckResult {
             s.transport,
             if s.enabled { "enabled" } else { "disabled" }
         ));
+        if s.enabled {
+            if let Some(msg) = crate::app::mcp::resolve_for_doctor(s) {
+                unresolved.push(format!("{}: {msg}", s.name));
+            }
+        }
     }
+    let has_unresolved = !unresolved.is_empty();
+    details.extend(unresolved);
 
     let headline = format!("MCP servers ({configured} configured, {enabled} enabled)");
     if !config_ok {
@@ -944,6 +952,9 @@ fn check_mcp_servers(config_ok: bool) -> CheckResult {
                 .to_string(),
         );
         return CheckResult::fail(headline, details);
+    }
+    if has_unresolved {
+        return CheckResult::warn(headline, details);
     }
     CheckResult {
         status: Status::Ok,

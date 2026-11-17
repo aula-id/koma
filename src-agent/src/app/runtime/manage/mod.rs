@@ -47,6 +47,7 @@ mod doctor;
 #[cfg(feature = "linker")]
 mod linker;
 mod mcp;
+mod mcp_cli;
 mod oauth;
 mod os;
 mod probe;
@@ -65,6 +66,7 @@ pub use doctor::run_doctor;
 #[cfg(feature = "linker")]
 pub use linker::ensure_linker_daemon_running;
 pub use mcp::{ensure_mcp_daemon_running, stop_mcp_daemon};
+pub use mcp_cli::run_mcp_cli;
 pub use oauth::ensure_oauth_daemon_running;
 // `spawn_into_session` + `SpawnIntoReply` are the extension `sessions.spawn_into`
 // cross-process transport (W7), consumed by the grant broker outside this module tree.

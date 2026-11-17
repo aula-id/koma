@@ -180,6 +180,7 @@ pub fn diff_for_client(
         || prev.global.session_models != next.global.session_models
         || prev.global.main_configured != next.global.main_configured
         || prev.global.mcp_servers != next.global.mcp_servers
+        || prev.global.mcp_project != next.global.mcp_project
     {
         return DiffResult::full();
     }

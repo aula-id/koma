@@ -20,6 +20,21 @@ use crate::model::app_config::McpServerEntry;
 use super::util::{namespace_tools, sanitize_server_name};
 use super::{connect_one, McpBackend, McpManager, ServerConn, Snapshot, ToolSource};
 
+/// Send a new server set to the running global MCP daemon (what a session's proxy
+/// manager does on its own reconnect). For `koma mcp`, which has no manager.
+pub fn reconnect_global_daemon(servers: &[McpServerEntry]) -> anyhow::Result<()> {
+    let sock = crate::model::store::mcp_daemon_sock_path()?;
+    match super::proxy::proxy_request(
+        &sock,
+        &McpRequest::Reconnect {
+            servers: servers.to_vec(),
+        },
+    )? {
+        McpResponse::Ack => Ok(()),
+        other => anyhow::bail!("unexpected response from the MCP daemon: {other:?}"),
+    }
+}
+
 impl McpManager {
     /// Build a LOCAL manager and kick off a background connect for every ENABLED
     /// server. Returns immediately — connecting never blocks startup.
@@ -41,6 +56,8 @@ impl McpManager {
             advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
             proxy_extension_tools: Mutex::new(Vec::new()),
+            project: Mutex::new(None),
+            hidden_prefixes: Mutex::new(Vec::new()),
         });
 
         for server in servers {
@@ -65,12 +82,13 @@ impl McpManager {
     /// [`McpResponse::Tools`]); the caller (`run_daemon`) uses that to FALL BACK to a
     /// `Local` manager, so a missing/broken daemon is never worse than today.
     ///
-    /// A `handle` is accepted for signature symmetry with [`Self::connect_all`] (and
-    /// so a future async-proxy variant can spawn on it); the current proxy is fully
-    /// synchronous connect-per-call, so it is not stored.
+    /// The proxy is fully synchronous connect-per-call; `handle` is kept only to run
+    /// the project overlay's local manager. `servers` only seeds the
+    /// read budget for a `Call` (the longest configured tool timeout).
     pub fn connect_proxy(
-        _handle: &tokio::runtime::Handle,
+        handle: &tokio::runtime::Handle,
         sock: PathBuf,
+        servers: &[McpServerEntry],
     ) -> anyhow::Result<Arc<Self>> {
         // Prime the advertise cache from the daemon. A connect/list failure here is
         // the fallback trigger — surface it so the caller drops to a Local manager.
@@ -85,9 +103,11 @@ impl McpManager {
 
         Ok(Arc::new(Self {
             backend: McpBackend::Proxy {
+                handle: handle.clone(),
                 sock,
                 cache: Mutex::new((defs, names)),
                 proxy_errors: Mutex::new(std::collections::HashMap::new()),
+                call_timeout: Mutex::new(super::util::proxy_call_timeout(servers)),
             },
             status_cache: Mutex::new((None, std::collections::HashMap::new())),
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
@@ -97,6 +117,8 @@ impl McpManager {
             advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
             proxy_extension_tools: Mutex::new(Vec::new()),
+            project: Mutex::new(None),
+            hidden_prefixes: Mutex::new(Vec::new()),
         }))
     }
 
@@ -122,7 +144,14 @@ impl McpManager {
         // usable) — a failed live-reconnect is never worse than the prior state.
         let (handle, snapshot) = match &self.backend {
             McpBackend::Local { handle, snapshot } => (handle, snapshot),
-            McpBackend::Proxy { sock, cache, .. } => {
+            McpBackend::Proxy {
+                sock,
+                cache,
+                call_timeout,
+                ..
+            } => {
+                *call_timeout.lock().unwrap_or_else(|p| p.into_inner()) =
+                    super::util::proxy_call_timeout(servers);
                 match super::proxy::proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
                     Ok(McpResponse::Ack) => {}
                     Ok(other) => crate::model::store::append_global_error_log(
@@ -197,6 +226,100 @@ impl McpManager {
         }
     }
 
+    /// Run the project-scope servers in a private local manager owned by this one.
+    /// `hidden` are the tool prefixes of base servers the project overrides in this
+    /// session. Idempotent: an identical set is a no-op and an empty set tears the
+    /// overlay down.
+    pub fn set_project_servers(
+        self: &Arc<Self>,
+        servers: Vec<McpServerEntry>,
+        hidden: Vec<String>,
+    ) {
+        *self
+            .hidden_prefixes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = hidden;
+        let handle = match &self.backend {
+            McpBackend::Local { handle, .. } | McpBackend::Proxy { handle, .. } => handle.clone(),
+        };
+        let mut slot = self.project.lock().unwrap_or_else(|p| p.into_inner());
+        match slot.as_mut() {
+            Some(current) if current.servers == servers => {}
+            Some(_) if servers.is_empty() => {
+                if let Some(old) = slot.take() {
+                    old.manager.reconnect(&[]);
+                }
+            }
+            Some(current) => {
+                current.manager.reconnect(&servers);
+                current.servers = servers;
+            }
+            None if servers.is_empty() => {}
+            None => {
+                *slot = Some(super::ProjectOverlay {
+                    manager: Self::connect_all(&handle, &servers),
+                    servers,
+                });
+            }
+        }
+    }
+
+    /// Restart one project-scope server (a no-op without an overlay).
+    pub fn restart_project_server(self: &Arc<Self>, server: &McpServerEntry) {
+        if let Some(overlay) = self.overlay() {
+            overlay.restart_server(server);
+        }
+    }
+
+    /// Restart ONE server: drop its connection/tools/error, bump its epoch so an
+    /// in-flight connect for it is discarded, and reconnect it if enabled. Other
+    /// servers are untouched. On a Proxy manager the global daemon does the work.
+    pub fn restart_server(self: &Arc<Self>, server: &McpServerEntry) {
+        let (handle, snapshot) = match &self.backend {
+            McpBackend::Local { handle, snapshot } => (handle, snapshot),
+            McpBackend::Proxy { sock, .. } => {
+                let req = McpRequest::RestartServer {
+                    server: Box::new(server.clone()),
+                };
+                match super::proxy::proxy_request(sock, &req) {
+                    Ok(McpResponse::Ack) => {}
+                    Ok(other) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: restart got an unexpected response ({other:?})"),
+                    ),
+                    Err(e) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: restart of '{}' failed: {e:#}", server.name),
+                    ),
+                }
+                return;
+            }
+        };
+        let old = {
+            let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            snap.tools.retain(
+                |t| !matches!(&t.source, super::ToolSource::McpServer(u) if u == &server.uuid),
+            );
+            snap.errors.remove(&server.uuid);
+            let epoch = snap.server_epoch.entry(server.uuid.clone()).or_insert(0);
+            *epoch = epoch.wrapping_add(1);
+            snap.conns.remove(&server.uuid)
+        };
+        if let Some(conn) = old {
+            handle.spawn(async move {
+                if let Err(e) = conn.service.cancel().await {
+                    crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("teardown of a restarted connection failed: {e}"),
+                    );
+                }
+            });
+        }
+        if server.enabled {
+            self.spawn_connect(server.clone());
+        }
+    }
+
     /// Spawn ONE background connect task for `server` and write its result into the
     /// shared snapshot. The single place the connect-and-store routine lives, shared
     /// by [`Self::connect_all`] (startup) and [`Self::reconnect`] (live config save).
@@ -250,9 +373,12 @@ impl McpManager {
             // Capture the CURRENT generation under a brief lock BEFORE the connect
             // await. If a reconnect bumps it while we're connecting, the post-await
             // re-check below will see the mismatch and discard this result.
-            let gen_at_start = {
+            let (gen_at_start, epoch_at_start) = {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-                snap.generation
+                (
+                    snap.generation,
+                    snap.server_epoch.get(&server.uuid).copied().unwrap_or(0),
+                )
             };
 
             match connect_one(&server).await {
@@ -275,7 +401,7 @@ impl McpManager {
                         // block — never held across an await.
                         let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
 
-                        if snap.generation != gen_at_start {
+                        if !snap.connect_is_current(&server.uuid, gen_at_start, epoch_at_start) {
                             // A reconnect happened mid-connect: this result belongs to
                             // a torn-down config. Leave `to_discard` = Some(service) so
                             // it's cancelled below; insert nothing.
@@ -301,7 +427,11 @@ impl McpManager {
                             // its tools. `take()` leaves `to_discard = None` so nothing
                             // is torn down afterwards.
                             snap.conns
-                                .insert(server.uuid.clone(), ServerConn { service, peer });
+                                .insert(server.uuid.clone(), ServerConn {
+                                    service,
+                                    peer,
+                                    call_timeout: super::util::tool_timeout(&server),
+                                });
                             snap.errors.remove(&server.uuid);
                             snap.tools.extend(discovered);
                         } else {
@@ -328,7 +458,7 @@ impl McpManager {
                     // Retain the error so the GUI can display it.
                     if let McpBackend::Local { snapshot, .. } = &mgr.backend {
                         let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-                        if snap.generation == gen_at_start {
+                        if snap.connect_is_current(&server.uuid, gen_at_start, epoch_at_start) {
                             snap.errors.insert(server.uuid, msg);
                         }
                     }

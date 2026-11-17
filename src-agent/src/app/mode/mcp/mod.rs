@@ -9,11 +9,14 @@
 //! (`app::runtime::actions::mcp`) reads them back to mutate + persist the config.
 
 mod state;
+#[cfg(test)]
+mod state_tests;
 mod types;
 
 pub use state::{transport_label, McpState};
-// Re-exported so the GUI config setters (daemon `SetMcpServer` handler) can map the
-// panel's single-line args/env STRING forms into the daemon's array/pair forms using
-// the SAME parsers the TUI MCP editor uses — no forked parsing logic.
-pub(crate) use state::{parse_args, parse_env};
+// Re-exported so the GUI config setters (daemon `SetMcpServer` handler) build the entry
+// with the SAME arg/env parsers the TUI MCP editor uses — no forked parsing logic.
+#[cfg(test)]
+pub(crate) use state::HEADER_KEEP;
+pub(crate) use state::{entry_from_form, mask_headers};
 pub use types::{McpEditField, McpSubMode};

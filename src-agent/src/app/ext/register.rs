@@ -179,9 +179,10 @@ pub fn register_mcp_servers(ext: &InstalledExtension, config: &mut AppConfig) ->
             transport: McpTransport::Stdio,
             command: exec_path.to_string_lossy().into_owned(),
             args: args.clone(),
-            env: existing.map(|e| e.env).unwrap_or_default(),
             url: String::new(),
             ext_id: Some(ext.id.clone()),
+            // Keep what the user tuned on the row (env, headers, timeouts, tool lists).
+            ..existing.unwrap_or_default()
         };
         // `upsert_mcp_server` mints a fresh uuid only when `entry.uuid` arrives empty (a
         // brand-new row); a preserved uuid above replaces the existing row in place.

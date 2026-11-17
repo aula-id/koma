@@ -85,11 +85,24 @@ declare global {
         args: string
         env: string
         url: string
+        extras?: {
+          argv?: string[]
+          envPairs?: [string, string][]
+          headers?: [string, string][]
+          cwd?: string
+          startupTimeoutMs?: number
+          toolTimeoutMs?: number
+          allowedTools?: string[]
+          disabledTools?: string[]
+        }
       }
+    | { r: 'ImportMcpJson'; text: string }
     | { r: 'DeleteMcpServer'; uuid: string }
     | { r: 'EnableMcpServer'; uuid: string; enabled: boolean }
     // MCP status refresh — request live per-server connection state.
     | { r: 'GetMcpStatus'; requestId: string }
+    | { r: 'RestartMcpServer'; uuid: string }
+    | { r: 'ApproveMcpProjectServer'; uuid: string; approved: boolean }
     // Provider CRUD (flat). `uuid` is the daemon config uuid on edit, `null`
     // for a new provider.
     | { r: 'SetProvider'; uuid: string | null; name: string; endpoint: string; apiKey: string }

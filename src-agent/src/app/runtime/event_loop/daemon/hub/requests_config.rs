@@ -16,6 +16,36 @@ use crate::ipc::proto::DaemonEvent;
 use super::core::DaemonHub;
 
 impl DaemonHub {
+    // GUI MCP import: parse pasted JSON, upsert by name, persist + live-reconnect, and
+    // toast the count plus any parse warnings.
+    pub(super) fn import_mcp_json(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        text: String,
+    ) {
+        use crate::app::mcp::project;
+        let parsed = match project::parse_servers_json(&text, None) {
+            Ok(p) => p,
+            Err(e) => return self.ack_or_error(idx, Err(anyhow::anyhow!(e))),
+        };
+        let mut warnings = parsed.warnings;
+        let applied = project::import_into(
+            &mut state.rest.config.mcp_servers,
+            parsed.servers,
+            &mut warnings,
+        );
+        let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
+        if result.is_ok() {
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(project::import_summary(applied, &warnings));
+        }
+        self.ack_or_error(idx, result);
+    }
+
     // GUI MCP CRUD (McpPanel). Build an `McpServerEntry` from the panel's form
     // (mapping the single-line args/env STRING forms into the daemon's array/pair
     // forms via the SAME `parse_args`/`parse_env` the TUI editor uses), upsert it
@@ -37,25 +67,84 @@ impl DaemonHub {
         args: String,
         env: String,
         url: String,
+        extras: crate::ipc::proto::McpServerExtras,
     ) {
-        let entry = crate::model::app_config::McpServerEntry {
-            uuid: uuid.unwrap_or_default(),
-            name: name.trim().to_string(),
-            enabled,
-            transport: if transport == "http" {
-                crate::model::app_config::McpTransport::Http
-            } else {
-                crate::model::app_config::McpTransport::Stdio
-            },
-            command: command.trim().to_string(),
-            args: crate::app::mode::mcp::parse_args(&args),
-            env: crate::app::mode::mcp::parse_env(&env),
-            url: url.trim().to_string(),
-            // A GUI-configured server is user-owned — no extension provenance.
-            ext_id: None,
-        };
+        let existing = uuid
+            .as_ref()
+            .and_then(|u| state.rest.config.mcp_servers.iter().find(|s| &s.uuid == u));
+        let entry = crate::app::mode::mcp::entry_from_form(
+            existing, uuid, &name, enabled, &transport, &command, &args, &env, &url, &extras,
+        );
         state.rest.config.upsert_mcp_server(entry);
         let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
+        self.ack_or_error(idx, result);
+    }
+
+    // GUI MCP per-server restart: a user server on the base manager, or a project server
+    // on the overlay. Runs on a thread because a Proxy manager blocks on socket IO.
+    pub(super) fn restart_mcp_server(&mut self, idx: usize, state: &mut AppState, uuid: String) {
+        let Some(mgr) = state.rest.mcp_manager.clone() else {
+            return self.ack_or_error(idx, Err(anyhow::anyhow!("MCP is not running")));
+        };
+        if let Some(entry) = state
+            .rest
+            .config
+            .mcp_servers
+            .iter()
+            .find(|s| s.uuid == uuid)
+            .cloned()
+        {
+            std::thread::spawn(move || mgr.restart_server(&entry));
+            return self.ack_or_error(idx, Ok(()));
+        }
+        let project = state
+            .rest
+            .mcp_project
+            .as_ref()
+            .and_then(|l| l.rows.iter().find(|r| r.entry.uuid == uuid))
+            .map(|r| r.entry.clone());
+        match project {
+            Some(entry) => {
+                std::thread::spawn(move || mgr.restart_project_server(&entry));
+                self.ack_or_error(idx, Ok(()));
+            }
+            None => self.ack_or_error(idx, Err(anyhow::anyhow!("no such MCP server"))),
+        }
+    }
+
+    // Approve or revoke a project `.mcp.json` server: record its current fingerprint under
+    // the workspace root, persist, tell other sessions, and re-apply the overlay here.
+    pub(super) fn approve_mcp_project_server(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        uuid: String,
+        approved: bool,
+    ) {
+        let Some(row) = state.rest.mcp_project.as_ref().and_then(|l| {
+            l.rows.iter().find(|r| r.entry.uuid == uuid).map(|r| {
+                (
+                    l.root_key.clone(),
+                    r.entry.name.clone(),
+                    r.fingerprint.clone(),
+                )
+            })
+        }) else {
+            return self.ack_or_error(idx, Err(anyhow::anyhow!("no such project MCP server")));
+        };
+        let (root, name, fingerprint) = row;
+        let approvals = &mut state.rest.config.mcp_project_approvals;
+        approvals.retain(|a| !(a.root == root && a.name == name));
+        if approved {
+            approvals.push(crate::model::app_config::McpProjectApproval {
+                root,
+                name,
+                fingerprint,
+            });
+        }
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
+        crate::app::runtime::actions::refresh_project_mcp(state, handle);
         self.ack_or_error(idx, result);
     }
 

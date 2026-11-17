@@ -8,7 +8,7 @@ import type { ActivityCommit, BranchInfo, CommitFile, GitCommitNode, GitFileEntr
 import type { InstalledExt, InstalledExtDetail, StoreDetail, StoreItem } from './marketplace'
 import type { AttachmentEntry, BashJobEntry, FileChangeEntry, HubCookingEntry, HubHistoryEntry, LoadPhase, LspRuntimeServer, LspServerStatus, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry } from './session'
 import type { ImportGraphEdge, ImportGraphNode, ImportGraphRootInfo } from './slices'
-import type { McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
+import type { McpProject, McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
 
 export type PushEnvelope = PushEvent & { eventId?: string }
 export type PushEvent =
@@ -155,6 +155,7 @@ export type PushEvent =
   | {
       k: 'Config'
       mcp: McpServer[]
+      mcpProject?: McpProject
       providers: Provider[]
       models: Model[]
       palette?: PaletteColors

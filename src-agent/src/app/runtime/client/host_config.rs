@@ -305,24 +305,38 @@ fn apply_global_config_req(
             args,
             env,
             url,
+            extras,
         } => {
-            cfg.upsert_mcp_server(McpServerEntry {
-                uuid: uuid.clone().unwrap_or_default(),
-                name: name.trim().to_string(),
-                enabled: *enabled,
-                transport: if transport == "http" {
-                    McpTransport::Http
-                } else {
-                    McpTransport::Stdio
-                },
-                command: command.trim().to_string(),
-                args: crate::app::mode::mcp::parse_args(args),
-                env: crate::app::mode::mcp::parse_env(env),
-                url: url.trim().to_string(),
-                // A GUI-configured server is user-owned — no extension provenance.
-                ext_id: None,
-            });
+            let existing = uuid
+                .as_ref()
+                .and_then(|u| cfg.mcp_servers.iter().find(|s| &s.uuid == u));
+            let entry = crate::app::mode::mcp::entry_from_form(
+                existing,
+                uuid.clone(),
+                name,
+                *enabled,
+                transport,
+                command,
+                args,
+                env,
+                url,
+                extras,
+            );
+            cfg.upsert_mcp_server(entry);
             true
+        }
+        ClientRequest::ImportMcpJson { text } => {
+            use crate::app::mcp::project;
+            match project::parse_servers_json(text, None) {
+                Ok(parsed) => {
+                    let mut warnings = parsed.warnings;
+                    project::import_into(&mut cfg.mcp_servers, parsed.servers, &mut warnings) > 0
+                }
+                Err(e) => {
+                    crate::model::store::append_global_error_log("mcp", &format!("import: {e}"));
+                    false
+                }
+            }
         }
         ClientRequest::DeleteMcpServer { uuid } => {
             cfg.remove_mcp_server_by_uuid(uuid);

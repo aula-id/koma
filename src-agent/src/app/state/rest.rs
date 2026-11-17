@@ -149,6 +149,9 @@ pub struct AppStateRest {
     /// builds it (and stays `None` for a config with no MCP servers — the manager is
     /// still built but inert, so this is `Some` of an empty manager in practice).
     pub mcp_manager: Option<std::sync::Arc<crate::app::mcp::McpManager>>,
+    /// The foreground session's project `.mcp.json` (servers awaiting or holding the
+    /// user's approval), re-read by `refresh_project_mcp`. `None` when the file is absent.
+    pub mcp_project: Option<crate::app::mcp::project::ProjectLayer>,
     /// The extension host manager, built once at startup. Owns every running
     /// extension's child process + duplex unix-socket connection, keyed by extension
     /// id. `None` until startup builds it (stays an empty, inert manager when no
@@ -574,6 +577,7 @@ impl AppStateRest {
             last_provider: None,
             config: AppConfig::default(),
             mcp_manager: None,
+            mcp_project: None,
             ext_manager: None,
             security_enabled: false,
             yolo_armed: false,

@@ -567,12 +567,42 @@ pub(super) struct PushMcpServer {
     pub(super) args: String,
     pub(super) env: String,
     pub(super) url: String,
+    /// The structured forms of `args`/`env` (the string forms above lose arguments that
+    /// contain spaces), plus the fields the string form never carried.
+    pub(super) argv: Vec<String>,
+    pub(super) env_pairs: Vec<(String, String)>,
+    /// Header names with every value masked (`mask_headers`); the daemon keeps the stored
+    /// value when the masked value comes back unchanged.
+    pub(super) headers: Vec<(String, String)>,
+    pub(super) cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) startup_timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tool_timeout_ms: Option<u64>,
+    pub(super) allowed_tools: Vec<String>,
+    pub(super) disabled_tools: Vec<String>,
     /// STATIC config-field tool count (from the Config envelope; no longer live).
     /// Runtime status (connected, live tool count, errors) now comes from the
     /// dedicated `McpStatus` push envelope instead.
     pub(super) tool_count: usize,
     /// Human-readable error string when the server's background connect failed.
     /// `None` = connected (or still connecting). Shown as an amber/red indicator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) error: Option<String>,
+    /// `"user"` (config.json) or `"project"` (the workspace `.mcp.json`).
+    pub(super) scope: &'static str,
+    /// Project rows only: `approved`, `pending` or `changed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approval: Option<&'static str>,
+    /// A user row that an approved project server of the same name shadows in this session.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) overridden: bool,
+}
+
+/// The project `.mcp.json` header info in a [`PushEnvelope::Config`].
+#[derive(serde::Serialize)]
+pub(super) struct PushMcpProject {
+    pub(super) file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) error: Option<String>,
 }

@@ -817,8 +817,13 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     //   work; a missing/broken global daemon degrades to today's per-session behaviour.
     if !state.rest.config.mcp_servers.is_empty() {
         let proxy = crate::model::store::mcp_daemon_sock_path().and_then(|sock| {
-            super::manage::ensure_mcp_daemon_running()
-                .and_then(|()| crate::app::mcp::McpManager::connect_proxy(&handle, sock))
+            super::manage::ensure_mcp_daemon_running().and_then(|()| {
+                crate::app::mcp::McpManager::connect_proxy(
+                    &handle,
+                    sock,
+                    &state.rest.config.mcp_servers,
+                )
+            })
         });
         state.rest.mcp_manager = Some(match proxy {
             // Proxying to the shared global daemon: the dedup win.
@@ -834,6 +839,9 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
             }
         });
     }
+
+    // Project `.mcp.json` servers: only approved ones run, in a private overlay.
+    super::actions::refresh_project_mcp(&mut state, &handle);
 
     // The final MCP manager may replace the inert one used during session warmup.
     // Register active extension tools into this manager (including proxy-local tools).
