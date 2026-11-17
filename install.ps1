@@ -108,7 +108,7 @@ try {
     # /passive: progress bar + UAC, no Welcome / InstallDir / PATH wizard.
     # PATH is written by the WiX Environment component; the wizard never needed
     # to opt into it.
-    $proc = Start-Process msiexec.exe -ArgumentList @('/i', $msiPath, '/passive', '/norestart') -Wait -NoNewWindow -PassThru
+    $proc = Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /passive /norestart" -Wait -NoNewWindow -PassThru
     if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
         Write-Error "MSI installer exited with code $($proc.ExitCode)"
         exit 1
