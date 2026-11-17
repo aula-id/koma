@@ -14,10 +14,13 @@ Problems, Language Servers — see `CODING_LANGUAGE_PACKS.md`):
 
 - Content fills `#workspace-bottom-panel` tab panels; **no** floating
   `absolute … shadow-xl` cards for the same job.
-- Shared tablist + collapse/close live on `BottomPanel`; child views do not
-  draw their own title bar with `X`.
-- Tool rows: `h-8` / compact `py-1`, `border-b border-koma-border`,
-  `KomaSelect` with `bg-koma-panel2`, icon buttons `h-6`.
+- Shared tablist, maximise/restore and close live on `BottomPanel`; child views
+  do not draw their own title bar with `X`. Header actions (Refresh, Open task
+  configuration) are rendered into the `BottomPanel` header through
+  `PanelActions` from `PanelChrome.tsx`.
+- Tool rows: `py-1`, `border-b border-koma-border`, `KomaSelect` with
+  `panelSelect` (`h-6`, `bg-koma-panel2`), buttons `panelButton` /
+  `panelIconButton` (`h-6`), all exported by `PanelChrome.tsx`.
 - `showCodingTasks()` only calls `setBottomPanelTab('tasks')`.
 
 The panel keeps its own explicit host/workspace selection. Switching the main

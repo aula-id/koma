@@ -680,6 +680,36 @@ fn run_skill_mutation(
                 affected,
             )
         }
+        ClientRequest::InstallSkillZipPath {
+            target,
+            name,
+            path,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => {
+            let parsed = OwnedSkillTarget::parse(&target);
+            let affected = parsed.as_ref().ok().and_then(|target| match target {
+                OwnedSkillTarget::Global => None,
+                OwnedSkillTarget::Project => project_identity.clone(),
+            });
+            let result = parsed.and_then(|target| {
+                crate::model::skill::install_staged_upload(
+                    workdir.as_deref(),
+                    target,
+                    &name,
+                    std::path::Path::new(&path),
+                )
+            });
+            (
+                request_id,
+                session_epoch,
+                tab_id,
+                "install-zip".to_string(),
+                vec![outcome(name, result)],
+                affected,
+            )
+        }
         ClientRequest::DownloadSkillZip {
             skill_id,
             generation,
@@ -980,6 +1010,41 @@ mod combined_update_tests {
             .body
             .contains("New body"));
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn install_from_a_path_outside_the_upload_dir_fails() {
+        let reply = run_skill_mutation(
+            ClientRequest::InstallSkillZipPath {
+                target: "global".into(),
+                name: "elsewhere".into(),
+                path: std::env::temp_dir()
+                    .join("not-staged.zip")
+                    .to_string_lossy()
+                    .into_owned(),
+                request_id: "stage-1".into(),
+                session_epoch: 1,
+                tab_id: "upload-skill".into(),
+            },
+            None,
+            vec![],
+            19,
+        );
+        let StoreReply::SkillMutation {
+            operation,
+            outcomes,
+            ..
+        } = reply
+        else {
+            panic!("expected skill mutation reply")
+        };
+        assert_eq!(operation, "install-zip");
+        assert_eq!(outcomes[0].status, "failed");
+        assert!(outcomes[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not a staged upload"));
     }
 
     #[test]

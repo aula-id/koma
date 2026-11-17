@@ -19,21 +19,6 @@ import { Empty } from './helpers'
 import { useKoma, visiblePlanTodos } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 
-// File-change status -> single-letter git-style badge + tone. added = new (good),
-// modified = touched (accent), deleted = removed (error/red).
-const FILE_STATUS: Record<string, { letter: string; tone: string }> = {
-  added: { letter: 'A', tone: 'text-koma-success' },
-  modified: { letter: 'M', tone: 'text-koma-accent' },
-  deleted: { letter: 'D', tone: 'text-koma-error' },
-}
-
-// Accept native Windows paths too; keep the original full path for the tooltip
-// and diff request.
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/)
-  return parts[parts.length - 1] || path
-}
-
 // Shared status -> icon/tone map for both the Agents and Bash rows. Mirrors
 // the TUI's run-state grammar: running = live/spinning, done = settled-good,
 // error = settled-bad, killed = settled-neutral (dimmed, no color signal).
@@ -129,10 +114,9 @@ function BackgroundBtn({ onClick }: { onClick: () => void }) {
 }
 
 export function ExplorePanel() {
-  const [open, setOpen] = useState({ plan: true, files: true, bash: true, agents: true })
+  const [open, setOpen] = useState({ plan: true, bash: true, agents: true })
   const subagents = useKoma((s) => s.session.subagents)
   const bash = useKoma((s) => s.session.bash)
-  const files = useKoma((s) => s.session.fileChanges)
   const planTodos = useKoma((s) => s.session.planTodos)
   const mode = useKoma((s) => s.session.mode)
   const sdlcPhase = useKoma((s) => s.session.sdlcPhase)
@@ -142,7 +126,6 @@ export function ExplorePanel() {
   const sdlcSealed = useKoma((s) => s.session.sdlcSealed)
   const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   const req = useKoma((s) => s.req)
-  const openDiffTab = useKoma((s) => s.openDiffTab)
   const openStreamTab = useKoma((s) => s.openStreamTab)
 
   const isPlan = mode === 'plan'
@@ -228,7 +211,7 @@ export function ExplorePanel() {
             )}
           </div>
         ) : planTodos.length === 0 ? (
-          <Empty>{isPlan ? 'No todos yet' : 'No todos'}</Empty>
+          <Empty>No steps yet. Koma lists its plan here for bigger tasks.</Empty>
         ) : (
           planTodos.map((t, i) => {
             const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
@@ -244,39 +227,12 @@ export function ExplorePanel() {
         )}
       </AccordionSection>
       <AccordionSection
-        title={files.length === 0 ? 'File changed' : `File changed · ${files.length}`}
-        open={open.files}
-        onToggle={() => setOpen((s) => ({ ...s, files: !s.files }))}
-      >
-        {files.length === 0 ? (
-          <Empty>No changes</Empty>
-        ) : (
-          files.map((f) => {
-            const meta = FILE_STATUS[f.status] ?? { letter: '?', tone: 'text-koma-dim' }
-            return (
-              <div
-                key={f.path}
-                title={`${f.status}: ${f.path}`}
-                onClick={() => openDiffTab(f.path)}
-                className="group flex min-h-[30px] cursor-pointer items-center gap-2.5 px-3 py-1 hover:bg-koma-hover"
-              >
-                <FileText size={13} className="flex-none text-koma-fg opacity-45" />
-                <span className={`min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg ${f.status === 'deleted' ? 'line-through opacity-60' : ''}`}>
-                  {baseName(f.path)}
-                </span>
-                <span className={`flex-none font-mono text-[11px] font-semibold ${meta.tone}`}>{meta.letter}</span>
-              </div>
-            )
-          })
-        )}
-      </AccordionSection>
-      <AccordionSection
         title={`Bash · ${bash.length}`}
         open={open.bash}
         onToggle={() => setOpen((s) => ({ ...s, bash: !s.bash }))}
       >
         {bash.length === 0 ? (
-          <Empty>No bash sessions</Empty>
+          <Empty>No commands run yet.</Empty>
         ) : (
           [...bash].reverse().map((b) => {
             const jobId = Number(String(b.id).replace(/^bash-/, ''))
@@ -302,7 +258,7 @@ export function ExplorePanel() {
         onToggle={() => setOpen((s) => ({ ...s, agents: !s.agents }))}
       >
         {subagents.length === 0 ? (
-          <Empty>No agents</Empty>
+          <Empty>No agents running.</Empty>
         ) : (
           [...subagents].reverse().map((a, i) => {
             const id = a.id

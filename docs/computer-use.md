@@ -11,7 +11,7 @@ Native device validation is separate from the compilation and regression evidenc
 
 ## Workflow and UI
 
-Use the monitor shortcut immediately left of Terminal, or **Settings → Computer
+Use the monitor shortcut at the left of the titlebar command cluster (before the on-screen browser Globe and the Terminal picker), or **Settings → Computer
 use → Start sharing**. Enabling Computer use grants consent for native desktop
 source selection and input until paused, stopped, or disconnected. Computer tools
 run without the workspace Safeguard classifier or per-action approval prompts in
@@ -433,7 +433,7 @@ and configuration. PipeWire's dynamically loaded modules need explicit staging i
 addition to linked libraries; its [runtime path settings](https://docs.pipewire.org/page_man_pipewire_1.html)
 are applied only to the capture subprocess.
 
-Install the packages named in the release workflow, then run from the repository
+Install the packages named in the Debian metadata, then run from the repository
 root on the native Linux packaging architecture:
 
 ```sh
@@ -443,10 +443,9 @@ cargo packager --release --formats deb,appimage --verbose
 python3 scripts/check_computer_package.py target/release
 ```
 
-The release workflow runs these preparation and artifact checks. The ARM64 package
-job uses the native `ubuntu-22.04-arm` runner listed in the
-[GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
-so the executable and staged libraries match the advertised architecture.
+The release workflow runs only the Windows preparation and verification steps;
+the Linux commands above are run by hand, and not on a cross-architecture host,
+so the executable and staged libraries match the packaging architecture.
 The AppImage check executes bundled OCR and loads bundled GStreamer plugins; it
 does not open a portal or capture a desktop. These gates are source implementation,
 not evidence that a release artifact has been built or validated in this session.

@@ -11,8 +11,14 @@ for real work. Two pillars drive it:
 2. **Token efficiency** — prompt caching plus a non-destructive "short-send"
    summarisation rail keep cheap models inside budget without losing context.
 
-Sessions are per-directory, resumable, and independently configured. Default
-launch is **daemon + thin client**; `koma alone` / `--local` is the standalone path.
+Sessions are per-directory, resumable, and independently configured. The launch
+modes are **daemon + thin client** (default) and standalone (`--local`).
+
+This document describes the Rust agent and its ratatui terminal client. Plain `koma`
+now opens the OpenTUI terminal (`src-term`, see
+[`INSTALL_AND_BUILD.md`](INSTALL_AND_BUILD.md)); the ratatui TUI described here is
+`koma legacy`, with `koma legacy agents` (session hub, `--resume`) and
+`koma legacy alone` (standalone, no daemon; the hidden `--local` flag).
 
 
 ---
@@ -30,7 +36,7 @@ launch is **daemon + thin client**; `koma alone` / `--local` is the standalone p
 │  · stream_complete  (provider-specific wire)        │
 │  · shortsend::shape (API-bound payload only)        │
 │  · classify_prompt / classify_toolcall              │
-│  · awareness::summarize                             │
+│  · awareness::summarize_with_fallback               │
 └──────────────────────┬──────────────────────────────┘
                        │ HTTPS
                   ┌────▼────┐
@@ -45,14 +51,17 @@ short-send rail; display and storage are always the full conversation (dual rail
 
 ## 2. Event Loop
 
-**File:** `src-agent/src/app/runtime/event_loop/` (`run_loop` and session drains)
+**File:** `src-agent/src/app/runtime/event_loop/` (`mod.rs::run_loop`, plus `drains.rs`, `sessions/`, `global/`, `daemon/`)
 
 `runtime/` is a **module tree** (`app/runtime/mod.rs`), not a single file. The entry
 point `run_loop` runs the synchronous main-thread loop:
 
 ```
 tick
- ├─ 1. Drain active_rx  (StreamEvent loop via try_recv)
+ ├─ 1. Service every session (`service_all_sessions`): drain each session's
+ │       active_rx (StreamEvent loop via try_recv), tool-task results and
+ │       sub-agent channels, so a background session keeps streaming
+ │       while another is on screen. Foreground session shown below:
  │       Token → append to streaming buffer
  │       Reasoning → append to parallel reasoning buffer
  │       Usage → stash prompt_tokens / cached_tokens / cost
@@ -105,7 +114,7 @@ The view is read-only with respect to state.
 One `tokio::runtime::Runtime` is created in `main.rs`. The main loop is
 synchronous; async work is spawned via `handle.spawn(...)`.
 
-**One channel per request.** `start_stream_task` (in `app/runtime/stream.rs`)
+**One channel per request.** `start_stream_task` (in `app/runtime/stream/run.rs`)
 opens a fresh `tokio::sync::mpsc::unbounded_channel` for each request. The
 receiver is stored in `state.rest.active_rx`; the sender goes into the spawned
 task. When the harness prompt-classifier runs, it uses a **separate** dedicated
@@ -117,12 +126,18 @@ channel (`state.rest.harness_rx`) so its verdict never mixes with stream events.
 |---|---|
 | `Token(String)` | Append text to the streaming buffer |
 | `Reasoning(String)` | Append to the parallel reasoning buffer (display-only) |
+| `ReasoningDetails(Vec<ReasoningDetail>)` | Merge OpenRouter `reasoning_details` fragments for replay |
+| `ContextPrepared { prompt_tokens, effective_window, drss_active }` | Local post-DRSS estimate and window for the footer; display only |
 | `Usage { prompt_tokens, completion_tokens, cached_tokens, cost }` | Stash token/cost accounting |
 | `ToolCalls(Vec<ToolCall>)` | Stash requested tool calls; consumed on Done |
 | `Done` | Stream finished; call advance_turn |
 | `Error(String)` | Stream failed; surface to status line |
+| `Retrying { attempt, max, delay_ms }` | Transient upstream error; the task sleeps and retries, turn continues |
 | `Compacted { summary, kept_tail }` | /compact result; apply to conversation |
 | `HarnessVerdict { allow, reason }` | Advisory PC verdict; delivered on harness_rx only |
+
+The enum has further variants for other side channels (for example the endpoint
+list delivered on `endpoints_rx`); see `service/mod.rs`.
 
 **Cancellation.** `abort_current` aborts the task's `AbortHandle` and sets
 `active_rx = None`. A dropped receiver silently discards any late events from the
@@ -133,7 +148,7 @@ tagging required.
 
 ## 5. Agentic Loop and Tools
 
-**File:** `app/runtime/stream.rs::advance_turn` / `process_tools` / `run_tool`
+**Files:** `app/runtime/stream/turn.rs::advance_turn`, `stream/tools/approval.rs::process_tools`, `stream/tools/dispatch.rs::run_tool` / `finish_tool_round`
 
 The model emits `tool_calls` during streaming. On `Done`, `advance_turn`:
 1. Commits the assistant message (content + tool_calls) to the conversation.
@@ -141,7 +156,7 @@ The model emits `tool_calls` during streaming. On `Done`, `advance_turn`:
 3. If tool calls → runs `process_tools`, which executes or gates each call,
    then calls `finish_tool_round`, which appends results and calls
    `start_stream_task` again. The loop continues until the model returns no more
-   tool calls or `MAX_AGENT_STEPS` (40) is reached.
+   tool calls; there is no fixed step cap (`agent_steps` only counts rounds).
 
 Normal execution does not require a separate planning step. In Plan mode, the
 runtime restricts tools to permitted investigation and planning operations;
@@ -166,8 +181,9 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-**`ToolCtx`** carries `workspace: PathBuf`, `workspaces: Vec<PathBuf>`, and
-`dir_cache: Arc<RwLock<DirCache>>`.
+**`ToolCtx`** carries `workspace: PathBuf` (the primary workdir, following a live
+`cd`), `workspaces: Vec<PathBuf>`, `dir_cache: Arc<RwLock<DirCache>>`,
+`plan_read_only` (the live Plan restriction) and `memory_dir`, among others.
 
 **Built-in tools** (`all_tools()` in `tool/mod.rs`):
 
@@ -175,33 +191,37 @@ pub trait Tool: Send + Sync {
 |---|---|---|
 | `read` / `write` / `edit` / `delete` / `dir_list` | `tool/fs/` | Filesystem (risky write path) |
 | `grep` / `glob` | `tool/search.rs` | Search |
-| `bash` / `bash_output` / `bash_kill` | `tool/shell.rs` + `app/bgbash` | Shell as job; FG parks turn; BG / Ctrl+B detach |
+| `bash` / `bash_output` / `bash_kill` | `tool/shell.rs` + `app/bgbash` | Shell as job; FG parks turn; BG / Ctrl+B detach. On Windows the shell is Git Bash (discovery in `tool/winpath.rs`) |
+| `cd` | `tool/cd.rs` | Changes the session's effective cwd |
 | `git_operator` / `git_cred` / `git_worktree` | `tool/git_*.rs` | Git (prefer over bash) |
 | `task` / `task_output` / `task_kill` / `task_send` | `tool/task.rs` + subagent | Sub-agents |
-| `remember` / `forget` / `recall` | memory tools | Project memory |
-| `web_*` / `browser_*` | internet tools | Fetch / full browser (feature-gated) |
-| `plan_enter` / checklist / SDLC tools | plan + `tool/sdlc*` | Plan / mission modes |
-| `graph_query` | `tool/graph.rs` | Import graph (when enabled) |
+| `remember` / `forget` / `recall` | `tool/memory.rs` | Project memory |
+| `skill_find` / `skill_load` / `skill_unload` / `skill_create` / `skill_modify` | `tool/skill.rs` | Skills |
+| `message_find` / `message_load` | `tool/history*.rs` | Chat-history search and exact recall (DRSS) |
+| `web_*` / `browser_*` / screenshot and image tools | `tool/internet/` | Fetch / full browser (feature-gated) |
+| `computer_*` / `screen_browser_*` | `tool/computer.rs`, `tool/screen_browser.rs` | Native desktop and screen-browser control (explicit GUI enablement) |
+| `plan_enter` / `plan_ready` / `checklist` / `mission_*` / `seqthink` | `tool/plan.rs`, `tool/todo.rs`, `tool/sdlc.rs`, `tool/seqthink.rs` | Plan / mission modes |
+| `secure_shelf` | `tool/secure_shelf.rs` | Secure-room shelf |
+| `graph_query` | `tool/graph.rs` | Import graph (`linker` feature) |
 | … | `tool/mod.rs` `all_tools()` | Canonical registry |
 
 **Sub-agent risky calls.** A sub-agent has no human of its own. `subagent_risky` in `config.json` (`classifier` by default, or `parent`, or `deny`) decides what its risky tool calls (`tool::tool_is_risky`) go through: the tool-call classifier, the parent session's approval prompt, or a refusal. The one gate is `risky_gate` in `app/subagent/engine.rs`; a sub-agent only runs structured tool calls, so text markup in its reply never reaches it. Under `parent` the call is announced as `AgentEvent::ApprovalRequest`, kept on the `SubAgent`, and projected onto the session's `awaiting_approval` snapshot as `subagent-<id>:<call id>`; `ApproveTool` and `DenyTool` answer it down the sub-agent's approval channel. The SDK sets it with `config.subagent_risky.set`.
 
-Paths: there is **no** `tool/fs.rs` — use `tool/fs/{read,write,edit,delete,dirlist,mod}.rs`.
+Paths: there is **no** `tool/fs.rs` — use `tool/fs/{read,write,edit,delete,dirlist,helpers,mod}.rs`.
 
 
 **Sandboxing.** `resolve(workspaces, path)` canonicalises the path and checks
-containment inside the target workspace. `resolve_read` is forgiving: a bare
-path without a `[N]` prefix tries workspace 0 first; if the file doesn't exist
-there, it tries the other workspaces by existence (so weak models that drop the
-prefix can still read files in secondary workspaces). Writes always use `resolve`
-— strict, no forgiveness.
+containment inside the target workspace. `resolve_read` also accepts the session
+directory and active skill directories, but does not guess a different workspace
+for a bare path. Writes always use `resolve` — strict. On Windows, paths are
+normalised first (verbatim `\\?\` prefixes stripped; see `tool/winpath.rs`).
 
 **Multi-workspace `[N]` prefix.** A path like `[2]src/main.rs` resolves against
 workspace 2. A bare path resolves against workspace 0. `parse_ws_prefix` extracts
 the index. The `[N]` convention is documented in `src-misc/system-tools.txt`.
 
 **Tool output truncation.** Long tool results are returned as-is and indexed as
-blobs in `messages.sqlite`; the short-send layer controls how much of the archive
+blobs in `messages.sqlite`; the DRSS layer controls how much of the archive
 re-enters each API request.
 
 **Hard tool deny list.** `tool/policy.rs` holds names and `*`/`?` globs of tools
@@ -223,12 +243,15 @@ gateway to strip tools.
 
 Controlled by `settings.classifier_enabled` (default: on). When disabled the
 loop behaves exactly as before — no secondary-model calls, no workspace check.
+The risky-call set is `tool_is_risky` in `tool/mod.rs` (`write`, `edit`, `delete`,
+`bash`, `git_operator`, `web_download`, and the mutating `browser_*` tools);
+`git_worktree remove` is gated separately inside `process_tools`.
 
 Three layers:
 
 **WC (workspace check)** — deterministic, no network. Checks whether the session
-workdir is the process launch directory or appears in the union of `settings.workdir`
-entries and `settings.allowed_folders`. Called once per tool round in `advance_turn`;
+workdir (the live `cd` override when set) is at or under the process launch directory
+or an entry of `settings.workdir` / `settings.allowed_folders`. Called once per tool round in `advance_turn`;
 if blocked, all pending tool calls are answered with a refusal and the turn halts.
 
 **PC (prompt classifier)** — advisory only. Runs once per user turn as a background
@@ -249,7 +272,7 @@ When classifier is disabled: Normal prompts on risky calls; Auto runs them inlin
 All classifier calls use `classify_with`, which sets `reasoning: {exclude: true}` to
 strip the model's chain-of-thought from the response (keeps verdicts clean and fast).
 
-Timeout: `CLASSIFY_TIMEOUT = 12 s`. Every failure becomes an unavailable verdict
+Timeout: `CLASSIFY_TIMEOUT = 120 s`. Every failure becomes an unavailable verdict
 carrying the real cause (HTTP error / timeout / unparseable reply).
 
 ---
@@ -261,11 +284,12 @@ The model's `delta.reasoning` field is a **separate streaming channel** from
 these fragments; they accumulate in a parallel buffer in `AppStateRest` and are
 rendered dim/italic above the answer.
 
-**Persisted for display; stripped on the wire for most model roles:**
+**Persisted for display; never sent back as text:**
 
 - `ChatMessage.reasoning` is stored with the message (see `dto/chat/message.rs`) so
   the transcript can show thinking after reload. Provider-specific
-  `reasoning_details` stay `#[serde(skip)]` / non-persisted wire junk.
+  `reasoning_details` stay `#[serde(skip)]`: in memory within a turn only, echoed
+  back on tool-continuation requests.
 - `take_reasoning()` drains the live stream buffer at assistant-commit time.
 - The buffer is also drained on interrupt and tool-round boundaries so it cannot
   bleed into the next turn or the short-send fold.
@@ -450,7 +474,7 @@ conversation. DRSS never invokes it.
 
 ## 9. SQLite Blob Archive
 
-**File:** `src-agent/src/model/msglog.rs`
+**Files:** `src-agent/src/model/msglog/` (`schema.rs`, `query.rs`, `blobs.rs`, `drss.rs`, `history_search.rs`)
 
 Each session has `messages.sqlite` alongside `messages.json`. Tables:
 
@@ -464,6 +488,10 @@ Each session has `messages.sqlite` alongside `messages.json`. Tables:
 | `drss_memory` | Bounded deterministic B snapshot and refresh-input fingerprint |
 | `drss_recovery` / `drss_recovery_fts` | Exact legacy copies, independent read keys, coverage, and keyword index |
 
+The same file also holds per-session tables for other features (`file_changes`,
+`bash_jobs`, `subagents`, `file_baselines`, `sdlc_nodes`, `sdlc_events`,
+`mission_meta`, `schema_meta`); see `model/msglog/schema.rs`.
+
 Heavy thresholds: `token_est >= 400` (≈1 600 chars) for general messages, `>= 150` for tool outputs, or any message containing a triple-backtick fence. Kind: `"code"`, `"tool_output"`, or `"large_text"`.
 
 Snippet extraction skips leading noise lines (box-drawing, fences, blank lines) so the first snippet character is real semantic text; leading noise would otherwise make blobs unsearchable.
@@ -476,7 +504,7 @@ The archive survives `/compact` — it is never rewritten on compaction.
 
 ## 10. Prompt Caching
 
-**Files:** `dto/chat.rs` (`CACHE_SPLIT_MARK`), `dto/openrouter.rs` (`to_wire`, `system_parts`)
+**Files:** `dto/chat/role.rs` (`CACHE_SPLIT_MARK`), `dto/openrouter/request.rs` (`to_wire`, `system_parts`)
 
 One `cache_control: {type: "ephemeral"}` breakpoint is placed on the **stable head** of the system message. `ChatMessage.content` stays a plain `String` internally; `to_wire` converts it to a `WireContent::Parts` array only for the system message.
 
@@ -512,7 +540,7 @@ cache hits, the flag is never reset). DRSS uses its fixed token bands independen
 
 ## 11. Multi-Model Robustness
 
-**File:** `src-agent/src/service/openrouter.rs`
+**Files:** `src-agent/src/service/openrouter/` (`catalogue.rs`, `helpers.rs`, `oneshot.rs`, `stream.rs`; provider wires in `anthropic/`, `codex/`, `commandcode/`)
 
 - **Capability-gated reasoning.** `effort_caps(models, model_id)` checks whether a
   model has a `reasoning` object OR lists `reasoning`/`include_reasoning` in
@@ -522,13 +550,13 @@ cache hits, the flag is never reset). DRSS uses its fixed token bands independen
 - **Mode-aware execution.** Normal execution has no forced planning step. Plan
   mode permits investigation and proposal preparation, then waits for approval
   through `plan_ready`; the runtime enforces permitted tools.
-- **Context length preference.** `context_length_for` uses the smaller positive
+- **Context length preference.** `context_length_for` (in `catalogue.rs`) uses the smaller positive
   serving-provider / nominal context length, matching DRSS. Missing, null, and
   zero values are unknown; callers use the shared 128 000-token fallback.
 - **Provider routing.** `provider_routing_for(slug)` sets `only: [slug], allow_fallbacks: false`
   for non-empty slugs; omits the field entirely for empty slugs (OpenRouter default routing).
 - **`reasoning: {exclude: true}`.** Used on ALL secondary / utility calls
-  (classifier, fold, router, awareness) to strip chain-of-thought from responses —
+  (classifier, awareness, …) to strip chain-of-thought from responses —
   never `enabled: false`, which 400s on mandatory-reasoning endpoints.
 
 ---
@@ -548,9 +576,9 @@ Exactly one `Mode` is active. Variants include (not exhaustive — see the enum)
 | `Chat` | Normal conversation |
 | `Loading` | Warming splash |
 | `Settings` | `/settings` |
-| `Agents` / `Mcp` / `Extensions` / `Store` / `Security` | Full-screen managers |
-| `Bash` / `Todo` / `Remote` / `Help` | Overlays / panels |
-| `Effort` / model cmd / skill / rewind / quit confirm / … | Other overlays |
+| `Agents` / `Mcp` / `Extensions` / `ExtStore` | Full-screen managers |
+| `Bash` / `Todo` / `Remote` / `Help` / `Notifications` / `Usage` / `Attachments` | Overlays / panels |
+| `Effort` / `Model` / `Skill` / `MessageRewind` / `QuitConfirm` | Other overlays |
 | `ExtScreen` | Extension-driven TUI screen |
 
 Key transitions (simplified):
@@ -561,6 +589,7 @@ First run                     → Onboard / KeyInput
 /resume                       → SessionHub
 SaveCreds / warm complete     → Chat
 /settings /agents /mcp /bash… → matching Mode
+/security                     → hands the session to the secure room (no Mode; not part of the legacy TUI)
 Esc from overlay              → Chat (or prior detail)
 ```
 
@@ -570,9 +599,11 @@ Esc from overlay              → Chat (or prior detail)
 
 ```
 ~/.koma/
-├── config.json                  ← global: theme (dark/light), accent colour
+├── config.json                  ← global: palette, provider/model catalogue, MCP servers,
+│                                  OAuth connections, installed extensions
 ├── session.sqlite               ← session registry (UUID → metadata)
 ├── usage.sqlite                 ← cost ledger across all sessions
+├── notifications.sqlite         ← notification history (WAL; also one per session dir)
 ├── sessions/
 │   └── <pwd_hash>/              ← bucket per working directory
 │       ├── settings.json        ← shared model catalogue (per-dir settings)
@@ -583,8 +614,9 @@ Esc from overlay              → Chat (or prior detail)
 │           │                      workdir[], compaction, awareness_*, classifier_*,
 │           │                      allowed_folders[], short_send_enabled,
 │           │                      context_window_limit, context_model_alias, max_output_tokens
-│           ├── messages.json      ← Vec<ChatMessage> (full transcript; reasoning #[serde(skip)])
+│           ├── messages.json      ← Vec<ChatMessage> (full transcript, incl. display-only reasoning)
 │           ├── messages.sqlite    ← append-only archive (messages + blobs + legacy summary + derived DRSS tables)
+│           ├── drss-context.json  ← context-limit match provenance (diagnostic)
 │           └── images/          ← pasted/screenshot attachments
 ├── run/
 │   ├── <session_id>.sock        ← session-daemon socket
@@ -592,8 +624,17 @@ Esc from overlay              → Chat (or prior detail)
 └── mcp.sock                     ← global MCP daemon socket (singleton)
 ```
 
-`config.json` is read/written by `model/app_config.rs::AppConfig`. It holds only
-global visual preferences. All per-session config lives in `settings.json`.
+The root is `~/.koma/` on Unix and `%LOCALAPPDATA%\koma` on Windows
+(`model/store.rs::base_dir`). `config.json` is read/written by
+`model/app_config.rs::AppConfig`: `palette` (the old `theme`/`accent` fields are
+deprecated and no longer drive rendering), the global provider and model catalogue,
+`mcp_servers` and `mcp_project_approvals`, OAuth connections and installed
+extensions. All per-session config lives in `settings.json`.
+
+Notification history is a SQLite store (`model/notifications.rs`) owned by one
+ordered worker thread. It runs in WAL mode and retries transient open/IO failures.
+A request names a session or none; with none it uses `<base>/notifications.sqlite`,
+otherwise the session directory's copy. It never recreates a deleted session.
 
 `session.lock` holds the owning process PID; liveness is probed via portable `kill(pid, 0)` (not `/proc`) on unix, so it works on both Linux and macOS; on Windows the equivalent lives in `model::proc_win::pid_alive` (`OpenProcess` + `GetExitCodeProcess`, biased toward reporting a process alive on any ambiguity).
 
@@ -625,15 +666,17 @@ calls dispatch to the session's extension host.
 Assembly at session load / rebuild:
 
 ```
-build_system_prompt(memory, agents) =
+build_system_prompt(memory, agents, subagents, skills) =
   system_prompt()       (src-misc/system-prompt.txt, embedded at compile time)
   + "\n\n"
   + system_personality() (src-misc/system-personality.txt)
   [+ "\n\n# Project Instructions\n" + agents]   ← AGENT.md / AGENTS.md in workdir
-  [+ "\n\n# Memory\n" + memory]                 ← memory/MEMORY.md
+  [+ "\n\n# Memory\n" + memory]                 ← memory/MEMORY.md index only; bodies via recall
+  [+ "\n\n# Skills\n" + pinned skills]          ← skills are found/loaded on demand
   [+ "\n\n" + system_tools()]                   ← src-misc/system-tools.txt
                                                  (thin routing + invariants;
                                                   call shape is JSON schemas)
+  [+ "\n\n# Sub-agents\n" + agent list]         ← names accepted by the `task` tool
 ```
 
 All files are embedded via `include_dir!` at compile time (the `src-misc/`
@@ -668,48 +711,50 @@ routing + hard behaviour only, not a per-tool encyclopedia.
 
 | Layer | Path | Responsibility |
 |---|---|---|
-| DTOs | `src-agent/src/dto/chat.rs` | `ChatMessage`, `Role`, `ToolCall`, `CACHE_SPLIT_MARK` |
-| DTOs | `src-agent/src/dto/openrouter.rs` | Wire types: `ChatRequest`, `WireMessage`, `to_wire`, `StreamChunk`, `Delta`, `ModelInfo`, `Usage` |
-| Model | `src-agent/src/model/app_config.rs` | `AppConfig` (global theme/accent, `~/.koma/config.json`) |
+| DTOs | `src-agent/src/dto/chat/` | `ChatMessage` (`message.rs`), `Role` and `CACHE_SPLIT_MARK` (`role.rs`), `ToolCall` (`tool/`) |
+| DTOs | `src-agent/src/dto/openrouter/` | Wire types: `ChatRequest`, `WireMessage`, `to_wire` (`request.rs`), `StreamChunk`, `Delta` (`response.rs`), `ModelInfo` (`models.rs`), `Usage` (`usage.rs`) |
+| Model | `src-agent/src/model/app_config.rs` | `AppConfig` (global palette, providers/models, MCP servers, `~/.koma/config.json`) |
 | Model | `src-agent/src/model/conversation.rs` | `Conversation` (in-memory message list, compaction apply) |
 | Model | `src-agent/src/model/session.rs` | `Session` (load/save, `rebuild_system`, `workdir()`/`workdirs()`) |
 | Model | `src-agent/src/model/settings.rs` | `Settings` (per-session config, `settings.json`) |
-| Model | `src-agent/src/model/store.rs` | Filesystem registry: `list_sessions`, `create_session`, `rename_session`, PID locking |
-| Model | `src-agent/src/model/memory.rs` | `load_memory` (reads `memory/MEMORY.md`) |
-| Model | `src-agent/src/model/msglog.rs` | SQLite archive: `append`, `totals`, blob indexing, deterministic DRSS index, legacy summary CRUD |
+| Model | `src-agent/src/model/store.rs` | Filesystem registry: `list_sessions`, `create_session`, `rename_session`, `base_dir`; locking re-exported from `session_lock.rs` |
+| Model | `src-agent/src/model/memory.rs` | `load_memory_index` (reads `memory/MEMORY.md`; only the index enters the prompt) |
+| Model | `src-agent/src/model/notifications.rs` | Notification history store |
+| Model | `src-agent/src/model/msglog/` | SQLite archive: `append`, `totals`, blob indexing, deterministic DRSS index, legacy summary CRUD |
 | Service | `src-agent/src/service/mod.rs` | `StreamEvent` enum definition |
-| Service | `src-agent/src/service/openrouter.rs` | `OpenRouterClient`: `stream_complete`, `complete`, `complete_with`, `classify_with`, `summarize_fold`, `pick_blobs`, `effort_caps`, `context_length_for` |
-| Controller | `src-agent/src/controller/input.rs` | `handle_key` → `Action`; `handle_paste` |
+| Service | `src-agent/src/service/openrouter/` | `OpenRouterClient`: `stream_complete` (`stream.rs`), `complete_with`, `classify_with` (`oneshot.rs`), `effort_caps`, `context_length_for` (`catalogue.rs`) |
+| Service | `src-agent/src/service/context_limits/` | Context-window discovery for DRSS |
+| Controller | `src-agent/src/controller/input/` | `handle_key` (`mod.rs`) → `Action` (`action.rs`); `handle_paste` (`paste.rs`) |
 | Controller | `src-agent/src/controller/command.rs` | `parse` → `Command`; palette matching |
 | View | `src-agent/src/view/mod.rs` | `draw` dispatcher; routes to mode-specific views |
-| View | `src-agent/src/view/chat.rs` | Chat transcript + status line + input bar |
-| View | `src-agent/src/view/markdown.rs` | Markdown block renderer (code fences, inline code, headings) |
-| View | `src-agent/src/view/theme.rs` | Colour palette from `AppConfig.theme` / `accent` |
-| View | `src-agent/src/view/settings.rs` | `/settings` overlay layout |
+| View | `src-agent/src/view/chat/` | Chat transcript + status line + input bar |
+| View | `src-agent/src/view/markdown/` | Markdown block renderer (code fences, inline code, headings) |
+| View | `src-agent/src/view/theme.rs` | Colour palette from `AppConfig.palette` |
+| View | `src-agent/src/view/settings/` | `/settings` overlay layout |
 | View | `src-agent/src/view/effort.rs` | `/effort` picker overlay |
 | View | `src-agent/src/view/key_input.rs` | Credentials form layout |
 | View | `src-agent/src/view/session_picker.rs` | Session list layout |
 | App | `src-agent/src/app/mod.rs` | Module root |
-| App | `src-agent/src/app/state.rs` | `AppState` + `AppStateRest` (all mutable runtime state) |
+| App | `src-agent/src/app/state/` | `AppState` + `AppStateRest` (all mutable runtime state; per-session state in `state/runtime/`) |
 | App | `src-agent/src/app/mode/` | `Mode` enum + `KeyInputForm`, `PickerState`, `SettingsState`, `EffortPickerState` |
-| App | `src-agent/src/app/runtime/mod.rs` | Runtime module root: `build_client`, `warm_session` |
-| App | `src-agent/src/app/runtime/event_loop.rs` | `run_loop` (main synchronous loop) |
-| App | `src-agent/src/app/runtime/actions.rs` | `apply_action` (Action dispatcher) |
-| App | `src-agent/src/app/runtime/commands.rs` | `apply_slash` (Command dispatcher) |
-| App | `src-agent/src/app/runtime/stream.rs` | `start_stream_task`, `advance_turn`, `process_tools`, `run_tool`, `finish_stream`, `abort_current` |
-| App | `src-agent/src/app/runtime/shortsend.rs` | `shape`, `update_summary`, `estimate_conv_tokens`, engage constants |
+| App | `src-agent/src/app/runtime/session_mgmt.rs` | `build_client`, `warm_session` |
+| App | `src-agent/src/app/runtime/event_loop/` | `run_loop` (main synchronous loop) |
+| App | `src-agent/src/app/runtime/actions/` | `apply_action` (Action dispatcher) |
+| App | `src-agent/src/app/runtime/commands/` | `apply_slash` (Command dispatcher) |
+| App | `src-agent/src/app/runtime/stream/` | `start_stream_task`, `abort_current` (`run.rs`); `finish_stream`, `advance_turn` (`turn.rs`); `process_tools`, `run_tool` (`tools/`) |
+| App | `src-agent/src/app/runtime/shortsend/` | DRSS: `shape` (`window.rs`), token budgets (`budget.rs`), objective (`goal.rs`), recovery |
 | App | `src-agent/src/app/runtime/terminal.rs` | Terminal setup/teardown helpers |
+| App | `src-agent/src/app/mcp/` | MCP client (`connect.rs`, `proxy.rs`), JSON import and project `.mcp.json` (`project.rs`), `${VAR}` expansion, `koma mcp` CLI (`cli.rs`) |
 | App | `src-agent/src/app/harness.rs` | `classify_prompt`, `classify_toolcall`, `workspace_allowed`, `Verdict` |
-| App | `src-agent/src/app/awareness.rs` | `summarize` (project-awareness secondary call) |
+| App | `src-agent/src/app/awareness.rs` | `summarize_with_fallback` (project-awareness secondary call) |
 | Tool | `src-agent/src/tool/mod.rs` | `Tool` trait, `ToolCtx`, `all_tools()`, `resolve`, `resolve_read` |
 | Tool | `src-agent/src/tool/fs/` | Read, Write, Edit, Delete, DirList |
-| Tool | `src-agent/src/tool/shell.rs` | Bash tool defs |
-| App | `src-agent/src/app/bgbash/` | Bash job registry (FG + BG) |
 | App | `src-agent/src/lsp/` | Host LSP for GUI coding panel |
 | Tool | `src-agent/src/tool/search.rs` | Grep, Glob |
 | Tool | `src-agent/src/tool/shell.rs` | Bash tool defs + `capture_raw` (non-intercept callers) |
 | App | `src-agent/src/app/bgbash/` | Bash job registry: every model `bash` is a `BashJob`; Ctrl+B promote |
 | Tool | `src-agent/src/tool/dircache.rs` | `DirCache`, `DirCacheUpdate`, `reindex` |
+| Tool | `src-agent/src/tool/winpath.rs` | Windows path normalisation and Git Bash discovery |
 | Tool | `src-agent/src/tool/pong.rs` | Pong (heartbeat) |
 | Resources | `src-agent/src/resources.rs` | Compile-time embed of `src-misc/`; `build_system_prompt`, `wanderer_word` |
 | Misc | `src-misc/system-prompt.txt` | Base system instructions (embedded) |
@@ -729,14 +774,14 @@ routing + hard behaviour only, not a per-tool encyclopedia.
 3. Add a `match` arm to `apply_slash()` in `app/runtime/commands.rs`.
 
 **New key binding:**
-1. Add a match arm in `controller/input.rs` (`handle_key` or `handle_paste`).
-2. Return the appropriate `Action` variant (add one if needed).
-3. Handle the new variant in `apply_action` in `app/runtime/actions.rs`.
+1. Add a match arm under `controller/input/` (`handle_key` in `mod.rs`, or the per-mode file; `handle_paste` in `paste.rs`).
+2. Return the appropriate `Action` variant (add one in `action.rs` if needed).
+3. Handle the new variant in `apply_action` in `app/runtime/actions/`.
 
 **New settings field:**
 1. Add the field to `Settings` in `model/settings.rs` with `#[serde(default)]`
    and a default fn so existing `settings.json` files load without error.
-2. Add a draft field to `SettingsState` in `app/mode/settings/state.rs` and wire
+2. Add a draft field to `SettingsState` in `app/mode/settings/state/` and wire
    it through the settings form and `apply_action::SaveSettings`.
 
 **New tool:**
@@ -745,21 +790,25 @@ routing + hard behaviour only, not a per-tool encyclopedia.
    (JSON Schema), and `run`.
 2. Add it to the `vec!` in `all_tools()` in `tool/mod.rs`.
 3. If it mutates the workspace, add its name to the `tool_is_risky` match in
-   `app/runtime/stream.rs` so the harness and approval gate apply to it.
+   `tool/mod.rs` so the harness and approval gate apply to it.
 
 ---
 
 ## 17. Build and Run
 
 ```sh
-# First run — prompts for API key and model, then opens chat
+# First run — opens the OpenTUI terminal (needs the prepared payload, see
+# INSTALL_AND_BUILD.md: python3 scripts/prepare-terminal.py)
 cargo run -p agent
 
-# Session picker — resume a previous conversation
-cargo run -p agent -- --resume
+# The ratatui TUI described here
+cargo run -p agent -- legacy
+
+# Session hub — resume a previous conversation
+cargo run -p agent -- legacy agents
 ```
 
-The binary is the `agent` crate. No environment variables are required; all
+The crate is `agent` and its binary is `koma`. No environment variables are required; all
 configuration is entered interactively and stored per-session in
 `~/.koma/sessions/<pwd_hash>/<uuid>/settings.json`.
 

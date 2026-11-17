@@ -80,3 +80,17 @@ fn a_result_is_kept_on_the_shelf_for_its_claim_revision_only() {
     assert!(stored(&shelf, "claims/web/ssrf", 3).is_none(), "a newer claim revision has not been checked");
     assert_eq!(key_of("claims/web/ssrf"), "notes/oracle/web/ssrf");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_missing_file_under_a_symlinked_alias_of_a_root_is_missing_not_outside() {
+    let (dir, _) = tree();
+    let alias = dir.parent().unwrap().join(format!("{}-alias", dir.file_name().unwrap().to_string_lossy()));
+    let _ = std::fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&dir, &alias).unwrap();
+    let missing = alias.join("src/nope.ts");
+    assert!(matches!(locate(&missing.to_string_lossy(), std::slice::from_ref(&dir)), Located::Missing));
+    let climbing = alias.join("new/../../x");
+    assert!(matches!(locate(&climbing.to_string_lossy(), std::slice::from_ref(&dir)), Located::Outside));
+    let _ = std::fs::remove_file(&alias);
+}

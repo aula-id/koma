@@ -6,6 +6,24 @@ use crate::ipc::proto::ModeSnapshot;
 
 use super::connector::OAuthFlowSnapshot;
 
+/// One project `.mcp.json` server and whether the user approved it (`approved`,
+/// `pending` or `changed`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpProjectServerSnapshot {
+    pub entry: crate::model::app_config::McpServerEntry,
+    pub approval: String,
+}
+
+/// The foreground session's project `.mcp.json`: its path, a read error if any, and rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpProjectSnapshot {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub servers: Vec<McpProjectServerSnapshot>,
+}
+
 /// Projection of the mode-independent, NON-session global UI state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -49,6 +67,8 @@ pub struct GlobalSnapshot {
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_project: Option<McpProjectSnapshot>,
     /// OAuth-backed connection UUID catalogue (`AppConfig.oauth_conns` — Codex/Kilo/xAI/
     /// ClaudeAI logins), mirrored alongside `providers` so a Main-role model bound to
     /// an OAuth connection (rather than a `providers` entry) resolves as usable the

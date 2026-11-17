@@ -132,16 +132,16 @@ export default function HelpTab() {
               and reply limits, bash shorts, internet mode). Opened from the gear at the bottom of the activity bar; closeable.
             </InfoRow>
             <InfoRow label="Diff tabs">
-              Click a row under the Explorer's "File changed" section to open a side-by-side diff. If the workspace
+              Click a file in the Source Control panel to open a side-by-side diff. If the workspace
               isn't a git repo, a "session baseline" badge marks that the original side came from the session's own
               first-touch snapshot rather than git.
             </InfoRow>
             <InfoRow label="Sub-agent / bash stream tabs">
-              Read-only. Opened from the Explorer's Agents/Bash rows, they live-update while their target is
+              Read-only. Opened from the Chat panel's Agents/Bash rows, they live-update while their target is
               running and stay open (closeable) afterward.
             </InfoRow>
-            <InfoRow label="Explorer sidebar">
-              Plan (the todo checklist while in Plan mode), File changed, Bash (running/finished jobs, with a kill
+            <InfoRow label="Chat sidebar">
+              Plan (the todo checklist while in Plan mode), Bash (running/finished jobs, with a kill
               button while running), and Agents (sub-agents, with background/kill buttons while running).
             </InfoRow>
             <InfoRow label="MCP panel">Add, edit, enable, or remove MCP servers.</InfoRow>

@@ -1,6 +1,7 @@
 //! Test discovery and structured results layered on the supervised task process.
 use super::sync::CheckedMutex;
 use super::WorkspaceRef;
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -428,7 +429,7 @@ fn recipe(root: &Path, p: &Profile, discover: bool, items: &[Value]) -> Result<V
             }
             anyhow::ensure!(!groups.is_empty(), "No Node test files were found");
             for (file, selectors) in groups {
-                let path = root.join(&file).canonicalize()?;
+                let path = winpath::canonical(&root.join(&file))?;
                 anyhow::ensure!(
                     path.starts_with(root) && path.is_file(),
                     "Test file is outside workspace"
@@ -698,7 +699,7 @@ pub(super) fn debug(
                 .as_str()
                 .or_else(|| item["file"].as_str())
                 .context("Test has no entry file")?;
-            let file = root.join(file).canonicalize()?;
+            let file = winpath::canonical(&root.join(file))?;
             anyhow::ensure!(
                 file.starts_with(root) && file.is_file(),
                 "Test file is outside workspace"
@@ -738,13 +739,11 @@ pub(super) fn debug(
                 }
                 args.push(file.into());
             }
-            let program = root
-                .join(if profile.kind == "jest" {
-                    "node_modules/jest/bin/jest.js"
-                } else {
-                    "node_modules/vitest/vitest.mjs"
-                })
-                .canonicalize()?;
+            let program = winpath::canonical(&root.join(if profile.kind == "jest" {
+                "node_modules/jest/bin/jest.js"
+            } else {
+                "node_modules/vitest/vitest.mjs"
+            }))?;
             (
                 "js-debug",
                 json!({"type":"pwa-node","program":program,"args":args,"autoAttachChildProcesses":true,"console":"internalConsole"}),
@@ -784,7 +783,7 @@ pub(super) fn debug(
                     .strip_prefix(&format!("{module}/"))
                     .context("Test belongs to a different Go module")?
             };
-            let program = root.join(relative).canonicalize()?;
+            let program = winpath::canonical(&root.join(relative))?;
             anyhow::ensure!(
                 program.starts_with(root),
                 "Go test package is outside workspace"

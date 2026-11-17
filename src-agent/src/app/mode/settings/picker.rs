@@ -132,7 +132,10 @@ fn materialize_in(chosen: &str, cwd: &Path, home: Option<&Path>) -> String {
         return String::new();
     }
     let path = filesystem_path(raw, cwd, home);
-    path.canonicalize().unwrap_or(path).display().to_string()
+    crate::tool::winpath::canonical(&path)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn trim_picker_text(chosen: &str) -> &str {

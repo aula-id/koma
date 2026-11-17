@@ -6,9 +6,9 @@ import type { AnalyticsModelRow, AnalyticsSeriesPoint, AnalyticsStatus } from '.
 import type { ChatMessage, PaletteColors, PaletteInfo, UsageDayEntry, UsageModelEntry } from './chat'
 import type { ActivityCommit, BranchInfo, CommitFile, GitCommitNode, GitFileEntry, GitPushMode, KeyInfo, RepoEntry, StashEntry } from './git'
 import type { InstalledExt, InstalledExtDetail, StoreDetail, StoreItem } from './marketplace'
-import type { AttachmentEntry, BashJobEntry, FileChangeEntry, HubCookingEntry, HubHistoryEntry, LoadPhase, LspRuntimeServer, LspServerStatus, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry } from './session'
+import type { AttachmentEntry, BashJobEntry, HubCookingEntry, HubHistoryEntry, LoadPhase, LspRuntimeServer, LspServerStatus, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry } from './session'
 import type { ImportGraphEdge, ImportGraphNode, ImportGraphRootInfo } from './slices'
-import type { McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
+import type { McpProject, McpServer, Model, ModelListEntry, Provider, RouteEntry } from '../../types/config'
 
 export type PushEnvelope = PushEvent & { eventId?: string }
 export type PushEvent =
@@ -33,9 +33,6 @@ export type PushEvent =
       palette: PaletteColors
       subagents: SubAgentEntry[]
       bash: BashJobEntry[]
-      // Cumulative file-change log (#24). Optional-tolerant: a host build that
-      // doesn't project it yet omits it, and the panel shows "No changes".
-      fileChanges?: FileChangeEntry[]
       // Session checklist (Explore). Optional-tolerant: a host build that
       // doesn't project it yet leaves the section empty.
       planTodos?: PlanTodoEntry[]
@@ -155,6 +152,7 @@ export type PushEvent =
   | {
       k: 'Config'
       mcp: McpServer[]
+      mcpProject?: McpProject
       providers: Provider[]
       models: Model[]
       palette?: PaletteColors

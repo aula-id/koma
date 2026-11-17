@@ -19,7 +19,8 @@ synced inverse images before mutation, and rolls back completed writes if a late
 step fails. External processes can still race filesystem operations; an external
 change during rollback preserves the recovery journal instead of overwriting it.
 Multi-file operations are not crash-atomic. Incomplete journals are retained at
-`~/.koma/coding/transactions/<id>` and named in errors.
+`~/.koma/coding/transactions/<id>` (under the local app data directory on
+Windows) and named in errors.
 
 **Recover Workspace Edit Transactions** in the command palette lists retained
 transactions for the selected host/root. Select one to compare current disk text

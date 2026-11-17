@@ -129,7 +129,7 @@ fn collect_companion_files(skill_dir: Option<&Path>) -> Vec<String> {
                 let Ok(relative) = path.strip_prefix(root) else {
                     continue;
                 };
-                let display = relative.to_string_lossy().replace('\\', "/");
+                let display = crate::model::slash::to_slash(&relative.to_string_lossy(), cfg!(windows));
                 if !display.eq_ignore_ascii_case("SKILL.md") {
                     out.push(display);
                 }

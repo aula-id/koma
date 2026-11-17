@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
-import { BookOpen, GraduationCap, Library } from 'lucide-react'
+import { BookOpen, GraduationCap, Info, Library } from 'lucide-react'
+import { showAbout } from '../lib/settingsNav'
 import TutorialTab from './TutorialTab'
 import LegacyHelpReference from './LegacyHelpReference'
 import { MessageBody } from './MessageBody'
@@ -26,11 +27,8 @@ export default function HelpTab() {
   return (
     <div className="flex h-full min-w-0 flex-col bg-koma-bg text-koma-fg">
       {/* Sub-tab strip — mirrors main TabBar (top accent + panel bg when active). */}
-      <nav
-        role="tablist"
-        aria-label="Help sections"
-        className="flex h-9 flex-none items-stretch border-b border-koma-border bg-koma-panel2"
-      >
+      <div className="flex h-9 flex-none items-stretch border-b border-koma-border bg-koma-panel2">
+      <nav role="tablist" aria-label="Help sections" className="flex items-stretch">
         {HELP_SECTIONS.map((s, index) => {
           const active = section === s.id
           const { Icon } = s
@@ -77,6 +75,16 @@ export default function HelpTab() {
           )
         })}
       </nav>
+        <button
+          type="button"
+          aria-label="About Koma"
+          onClick={showAbout}
+          className="ml-auto flex h-full flex-none cursor-pointer items-center gap-1.5 px-3 text-[12px] text-koma-dim outline-none hover:bg-koma-hover hover:text-koma-fg focus-visible:bg-koma-hover"
+        >
+          <Info size={13} className="opacity-80" aria-hidden />
+          <span>About Koma</span>
+        </button>
+      </div>
 
       {(guide.id || guide.blocked) && (
         <div role="status" className="border-b border-koma-border p-3 text-sm">

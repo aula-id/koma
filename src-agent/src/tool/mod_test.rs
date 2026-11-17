@@ -454,6 +454,21 @@ fn built_in_and_main_advertised_tool_names_are_unique() {
     );
 }
 
+#[test]
+fn normalize_tool_path_maps_per_platform() {
+    let no = |_: &str| false;
+    let yes = |_: &str| true;
+    assert_eq!(
+        normalize_tool_path_for("/c/Users/x", true, &no),
+        r"C:\Users\x"
+    );
+    assert_eq!(normalize_tool_path_for("src/a.rs", true, &no), r"src\a.rs");
+    assert_eq!(normalize_tool_path_for("/tmp/x", true, &no), r"\tmp\x");
+    assert_eq!(normalize_tool_path_for("a\\b", false, &no), "a/b");
+    assert_eq!(normalize_tool_path_for("a\\b", false, &yes), "a\\b");
+    assert_eq!(normalize_tool_path_for("a/b", false, &no), "a/b");
+}
+
 // --- skill roots are read-only to the agent's file tools ---
 
 struct SkillRootFixture {
@@ -585,6 +600,55 @@ fn write_edit_and_delete_refuse_paths_under_an_active_skill_dir() {
     // Loading the skill widens reads only: the dotdot form is refused as well.
     let escaped = fixture.workspace.join("../team-skills/review/helper.md");
     assert_mutations_refused(&fixture, &ctx, &escaped);
+}
+
+#[cfg(unix)]
+#[test]
+fn literal_backslash_file_resolves_on_posix() {
+    let tmp = std::env::temp_dir().join(format!("koma-bs-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("a\\b.txt"), "x").unwrap();
+    let ws = vec![tmp.clone()];
+    assert!(literal_path_exists("a\\b.txt", &ws));
+    assert_eq!(normalize_tool_path("a\\b.txt", &ws), "a\\b.txt");
+    assert!(!literal_path_exists("c\\d.txt", &ws));
+    assert_eq!(normalize_tool_path("c\\d.txt", &ws), "c/d.txt");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn model_display_path_is_workspace_relative() {
+    let ws = vec![PathBuf::from("/ws")];
+    assert_eq!(
+        model_display_path(&ws, Path::new("/ws/src/a.rs")),
+        "src/a.rs"
+    );
+}
+
+#[test]
+fn dotdot_through_missing_dir_is_rejected_everywhere() {
+    let base = std::env::temp_dir().join(format!("koma-dotdot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join("sub")).unwrap();
+    let wss = vec![ws.clone()];
+    let ws_canon = winpath::canonical(&ws).unwrap();
+
+    assert!(resolve_in(&wss, "newdir/../../escape.txt", false).is_err());
+    assert!(!ws.join("newdir").exists());
+    assert!(!base.join("escape.txt").exists());
+    let abs_bad = format!("{}/newdir/../../x", ws.display());
+    assert!(resolve_in(&wss, &abs_bad, false).is_err());
+    assert!(resolve_read(&wss, &abs_bad, None, &[]).is_err());
+    assert!(!ws.join("newdir").exists());
+
+    let ok = resolve_in(&wss, "sub/../ok.txt", false).unwrap();
+    assert!(ok.starts_with(&ws_canon));
+    let abs_ok = format!("{}/sub/../ok.txt", ws.display());
+    let ok = resolve_read(&wss, &abs_ok, None, &[]).unwrap();
+    assert!(ok.starts_with(&ws_canon));
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[cfg(unix)]

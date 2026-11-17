@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, type FormEvent, type KeyboardEvent } from 'react'
-import { Plus, Trash2, Edit3, Link2, Check, X, Lock } from 'lucide-react'
+import { Plus, Trash2, Edit3, Link2, Check, X, Lock, Server } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
+import { Empty, EmptyState } from './helpers'
 
 type RemotePanelView =
   | { kind: 'list' }
@@ -183,7 +184,7 @@ export function RemotePanel() {
             className="flex w-full items-center justify-center gap-1.5 rounded bg-koma-accent text-koma-bg py-1.5 text-[12px] hover:opacity-90"
             onClick={handleSave}
           >
-            {isNew ? 'Add Host' : 'Save'}
+            {isNew ? 'Add host' : 'Save'}
           </button>
         </div>
       </div>
@@ -206,7 +207,13 @@ export function RemotePanel() {
       <div className="flex-1 overflow-auto px-2 py-1">
         <div className="flex flex-col gap-1">
           {filtered.length === 0 && (
-            <div className="text-koma-dim text-center py-4">No hosts saved</div>
+            query.trim() ? (
+              <Empty>No hosts match</Empty>
+            ) : (
+              <EmptyState icon={Server} title="No hosts yet" hint="Add one with the Add host button below.">
+                Hosts are other computers Koma can work on over SSH, like a server.
+              </EmptyState>
+            )
           )}
           {filtered.map((host) => {
             const armed = armedDelete === host.id
@@ -356,7 +363,7 @@ export function RemotePanel() {
           onClick={handleAdd}
         >
           <Plus size={14} />
-          Add Host
+          Add host
         </button>
       </div>
     </div>

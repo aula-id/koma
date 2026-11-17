@@ -402,7 +402,7 @@ this session. Paths written as [N]… refer to these roots. Bare relative tool p
 target [0] (primary):",
         );
         for (i, p) in workdirs.iter().enumerate() {
-            let path = p.display().to_string().replace('\\', "/");
+            let path = crate::model::slash::to_slash(&p.display().to_string(), cfg!(windows));
             if i == 0 {
                 s.push_str(&format!("\n[{i}] {path}  (primary)"));
             } else {

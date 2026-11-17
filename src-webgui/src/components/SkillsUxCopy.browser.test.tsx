@@ -5,6 +5,7 @@ import SettingsTab from './SettingsTab'
 import SkillTab from './SkillTab'
 import { TabBar } from './TabBar'
 import UploadSkillTab from './UploadSkillTab'
+import { INSTALL_CONFIRM_MS } from '../lib/skillUpload'
 import { useKoma, type SettingsValues, type SkillCatalogueEntry, type SkillDetail, type Tab } from '../store/koma'
 
 const AUTUMN = {
@@ -226,7 +227,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
     const choose = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Choose .zip'))
     expect(project?.disabled).toBe(true)
     expect(choose?.disabled).toBe(true)
-    expect(screen.getByText('A .zip or .skill package up to 64 MiB. Must contain a valid SKILL.md.')).toBeTruthy()
+    expect(screen.getByText('A .zip or .skill package up to 256 MiB. Must contain a valid SKILL.md.')).toBeTruthy()
 
     const summary = document.querySelector<HTMLElement>('summary')!
     const details = summary.closest('details')!
@@ -239,9 +240,9 @@ describe.sequential('Skills UX copy and disclosures', () => {
     expect(details.open).toBe(true)
     const requirements = details.textContent ?? ''
     expect(requirements).toContain('Maximum 1,000 files and folder depth 16.')
-    expect(requirements).toContain('Maximum 8 MiB per companion file.')
+    expect(requirements).not.toContain('per companion file')
     expect(requirements).toContain('Maximum 2 MiB for SKILL.md.')
-    expect(requirements).toContain('Maximum 64 MiB compressed and 64 MiB uncompressed total.')
+    expect(requirements).toContain('Maximum 256 MiB compressed and 256 MiB uncompressed total.')
     expect(requirements).toContain('No symlinks, special files, path traversal, collisions, or malformed SKILL.md.')
 
     const root = summary.closest<HTMLElement>('.bg-koma-bg')!
@@ -252,18 +253,18 @@ describe.sequential('Skills UX copy and disclosures', () => {
     expect(getComputedStyle(root).backgroundColor).toBe('rgb(15, 20, 25)')
   })
 
-  it('retains the client-side 64 MiB ZIP rejection', async () => {
+  it('retains the client-side 256 MiB ZIP rejection', async () => {
     useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' } }))
     await render(<UploadSkillTab />)
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
     const file = new File(['zip'], 'oversized.zip', { type: 'application/zip' })
-    Object.defineProperty(file, 'size', { value: 64 * 1024 * 1024 + 1 })
+    Object.defineProperty(file, 'size', { value: 256 * 1024 * 1024 + 1 })
     const transfer = new DataTransfer()
     transfer.items.add(file)
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
     input.dispatchEvent(new Event('change', { bubbles: true }))
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    expect(useKoma.getState().ui.toast?.text).toBe('Skill package exceeds the 64 MiB upload limit.')
+    expect(useKoma.getState().ui.toast?.text).toBe('Skill package exceeds the 256 MiB upload limit.')
     expect(useKoma.getState().ui.toast?.kind).toBe('error')
   })
 
@@ -281,8 +282,54 @@ describe.sequential('Skills UX copy and disclosures', () => {
       Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
       input.dispatchEvent(new Event('change', { bubbles: true }))
       await expect.poll(() => sent.length).toBe(1)
-      expect(sent[0]).toMatchObject({ r: 'InstallSkillZip', name: 'pdf-helper', target: 'global' })
+      expect(sent[0]).toMatchObject({ r: 'SkillUploadChunk', name: 'pdf-helper', target: 'global', offset: 0, total: 2 })
     } finally {
+      useKoma.setState({ req: originalReq })
+    }
+  })
+
+  it('sends a large package as contiguous chunks that end at the total', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' }, skillOpResults: {} }))
+    const sent: Array<Record<string, unknown>> = []
+    const originalReq = useKoma.getState().req
+    useKoma.setState({ req: ((message: Record<string, unknown>) => { sent.push(message) }) as typeof originalReq })
+    try {
+      await render(<UploadSkillTab />)
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+      const size = 9 * 1024 * 1024
+      const transfer = new DataTransfer()
+      transfer.items.add(new File([new Uint8Array(size)], 'big-pack.zip'))
+      Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await expect.poll(() => sent.length, { timeout: 10_000 }).toBe(3)
+      expect(sent.map((m) => m.offset)).toEqual([0, 4 * 1024 * 1024, 8 * 1024 * 1024])
+      expect(new Set(sent.map((m) => m.uploadId)).size).toBe(1)
+      expect(sent.every((m) => m.total === size)).toBe(true)
+    } finally {
+      useKoma.setState({ req: originalReq })
+    }
+  })
+
+  it('stops waiting when no install result arrives after the last chunk', async () => {
+    useKoma.setState((state) => ({ session: { ...state.session, id: 'session-a' }, skillOpResults: {}, skillLastOp: null }))
+    const sent: Array<Record<string, unknown>> = []
+    const originalReq = useKoma.getState().req
+    useKoma.setState({ req: ((message: Record<string, unknown>) => { sent.push(message) }) as typeof originalReq })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await render(<UploadSkillTab />)
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['PK'], 'silent.zip'))
+      Object.defineProperty(input, 'files', { configurable: true, value: transfer.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await expect.poll(async () => { await vi.advanceTimersByTimeAsync(10); return sent.length }).toBe(1)
+      await vi.advanceTimersByTimeAsync(INSTALL_CONFIRM_MS + 1000)
+      await expect.poll(() => useKoma.getState().ui.toast?.text).toBe('Install was not confirmed. Check the skills list; the package may still have installed.')
+      const choose = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Choose another package'))
+      expect(choose?.disabled).toBe(false)
+    } finally {
+      vi.useRealTimers()
       useKoma.setState({ req: originalReq })
     }
   })
@@ -382,7 +429,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
     useKoma.getState().detachSession()
     const firstChatSnapshot = {
       k: 'Snapshot', session: 'first-chat', state: 'idle', messages: [], title: '', subagents: [], bash: [],
-      fileChanges: [], attachments: [], pendingSteer: [], awaitingApproval: false,
+      attachments: [], pendingSteer: [], awaitingApproval: false,
       palette: useKoma.getState().palette, loadedSkillNames: [],
     } as const
     useKoma.getState().push({ ...firstChatSnapshot, session: 'stale-in-flight-chat' } as any)

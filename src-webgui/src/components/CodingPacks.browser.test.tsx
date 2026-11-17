@@ -32,8 +32,8 @@ it.each([360, 780])('separates environment and installation at %ipx with one scr
   await expect.element(screen.getByRole('button', { name: 'Review changes', exact: true })).not.toBeInTheDocument()
   const section = document.querySelector<HTMLElement>('[aria-label="Language packs"]')!
   expect(section.scrollWidth).toBeLessThanOrEqual(section.clientWidth)
-  const language = screen.getByLabelText('Language').element().getBoundingClientRect()
-  const arrow = screen.getByLabelText('Language').element().parentElement!.querySelector('svg')!.getBoundingClientRect()
+  const language = screen.getByLabelText('Language', { exact: true }).element().getBoundingClientRect()
+  const arrow = screen.getByLabelText('Language', { exact: true }).element().parentElement!.querySelector('svg')!.getBoundingClientRect()
   expect(arrow.right).toBeLessThanOrEqual(language.right)
   expect(arrow.left).toBeGreaterThan(language.right - 24)
   expect(language.width).toBeLessThanOrEqual(160)

@@ -4,7 +4,7 @@ import { isNotebookPath } from '../lib/notebook-workspace'
 import { CodingTests } from '../components/CodingTests'
 import { CodingDebug } from '../components/CodingDebug'
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { TAB_DRAG_MIME, TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -30,6 +30,8 @@ import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { BottomPanel } from '../components/BottomPanel'
 import { useKoma } from '../store/koma'
+import { resolveViewSelection } from '../lib/sidebarSelect'
+import { useSidebarFollowsActiveTab } from '../lib/useSidebarFollow'
 import { BrailleSpinner } from '../components/BrailleSpinner'
 import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
 import { GlobalContextMenu } from '../components/GlobalContextMenu'
@@ -117,14 +119,23 @@ function RootLayout() {
   // Counter for generating unique terminal IDs.
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
-  // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
-  // open. ExplorePanel's own effect on the same tick expands its PLAN section.
+  // `focusPlanTick`): switch the sidebar to the Chat view, ensure it's
+  // open and focus the chat tab. ExplorePanel's own effect on the same tick expands its PLAN section.
   const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   useEffect(() => {
     if (focusPlanTick === 0) return
     setActiveView('explore')
     setSidebarOpen(true)
+    useKoma.getState().activateTab('chat')
   }, [focusPlanTick])
+
+  // The sidebar follows the active tab: a diagram/design editor or Welcome tab
+  // becoming active switches to that view and always re-opens the sidebar.
+  const followTab = useCallback((view: SidebarView) => {
+    setActiveView(view)
+    setSidebarOpen(true)
+  }, [])
+  useSidebarFollowsActiveTab(followTab)
 
   // Terminal button handler: each click creates a new terminal tab with a unique ID.
   // Host opens a remote shell (ssh -t) when remote hub/session is live; local otherwise.
@@ -356,14 +367,15 @@ function RootLayout() {
   }, [platform, req])
 
   // Click the active view's icon to collapse/expand; click another to switch to
-  // it (and ensure the sidebar is open).
+  // it (and ensure the sidebar is open). The Chat icon also focuses the chat
+  // tab, and only collapses when the chat tab was already focused.
   const selectView = (view: SidebarView) => {
-    if (view === activeView) {
-      setSidebarOpen((o) => !o)
-    } else {
-      setActiveView(view)
-      setSidebarOpen(true)
-    }
+    const st = useKoma.getState()
+    const r = resolveViewSelection(view, activeView, sidebarOpen, st.ui.activeTabId)
+    if (r.activateChat) st.activateTab('chat')
+    setActiveView(r.view)
+    setSidebarOpen(r.sidebarOpen)
+    if (r.sidebarOpen && (r.view === 'diagram' || r.view === 'design')) st.maybeOpenWelcomeTab(r.view)
   }
 
   // Drag the divider between the sidebar and the terminal to resize. Tracks the
@@ -512,6 +524,7 @@ const TutorialTab = lazy(() => import('../components/TutorialTab'))
 // Per-agent editor — lazy so its chunk only loads when the Agents panel's
 // first row (or "+ Add agent") is clicked.
 const AgentTab = lazy(() => import('../components/AgentTab'))
+const McpTab = lazy(() => import('../components/McpTab'))
 const SkillTab = lazy(() => import('../components/SkillTab'))
 const UploadSkillTab = lazy(() => import('../components/UploadSkillTab'))
 
@@ -547,6 +560,7 @@ const TerminalTab = lazy(() => import('../components/TerminalTab').then(m => ({ 
 
 const DiagramTab = lazy(() => import('../components/DiagramTab').then((m) => ({ default: m.DiagramTab })))
 const DesignTab = lazy(() => import('../components/DesignTab').then((m) => ({ default: m.DesignTab })))
+const WelcomeTab = lazy(() => import('../components/WelcomeTab'))
 
 function DiffFallback() {
   return (
@@ -580,6 +594,8 @@ function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visibl
         <HelpTab />
       ) : tab.kind === 'agent' ? (
         <AgentTab tab={tab} />
+      ) : tab.kind === 'mcp' ? (
+        <McpTab tab={tab} />
       ) : tab.kind === 'skill' ? (
         <SkillTab tab={tab} />
       ) : tab.kind === 'uploadSkill' ? (
@@ -616,6 +632,8 @@ function TabBody({ tab, visible }: { tab: Exclude<Tab, { kind: 'chat' }>; visibl
         <DiagramTab tab={tab} />
       ) : tab.kind === 'design' ? (
         <DesignTab tab={tab} />
+      ) : tab.kind === 'welcome' ? (
+        <WelcomeTab which={tab.which} />
       ) : null}
     </Suspense>
   )

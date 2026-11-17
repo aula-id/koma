@@ -420,3 +420,77 @@ fn daemon_session_only_flags_no_positional_verb() {
     assert!(opts.unknown_command.is_none());
     assert!(!opts.resume);
 }
+
+fn mcp(args: &[&str]) -> Option<crate::app::mcp::cli::McpCli> {
+    let argv = std::iter::once("koma")
+        .chain(std::iter::once("mcp"))
+        .chain(args.iter().copied())
+        .map(String::from);
+    parse(argv).mcp
+}
+
+#[test]
+fn mcp_add_keeps_server_flags_after_double_dash() {
+    use crate::app::mcp::cli::{McpCli, McpScope};
+    let got = mcp(&[
+        "add", "fs", "--scope", "project", "-e", "A=1", "--", "npx", "-y", "srv", "--local",
+        "--daemon",
+    ]);
+    match got {
+        Some(McpCli::Add {
+            name,
+            scope,
+            env,
+            target,
+            ..
+        }) => {
+            assert_eq!(name, "fs");
+            assert_eq!(scope, McpScope::Project);
+            assert_eq!(env, vec!["A=1"]);
+            assert_eq!(target, vec!["npx", "-y", "srv", "--local", "--daemon"]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn mcp_parse_verbs_and_flags() {
+    use crate::app::mcp::cli::{McpCli, McpScope};
+    assert_eq!(mcp(&["list", "--json"]), Some(McpCli::List { json: true }));
+    assert_eq!(
+        mcp(&["get", "fs"]),
+        Some(McpCli::Get { name: "fs".into() })
+    );
+    assert_eq!(
+        mcp(&["remove", "fs", "--scope=project"]),
+        Some(McpCli::Remove {
+            name: "fs".into(),
+            scope: McpScope::Project
+        })
+    );
+    assert_eq!(
+        mcp(&["approve", "--all", "--revoke"]),
+        Some(McpCli::Approve {
+            name: None,
+            all: true,
+            revoke: true
+        })
+    );
+    assert_eq!(
+        mcp(&["add-json", "x", "{\"command\":\"a\"}"]),
+        Some(McpCli::AddJson {
+            name: "x".into(),
+            scope: McpScope::User,
+            json: "{\"command\":\"a\"}".into()
+        })
+    );
+    // Positional target without `--`, bad scope, missing target, unknown flag.
+    assert!(matches!(
+        mcp(&["add", "h", "https://x/mcp"]),
+        Some(McpCli::Add { target, .. }) if target == vec!["https://x/mcp"]
+    ));
+    assert_eq!(mcp(&["add", "h"]), Some(McpCli::Usage));
+    assert_eq!(mcp(&["remove", "h", "--scope", "local"]), Some(McpCli::Usage));
+    assert_eq!(mcp(&["list", "--bogus"]), Some(McpCli::Usage));
+    assert_eq!(mcp(&[]), Some(McpCli::Usage));
+}

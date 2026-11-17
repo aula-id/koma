@@ -24,6 +24,11 @@ mod parse;
 mod persistence;
 mod registry;
 pub mod search;
+mod upload;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod upload_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -36,7 +41,11 @@ pub use def::{
 pub(crate) use persistence::update_owned_skill_with_generation;
 pub use persistence::{
     create_owned_skill, delete_owned_skill, duplicate_to_owned, export_owned_skill_zip,
-    install_owned_skill_zip, update_owned_skill, OwnedSkillTarget, SkillEdit,
+    install_owned_skill_zip, install_owned_skill_zip_file, update_owned_skill, OwnedSkillTarget,
+    SkillEdit, MAX_SKILL_ZIP_BYTES,
 };
-pub use registry::{valid_extra_skill_roots, SkillRegistry, PINNED_MAX};
 pub(crate) use registry::{load_root, load_root_with_diagnostics, SkippedSkill};
+pub use registry::{valid_extra_skill_roots, SkillRegistry, PINNED_MAX};
+pub(crate) use upload::install_staged_upload;
+#[cfg(feature = "gui")]
+pub(crate) use upload::{append_chunk, sweep_stale, upload_dir, Staged};

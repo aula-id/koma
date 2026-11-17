@@ -20,6 +20,8 @@ export type Tab =
   // Singleton Tutorial coach tab (NLP + driver.js). ActivityBar above Help.
   | { id: 'tutorial'; kind: 'tutorial' }
   | { id: 'notifications'; kind: 'notifications' }
+  // Singleton Welcome page for the Diagram / Design features. Id is 'welcome-diagram' or 'welcome-design'.
+  | { id: 'welcome-diagram' | 'welcome-design'; kind: 'welcome'; which: 'diagram' | 'design' }
   | {
       // Stable id — `diff:${path}` for a File-changed diff (find-by-path is
       // trivial), or `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}` for a
@@ -81,6 +83,14 @@ export type Tab =
   // Lazy Skills editor; null skillId denotes Create.
   | { id: string; kind: 'skill'; skillId: string | null; title: string }
   | { id: 'upload-skill'; kind: 'uploadSkill' }
+  // MCP server editor / JSON import, opened from the MCP sidebar list. Ids are
+  // stable: `mcp:new` and `mcp:import` (at most one each) and `mcp:edit:${uuid}`
+  // (one per server). `title` is the server name at open time; the Config push
+  // keeps it in sync and closes the tab when the server disappears. Draft text
+  // lives in the tab component only; closing discards it (same as the agent tab).
+  | { id: 'mcp:new'; kind: 'mcp'; mode: 'new'; title: string }
+  | { id: string; kind: 'mcp'; mode: 'edit'; uuid: string; title: string }
+  | { id: 'mcp:import'; kind: 'mcp'; mode: 'import'; title: string }
   // Installed-extension detail tab (Tab-B) — full manifest projection for one
   // locally-installed extension. Deduped by `extId`; closeable like a diff tab.
   | { id: string; kind: 'installedExtension'; extId: string; title: string }

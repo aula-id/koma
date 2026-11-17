@@ -11,7 +11,7 @@ import { useKoma } from '../../store/koma'
 import { fileKey, type DirState, type FileTreeEntry } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Select } from './form'
-import { Empty, IconBtn } from './helpers'
+import { Empty, IconBtn, NoWorkspaceState } from './helpers'
 
 import { sourceLanguage, SOURCE_LANGUAGES, type SourceLanguage } from '../../lib/importGraphLanguages'
 
@@ -315,7 +315,7 @@ export function ImportGraphPanel() {
   }
 
   if (roots.length === 0) {
-    return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+    return <NoWorkspaceState />
   }
 
   return (
@@ -440,7 +440,7 @@ export function ImportGraphPanel() {
             />
           ))
         ) : rootDir ? (
-          <Empty>{rootDir.entries.length > 0 ? 'No files match the current filters.' : 'Empty workspace'}</Empty>
+          <Empty>{rootDir.entries.length > 0 ? 'No files match the current filters.' : 'This folder is empty.'}</Empty>
         ) : null}
       </div>
     </div>

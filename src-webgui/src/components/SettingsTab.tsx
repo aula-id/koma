@@ -18,8 +18,11 @@ import {
   Library,
   Monitor,
   Globe,
+  Info,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { AboutPanel } from './AboutKoma'
+import { onSettingsSectionRequest, takePendingSection } from '../lib/settingsNav'
 import { CHAT_TURNS_DEFAULT, clampChatTurns } from '../lib/chatWindow'
 import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
 import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
@@ -39,7 +42,7 @@ import { SettingsFolderButton } from './SettingsFolderButton'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'webSearch' | 'account' | 'appearance' | 'session' | 'activityBar' | 'skills' | 'lsp' | 'sshKeys' | 'computer' | 'screenBrowser'
+type SectionId = 'webSearch' | 'account' | 'appearance' | 'session' | 'activityBar' | 'skills' | 'lsp' | 'sshKeys' | 'computer' | 'screenBrowser' | 'about'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
 // scroll-spy so adding/reordering a section only needs a change here. Account
@@ -56,6 +59,7 @@ const SECTION_ORDER: SectionId[] = [
   'skills',
   'lsp',
   'sshKeys',
+  'about',
 ]
 
 export default function SettingsTab({ visible = true }: { visible?: boolean }) {
@@ -75,11 +79,12 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
   const skillsRef = useRef<HTMLDivElement>(null)
   const lspRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
+  const aboutRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<SectionId>('account')
 
   const sectionRef = (id: SectionId) => ({
     account: accountRef, appearance: appearanceRef, session: sessionRef,
-    webSearch: webSearchRef, computer: computerRef, screenBrowser: screenBrowserRef, activityBar: activityBarRef, skills: skillsRef, lsp: lspRef, sshKeys: sshKeysRef,
+    webSearch: webSearchRef, computer: computerRef, screenBrowser: screenBrowserRef, activityBar: activityBarRef, skills: skillsRef, lsp: lspRef, sshKeys: sshKeysRef, about: aboutRef,
   })[id]
 
   // Nav click → smooth-scroll the pane to the section header.
@@ -87,6 +92,23 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
     setActive(id)
     sectionRef(id).current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+
+  // Another tab asked for a section (About from Help, the palette): once this
+  // tab is visible, scroll there and move focus to the section.
+  const [requestTick, setRequestTick] = useState(0)
+  useEffect(() => onSettingsSectionRequest(() => setRequestTick((n) => n + 1)), [])
+  useEffect(() => {
+    if (!visible) return
+    const id = takePendingSection()
+    if (!id) return
+    const frame = requestAnimationFrame(() => {
+      setActive(id)
+      const el = sectionRef(id).current
+      el?.scrollIntoView({ block: 'start' })
+      el?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [visible, requestTick])
 
   // Scroll spy: highlight the nav item whose section is at the top of the pane.
   // Uses viewport rects (robust against layout offsets) — walking sections
@@ -152,6 +174,7 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
           active={active === 'sshKeys'}
           onClick={() => goto('sshKeys')}
         />
+        <NavItem icon={<Info size={15} />} label="About" active={active === 'about'} onClick={() => goto('about')} />
       </nav>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto">
@@ -220,6 +243,11 @@ export default function SettingsTab({ visible = true }: { visible?: boolean }) {
               desc="Manage your local SSH keys for Git connections."
             />
             <SshKeysSettings />
+          </section>
+
+          <section ref={aboutRef} id="settings-section-about" aria-label="About Koma" tabIndex={-1} className="mt-12 outline-none">
+            <SectionHeader title="About" desc="Version and build details for this copy of koma." />
+            <AboutPanel />
           </section>
         </div>
       </div>

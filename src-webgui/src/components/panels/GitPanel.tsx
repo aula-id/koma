@@ -24,15 +24,16 @@ import { AccordionSection } from '../AccordionSection'
 import { BranchSwitcher } from '../BranchSwitcher'
 import { GitGraphMini } from '../GitGraphMini'
 import { ConflictBanner } from '../ConflictBanner'
-import { Empty } from './helpers'
+import { Empty, EmptyState, NoProjectState } from './helpers'
 import { Select } from './form'
+import { repoOptionLabel } from './repoLabel'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { GitPushMenu } from '../GitPushMenu'
 
-// git-porcelain status char -> badge tone. Mirrors ExplorePanel's FILE_STATUS
-// idiom (added = good, modified = accent, deleted = error): A/? = new
+// git-porcelain status char -> badge tone (added = good, modified = accent,
+// deleted = error): A/? = new
 // (good), M = touched (accent), D = removed (error), R/C = a rename/copy
 // (warn — worth a second glance), U = unmerged/conflict (error, needs
 // attention).
@@ -238,10 +239,10 @@ function FileRow({
       {/* Idle: max-w-0 so actions take no flex width. Hover expands for icons. */}
       {actionCount > 0 && (
         <div
-          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
+          className={`flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 ${
             actionCount >= 2
-              ? 'group-hover:max-w-[40px] group-focus-within:max-w-[40px]'
-              : 'group-hover:max-w-[20px] group-focus-within:max-w-[20px]'
+              ? 'group-hover:max-w-[40px] group-has-[:focus-visible]:max-w-[40px]'
+              : 'group-hover:max-w-[20px] group-has-[:focus-visible]:max-w-[20px]'
           }`}
         >
           {onDiscard && (
@@ -316,7 +317,7 @@ export function GitPanel() {
   if (sessionId === null) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>Open a project to use Source Control</Empty>
+        <NoProjectState feature="Source Control" />
       </div>
     )
   }
@@ -326,7 +327,13 @@ export function GitPanel() {
   if (git.error || !git.root) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>{repos.length === 0 ? 'No repository detected in this workspace' : (git.error ?? 'Not a git repository')}</Empty>
+        {repos.length === 0 ? (
+          <EmptyState title="No Git history here">
+            This folder is not tracked by Git yet, so there are no changes to show. Ask Koma in the chat to set it up.
+          </EmptyState>
+        ) : (
+          <Empty>{git.error ?? 'Not a git repository'}</Empty>
+        )}
       </div>
     )
   }
@@ -345,16 +352,25 @@ export function GitPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {repos.length > 1 && (
+      {repos.length >= 1 && (
         <div className="flex items-center gap-1.5 border-b border-koma-border px-2 py-1">
           <FolderGit2 size={12} className="flex-none text-koma-dim opacity-60" />
           <div className="min-w-0 flex-1" title="Active repository">
             <Select
               value={activeRepoRoot ?? git.root ?? ''}
-              options={repos.map((r) => ({ value: r.root, label: r.name }))}
+              options={repos.map((r) => ({ value: r.root, label: repoOptionLabel(r) }))}
               onChange={(root) => setActiveRepo(root)}
             />
           </div>
+          <button
+            type="button"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+            title="Rescan for repositories"
+            aria-label="Rescan for repositories"
+            onClick={() => refreshRepos(true)}
+          >
+            <RefreshCw size={12} />
+          </button>
         </div>
       )}
       <ConflictBanner />
@@ -432,7 +448,7 @@ export function GitPanel() {
         />
       </div>
       {clean ? (
-        <Empty>No changes</Empty>
+        <Empty>No changes since the last commit.</Empty>
       ) : (
         <>
           {git.conflicted.length > 0 && (
@@ -466,7 +482,7 @@ export function GitPanel() {
             }
           >
             {staged.length === 0 ? (
-              <Empty>No staged changes</Empty>
+              <Empty>Nothing staged yet. Use + on a change to stage it.</Empty>
             ) : (
               staged.map((e) => (
                 <FileRow
@@ -496,7 +512,7 @@ export function GitPanel() {
             }
           >
             {unstaged.length === 0 ? (
-              <Empty>No changes</Empty>
+              <Empty>No unstaged changes.</Empty>
             ) : (
               <>
                 {armedDiscard === DISCARD_ALL && (

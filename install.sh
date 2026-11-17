@@ -22,6 +22,13 @@ set -e
 KOMA_RELEASE_BASE="${KOMA_RELEASE_BASE:-https://github.com/aula-id/koma/releases/latest/download}"
 
 INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
+# A relative install dir would be written verbatim into the shell rc PATH line
+# and break outside this cwd. Absolute values pass through unchanged.
+case "$INSTALL_DIR" in
+    /*) ;;
+    [A-Za-z]:[\\/]*) ;;   # Windows drive path under Git Bash / MSYS: leave as is
+    *)  INSTALL_DIR="$(pwd)/${INSTALL_DIR#./}" ;;
+esac
 
 WITH_RESEARCH=0
 WITH_LSP=0
@@ -959,6 +966,14 @@ fi
 # Silverblue, …) where .deb is awkward. Override icon CDN with
 # KOMA_ICON_BASE=... (defaults to assets on main).
 # ---------------------------------------------------------------------------
+# Quote one Desktop Entry Exec argument: wrap in double quotes, backslash-escape
+# the characters the spec reserves inside quotes (" ` $ and \). A literal
+# backslash needs four (string-escape pass, then quote pass); % is doubled
+# because Exec treats it as a field code.
+_desktop_quote() {
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\&/g' -e 's/%/%%/g')"
+}
+
 if [ "$_launcher_ok" != 1 ] && [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
     _koma_bin="$INSTALL_DIR/koma"
     # Resolve to an absolute path for Exec= (required by the FreeDesktop spec
@@ -1020,7 +1035,7 @@ if [ "$_launcher_ok" != 1 ] && [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
                 printf '%s\n' 'Type=Application'
                 printf '%s\n' 'Name=Koma'
                 printf '%s\n' 'Comment=Agentic coding desktop client'
-                printf '%s\n' "Exec=${_koma_bin} gui"
+                printf '%s\n' "Exec=$(_desktop_quote "$_koma_bin") gui"
                 # Prefer the file we just wrote. A bare theme name stays invisible
                 # when the user hicolor tree has no icon cache.
                 _icon_file=""
@@ -1219,7 +1234,10 @@ case ":${PATH}:" in
         rc=""
         case "$(basename "${SHELL:-}")" in
             zsh)  rc="$HOME/.zshrc"  ;;
-            bash) rc="$HOME/.bashrc" ;;
+            bash)
+                # Terminal.app login shells read ~/.bash_profile, not ~/.bashrc.
+                if [ "$(uname -s)" = Darwin ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi
+                ;;
             *)
                 if [ -f "$HOME/.zshrc" ]; then rc="$HOME/.zshrc"; else rc="$HOME/.bashrc"; fi
                 ;;

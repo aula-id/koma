@@ -55,8 +55,16 @@ pub(crate) fn record_change(ctx: &ToolCtx, path: &Path, status: &str) {
 fn display_key(ctx: &ToolCtx, path: &Path) -> String {
     ctx.workspaces
         .iter()
-        .filter_map(|root| path.strip_prefix(root).ok())
-        .map(|rel| rel.to_string_lossy().into_owned())
+        .filter_map(|root| {
+            path.strip_prefix(root)
+                .ok()
+                .map(Path::to_path_buf)
+                .or_else(|| {
+                    let plain = crate::tool::winpath::canonical(root).ok()?;
+                    path.strip_prefix(plain).ok().map(Path::to_path_buf)
+                })
+        })
+        .map(|rel| crate::tool::winpath::to_slash(&rel.to_string_lossy(), cfg!(windows)))
         .min_by_key(|s| s.len())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }

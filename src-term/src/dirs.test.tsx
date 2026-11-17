@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join, parse, resolve } from "node:path"
 import { act } from "react"
 import { testRender } from "@opentui/react/test-utils"
-import { addDirArgument, directoryToList, guideFolders, listChildFolders } from "./dirs.ts"
+import { addDirArgument, directoryToList, guideFolders, lastSep, listChildFolders } from "./dirs.ts"
 import { FolderGuide } from "./dirs.tsx"
 import { themeFor } from "./theme.ts"
 
@@ -24,6 +24,10 @@ test("the adddir guide reads the path and lists that directory", () => {
   expect(directoryToList("~/Project", work, home)).toBe(join(home, "Project"))
   expect(directoryToList("~/", work, home)).toBe(home)
   expect(directoryToList("~", work, home)).toBe(home)
+  expect(directoryToList("~\\Project", work, home, "win32")).toBe(join(home, "Project"))
+  expect(directoryToList("~\\Project", work, home, "linux")).toBeNull()
+  expect(directoryToList("~\\", work, home, "win32")).toBe(home)
+  expect(directoryToList("~\\", work, home, "linux")).toBeNull()
   expect(directoryToList("~other", work, home)).toBeNull()
   expect(directoryToList("./", work, home)).toBe(work)
   expect(directoryToList("src", work, home)).toBe(join(work, "src"))
@@ -72,4 +76,13 @@ test("a directory guide lists folders inside the typed path and skips files", as
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("lastSep treats backslash as a separator on win32 only", () => {
+  expect(lastSep("a\\b", "linux")).toBe(-1)
+  expect(lastSep("a\\b/c", "darwin")).toBe(3)
+  expect(lastSep("a\\b", "win32")).toBe(1)
+  expect(lastSep("a\\b/c", "win32")).toBe(3)
+  expect(directoryToList("~\\x", "/w", "/h", "linux")).toBeNull()
+  expect(directoryToList("~\\x", "C:\\w", "C:\\h", "win32")).not.toBeNull()
 })

@@ -22,8 +22,8 @@ NotebookTab
 
 M0 gates
   coding-disk.ts     no LspDidChange for notebooks
-  push/coding.ts     no LspDidSave/Change after notebook save; Notebook* events → koma-notebook
-  tabs.ts            no LspDidClose; dispose controller on force-close
+  store/push/coding.ts  no LspDidSave/Change after notebook save; Notebook* events → koma-notebook
+  store/actions/tabs.ts no LspDidClose; dispose controller on force-close
   monaco-lsp.ts      notebook cell/raw schemes refused by modelToRootPath
   CodeEditorTab      defensive isNotebookPath skip on LspDidOpen
 
@@ -51,9 +51,11 @@ M3 native
 | `lib/notebook-html.ts` | DOMPurify + srcdoc helper |
 | `lib/notebook-analysis.ts` | M2 capability gate |
 | `lib/notebook-runtime.ts` | Kernel RPC + IOPub → nbformat mapping |
+| `lib/notebook-kernel-picker.ts` | Select Kernel: Python environment candidates (packs, project venvs), per-document remembered choice |
 | `lib/coding-autosave.ts` | Shared 750 ms document autosave |
 | `components/NotebookTab.tsx` | Cell UI + Run/Interrupt/Restart |
 | `components/NotebookOutputs.tsx` | Shared disk + live output renderer |
+| `components/NotebookCreateDialog.tsx` | New notebook dialog (`koma-new-notebook` event, default `Untitled.ipynb`) |
 
 ## Native RPC (Coding service)
 
@@ -84,7 +86,7 @@ Hello capability token: `notebook`.
 KOMA_LSP_NOTEBOOK_PROBE=1 cargo test -p agent --no-default-features coding::notebook_probe -- --ignored --nocapture
 ```
 
-Looks for `~/.koma/lsp/basedpyright/venv/bin/basedpyright-langserver` (override with `KOMA_BASED_PYRIGHT`).
+Looks for the koma-managed `basedpyright-langserver` (under `~/.koma/lsp/basedpyright/`, resolved by `lsp::manifest::managed_binary_path`; override with `KOMA_BASED_PYRIGHT`).
 
 **Last probe (dev host):** `notebookDocumentSync: true` on pinned basedpyright. Analysis UI still Unavailable until C3 client wiring (`notebookDocument/didOpen|didChange|didClose` + cell Monaco providers) ships — no half-enable, no cell-concat fallback.
 

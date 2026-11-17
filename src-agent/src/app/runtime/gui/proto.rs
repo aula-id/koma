@@ -291,6 +291,12 @@ pub(super) enum GuiReq {
         args: String,
         env: String,
         url: String,
+        #[serde(default)]
+        extras: crate::ipc::proto::McpServerExtras,
+    },
+    /// Import MCP servers from pasted JSON (McpPanel "Import JSON").
+    ImportMcpJson {
+        text: String,
     },
     /// Remove an MCP server by uuid (McpPanel arm-delete).
     DeleteMcpServer {
@@ -307,6 +313,15 @@ pub(super) enum GuiReq {
     GetMcpStatus {
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    /// Restart one MCP server by uuid (McpPanel row Restart button).
+    RestartMcpServer {
+        uuid: String,
+    },
+    /// Approve or revoke a project `.mcp.json` server by uuid.
+    ApproveMcpProjectServer {
+        uuid: String,
+        approved: bool,
     },
     /// Upsert a provider (Connector ProviderForm). `uuid` is absent for a new provider.
     SetProvider {
@@ -475,7 +490,11 @@ pub(super) enum GuiReq {
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Same routing as `GitStatus` — host-local, never the
     /// daemon. Reply lands as a `RepoList` push.
-    GitRepos,
+    GitRepos {
+        /// Bypass the discovery cache (the picker's rescan button).
+        #[serde(default)]
+        force: bool,
+    },
     /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
     /// (an absolute toplevel path from a prior `RepoList`). Routed to the host-relay
     /// thread via `HostCtl::SetActiveRepo`, same reasoning as `SetGitKey` — the reply
@@ -894,6 +913,22 @@ pub(super) enum GuiReq {
     InstallSkillZip {
         target: String,
         name: String,
+        #[serde(rename = "dataB64")]
+        data_b64: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(default, rename = "sessionEpoch")]
+        session_epoch: u64,
+        #[serde(default, rename = "tabId")]
+        tab_id: String,
+    },
+    SkillUploadChunk {
+        target: String,
+        name: String,
+        #[serde(rename = "uploadId")]
+        upload_id: String,
+        offset: u64,
+        total: u64,
         #[serde(rename = "dataB64")]
         data_b64: String,
         #[serde(rename = "requestId")]
@@ -1615,6 +1650,23 @@ mod skill_wire_tests {
         assert!(
             matches!(upload, GuiReq::InstallSkillZip { data_b64, .. } if data_b64 == "UEsDBA==")
         );
+
+        let chunk: GuiReq = serde_json::from_value(serde_json::json!({
+            "r": "SkillUploadChunk",
+            "target": "global",
+            "name": "packaged",
+            "uploadId": "install-zip-1-abc",
+            "offset": 4194304,
+            "total": 9437184,
+            "dataB64": "UEsDBA==",
+            "requestId": "install-zip-1"
+        }))
+        .expect("chunk request");
+        assert!(matches!(
+            chunk,
+            GuiReq::SkillUploadChunk { upload_id, offset: 4194304, total: 9437184, session_epoch: 0, tab_id, .. }
+                if upload_id == "install-zip-1-abc" && tab_id.is_empty()
+        ));
 
         let download: GuiReq = serde_json::from_value(serde_json::json!({
             "r": "DownloadSkillZip",

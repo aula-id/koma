@@ -100,15 +100,43 @@ enum Located {
     Missing,
 }
 
+/// Whether a nonexistent absolute `given` lies under a canonical root: canonicalise the
+/// longest existing ancestor and re-attach the missing tail. A `..` in the tail could
+/// climb out of the root, so it is never trusted.
+fn missing_under(given: &Path, canon: &[PathBuf]) -> bool {
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cur = given;
+    let base = loop {
+        if let Ok(c) = crate::tool::winpath::canonical(cur) {
+            break c;
+        }
+        match (cur.file_name(), cur.parent()) {
+            (Some(n), Some(p)) => {
+                tail.push(n);
+                cur = p;
+            }
+            _ => return false,
+        }
+    };
+    if given.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    let mut full = base;
+    for n in tail.iter().rev() {
+        full.push(n);
+    }
+    canon.iter().any(|r| full.starts_with(r))
+}
+
 fn locate(path: &str, roots: &[PathBuf]) -> Located {
-    let canon: Vec<PathBuf> = roots.iter().filter_map(|r| r.canonicalize().ok()).collect();
-    let inside = |p: &Path| p.canonicalize().ok().filter(|c| canon.iter().any(|r| c.starts_with(r)));
+    let canon: Vec<PathBuf> = roots.iter().filter_map(|r| crate::tool::winpath::canonical(r).ok()).collect();
+    let inside = |p: &Path| crate::tool::winpath::canonical(p).ok().filter(|c| canon.iter().any(|r| c.starts_with(r)));
     let given = Path::new(path);
     if given.is_absolute() {
-        return match given.canonicalize() {
+        return match crate::tool::winpath::canonical(given) {
             Ok(c) if canon.iter().any(|r| c.starts_with(r)) => Located::Found(c),
             Ok(_) => Located::Outside,
-            Err(_) if canon.iter().any(|r| given.starts_with(r)) => Located::Missing,
+            Err(_) if missing_under(given, &canon) => Located::Missing,
             Err(_) => Located::Outside,
         };
     }

@@ -34,7 +34,7 @@ beforeEach(() => {
 function attachSnapshot(session: string, loadedSkillNames: string[] = []) {
   useKoma.getState().push({
     k: 'Snapshot', session, state: 'idle', messages: [], title: '', subagents: [], bash: [],
-    fileChanges: [], attachments: [], pendingSteer: [], awaitingApproval: false,
+    attachments: [], pendingSteer: [], awaitingApproval: false,
     palette: useKoma.getState().palette, loadedSkillNames,
   } as any)
 }

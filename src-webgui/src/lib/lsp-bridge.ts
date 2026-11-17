@@ -1,3 +1,6 @@
+import { foldDrive, relativeUnder, stripVerbatim, toSlashIfWindows } from './pathDisplay'
+
+export { foldDrive }
 // Monaco-free LSP types + pending-request map + URI helpers.
 // The boot store and Problems drawer import THIS file so the main bundle
 // never pulls monaco-editor. monaco-lsp.ts (lazy editor path) re-exports these.
@@ -240,8 +243,8 @@ export function resolveLspFileText(
 export function pathToUri(root: string, path: string): string {
   const abs = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
     ? path
-    : `${root.replace(/\/$/, '')}/${path.replace(/^\//, '')}`
-  const norm = abs.replace(/\\/g, '/')
+    : `${stripVerbatim(root).replace(/[\\/]$/, '')}/${path.replace(/^[\\/]/, '')}`
+  const norm = toSlashIfWindows(abs)
   const encoded = norm.split('/').map((segment, index) => index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)).join('/')
   if (norm.startsWith('//')) return `file:${encoded}`
   if (norm.startsWith('/')) return `file://${encoded}`
@@ -255,7 +258,7 @@ export function uriToPath(uri: string): string | null {
     if (parsed.protocol !== 'file:') return null
     let path = decodeURIComponent(parsed.pathname)
     if (parsed.hostname && parsed.hostname !== 'localhost') path = `//${parsed.hostname}${path}`
-    if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1)
+    if (/^\/[A-Za-z]:\//.test(path)) path = foldDrive(path.slice(1))
     return path
   } catch { return null }
 }
@@ -265,14 +268,10 @@ export function splitRootPath(
   absPath: string,
   roots: string[],
 ): { root: string; path: string } | null {
-  const norm = absPath.replace(/\\/g, '/')
   const sorted = [...roots].sort((a, b) => b.length - a.length)
   for (const root of sorted) {
-    const r = root.replace(/\\/g, '/').replace(/\/$/, '')
-    if (norm === r) return { root, path: '' }
-    if (norm.startsWith(r + '/')) {
-      return { root, path: norm.slice(r.length + 1) }
-    }
+    const rel = relativeUnder(root, absPath)
+    if (rel !== null) return { root, path: rel }
   }
   return null
 }

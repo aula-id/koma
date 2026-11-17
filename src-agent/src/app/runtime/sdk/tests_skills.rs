@@ -21,7 +21,7 @@ impl Fixture {
         let base = std::env::temp_dir().join(format!("koma-skl-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(base.join("data")).unwrap();
         std::fs::create_dir_all(base.join("work")).unwrap();
-        let base = std::fs::canonicalize(base).unwrap();
+        let base = crate::tool::winpath::canonical(&base).unwrap();
         let config = crate::model::app_config::AppConfig {
             providers: vec![crate::model::app_config::ProviderConn {
                 uuid: "p-local".into(),

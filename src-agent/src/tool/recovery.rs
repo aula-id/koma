@@ -274,7 +274,8 @@ pub(crate) fn shell_listing(
     args: &Value,
     run: impl FnOnce() -> (String, bool),
 ) -> Result<String> {
-    let target = super::partial_canonicalize(&ctx.workspace);
+    let target =
+        super::winpath::partial_canonical(&ctx.workspace).unwrap_or_else(|_| ctx.workspace.clone());
     if super::find_workspace(&ctx.workspaces, &target).is_none() {
         // A user /cd can authorize shell execution outside structured roots.
         // Preserve that execution without adding native filesystem access.

@@ -47,7 +47,7 @@ pub mod shell_filter;
 pub mod skill;
 pub mod task;
 pub mod todo;
-
+pub mod winpath;
 
 pub use dircache::DirCache;
 pub use output::CallTrack;
@@ -594,6 +594,10 @@ pub fn model_display_path(workspaces: &[PathBuf], abs: &Path) -> String {
             if let Ok(rel) = abs.strip_prefix(ws) {
                 return rel.to_string_lossy().replace('\\', "/");
             }
+            if let Ok(rel) = abs.strip_prefix(winpath::canonical(ws).unwrap_or_else(|_| ws.clone()))
+            {
+                return rel.to_string_lossy().replace('\\', "/");
+            }
         }
         return abs.to_string_lossy().replace('\\', "/");
     }
@@ -800,14 +804,41 @@ pub fn main_tool_names() -> Vec<String> {
     out
 }
 
-// Native Windows separators preserve verbatim and UNC path prefixes.
-fn normalize_tool_path(path: &str) -> String {
-    #[cfg(windows)]
-    {
-        path.replace('/', "\\")
+fn normalize_tool_path(path: &str, workspaces: &[PathBuf]) -> String {
+    normalize_tool_path_for(path, cfg!(windows), &|p| literal_path_exists(p, workspaces))
+}
+
+/// True when `p` names an existing entry literally (backslashes kept): an
+/// absolute path as-is, otherwise under any workspace root (after a `[N]` prefix).
+fn literal_path_exists(p: &str, workspaces: &[PathBuf]) -> bool {
+    let path = Path::new(p);
+    if path.is_absolute() {
+        return path.symlink_metadata().is_ok();
     }
-    #[cfg(not(windows))]
-    {
+    let (_, bare) = parse_ws_prefix(p);
+    let bare = if p.starts_with('[') {
+        bare.trim_start_matches(['/', '\\'])
+    } else {
+        bare
+    };
+    workspaces
+        .iter()
+        .any(|ws| ws.join(bare).symlink_metadata().is_ok())
+}
+
+/// Windows keeps native separators (UNC prefixes survive) and maps git-bash
+/// style `/c/x` onto `C:\x`. Elsewhere `\` is a legal file-name character, so a
+/// backslash path is converted to `/` only when it does not exist literally.
+fn normalize_tool_path_for(
+    path: &str,
+    windows: bool,
+    literal_exists: &dyn Fn(&str) -> bool,
+) -> String {
+    if windows {
+        winpath::msys_to_win(path).unwrap_or_else(|| path.replace('/', "\\"))
+    } else if !path.contains('\\') || literal_exists(path) {
+        path.to_string()
+    } else {
         path.replace('\\', "/")
     }
 }
@@ -824,21 +855,21 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
 
 /// Like [`resolve`], with an explicit scratch-root policy.
 pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Result<PathBuf> {
-    let normalized = normalize_tool_path(rel);
+    let normalized = normalize_tool_path(rel, workspaces);
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let candidate = partial_canonicalize(as_path);
+        let candidate = partial_canon_checked(as_path, rel)?;
         // Historical exemption: absolute paths under process-global scratch.
         // SDLC execute/integrate disables this so mission binding cannot be bypassed.
         if allow_scratch {
-            let scratch = partial_canonicalize(&crate::model::store::scratch_root());
+            let scratch = partial_canon_lossy(&crate::model::store::scratch_root());
             if candidate.starts_with(&scratch) {
                 return Ok(candidate);
             }
         }
         for ws in workspaces {
-            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            let ws_canon = winpath::canonical(ws).unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
                 return Ok(candidate);
             }
@@ -857,14 +888,15 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
             workspaces.len()
         )
     })?;
-    let ws = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let ws = winpath::canonical(base).unwrap_or_else(|_| base.to_path_buf());
     let bare = if rel.starts_with('[') {
         bare.trim_start_matches(['/', '\\'])
     } else {
         bare
     };
     let joined = ws.join(bare);
-    let candidate = partial_canonicalize(&joined);
+    let candidate = winpath::partial_canonical(&joined)
+        .map_err(|_| anyhow::anyhow!("{}", outside_workspace_message(bare, ws_idx)))?;
     if !candidate.starts_with(&ws) {
         bail!("{}", outside_workspace_message(bare, ws_idx));
     }
@@ -895,55 +927,29 @@ pub fn resolve_read(
     session_dir: Option<&Path>,
     active_skill_dirs: &[PathBuf],
 ) -> Result<PathBuf> {
-    let normalized = normalize_tool_path(rel);
+    let normalized = normalize_tool_path(rel, workspaces);
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let scratch = partial_canonicalize(&crate::model::store::scratch_root());
-        let candidate = partial_canonicalize(as_path);
+        let scratch = partial_canon_lossy(&crate::model::store::scratch_root());
+        let candidate = partial_canon_checked(as_path, rel)?;
         if candidate.starts_with(&scratch) {
             return resolve(workspaces, rel);
         }
         if let Some(session_dir) = session_dir {
-            let normalized = partial_canonicalize(as_path);
             let session_canon = canonicalize_or_verbatim(session_dir);
-            if normalized.starts_with(&session_canon) {
-                return Ok(normalized);
+            if candidate.starts_with(&session_canon) {
+                return Ok(candidate);
             }
         }
         for skill_dir in active_skill_dirs {
-            let normalized = partial_canonicalize(as_path);
             let skill_canon = canonicalize_or_verbatim(skill_dir);
-            if normalized.starts_with(&skill_canon) {
-                return Ok(normalized);
+            if candidate.starts_with(&skill_canon) {
+                return Ok(candidate);
             }
         }
-        let candidate = match as_path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
-                let mut existing = as_path;
-                let mut tail: Vec<std::ffi::OsString> = Vec::new();
-                while !existing.exists() {
-                    match existing.file_name() {
-                        Some(n) => tail.push(n.to_os_string()),
-                        None => break,
-                    }
-                    match existing.parent() {
-                        Some(p) => existing = p,
-                        None => break,
-                    }
-                }
-                let mut base = existing
-                    .canonicalize()
-                    .unwrap_or_else(|_| existing.to_path_buf());
-                for seg in tail.iter().rev() {
-                    base.push(seg);
-                }
-                base
-            }
-        };
         for ws in workspaces {
-            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            let ws_canon = winpath::canonical(ws).unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
                 return Ok(candidate);
             }
@@ -953,37 +959,21 @@ pub fn resolve_read(
     resolve(workspaces, rel)
 }
 
-/// Canonicalize a path, falling back to verbatim if the OS can't resolve it.
-fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+/// Partial-canonicalize an absolute tool path; a `..` through a missing
+/// directory is an escape attempt and fails on every platform.
+fn partial_canon_checked(p: &Path, shown: &str) -> Result<PathBuf> {
+    winpath::partial_canonical(p)
+        .map_err(|_| anyhow::anyhow!("{}", outside_workspace_message(shown, 0)))
 }
 
-/// Partial-canonicalize a path.
-fn partial_canonicalize(as_path: &Path) -> PathBuf {
-    match as_path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            let mut existing = as_path;
-            let mut tail: Vec<std::ffi::OsString> = Vec::new();
-            while !existing.exists() {
-                match existing.file_name() {
-                    Some(n) => tail.push(n.to_os_string()),
-                    None => break,
-                }
-                match existing.parent() {
-                    Some(p) => existing = p,
-                    None => break,
-                }
-            }
-            let mut base = existing
-                .canonicalize()
-                .unwrap_or_else(|_| existing.to_path_buf());
-            for seg in tail.iter().rev() {
-                base.push(seg);
-            }
-            base
-        }
-    }
+/// Partial-canonicalize a trusted root (never contains a missing `..`).
+fn partial_canon_lossy(p: &Path) -> PathBuf {
+    winpath::partial_canonical(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Canonicalize a path, falling back to verbatim if the OS can't resolve it.
+fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
+    winpath::canonical(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].
@@ -1052,8 +1042,11 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 /// Update the session security working set after a successful catalog/run touch.
 /// Find which workspace contains the given absolute path.
 pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
+    // Roots are compared in their plain form, so a verbatim `abs` from a raw
+    // canonicalize elsewhere must be brought to the same form (Windows only).
+    let abs = winpath::display_path(abs);
     for ws in workspaces {
-        let ws = ws.canonicalize().unwrap_or_else(|_| ws.clone());
+        let ws = winpath::canonical(ws).unwrap_or_else(|_| ws.clone());
         if abs.starts_with(&ws) {
             return Some(ws);
         }

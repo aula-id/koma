@@ -251,7 +251,7 @@ fn spill_full_output(session_dir: Option<&Path>, name: &str, body: &str) -> Opti
     let path = dir.join(format!("{epoch_ms}_{}.txt", tool_slug(name)));
     std::fs::write(&path, body).ok()?;
     gc_tmp_dir(&dir);
-    Some(path.canonicalize().unwrap_or(path))
+    Some(super::winpath::canonical(&path).unwrap_or(path))
 }
 
 fn tool_slug(name: &str) -> String {

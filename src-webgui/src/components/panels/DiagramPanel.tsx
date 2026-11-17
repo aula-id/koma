@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, File, Pencil, Trash2, X } from 'lucide-react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { File, FolderOpen, Pencil, Trash2, Workflow } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { AddBtn, Empty, IconBtn } from './helpers'
+import { AddBtn, Empty, EmptyState, IconBtn, InlineNameInput, NoProjectState, NoWorkspaceState, WelcomeLink } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
@@ -10,77 +10,14 @@ import { SHAPE_MIME, diagramFileName, isDiagramPath } from '../../lib/diagram'
 import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
 import { DiagramRefMenuItems } from '../DiagramVisual'
 import { DIAGRAM_PALETTE, ShapePreview, type DiagramPaletteEntry } from '../diagram/DiagramShapePreview'
+import { isEditorTabActive } from '../../lib/welcome'
+import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 const PALETTE_GROUPS = ['Basic', 'Flowchart', 'Containers', 'Database'] as const
 
 const EMPTY_ROOTS: string[] = []
 
 
-function rootLabel(root: string): string {
-  const parts = root.split('/').filter(Boolean)
-  return parts[parts.length - 1] || root
-}
-
-function InlineNameInput({
-  initial,
-  placeholder,
-  onSubmit,
-  onCancel,
-}: {
-  initial: string
-  placeholder: string
-  onSubmit: (value: string) => void
-  onCancel: () => void
-}) {
-  const [value, setValue] = useState(initial)
-  useEffect(() => {
-    const el = document.getElementById('diagram-name-input') as HTMLInputElement | null
-    el?.focus()
-    el?.select()
-  }, [])
-  const commit = () => {
-    const v = value.trim()
-    if (!v) {
-      onCancel()
-      return
-    }
-    onSubmit(v)
-  }
-  return (
-    <form
-      className="flex min-w-0 flex-1 items-center gap-1"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault()
-        commit()
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <input
-        id="diagram-name-input"
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            onCancel()
-          }
-        }}
-        onBlur={() => {
-          if (!value.trim()) onCancel()
-        }}
-        className="h-5 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
-      />
-      <IconBtn label="Confirm" tone="emerald" onClick={commit}>
-        <Check size={12} />
-      </IconBtn>
-      <IconBtn label="Cancel" tone="red" onClick={onCancel}>
-        <X size={12} />
-      </IconBtn>
-    </form>
-  )
-}
 
 function ShapeTile({ entry }: { entry: DiagramPaletteEntry }) {
   return (
@@ -116,13 +53,18 @@ export function DiagramPanel() {
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
+  const diagramActive = useKoma((s) => isEditorTabActive('diagram', s.ui))
+  const activeTabId = useKoma((s) => s.ui.activeTabId)
 
+  const [browseFiles, setBrowseFiles] = useState(false)
   const [shapesOpen, setShapesOpen] = useState(true)
   const [diagramsOpen, setDiagramsOpen] = useState(true)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
+
+  useEffect(() => setBrowseFiles(false), [activeTabId])
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -161,8 +103,11 @@ export function DiagramPanel() {
     }
   }, [menu])
 
-  if (sessionId === null) return <Empty>Open a project to use Diagram</Empty>
-  if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+  if (sessionId === null) return <NoProjectState feature="Diagram" />
+  if (workdir.length === 0) return <NoWorkspaceState />
+
+  const editorMode = diagramActive && !browseFiles
+  const startCreate = () => { setCreating(true); setRenaming(null); setDeleting(null) }
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((e) => !e.isDir && isDiagramPath(e.path))
   const gone = isMissingCodingDirError(dir?.error)
@@ -205,7 +150,20 @@ export function DiagramPanel() {
             disabled={creating || renaming != null || deleting != null}
           />
         </div>
+        {diagramActive && (
+          <button
+            type="button"
+            aria-label="Files"
+            aria-pressed={browseFiles}
+            title={browseFiles ? 'Back to editor tools' : 'Show diagram files'}
+            onClick={() => setBrowseFiles((v) => !v)}
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${browseFiles ? 'text-koma-fg' : 'text-koma-dim'}`}
+          >
+            <FolderOpen size={14} />
+          </button>
+        )}
       </div>
+      {editorMode && (
       <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false} shrink>
         <div className="flex flex-col gap-1 px-2 py-1.5">
           {PALETTE_GROUPS.map((group) => (
@@ -220,12 +178,14 @@ export function DiagramPanel() {
           ))}
         </div>
       </AccordionSection>
+      )}
+      {!editorMode && (
       <AccordionSection
         title="Diagrams"
         open={diagramsOpen}
         minHeight={120}
         onToggle={() => setDiagramsOpen((v) => !v)}
-        action={<AddBtn label="New diagram" onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }} />}
+        action={<AddBtn label="New diagram" text="New" onClick={startCreate} />}
       >
         {!activeRoot ? (
           <Empty>Select a workspace root</Empty>
@@ -306,7 +266,7 @@ export function DiagramPanel() {
                           <File size={13} className="flex-none opacity-70" />
                           <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                         </button>
-                        <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100">
+                        <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[56px] group-has-[:focus-visible]:opacity-100">
                           <IconBtn label="Rename" onClick={() => { setRenaming(entry.path); setCreating(false); setDeleting(null) }}>
                             <Pencil size={12} />
                           </IconBtn>
@@ -323,11 +283,19 @@ export function DiagramPanel() {
                 )
               })
             ) : !creating ? (
-              <Empty>No diagrams</Empty>
+              <EmptyState
+                icon={Workflow}
+                title="No diagrams yet"
+                primary={{ label: 'New diagram', onClick: startCreate }}
+                footer={<WelcomeLink which="diagram" />}
+              >
+                Diagrams are drawings of how things connect, like a flowchart. Ask Koma to draw one, or make your own.
+              </EmptyState>
             ) : null}
           </>
         )}
       </AccordionSection>
+      )}
       {menu ? (
         <div
           className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"

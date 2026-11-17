@@ -8,6 +8,12 @@
 import 'monaco-editor/esm/vs/editor/edcore.main.js'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
+import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker&inline'
+// The json language service (diagnostics, schema completion) for embedded form editors.
+// Code files still map .json to the javascript tokenizer (EXT_LANG), so this only
+// affects models created with language 'json'.
+// @ts-expect-error the esm contribution ships an empty d.ts
+import { jsonDefaults as rawJsonDefaults } from 'monaco-editor/esm/vs/language/json/monaco.contribution'
 import { luminance } from './luminance'
 
 // Language contributions (Monarch tokenizers only)
@@ -33,7 +39,7 @@ import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
 // Custom-protocol (koma://) webviews can't reliably fetch module workers, so the
 // base editor worker is inlined via vite's `?worker&inline` (compiled to a blob
 // URL — no network). NO language workers are registered, so getWorker returns
-// the one base worker regardless of the requested label.
+// the one base worker, except the json service which needs its own inlined worker.
 let monacoReady = false
 
 export function initMonaco(): void {
@@ -41,41 +47,21 @@ export function initMonaco(): void {
   ;(self as unknown as {
     MonacoEnvironment?: { getWorker: (workerId: string, label: string) => Worker }
   }).MonacoEnvironment = {
-    getWorker: () => new EditorWorker(),
+    getWorker: (_id: string, label: string) => (label === 'json' ? new JsonWorker() : new EditorWorker()),
   }
   monacoReady = true
+  // Disposing an editor mid-request (language service, hover, suggest) rejects the pending
+  // promise with Monaco's own cancellation marker; that is control flow, not a failure.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('unhandledrejection', (e) => {
+      const r = e.reason as { name?: string; message?: string } | undefined
+      if (r?.name === 'Canceled' && r.message === 'Canceled') e.preventDefault()
+    })
+  }
   ;(globalThis as unknown as { __komaMonacoReady?: boolean }).__komaMonacoReady = true
 }
 
-// ext -> Monarch language id (all registered above). JSON has no basic-languages
-// tokenizer (its highlighter ships with the worker-backed json service we omit),
-// so it borrows the javascript tokenizer — close enough for coloured JSON diffs.
-// Unknown extensions fall back to plaintext.
-const EXT_LANG: Record<string, string> = {
-  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  json: 'javascript', jsonc: 'javascript',
-  css: 'css', scss: 'scss', sass: 'scss', less: 'less',
-  html: 'html', htm: 'html', xhtml: 'html', xml: 'xml', svg: 'xml',
-  md: 'markdown', markdown: 'markdown', mdx: 'markdown',
-  rs: 'rust',
-  py: 'python', pyi: 'python',
-  go: 'go',
-  sh: 'shell', bash: 'shell', zsh: 'shell',
-  yaml: 'yaml', yml: 'yaml',
-  sql: 'sql',
-  c: 'cpp', h: 'cpp', hpp: 'cpp', hh: 'cpp', cpp: 'cpp', cc: 'cpp', cxx: 'cpp',
-  java: 'java',
-  php: 'php', phtml: 'php', php3: 'php', php4: 'php', php5: 'php', phps: 'php',
-  ini: 'ini', toml: 'ini', cfg: 'ini', conf: 'ini',
-}
-
-export function langFromPath(path: string): string {
-  const file = path.split('/').pop() ?? path
-  const dot = file.lastIndexOf('.')
-  const ext = dot > 0 ? file.slice(dot + 1).toLowerCase() : ''
-  return EXT_LANG[ext] ?? 'plaintext'
-}
+export { langFromPath } from './editorLanguages'
 
 // Resolve a CSS custom property (incl. color-mix() expressions like koma-panel/
 // border) to a concrete hex. getComputedStyle on a raw custom property returns
@@ -419,4 +405,34 @@ export function readMonoFont(): string {
     /* ignore */
   }
   return "'KomaMono', ui-monospace, 'JetBrains Mono', monospace"
+}
+
+type JsonSchemaEntry = { uri: string; fileMatch: string[]; schema: object }
+type JsonDefaults = {
+  setDiagnosticsOptions: (o: {
+    validate: boolean
+    allowComments: boolean
+    trailingCommas: 'error' | 'warning' | 'ignore'
+    schemas: JsonSchemaEntry[]
+  }) => void
+}
+const jsonSchemas = new Map<string, JsonSchemaEntry>()
+
+function pushJsonDiagnostics(): void {
+  ;(rawJsonDefaults as JsonDefaults).setDiagnosticsOptions({
+    validate: true,
+    allowComments: false,
+    trailingCommas: 'error',
+    schemas: [...jsonSchemas.values()],
+  })
+}
+
+/** Attach a JSON schema to ONE model (matched by its exact URI), so concurrent embedded
+ *  editors never see each other's schema. Returns the detach function. */
+export function attachJsonSchema(modelUri: string, schema: object): () => void {
+  jsonSchemas.set(modelUri, { uri: `${modelUri}#schema`, fileMatch: [modelUri], schema })
+  pushJsonDiagnostics()
+  return () => {
+    if (jsonSchemas.delete(modelUri)) pushJsonDiagnostics()
+  }
 }

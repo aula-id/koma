@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import { codingRequest, workspaceKey, type WorkspaceRef } from './coding-service'
+import { isWindowsPath, relativeUnder } from './pathDisplay'
 export type Breakpoint = { line: number; condition?: string; hitCondition?: string; logMessage?: string }
 export type Breakpoints = Record<string, Breakpoint[]>
 export type DebugSession = { id: string; label: string; request: string; status: string; error: string | null; generation: number; terminalTaskIds?: string[]; preLaunchTaskId?: string; exceptionFilters?: string[]; capabilities: Record<string, unknown>; breakpoints: Record<string, { breakpoints?: { verified: boolean; line?: number; message?: string }[] }> }
@@ -30,8 +31,7 @@ export function bindDebugEditor(monaco: typeof Monaco, editor: Monaco.editor.ISt
   const executionMarker = editor.createDecorationsCollection()
   const paintExecution = () => {
     const location = execution.get(workspaceKey(w))
-    const absolute = `${w.root.replace(/[\\/]$/, '')}/${path}`.replace(/\\/g, '/')
-    const matches = location && location.path.replace(/\\/g, '/') === absolute
+    const matches = location && executionMatches(w.root, path, location.path)
     executionMarker.set(matches ? [{ range: new monaco.Range(location.line, 1, location.line, 1), options: { isWholeLine: true, className: 'koma-debug-execution', linesDecorationsClassName: 'koma-debug-location' } }] : [])
   }
   paintExecution()
@@ -42,6 +42,12 @@ export function bindDebugEditor(monaco: typeof Monaco, editor: Monaco.editor.ISt
   const mouse = editor.onMouseDown(e => { if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) toggle(e.target.position.lineNumber) })
   const action = editor.addAction({ id: 'koma.toggleBreakpoint', label: 'Toggle Breakpoint', keybindings: [monaco.KeyCode.F9], run: () => { const p = editor.getPosition(); if (p) toggle(p.lineNumber) } })
   return () => { action.dispose(); mouse.dispose(); moved.dispose(); markers.clear(); executionMarker.clear(); window.removeEventListener('koma-debug-execution', paintExecution); window.removeEventListener('koma-breakpoints', change) }
+}
+/** True when the debugger's absolute `execPath` is the workspace-relative `relPath` under `root`; case-folds only for Windows-shaped paths. */
+export function executionMatches(root: string, relPath: string, execPath: string): boolean {
+  const rel = relativeUnder(root, execPath)
+  if (rel === null) return false
+  return isWindowsPath(root) || isWindowsPath(execPath) ? rel.toLowerCase() === relPath.replace(/\\/g, '/').toLowerCase() : rel === relPath
 }
 const pendingUpdates = new Map<string, { points: Breakpoint[]; promise: Promise<void> }>()
 export function updateRunningBreakpoints(workspace: WorkspaceRef, path: string, points: Breakpoint[]): Promise<void> {

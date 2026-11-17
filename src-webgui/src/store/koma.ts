@@ -15,6 +15,8 @@ import { remoteActions } from './actions/remote'
 import { sessionActions } from './actions/session'
 import { skillActions } from './actions/skills'
 import { tabActions } from './actions/tabs'
+import { welcomeActions } from './actions/welcome'
+import { mcpTabActions } from './actions/mcp'
 import { initialCoding } from './coding'
 import { initialDesign } from './design'
 import { initialDiagram } from './diagram'
@@ -95,7 +97,6 @@ export type {
   CatalogueProviderEntry,
   DiffPayload,
   DyingMark,
-  FileChangeEntry,
   HubCookingEntry,
   HubHistoryEntry,
   LoadPhase,
@@ -288,9 +289,26 @@ export const useKoma = create<KomaState>((set, get) => ({
         }
       })
     }
+    // A chunk that never left the webview must not leave the upload tab waiting for a SkillOp.
+    const failSkillInstall = (reason: string) => {
+      if (g.r !== 'SkillUploadChunk') return
+      set((s) => {
+        const result = {
+          requestId: g.requestId,
+          operation: 'install-zip',
+          tabId: g.tabId,
+          outcomes: [{ name: g.name, status: 'failed' as const, error: reason }],
+        }
+        return {
+          skillLastOp: result,
+          skillOpResults: { ...Object.fromEntries(Object.entries(s.skillOpResults).slice(-31)), [g.requestId]: result },
+        }
+      })
+    }
     const ipc = window.ipc
     if (!ipc || typeof ipc.postMessage !== 'function') {
       failSkillUpdate('IPC unavailable — save was not sent')
+      failSkillInstall('IPC unavailable — upload was not sent')
       if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC unavailable — save was not sent' })
       if (isCodingReq) {
         const text = 'IPC unavailable — coding request was not sent'
@@ -307,6 +325,7 @@ export const useKoma = create<KomaState>((set, get) => ({
       ipc.postMessage(JSON.stringify({ t: 'req', ...g }))
     } catch (e) {
       failSkillUpdate('IPC error — save was not sent')
+      failSkillInstall('IPC error — upload was not sent')
       if (g.r === 'FileSave') get().push({ k: 'FileSave', root: g.root, path: g.path, requestId: g.requestId, fingerprint: '', error: 'IPC error — save was not sent' })
       if (isCodingReq) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -332,6 +351,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   ...codingActions(set, get),
   ...diagramActions(set, get),
   ...designActions(set, get),
+  ...welcomeActions(set, get),
+  ...mcpTabActions(set, get),
 }))
 
 // Capture at state publication, before rendering/expiration can replace a toast.

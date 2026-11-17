@@ -86,7 +86,6 @@ export const initialSession: SessionSlice = {
   reasoning: '',
   subagents: [],
   bash: [],
-  fileChanges: [],
   planTodos: [],
   attachments: [],
   searchResults: [],

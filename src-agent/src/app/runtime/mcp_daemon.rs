@@ -441,6 +441,11 @@ async fn handle_request(
             McpResponse::Ack
         }
 
+        McpRequest::RestartServer { server } => {
+            manager.restart_server(&server);
+            McpResponse::Ack
+        }
+
         McpRequest::Status => {
             let status = manager.server_status();
             let errors = manager.server_errors();

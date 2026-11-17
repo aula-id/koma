@@ -154,6 +154,7 @@ fn sample_global_snapshot() -> GlobalSnapshot {
         main_configured: None,
         session_models: Vec::new(),
         mcp_servers: Vec::new(),
+        mcp_project: None,
         oauth_conn_uuids: Vec::new(),
         // Non-default sub-agent viewer + `$` panel state so the round-trip proves
         // these stage-3 global flags survive serialize -> deserialize.
@@ -292,6 +293,14 @@ fn client_request_variants_roundtrip() {
             target: "project".to_string(),
             name: "packaged".to_string(),
             data_b64: "UEsDBA==".to_string(),
+            request_id: "upload-1".to_string(),
+            session_epoch: 7,
+            tab_id: "upload-skill".to_string(),
+        },
+        ClientRequest::InstallSkillZipPath {
+            target: "global".to_string(),
+            name: "packaged".to_string(),
+            path: "/tmp/skill-upload/upload-1.zip".to_string(),
             request_id: "upload-1".to_string(),
             session_epoch: 7,
             tab_id: "upload-skill".to_string(),

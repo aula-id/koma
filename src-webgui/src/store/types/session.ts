@@ -87,15 +87,6 @@ export type BashJobEntry = {
   outputTail?: string
 }
 
-// One cumulative file-change row for the Explore "File changed" panel — the
-// (workspace-relative when possible) path this session's write/edit/delete
-// touched + its latest status. Persisted daemon-side (survives compaction +
-// close/reopen), REPLACED wholesale on each Snapshot.
-export type FileChangeEntry = {
-  path: string
-  status: 'added' | 'modified' | 'deleted'
-}
-
 // One Plan-mode todo row for the Explore "PLAN" section — mirrors the host's
 // `PlanTodoSnapshot` (render.rs `PushPlanTodo`, `rename_all = "camelCase"`).
 // The two locked workflow rails ("serve plan to user"/"save plan to file &

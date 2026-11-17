@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Check, Trash2, X } from 'lucide-react'
+import { Check, Plug, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../../AccordionSection'
-import { Empty, AddBtn, Row, ScopePill } from '../helpers'
+import { Empty, EmptyState, AddBtn, Row, ScopePill } from '../helpers'
 import { useKoma, type OAuthConn } from '../../../store/koma'
 import type { Provider, Model } from '../../../types/config'
 
@@ -85,7 +85,7 @@ function OAuthConnRow({
       </span>
       {/* Idle: max-w-0 so the trash takes no flex width. opacity alone would
           still reserve a permanent empty gutter on the right. */}
-      <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[20px] group-hover:opacity-100">
+      <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[20px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[20px] group-has-[:focus-visible]:opacity-100">
         <button
           onClick={onArm}
           aria-label="Disconnect"
@@ -126,19 +126,35 @@ export function ConnectorListView({
   // and session_models show here.
   const realProviders = providers.filter((p) => !p.isKomaFree)
   const realModels = models.filter((m) => !m.free)
+  const firstRun = realProviders.length === 0 && conns.length === 0 && realModels.length === 0
 
   return (
     <div
       className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel"
       data-tour="connector-list"
     >
+      {/* flex-none sibling, not a replacement: the accordions (and their tour
+          ids) stay mounted. Capped so a short window can't push them out. */}
+      {firstRun && (
+        <div className="max-h-[45%] flex-none overflow-y-auto">
+          <EmptyState
+            icon={Plug}
+            title="Connect an AI"
+            primary={{ label: 'Sign in with an account', onClick: onConnectOAuth }}
+            secondary={{ label: 'Add an API key', onClick: onAddProvider }}
+          >
+            Until you connect your own AI, Koma uses its built-in free model. To use your own, sign in with an account or add an API key.
+          </EmptyState>
+        </div>
+      )}
       <AccordionSection
         title="Providers"
         open={open.providers}
         onToggle={() => setOpen((s) => ({ ...s, providers: !s.providers }))}
-        action={<AddBtn label="Add provider" tourId="connector-add-provider" onClick={onAddProvider} />}
+        count={realProviders.length || undefined}
+        action={<AddBtn label="Add provider" text="Add" tourId="connector-add-provider" onClick={onAddProvider} />}
       >
-        {realProviders.length === 0 && <Empty>No providers</Empty>}
+        {realProviders.length === 0 && <Empty>No API-key providers yet.</Empty>}
         {realProviders.map((p) => (
           <Row
             key={p.id}
@@ -159,9 +175,10 @@ export function ConnectorListView({
         title="OAuth"
         open={open.oauth}
         onToggle={() => setOpen((s) => ({ ...s, oauth: !s.oauth }))}
-        action={<AddBtn label="Connect account" tourId="connector-add-oauth" onClick={onConnectOAuth} />}
+        count={conns.length || undefined}
+        action={<AddBtn label="Sign in with an account" text="Sign in" tourId="connector-add-oauth" onClick={onConnectOAuth} />}
       >
-        {conns.length === 0 && <Empty>No connections</Empty>}
+        {conns.length === 0 && <Empty>No signed-in accounts yet.</Empty>}
         {conns.map((c) => (
           <OAuthConnRow
             key={c.uuid}
@@ -179,9 +196,10 @@ export function ConnectorListView({
         title="Models"
         open={open.models}
         onToggle={() => setOpen((s) => ({ ...s, models: !s.models }))}
-        action={<AddBtn label="Add model" tourId="connector-add-model" onClick={onAddModel} />}
+        count={realModels.length || undefined}
+        action={<AddBtn label="Add model" text="Add" tourId="connector-add-model" onClick={onAddModel} />}
       >
-        {realModels.length === 0 && <Empty>No models</Empty>}
+        {realModels.length === 0 && <Empty>No models yet.</Empty>}
         {realModels.map((m) => (
           <Row
             key={m.id}

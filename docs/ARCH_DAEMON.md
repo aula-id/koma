@@ -30,7 +30,7 @@ koma's daemon is built on several deliberate architectural decisions:
 
 2. **Daemon-per-session.** Each daemon owns exactly one session. Multiple sessions = multiple daemons. This eliminates cross-session contention and simplifies locking.
 
-3. **Single-writer.** The first client to `Attach` becomes the controller with write access. Subsequent clients are read-only observers. This prevents concurrent mutation races.
+3. **One controller.** The first enrolled client is the controller. Only the daemon-wide `QuitDaemon` is controller-gated; every other request is honoured for any client, each driving its own foreground session.
 
 4. **Sync loop, async bridge.** The daemon loop is synchronous (`thread::sleep`, `try_recv`). Per-client I/O is async (tokio tasks). They communicate over `std::sync::mpsc` channels — no `async` in the hot loop.
 
@@ -64,13 +64,15 @@ The spawn-or-attach decision:
 
 ## Startup Sequence
 
-The entry point is `run_daemon()` in `src-agent/src/app/runtime/lifecycle.rs:445`.
+The entry point is `run_daemon()` in `src-agent/src/app/runtime/lifecycle/mod.rs`.
 
 ### Phase 1: Process Setup
 
 ```
 1. Ignore SIGPIPE (libc::signal(SIGPIPE, SIG_IGN))
    - Writes to dead clients return EPIPE, never kill the daemon
+   - Windows has no SIGPIPE: install_killtree_job() arms the
+     kill-on-close Job Object instead
 
 2. Require --session <id>
    - Daemon-per-session: session ID is mandatory
@@ -109,43 +111,46 @@ The entry point is `run_daemon()` in `src-agent/src/app/runtime/lifecycle.rs:445
        ├── McpManager::connect_proxy()     — connect to ~/.koma/mcp.sock
        │   └── OK → use proxy (N daemons share 1 MCP server copy)
        └── ERR → McpManager::connect_all() — fallback to local connections
+
+6. refresh_project_mcp()
+   └── project .mcp.json servers: only approved ones are applied to the MCP manager
 ```
 
 ### Phase 4: Infrastructure
 
 ```
-6. install_daemon_signals(&handle)
+7. install_daemon_signals(&handle)
    └── Returns Arc<AtomicBool> (shutting_down flag)
 
-7. write_daemon_pid(&session_id)     — advisory pidfile (diagnostics only)
+8. write_daemon_pid(&session_id)     — advisory pidfile (diagnostics only)
 
-8. DaemonHub::new()
+9. DaemonHub::new()
    └── Returns (hub, req_tx)         — sync↔async bridge
 
-9. ipc::server::bind(&sock_path)     — THIS PROCESS IS NOW THE DAEMON
+10. ipc::server::bind(&sock_path)     — THIS PROCESS IS NOW THE DAEMON
    └── handle.spawn(accept_loop(listener, req_tx))
 ```
 
 ### Phase 5: Enter Loop
 
 ```
-10. daemon_loop(state, client, handle, hub, shutting_down)
+11. daemon_loop(state, client, handle, hub, shutting_down)
     └── Returns on: QuitDaemon / signal / self-exit
 ```
 
 ### Phase 6: Teardown
 
 ```
-11. shutdown_runtime(state, rt)       — release all locks, drop runtime
-12. remove_file(&sock_path)          — unlink daemon socket
-13. remove_file(&pid_path)           — unlink pidfile
+12. shutdown_runtime(state, rt)       — release all locks, drop runtime
+13. remove_file(&sock_path)          — unlink daemon socket
+14. remove_file(&pid_path)           — unlink pidfile
 ```
 
 ---
 
 ## The Daemon Loop
 
-Located at `src-agent/src/app/runtime/event_loop/daemon/mod.rs:283`.
+Located at `src-agent/src/app/runtime/event_loop/daemon/mod.rs` (`daemon_loop`).
 
 The loop is **synchronous** — it uses `try_recv()` and `thread::sleep()`, never `.await`. Per-client async tasks run on the tokio runtime separately.
 
@@ -296,9 +301,7 @@ enum HubInbound {
 
 ### Single-Writer Enforcement
 
-The **first enrolled client** is the controller. Mutating requests from non-controller clients are rejected with `DaemonEvent::Error("read-only observer")`.
-
-Read-only requests are honored for everyone: `Attach`, `Resync`, `ListSessions`, `Status`, `Detach`, `FileSearch`, `ListModels`, `ListRoutes`.
+The **first enrolled client** is the controller. A `QuitDaemon` from a non-controller is rejected with a `DaemonEvent::Error` ("read-only: only the controlling client can shut down the daemon"). Every other request is honoured for any client, so a second window can close its own session (`QuitSession`) and `Detach` without touching the others.
 
 ### Frame Sequence Numbering
 
@@ -343,7 +346,7 @@ Per-client mode projections are cached with a 100ms TTL (`MODE_SNAPSHOT_TTL`). T
 
 ### Client → Daemon (`ClientRequest`)
 
-36 variants organized by function:
+`ClientRequest` has well over a hundred variants (`src-agent/src/ipc/proto/mod.rs`). The tables below list the core ones by function; skills, agents, OAuth, extensions, terminal, notifications, web search, computer and screen-browser control have further variants in the same enum.
 
 **Session lifecycle:**
 | Variant | Description |
@@ -388,6 +391,10 @@ Per-client mode projections are cached with a 100ms TTL (`MODE_SNAPSHOT_TTL`). T
 | Variant | Description |
 |---|---|
 | `SetMcpServer { ... }` | Upsert MCP server |
+| `ImportMcpJson { ... }` | Import Claude Code / Cursor / VS Code MCP JSON |
+| `GetMcpStatus { ... }` | Per-server connection state |
+| `RestartMcpServer { ... }` | Restart one MCP server |
+| `ApproveMcpProjectServer { ... }` | Approve a project `.mcp.json` server |
 | `DeleteMcpServer { uuid }` | Remove MCP server |
 | `EnableMcpServer { uuid, enabled }` | Toggle MCP server |
 | `SetProvider { ... }` | Upsert provider |
@@ -418,7 +425,7 @@ struct DaemonFrame {
 }
 ```
 
-**`DaemonEvent`** (12 variants):
+**`DaemonEvent`** (selected variants; the full enum is in `ipc/proto/mod.rs`):
 
 | Variant | Description |
 |---|---|
@@ -434,6 +441,8 @@ struct DaemonFrame {
 | `FileSearchResults` | Fuzzy search results |
 | `ModelList` | Model catalogue for GUI |
 | `ModelRoutes` | Provider route list for GUI |
+| `EnterSecure` | Signal: enter the secure room |
+| `RunState` | Reply to `GetRunState` |
 
 **`StateDelta`** (selected variants):
 
@@ -467,7 +476,7 @@ Round-trips crossterm `KeyEvent` ↔ `KeyWire` for TUI clients. GUI clients tran
 
 ### Snapshot Building
 
-`build_snapshot(state)` in `src-agent/src/ipc/snapshot/projection.rs`:
+`build_snapshot(state)` in `src-agent/src/ipc/snapshot/projection/`:
 
 1. Calls `mode_snapshot(state)` to get the per-client mode projection
 2. Projects each `SessionRuntime` → `SessionSnapshot` (25+ fields)
@@ -617,7 +626,7 @@ This prevents the daemon from exiting while leaving a client with a half-open so
 
 ## Daemon Management CLI
 
-Located at `src-agent/src/app/runtime/manage.rs`.
+Located at `src-agent/src/app/runtime/manage/` (`mod.rs`, `commands.rs`, `probe.rs`, `mcp.rs`, `os.rs`, plus doctor, linker, OAuth and the `koma mcp` CLI in `mcp_cli.rs`).
 
 ### Discovery
 
@@ -633,13 +642,13 @@ fn daemon_alive(session_id: &str) -> bool {
 | Function | Description |
 |---|---|
 | `ensure_daemon_running(id, resume, workdir)` | Probe → spawn if not live → poll until accepting |
-| `spawn_daemon(id, resume, workdir)` | Re-exec current binary with `--daemon --session <id>`, `setsid()`, stdin/stdout/stderr → `/dev/null` |
+| `spawn_daemon(id, resume, workdir)` | Re-exec current binary with `--daemon --session <id>` (plus `--resume`), `setsid()` on unix, stdin/stdout/stderr → null |
 | `restart_daemon(id, quiet)` | Stop → spawn → confirm accepting |
 | `stop_session_daemon(id, quiet)` | QuitDaemon → SIGTERM → SIGKILL escalation |
-| `nuke_session_daemon(id)` | Fire-and-forget QuitDaemon (for Ctrl+X in swapper) |
-| `probe_status(sock_path)` | Status probe without attaching (500ms timeout) |
+| `probe_status(sock_path)` | Status probe without attaching (500ms timeout, `manage/probe.rs`) |
 | `list_live_sessions()` | Enumerate sockets → probe each → sweep stale |
-| `kill_orphan_daemon_processes()` | `/proc` scan for orphaned daemon processes (Linux-only) |
+| `ensure_mcp_daemon_running()` | Spawn or reuse the global MCP daemon (`manage/mcp.rs`) |
+| `kill_orphan_daemon_processes()` | `/proc` scan for orphaned `--daemon` / `--mcp-daemon` processes (Linux only; returns 0 elsewhere) |
 
 ### Constants
 
@@ -655,9 +664,9 @@ fn daemon_alive(session_id: &str) -> bool {
 
 `spawn_daemon` re-execs the current binary (not fork+exec):
 ```
-setsid()                        — new session, detach from terminal
+setsid()                        — new session, detach from terminal (unix)
 --daemon --session <id>         — daemon mode with session key
-stdin/stdout/stderr → /dev/null — fully detached
+stdin/stdout/stderr → null      — fully detached
 ```
 
 This ensures the daemon runs independently of any terminal.
@@ -685,11 +694,11 @@ Unknown top-level verbs (typos) print `--help` and exit 1; they never spawn a se
 
 ## Global MCP Daemon
 
-Located at `src-agent/src/app/runtime/mcp_daemon.rs`.
+Located at `src-agent/src/app/runtime/mcp_daemon.rs`. Server configuration, the project `.mcp.json` approval gate and the `koma mcp` CLI are covered in [MCP.md](MCP.md).
 
 ### Purpose
 
-A singleton process that owns all MCP server connections. Session daemons proxy to it via `~/.koma/mcp.sock`, so N daemons share ONE copy of every MCP server.
+A singleton process (`koma --mcp-daemon`) that owns all MCP server connections. Session daemons proxy to it via `~/.koma/mcp.sock` (pidfile `~/.koma/mcp.pid`), so N daemons share ONE copy of every MCP server.
 
 ### Architecture
 
@@ -706,7 +715,10 @@ Session Daemon C ─┘
 | `List` | `Tools { defs, names }` — all advertised tool definitions |
 | `Call { tool, args }` | `CallResult(output)` or `CallResult(error)` |
 | `Reconnect { servers }` | `Ack` — reconnect to specified servers |
-| `Status` | `Status(server_status)` — health of each server |
+| `RestartServer { server }` | `Ack` — restart one server, leave the others |
+| `Status` | `Status` — health of each server |
+| `Fingerprint` | `Fingerprint(String)` — build fingerprint |
+| `Shutdown` | `Ack` — graceful stop (Windows has no SIGTERM) |
 
 ### Reaper
 
@@ -721,7 +733,7 @@ The global MCP daemon self-reaps when no session daemons need it:
 ### Lifecycle
 
 1. Session daemon needs MCP → `ensure_mcp_daemon_running()`
-2. If global daemon not running → spawn it
+2. If global daemon not running → spawn it; if one is running, send `Fingerprint` and restart it when the build differs
 3. Connect proxy to `~/.koma/mcp.sock`
 4. If proxy fails → fallback to local `connect_all()`
 
@@ -731,7 +743,7 @@ The global MCP daemon self-reaps when no session daemons need it:
 
 ### Daemon Self-Test
 
-`koma --daemon-selftest` (`run_daemon_selftest()` in `lifecycle.rs:569`):
+`koma --daemon-selftest` (`run_daemon_selftest()` in `lifecycle/selftest.rs`):
 
 1. Creates a private tokio runtime + DaemonHub
 2. Binds a test socket (`daemon-selftest.sock`)
@@ -816,17 +828,18 @@ Two separate tasks (not `select!`) because `std::sync::mpsc::Receiver` is `!Sync
 
 | Constant | Value | Location | Description |
 |---|---|---|---|
-| `MAX_FRAME_BYTES` | 64 MiB | `ipc/proto/mod.rs:24` | Max single IPC frame payload |
-| `SELF_EXIT_GRACE_TICKS` | 10 (~1s) | `daemon/mod.rs:85` | Consecutive quiescent ticks before self-exit |
-| `APPROVAL_PARK_TIMEOUT` | 30 min | `daemon/mod.rs:98` | Auto-deny if detached too long |
-| `MAX_SUBAGENTS` | 5 | `subagent/mod.rs:54` | Max concurrent sub-agents |
+| `MAX_FRAME_BYTES` | 64 MiB | `ipc/proto/mod.rs` | Max single IPC frame payload |
+| `SELF_EXIT_GRACE_TICKS` | 10 (~1s) | `daemon/mod.rs` | Consecutive quiescent ticks before self-exit |
+| `APPROVAL_PARK_TIMEOUT` | 30 min | `daemon/mod.rs` | Auto-deny if detached too long |
+| `MAX_SUBAGENTS` | 5 | `subagent/mod.rs` | Max concurrent sub-agents |
 | `FRAME_POLL` | 4 ms | `ipc/conn.rs` | Per-client write channel poll interval |
 | `MODE_SNAPSHOT_TTL` | 100 ms | `hub/core.rs` | Mode projection cache TTL |
 | `DEFAULT_MODEL` | `koma/apple` | `config.rs` | Soft default = koma-free model id (dispatch already routes unusable Main there) |
-| `SPAWN_CONNECT_TIMEOUT` | 3 s | `manage.rs` | Max wait for spawned daemon |
-| `SPAWN_POLL_INTERVAL` | 50 ms | `manage.rs` | Poll interval during spawn wait |
-| `SOCKET_IO_TIMEOUT` | 3 s | `manage.rs` | Socket operation timeout |
-| `KILL_GRACE` | 3 s | `manage.rs` | Grace after SIGTERM before SIGKILL |
+| `SPAWN_CONNECT_TIMEOUT` | 3 s | `manage/mod.rs` | Max wait for spawned daemon |
+| `SPAWN_POLL_INTERVAL` | 50 ms | `manage/mod.rs` | Poll interval during spawn wait |
+| `SOCKET_IO_TIMEOUT` | 3 s | `manage/mod.rs` | Socket operation timeout |
+| `KILL_GRACE` | 3 s | `manage/mod.rs` | Grace after SIGTERM before SIGKILL |
+| `SIGNAL_GRACE` | 2 s | `manage/mod.rs` | Grace for signal delivery |
 | `REAPER_POLL` | 15 s | `mcp_daemon.rs` | MCP daemon reaper check interval |
 | `REAPER_INITIAL_GRACE` | 15 s | `mcp_daemon.rs` | Grace before first reaper check |
 | `REAPER_EMPTY_STREAK_TO_EXIT` | 2 | `mcp_daemon.rs` | Empty scans before MCP daemon exits |
@@ -839,11 +852,11 @@ The daemon exposes several sub-commands via `koma daemon <verb>`:
 
 | Command | Description |
 |---|---|
-| `koma daemon status` | List all live daemon sessions with metadata |
-| `koma daemon restart <id>` | Stop + respawn a session daemon |
-| `koma daemon stop <id>` | Gracefully stop a session daemon |
-| `koma daemon nuke <id>` | Force-stop a session daemon (fire-and-forget) |
-| `koma daemon orphans` | Kill orphaned daemon processes (Linux `/proc` scan) |
+| `koma daemon status` | Show live session daemons (session id, PID, socket, session count) |
+| `koma daemon kill [--session <id>]` | Stop every live session daemon, or one; also sweeps orphan processes (Linux) |
+| `koma daemon restart` | Stop the daemon (if any), then start a fresh one |
+| `koma daemon clean` | Remove a stale socket/pidfile when no daemon is running |
+| `koma daemon delete --session <id>` | Delete one on-disk history session (refuses if live) |
 
 ---
 

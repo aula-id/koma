@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
-use super::bridge::REQ_POLL;
+use super::bridge::{log_dropped_oversize, write_requests, REQ_POLL};
 use super::connect::{Connection, TransportKind, HELLO_HANDSHAKE_TIMEOUT};
 
 /// Connect to a remote koma server over generic async streams (stdin/stdout),
@@ -77,12 +77,12 @@ where
                         }
                     }
                 }
-                for req in &batch {
-                    if let Ok(json) = serde_json::to_vec(&req) {
-                        if frame::write_frame_to(&mut writer, &json).await.is_err() {
-                            return; // dead socket
-                        }
-                    }
+                if !write_requests(&mut writer, &batch, &|len| {
+                    log_dropped_oversize("remote session connection", len)
+                })
+                .await
+                {
+                    return; // dead socket
                 }
                 // Channel closed AND the final drained batch is flushed: safe to
                 // return (the shutdown frame(s) are on the wire).

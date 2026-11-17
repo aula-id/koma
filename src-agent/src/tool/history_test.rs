@@ -415,3 +415,21 @@ fn tool_registration_and_history_routing_stay_aligned() {
         "operator contract must still point at message_load for past context"
     );
 }
+
+#[test]
+fn reload_hints_escape_paths_as_json() {
+    let mut out = String::new();
+    let win = std::path::Path::new("C:\\Users\\x\\a.png");
+    out.push_str(&format!(
+        "call read({{\"path\":{}}})",
+        json_str(&win.to_string_lossy())
+    ));
+    assert!(
+        out.contains("\"path\":\"C:\\\\Users\\\\x\\\\a.png\""),
+        "{out}"
+    );
+    let q = json_str("/tmp/we\"ird.png");
+    assert_eq!(q, "\"/tmp/we\\\"ird.png\"");
+    let v: serde_json::Value = serde_json::from_str(&format!("{{\"path\":{q}}}")).unwrap();
+    assert_eq!(v["path"], "/tmp/we\"ird.png");
+}

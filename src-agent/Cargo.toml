@@ -51,7 +51,7 @@ sha2 = "0.10"
 bytes = "1"
 # Pure-Rust ZMQ for notebook kernel shell/IOPub (no system libzmq).
 zeromq = "0.6"
-rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
+rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls", "macros"] }
 
 # Linker daemon: import-graph scanner (tree-sitter based).
 tree-sitter = { version = "0.23", optional = true }

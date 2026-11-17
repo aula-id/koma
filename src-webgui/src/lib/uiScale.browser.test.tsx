@@ -64,7 +64,7 @@ it('keeps Settings and its scale selector reachable at 1.5× across session swit
   expect(rect.bottom).toBeLessThanOrEqual(window.innerHeight)
   const slider = group.querySelector('input[type="range"]')!
   expect(slider.getBoundingClientRect().width).toBeGreaterThan(40)
-  useKoma.getState().push({ k: 'Snapshot', session: 'another-session', state: 'idle', messages: [], title: '', subagents: [], bash: [], fileChanges: [], attachments: [], pendingSteer: [], awaitingApproval: false, palette: useKoma.getState().palette } as any)
+  useKoma.getState().push({ k: 'Snapshot', session: 'another-session', state: 'idle', messages: [], title: '', subagents: [], bash: [], attachments: [], pendingSteer: [], awaitingApproval: false, palette: useKoma.getState().palette } as any)
   expect(useUiScale.getState().scale).toBe(1.5)
 })
 

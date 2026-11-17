@@ -24,7 +24,7 @@
 //! Legacy sessions without provenance adopt known extension secondary roots once,
 //! cleaning up the roots old releases inadvertently saved for every session.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
 
@@ -73,9 +73,15 @@ pub fn validate_workspace_dir(raw: &str) -> Result<PathBuf> {
 
     let expanded = expand_tilde(raw, &home)?;
 
+    // A `..` component passes the lexical `starts_with(home)` check but would let
+    // `create_dir_all` create a directory outside $HOME before phase 2 rejects it.
+    if has_parent_dir(&expanded) {
+        bail!("workspace_dir '{raw}' must not contain '..'");
+    }
+
     // Phase 1: lexical pre-check so a sensitive / $HOME / ~.koma path is never even
     // created on disk. Best-effort (paths not yet canonical); phase 2 is authoritative.
-    if let Some(reason) = policy_violation(&expanded, &home) {
+    if let Some(reason) = policy_violation(&expanded, &home, fold_case()) {
         bail!("workspace_dir '{raw}' {reason}");
     }
 
@@ -86,7 +92,7 @@ pub fn validate_workspace_dir(raw: &str) -> Result<PathBuf> {
 
     // Phase 2: authoritative check on the CANONICAL path (symlinks + `..` resolved).
     let home_canon = norm(&home);
-    if let Some(reason) = policy_violation(&canon, &home_canon) {
+    if let Some(reason) = policy_violation(&canon, &home_canon, fold_case()) {
         bail!("workspace_dir '{raw}' {reason} (after canonicalization)");
     }
     Ok(canon)
@@ -128,6 +134,13 @@ pub fn remove_workspace_dir(raw: &str) -> bool {
             return false;
         }
     };
+    if has_parent_dir(&expanded) {
+        store::append_global_error_log(
+            "ext-workspace",
+            &format!("workspace_dir '{raw}' contains '..' — refusing to remove"),
+        );
+        return false;
+    }
     // Missing → nothing to remove. Do NOT create-then-delete (unlike install validation).
     if !expanded.exists() {
         return false;
@@ -137,7 +150,7 @@ pub fn remove_workspace_dir(raw: &str) -> bool {
     // credential store, or ~/.config's root even via a symlink.
     let canon = norm(&expanded);
     let home_canon = norm(&home);
-    if let Some(reason) = policy_violation(&canon, &home_canon) {
+    if let Some(reason) = policy_violation(&canon, &home_canon, fold_case()) {
         store::append_global_error_log(
             "ext-workspace",
             &format!(
@@ -283,13 +296,13 @@ pub(crate) fn read_workspace_dir(id: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Expand a leading `~` against `home`: `~` → `home`, `~/rest` → `home/rest`. A `~user`
+/// Expand a leading `~` against `home`: `~` → `home`, `~/rest` or `~\rest` → `home/rest`. A `~user`
 /// form (leading `~` that is neither `~` nor `~/…`) is rejected. Any other string is
 /// returned verbatim as a [`PathBuf`].
 fn expand_tilde(raw: &str, home: &Path) -> Result<PathBuf> {
     if raw == "~" {
         Ok(home.to_path_buf())
-    } else if let Some(rest) = raw.strip_prefix("~/") {
+    } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
         Ok(home.join(rest))
     } else if raw.starts_with('~') {
         bail!("the '~user' form is not supported: {raw}")
@@ -303,31 +316,73 @@ fn expand_tilde(raw: &str, home: &Path) -> Result<PathBuf> {
 /// the error). `path` and `home` must be in the SAME form (both raw in phase 1, both
 /// canonical in phase 2); the koma/sensitive roots are canonicalized-if-existing so the
 /// comparison holds against a canonical `path` in phase 2.
-fn policy_violation(path: &Path, home: &Path) -> Option<String> {
+fn policy_violation(path: &Path, home: &Path, fold: bool) -> Option<String> {
     // Strictly under $HOME: not $HOME itself, not outside it.
-    if path == home {
+    if eq_fold(path, home, fold) {
         return Some("resolves to $HOME itself".to_string());
     }
-    if !path.starts_with(home) {
+    if !starts_with_fold(path, home, fold) {
         return Some("is not under $HOME".to_string());
     }
     // Never koma's own state tree (~/.koma).
     if let Ok(base) = store::base_dir() {
-        if path.starts_with(norm(&base)) {
+        if starts_with_fold(path, &norm(&base), fold) {
             return Some("is under koma's own ~/.koma tree".to_string());
         }
     }
     // Never a credential/secret store — reject the whole subtree.
     for name in [".ssh", ".aws", ".gnupg"] {
-        if path.starts_with(norm(&home.join(name))) {
+        if starts_with_fold(path, &norm(&home.join(name)), fold) {
             return Some(format!("is under the sensitive directory ~/{name}"));
         }
     }
     // ~/.config: reject the ROOT itself, but allow XDG-style subdirs (~/.config/<ext>).
-    if path == norm(&home.join(".config")).as_path() {
+    if eq_fold(path, &norm(&home.join(".config")), fold) {
         return Some("resolves to ~/.config itself".to_string());
     }
     None
+}
+
+/// Whether the host file system compares names case-insensitively: Windows always,
+/// macOS by default (APFS). Linux is exact (`~/.SSH` is a distinct directory there).
+fn fold_case() -> bool {
+    cfg!(windows) || cfg!(target_os = "macos")
+}
+
+fn has_parent_dir(p: &Path) -> bool {
+    p.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+fn component_eq(a: &std::ffi::OsStr, b: &std::ffi::OsStr, fold: bool) -> bool {
+    if fold {
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
+/// Component-wise `Path::starts_with`, case-folded when `fold` is true.
+fn starts_with_fold(path: &Path, base: &Path, fold: bool) -> bool {
+    let mut p = path.components();
+    for b in base.components() {
+        match p.next() {
+            Some(a) if component_eq(a.as_os_str(), b.as_os_str(), fold) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn eq_fold(a: &Path, b: &Path, fold: bool) -> bool {
+    let mut ia = a.components();
+    let mut ib = b.components();
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if component_eq(x.as_os_str(), y.as_os_str(), fold) => {}
+            _ => return false,
+        }
+    }
 }
 
 /// Canonicalize `p`, falling back to `p` verbatim when it can't be canonicalized (e.g.

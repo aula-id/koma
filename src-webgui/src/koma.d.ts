@@ -3,6 +3,7 @@ declare global {
   interface Window {
     __komaUiScaleReply?: (reply: import('./lib/uiScale').UiScaleReply) => void
     __komaComputerPalette?: Record<string, string>
+    __komaBuild?: unknown
     __komaComputerInitial?: import('./types/computer').ComputerStatus | null
     __komaScreenBrowserPalette?: Record<string, string>
     __komaScreenBrowserInitial?: import('./types/screenBrowser').ScreenBrowserStatus | null
@@ -85,11 +86,24 @@ declare global {
         args: string
         env: string
         url: string
+        extras?: {
+          argv?: string[]
+          envPairs?: [string, string][]
+          headers?: [string, string][]
+          cwd?: string
+          startupTimeoutMs?: number
+          toolTimeoutMs?: number
+          allowedTools?: string[]
+          disabledTools?: string[]
+        }
       }
+    | { r: 'ImportMcpJson'; text: string }
     | { r: 'DeleteMcpServer'; uuid: string }
     | { r: 'EnableMcpServer'; uuid: string; enabled: boolean }
     // MCP status refresh — request live per-server connection state.
     | { r: 'GetMcpStatus'; requestId: string }
+    | { r: 'RestartMcpServer'; uuid: string }
+    | { r: 'ApproveMcpProjectServer'; uuid: string; approved: boolean }
     // Provider CRUD (flat). `uuid` is the daemon config uuid on edit, `null`
     // for a new provider.
     | { r: 'SetProvider'; uuid: string | null; name: string; endpoint: string; apiKey: string }
@@ -319,6 +333,18 @@ declare global {
         r: 'InstallSkillZip'
         target: 'global' | 'project'
         name: string
+        dataB64: string
+        requestId: string
+        sessionEpoch: number
+        tabId: string
+      }
+    | {
+        r: 'SkillUploadChunk'
+        target: 'global' | 'project'
+        name: string
+        uploadId: string
+        offset: number
+        total: number
         dataB64: string
         requestId: string
         sessionEpoch: number
@@ -562,7 +588,7 @@ declare global {
     // host-side — works regardless of attach state. Reply lands as the
     // BranchList push envelope.
     | { r: 'GitBranchList'; requestId?: number | null }
-    | { r: 'GitRepos' }
+    | { r: 'GitRepos'; force?: boolean }
     | { r: 'SetActiveRepo'; root: string }
     // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     // only, never `--force`): switch (or detach onto) `ref` — a branch name or

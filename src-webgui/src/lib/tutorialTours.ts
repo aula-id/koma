@@ -51,7 +51,7 @@ export const TOUR_CATALOGUE: TourMeta[] = [
   {
     id: 'activity-bar',
     title: 'Activity bar',
-    blurb: 'Left strip of panels — Explore, Git, Agents, and more.',
+    blurb: 'Left strip of panels — Chat, Git, Agents, and more.',
     kind: 'spotlight',
   },
   {
@@ -227,7 +227,7 @@ async function ensureSidebarView(view: string, panelSel?: string): Promise<boole
       mcp: 'MCP',
       remote: 'Remote',
       store: 'Extensions',
-      explore: 'Explore',
+      explore: 'Chat',
       coding: 'Coding',
       usage: 'Usage',
       importGraph: 'Import Graph',
@@ -401,7 +401,7 @@ function buildTour(id: TourId): BuiltTour | null {
             targets: ['[data-tour-view="connector"]', '[data-tour="activity-bar"]'],
             title: 'Connector',
             description:
-              'Providers, OAuth accounts, and models live here. Next opens Connect account (+).',
+              'Providers, OAuth accounts, and models live here. Next opens Sign in with an account (+).',
             side: 'right',
             onNext: async () => {
               await openConnectorAdd('oauth')
@@ -463,7 +463,7 @@ function buildTour(id: TourId): BuiltTour | null {
           step({
             targets: ['[data-tour-view="connector"]', '[data-tour="activity-bar"]'],
             title: 'Connector',
-            description: 'API-key providers live under Providers. Next opens + Add provider.',
+            description: 'API-key providers live under Providers. Next opens Add provider.',
             side: 'right',
             onNext: async () => {
               await openConnectorAdd('provider')
@@ -606,7 +606,7 @@ function buildTour(id: TourId): BuiltTour | null {
             targets: ['[data-tour="connector-list"]'],
             title: 'Three catalogues',
             description:
-              'Providers (+), OAuth / Connect account (+), Models (+). Setup tours walk the full recipes.',
+              'Providers (+), OAuth / Sign in with an account (+), Models (+). Setup tours walk the full recipes.',
             side: 'left',
           }),
         ],

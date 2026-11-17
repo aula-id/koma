@@ -12,6 +12,7 @@ import { showCodingHistory } from './CodingHistory'
 import { showCodingPacks } from './CodingPacks'
 import { showCodingTasks } from './CodingTasks'
 import { KomaSelect } from './KomaSelect'
+import { showAbout } from '../lib/settingsNav'
 
 type Command = { id: string; title: string; shortcut?: string; editor?: boolean }
 const commands: Command[] = [
@@ -51,6 +52,7 @@ const commands: Command[] = [
   { id: 'history', title: 'Show Local History', editor: true },
   { id: 'terminal', title: 'Open Terminal' },
   { id: 'settings', title: 'Open Settings' },
+  { id: 'about', title: 'About Koma' },
 ]
 type Hit = { root: string; path: string }
 
@@ -175,6 +177,7 @@ export function CodingPalette() {
     else if (command.id === 'history' && activeTab?.kind === 'codingFile') showCodingHistory(activeTab.root, activeTab.path)
     else if (command.id === 'terminal') store.openTerminalTab(`coding-${Date.now()}`, 'Terminal')
     else if (command.id === 'settings') store.openSettingsTab()
+    else if (command.id === 'about') showAbout()
     else window.dispatchEvent(new CustomEvent('koma-coding-command', { detail: { id: command.id, tabId: activeTab?.id } }))
   }
   return (

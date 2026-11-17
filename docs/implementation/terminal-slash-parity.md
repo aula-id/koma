@@ -101,8 +101,9 @@ release acceptance solely from the automated suite.
 
 - Every runtime `awaiting_approval` park uses the paused call at `tool_idx`.
   Producers audited: generic Normal/TAC gates and classifier outage fallback in
-  `stream/tools/approval.rs`, destructive/security intercepts in `intercepts/guard.rs`,
-  plan gates in `intercepts/plan.rs`, and mission/human gates in `intercepts/sdlc.rs`.
+  `src-agent/src/app/runtime/stream/tools/approval.rs`, destructive/security intercepts in
+  `src-agent/src/app/runtime/stream/tools/intercepts/guard.rs`, plan gates in `intercepts/plan.rs`,
+  and mission/human gates in `intercepts/sdlc.rs` (same directory).
   Their automatic allow/block policies are unchanged. The terminal uses the existing
   ApproveTool and PlanDecision operations, preserving the separate compact and
   discussion outcomes. Quit/loading precedence stays with the daemon mode.

@@ -1,6 +1,6 @@
 # Extension architecture and communication contract
 
-> **Status: v0 / unstable.** This is an implementation contract, not a frozen public API. The wire types in `src-extension/src/protocol.rs` and the host implementation are authoritative. In particular, oneshot lifecycle (the host still runs the full duplex serve loop rather than a strict one-request-then-exit cycle) and automatic restart after an unexpected exit are not complete features yet. Panel and model/provider runtime wiring — once the gaps this note used to describe — are now live: see `docs/EXTENSIONS.md`'s "Panel bridge" and `models:contribute` grants-reference sections, both verified against the same broker/hub source this document cites. Sections 2 and 8 below cover only the manifest shape and the original `agents.*` broker contract in low-level wire detail; `docs/EXTENSIONS.md` is the up-to-date, complete capability reference for everything landed since (the full 8-grant surface, events, the panel bridge, delegated OAuth) and is the doc to read first — come back here for byte-level framing/timeout/handshake detail it doesn't restate.
+> **Status: v0 / unstable.** This is an implementation contract, not a frozen public API. The wire types in `src-extension/src/protocol.rs` and the host implementation are authoritative. In particular, oneshot lifecycle (the host still runs the full duplex serve loop rather than a strict one-request-then-exit cycle) and automatic restart after an unexpected exit are not complete features yet. Panel and model/provider runtime wiring — once the gaps this note used to describe — are now live: see `docs/EXTENSIONS.md`'s "Panel bridge" and `models:contribute` grants-reference sections, both verified against the same broker/hub source this document cites. Sections 2 and 8 below cover only the manifest shape and the original `agents.*` broker contract in low-level wire detail; `docs/EXTENSIONS.md` is the up-to-date, complete capability reference for everything landed since (the full 9-grant surface, events, the panel bridge, delegated OAuth) and is the doc to read first — come back here for byte-level framing/timeout/handshake detail it doesn't restate.
 
 ## 1. Scope and actors
 
@@ -31,7 +31,7 @@ One extension has one child and one live socket connection. A daemon extension i
 | `kind` | `ExtensionKind` | required | `"daemon"` or `"oneshot"`. |
 | `runtime` | `Runtime` | required | Object described below. |
 | `contributes` | `Contributes` | omitted => empty object | Object; `#[serde(default)]`. Empty arrays are omitted when serializing. |
-| `requires` | `Vec<Grant>` | omitted => `[]` | Array; `#[serde(default)]`. Eight wire values today: `"agents:read"`, `"agents:orchestrate"`, `"sessions:manage"`, `"chat:prompt"`, `"models:invoke"`, `"context:publish"`, `"oauth:contribute"`, `"models:contribute"` — see `docs/EXTENSIONS.md`'s grants reference for what each unlocks. |
+| `requires` | `Vec<Grant>` | omitted => `[]` | Array; `#[serde(default)]`. Nine wire values today: `"agents:read"`, `"agents:orchestrate"`, `"sessions:manage"`, `"chat:prompt"`, `"models:invoke"`, `"context:publish"`, `"oauth:contribute"`, `"models:contribute"`, `"oauth:read"` — see `docs/EXTENSIONS.md`'s grants reference for what each unlocks. |
 | `workspace_dir` | `Option<String>` | omitted => none | String, e.g. `"~/.event-watcher"`. An extension-owned state directory koma creates and injects as an extra workspace root of every session (must resolve strictly under `$HOME`; a path failing validation is logged and skipped, never blocks startup). See `docs/EXTENSIONS.md`'s `workspace_dir` section for the full validation rule set. |
 
 `runtime` is `{ "exec": String, "args": Vec<String> }`; `exec` is required, relative to the package root, and `args` defaults to `[]` and serializes as an array. `contributes` contains arrays (all default `[]`, all empty arrays skipped on serialization):
@@ -67,9 +67,10 @@ Both enums use `#[serde(tag = "t", rename_all = "lowercase")]`. `params` and `re
 | Tag and exact fields | Direction | Meaning |
 |---|---|---|
 | `{"t":"hello","protocol":String,"token":String,"manifest":ExtensionManifest}` | extension -> host, first frame only | Handshake identity and manifest. |
-| `{"t":"call","id":u64,"method":String,"params":Value}` | extension -> host | Requirement request; currently only `agents.*` is implemented. |
+| `{"t":"call","id":u64,"method":String,"params":Value}` | extension -> host | Requirement request: `agents.*` plus the other grant-gated verbs listed in section 8 and `docs/EXTENSIONS.md`. |
 | `{"t":"result","id":u64,"result":Value}` | extension -> host | Reply to host `Invoke` with the same `id`. There is no separate error field: errors are JSON values such as `{ "error": "..." }`. |
 | `{"t":"health","ok":bool}` | extension -> host | Advisory health flag; does not restart or grant capabilities. |
+| `{"t":"notify","name":String,"params":Value}` | extension -> host | Fire-and-forget notification with no `id` and no reply (e.g. `panel.push`); sent by `Koma::notify`. |
 
 ### `KomaMsg` (koma -> extension)
 
@@ -81,6 +82,7 @@ Both enums use `#[serde(tag = "t", rename_all = "lowercase")]`. `params` and `re
 | `{"t":"result","id":u64,"result":Value}` | host -> extension | Reply to extension `Call`; broker errors are values with an `error` string. |
 | `{"t":"ping"}` | host -> extension | Liveness probe; SDK answers `Health {ok:true}`. |
 | `{"t":"shutdown"}` | host -> extension | SDK serve loop exits cleanly. |
+| `{"t":"event","name":String,"params":Value}` | host -> extension | Fire-and-forget event with no `id` and no reply; dispatched to `Extension::on_event`. |
 
 Example serialized frames are therefore `{"t":"invoke","id":7,"method":"tool.call","params":{"x":1}}` and `{"t":"result","id":7,"result":{"output":"ok"}}`.
 
@@ -135,7 +137,7 @@ Denied calls return `{ "error":"grant denied: <method> requires agents:read" }` 
 
 Spawn targets the active/foreground session (or first non-closed fallback), uses the normal `spawn_or_queue` path/cap, and is non-detached with no tool-call ID, but is marked ext-owned; completion updates usage/the persisted sub-agent record but is now (since the two-tier silent-done change) COMPLETELY SILENT in the human chat — no display note, no nudge — and does not wake the chat model. The extension gets its result via `agents.result`/`agents.done` instead; see `docs/EXTENSIONS.md`'s "Events" section for the exact contrast with a human-run `/task`'s chat-visible completion fold. The returned extension-facing ID is private to this extension and permanently maps to a stable session UUID plus local sub-agent ID. List/status/result/kill never resolve raw IDs or another extension's/user's IDs, even after foreground switches. Uninstall removes that extension's registry.
 
-**This section only covers `agents:read`/`agents:orchestrate`, the first two grants the broker shipped with.** Six more grants (`sessions:manage`, `chat:prompt`, `models:invoke`, `context:publish`, `oauth:contribute`, `models:contribute`) have landed since, each unlocking its own set of broker verbs (`sessions.*`, `chat.prompt`, `models.invoke`, `context.*`, `oauth.*` invokes, `models.register`/`.unregister`, `providers.register`/`.unregister`) with the same "grant-gated, JSON-value replies, errors never left pending" shape as the table above. `docs/EXTENSIONS.md`'s grants reference has the complete, current table — every verb, every request/response shape, every error string, every numeric limit — kept in lockstep with `broker.rs`; treat it as authoritative for anything not `agents.*`.
+**This section only covers `agents:read`/`agents:orchestrate`, the first two grants the broker shipped with.** Seven more grants (`sessions:manage`, `chat:prompt`, `models:invoke`, `context:publish`, `oauth:contribute`, `models:contribute`, `oauth:read`) have landed since, each unlocking its own set of broker verbs (`sessions.*`, `chat.prompt`, `models.invoke`, `context.*`, `oauth.*` invokes, `oauth.token`, `models.register`/`.unregister`, `providers.register`/`.unregister`) with the same "grant-gated, JSON-value replies, errors never left pending" shape as the table above. `docs/EXTENSIONS.md`'s grants reference has the complete, current table — every verb, every request/response shape, every error string, every numeric limit — kept in lockstep with `broker.rs`; treat it as authoritative for anything not `agents.*`.
 
 ## 9. Contribution invocation and limitations
 
@@ -205,7 +207,7 @@ Checklist for a custom extension based on `src-extension/example/fleet-board-dae
 1. Depend on `koma-extension` by path; implement `Extension`, parse a checked-in manifest, and choose daemon only if persistent host state is required (delegated OAuth and a live panel both require it).
 2. Keep `id`, `runtime.exec`, contribution names, and requested grants intentional; use `bin/<name>` in the packaged manifest.
 3. Implement every declared invocation method and return JSON values, including explicit error values.
-4. Use `Koma::call` only from a driver/worker thread you own, never from `on_invoke`/`on_event` — see the DEADLOCK RULE in `src-extension/src/sdk.rs`'s `Extension` trait docs and `docs/EXTENSIONS.md`'s "deadlock rule and threading model" section; validate and handle timeout/error values for whichever grant-gated verb you call (all eight are covered there, not just `agents.*`).
+4. Use `Koma::call` only from a driver/worker thread you own, never from `on_invoke`/`on_event` — see the DEADLOCK RULE in `src-extension/src/sdk.rs`'s `Extension` trait docs and `docs/EXTENSIONS.md`'s "deadlock rule and threading model" section; validate and handle timeout/error values for whichever grant-gated verb you call (all nine are covered there, not just `agents.*`).
 5. Exercise demo mode, but test host mode with the real daemon, token, handshake, out-of-order calls, EOF, and oversized/malformed frames.
 6. Put panel assets under `ui/`, use relative URLs, and do not expect host globals or IPC in the iframe — talk to the host through the `panel.msg`/`panel.push` envelope instead (copy `ui/koma-panel.js` from `fleet-board-daemon` rather than hand-rolling it).
 7. Package `manifest.json`, `bin/<name>`, and optional `ui/`; production installation requires a signed archive.
@@ -219,7 +221,7 @@ Checklist for a custom extension based on `src-extension/example/fleet-board-dae
 | Host lifecycle, generations, timeouts | `src-agent/src/app/ext/mod.rs`, `wire.rs` |
 | Install and path/signature checks | `src-agent/src/app/ext/install.rs` |
 | Contributions | `src-agent/src/app/ext/register.rs` |
-| Agent grants and ownership; `models.register`/`providers.register` | `src-agent/src/app/ext/broker.rs` (all 8 grants; event-loop drains feed it) |
+| Agent grants and ownership; `models.register`/`providers.register` | `src-agent/src/app/ext/broker.rs` (all 9 grants; event-loop drains feed it) |
 | Sub-agent model slug binding | `src-agent/src/app/resolve.rs` (`resolve_agent`, `ext_conn_route`, `ext_preferred_provider_uuids`) |
 | Event fan-out (`subagent.done`/`agent.turn_end`/`session.foreground_change`/`agents.done`) | `src-agent/src/app/ext/events.rs`, `mod.rs` (`notify`/`subscribers`); trigger sites in `runtime/event_loop/sessions/{subagents,deferred}.rs`, `runtime/actions/session/attach.rs` |
 | Delegated OAuth (`oauth.begin`/`.poll`/`.cancel`) | `src-agent/src/app/runtime/event_loop/daemon/hub/requests_oauth.rs` |

@@ -1,4 +1,5 @@
 //! Project-selected executables and environment; no process-global mutation.
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -194,13 +195,13 @@ pub(super) fn select(
     let dir = root.join(".koma");
     std::fs::create_dir_all(&dir)?;
     anyhow::ensure!(
-        dir.canonicalize()?.starts_with(root),
+        winpath::canonical(&dir)?.starts_with(root),
         "Coding directory is outside workspace"
     );
     let target = dir.join("coding.json");
     if target.exists() {
         anyhow::ensure!(
-            target.canonicalize()?.starts_with(root),
+            winpath::canonical(&target)?.starts_with(root),
             "Configuration is outside workspace"
         );
     }

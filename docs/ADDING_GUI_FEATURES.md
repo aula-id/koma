@@ -76,7 +76,10 @@ Most sidebar-and-tab features touch these frontend files:
 | ActivityBar entry | `src-webgui/src/components/ActivityBar.tsx` |
 | Sidebar view type and panel routing | `src-webgui/src/components/Sidebar.tsx` |
 | New panel | `src-webgui/src/components/panels/<Name>Panel.tsx` |
-| Tab union, state, actions, and reducer | `src-webgui/src/store/koma.ts` |
+| Tab union | `src-webgui/src/store/types/tabs.ts` |
+| Store state and action signatures | `src-webgui/src/store/state.ts` |
+| Store actions (open/refresh, `req` callers) | `src-webgui/src/store/actions/<area>.ts` (for example `session.ts`, `git.ts`, `skills.ts`) |
+| Push reducers | `src-webgui/src/store/push/<area>.ts`, dispatched from `push` in `src-webgui/src/store/koma.ts` |
 | Tab strip | `src-webgui/src/components/TabBar.tsx` |
 | Main tab routing | `src-webgui/src/routes/index.tsx` |
 | New tab content | `src-webgui/src/components/<Name>Tab.tsx` |
@@ -87,10 +90,11 @@ A backend-backed feature usually also touches:
 | Purpose | File or area |
 |---|---|
 | Rust request deserialization | `src-agent/src/app/runtime/gui/proto.rs` |
-| Rust GUI dispatch | `src-agent/src/app/runtime/gui/dispatch.rs` |
+| Rust GUI dispatch | `src-agent/src/app/runtime/gui/dispatch.rs` (helpers in `dispatch_git.rs` and `dispatch_forward.rs`) |
 | Host control and worker path | `src-agent/src/app/runtime/client/` |
 | Rust push serialization | `src-agent/src/app/runtime/client/push_proto.rs` |
-| Push reducer | `src-webgui/src/store/koma.ts` |
+| Push envelope union (TypeScript) | `src-webgui/src/store/types/envelope.ts` |
+| Push reducer | `src-webgui/src/store/push/<area>.ts` |
 
 Read the closest existing implementation before changing it. For UI-only tab
 plumbing, use Settings, Help, Graph, or a diff tab as the template. For a
@@ -135,7 +139,8 @@ the boundary between the sidebar and the editor area.
 
 ### Add tab identity and actions
 
-Add the new tab variant to the `Tab` union in `src-webgui/src/store/koma.ts`.
+Add the new tab variant to the `Tab` union in
+`src-webgui/src/store/types/tabs.ts`.
 Use a fixed ID for a singleton:
 
 ```ts
@@ -148,8 +153,10 @@ Use a resource-derived ID when multiple instances are valid:
 document:<resource-key>
 ```
 
-The ID must be stable enough to deduplicate repeated opens. Add the action to
-`KomaState` and implement it as open-or-focus:
+The ID must be stable enough to deduplicate repeated opens. Declare the action in
+`KomaState` (`src-webgui/src/store/state.ts`) and implement it as open-or-focus in
+the matching `src-webgui/src/store/actions/<area>.ts` (`openSettingsTab` in
+`actions/session.ts` is the model):
 
 ```ts
 openFeatureTab: () => {
@@ -177,7 +184,7 @@ Create `src-webgui/src/components/<Name>Tab.tsx`, then add a matching branch in
 - keep inactive tabs mounted unless the feature has a specific reason not to;
 - use `min-h-0 flex-1 overflow-y-auto` for scrollable content.
 
-Add the matching tab-strip branch in `TabBar.tsx`. It should activate on click,
+Add the matching tab-strip label and icon case in `TabBar.tsx`. It should activate on click,
 close through the shared `closeTab` action, stop propagation from the close button,
 and support keyboard activation when it uses `role="button"`.
 
@@ -201,7 +208,7 @@ match the reply:
 ```text
 FileDiff       -> path
 GitDiff        -> path + staged
-CommitDiff     -> sha + path
+GitCommitDiff  -> sha + path
 UsagePreview   -> scope + sessionId
 ```
 
@@ -227,7 +234,7 @@ or emit a deterministic empty/error reply so the UI can clear its loading state.
 
 Add the Rust push variant in
 `src-agent/src/app/runtime/client/push_proto.rs` and the matching TypeScript
-variant in the `PushEnvelope` union in `src-webgui/src/store/koma.ts`.
+variant in the `PushEnvelope` union in `src-webgui/src/store/types/envelope.ts`.
 
 Every request must produce a reply for:
 

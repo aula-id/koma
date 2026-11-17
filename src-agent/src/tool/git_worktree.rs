@@ -26,11 +26,11 @@
 
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
-use super::{Tool, ToolCtx};
+use super::{winpath, Tool, ToolCtx};
 
 /// Sentinel prefix emitted by `enter` on success. The runtime strips this prefix,
 /// extracts the canonical path, adds it to `settings.workdir` (if not already
@@ -130,7 +130,7 @@ impl Tool for GitWorktree {
                 let base = ctx.worktrees_dir.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("no active session — cannot resolve worktree dir")
                 })?;
-                let shadow = base.join(name);
+                let shadow = worktree_path(base, name, cfg!(windows))?;
 
                 // Ensure the `worktrees/` parent exists before git adds into it.
                 if let Err(e) = std::fs::create_dir_all(base) {
@@ -173,7 +173,7 @@ impl Tool for GitWorktree {
                 let base = ctx.worktrees_dir.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("no active session — cannot resolve worktree dir")
                 })?;
-                let shadow = base.join(name);
+                let shadow = worktree_path(base, name, cfg!(windows))?;
 
                 let force = args
                     .get("force")
@@ -320,3 +320,16 @@ fn run_git(args: &[&str], cwd: &Path, timeout_ms: u64) -> String {
 
     super::shell::format_captured_output(combined, &exit_code)
 }
+
+/// Resolve `<base>/<name>` for a worktree. `name` must be one safe path
+/// component so the join cannot leave `base`; `windows` adds the Windows-only
+/// rules (':' / drive-relative, reserved names, trailing dot or space).
+fn worktree_path(base: &Path, name: &str, windows: bool) -> Result<PathBuf> {
+    let name = winpath::safe_single_component(name, windows)
+        .map_err(|e| anyhow::anyhow!("invalid worktree name '{name}': {e}"))?;
+    Ok(base.join(name))
+}
+
+#[cfg(test)]
+#[path = "git_worktree_test.rs"]
+mod tests;

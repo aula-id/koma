@@ -119,9 +119,8 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     // persist. Skip when the directory is already a root.
     let already = state.rest.fg().session.as_ref().is_some_and(|s| {
         s.settings.workdir.iter().any(|w| {
-            std::path::Path::new(w.trim())
-                .canonicalize()
-                .map(|c| c == canonical)
+            crate::tool::winpath::canonical(std::path::Path::new(w.trim()))
+                .map(|c| same_root(&c, &canonical, cfg!(windows)))
                 .unwrap_or(false)
         })
     });
@@ -144,4 +143,42 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     }
     state.rest.fg_mut().status = format!("added workspace root: {canonical_str}");
     Ok(())
+}
+
+/// Whether two canonical workspace roots name the same directory. Windows
+/// paths are case-insensitive and accept either separator; elsewhere they are
+/// compared exactly.
+fn same_root(a: &std::path::Path, b: &std::path::Path, windows: bool) -> bool {
+    if windows {
+        crate::tool::winpath::win_key(&a.to_string_lossy())
+            == crate::tool::winpath::win_key(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
+
+#[cfg(test)]
+mod same_root_tests {
+    use super::same_root;
+    use std::path::Path;
+
+    #[test]
+    fn windows_ignores_case_and_separators() {
+        assert!(same_root(
+            Path::new(r"C:\Proj"),
+            Path::new("c:/proj/"),
+            true
+        ));
+        assert!(!same_root(
+            Path::new(r"C:\Proj"),
+            Path::new(r"C:\Other"),
+            true
+        ));
+    }
+
+    #[test]
+    fn posix_is_exact() {
+        assert!(!same_root(Path::new("/A/b"), Path::new("/a/b"), false));
+        assert!(same_root(Path::new("/a/b"), Path::new("/a/b"), false));
+    }
 }

@@ -66,7 +66,7 @@ fn containment_pass_narrows_ctx_to_single_root() {
     };
     narrow_ctx_to_workspace(&mut ctx, Some(&overrides)).expect("contained path must pass");
 
-    let canon_child = child.canonicalize().unwrap();
+    let canon_child = crate::tool::winpath::canonical(&child).unwrap();
     assert_eq!(ctx.workspace, canon_child);
     assert_eq!(ctx.workspaces, vec![canon_child]);
 
@@ -94,7 +94,7 @@ fn containment_reject_when_outside_every_root() {
         .expect_err("outsider path must be rejected");
     match err {
         SpawnFailReason::Workspace(msg) => assert!(
-            msg.contains(&outsider.canonicalize().unwrap().display().to_string()),
+            msg.contains(&crate::tool::winpath::canonical(&outsider).unwrap().display().to_string()),
             "error must name the rejected path: {msg}"
         ),
         SpawnFailReason::Unresolved => panic!("expected a Workspace failure reason"),

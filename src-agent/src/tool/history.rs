@@ -440,6 +440,11 @@ fn floor_chars(s: &str, max_chars: usize) -> &str {
     }
 }
 
+/// JSON string literal (with quotes) for embedding a path in a call hint.
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 /// When a hit snippet mentions `[Image #N]`, resolve N under that hit's session
 /// dir and append a reload hint. Only markers present in the snippet; never
 /// dumps the whole session images dir.
@@ -455,9 +460,9 @@ fn append_image_reload_lines(out: &mut String, session_path: &Path, snippet: &st
             continue;
         };
         out.push_str(&format!(
-            "  image: [Image #{n}] {} — call load_image({{\"path\":\"{}\"}}) to re-inspect\n",
+            "  image: [Image #{n}] {} — call load_image({{\"path\":{}}}) to re-inspect\n",
             path.display(),
-            path.display()
+            json_str(&path.to_string_lossy())
         ));
     }
 }
@@ -492,9 +497,9 @@ fn append_paste_reload_lines(out: &mut String, session_path: &Path, snippet: &st
         let path = session_path.join("pastes").join(&name);
         if path.is_file() {
             out.push_str(&format!(
-                "  paste: [Pasted Text #{n}] {} — call read({{\"path\":\"{}\"}}) to reload the body\n",
+                "  paste: [Pasted Text #{n}] {} — call read({{\"path\":{}}}) to reload the body\n",
                 path.display(),
-                path.display()
+                json_str(&path.to_string_lossy())
             ));
         } else {
             out.push_str(&format!(

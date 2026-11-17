@@ -206,7 +206,14 @@ fn main() -> anyhow::Result<()> {
     service::catalogue_overlay::init();
 
     let args = app::launcher::args_for_launch(std::env::args().collect());
-    let opts = cli::parse(args);
+    let mut opts = cli::parse(args);
+
+    // --- short-circuit: `koma mcp …` (no TUI, no daemon) ---
+    // First of all, so flags inside a server command (`-- npx srv --daemon`) cannot
+    // select another mode.
+    if let Some(cmd) = opts.mcp.take() {
+        std::process::exit(app::run_mcp_cli(cmd));
+    }
 
     // --- short-circuit: unknown positional verb (typo) → help, no TUI ---
     // e.g. `koma docker` instead of `doctor`. Must not mint a session / spawn a daemon.
@@ -544,7 +551,6 @@ fn main() -> anyhow::Result<()> {
         return app::run_term_preview(app::TermStart::Session(None));
     }
 
-    let mut opts = opts;
     let session_id = uuid::Uuid::new_v4().to_string();
     if let Err(e) = app::ensure_daemon_running(&session_id, false, None) {
         eprintln!("error: could not start the koma daemon: {e:#} — try `koma legacy alone`");

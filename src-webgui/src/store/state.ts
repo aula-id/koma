@@ -399,6 +399,10 @@ export type KomaState = {
   // it. No wire request — the Help tab is static content, unlike Settings.
   openNotificationsTab: () => void
   openHelpTab: () => void
+  // Open (or focus) the singleton Welcome tab of the Diagram or Design feature.
+  openWelcomeTab: (which: 'diagram' | 'design') => void
+  // Activity-icon click: open the Welcome tab only when the feature has no tab and no files; waits for the .koma listing.
+  maybeOpenWelcomeTab: (which: 'diagram' | 'design') => void
   // Open (or focus) the singleton Tutorial tab (id 'tutorial').
   openTutorialTab: () => void
   // Send one Tutorial coach turn (host koma-free). Appends the user message
@@ -428,6 +432,8 @@ export type KomaState = {
   requestSkillDetail: (tabId: string, skillId: string, generation: string) => void
   readSkillFile: (tabId: string, skillId: string, generation: string, path: string) => void
   openAgentTab: (agentId: string | null) => void
+  // Open (or focus) the MCP editor tab: one 'new', one 'import', one 'edit' per server uuid.
+  openMcpTab: (target: { mode: 'new' } | { mode: 'import' } | { mode: 'edit'; uuid: string; title: string }) => void
   // Rebind an already-open agent tab's identity after a successful
   // create/rename (fired optimistically right after the SetAgent req, since
   // the wire gives no dedicated ack — just a fresh AgentsValues push). Updates
@@ -435,10 +441,6 @@ export type KomaState = {
   // AgentsPanel still finds THIS tab instead of opening a duplicate) and its
   // `agentId`. No-op if `oldAgentId === newAgentId` (a save with no rename).
   renameAgentTab: (oldAgentId: string | null, newAgentId: string) => void
-  // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
-  // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
-  // an already-open file refreshes it (same loading + re-request path).
-  openDiffTab: (path: string) => void
   // Re-fetch the Source Control "GIT" panel's status (branch/ahead-behind +
   // staged/unstaged lists). Fired on GitPanel mount/(re)activation, and once
   // at boot (routes/index.tsx) so the footer's branch indicator populates
@@ -482,7 +484,7 @@ export type KomaState = {
   refreshBranches: () => void
   // Repo picker (multi-repo support): re-fetch every detected repository root
   // + which one is active.
-  refreshRepos: () => void
+  refreshRepos: (force?: boolean) => void
   // Repo picker pick: switch the active repo to `root`. Optimistically
   // updates `activeRepoRoot` + clears the stale graph/activity slices
   // (preserving the graph view mode) before telling the host — each panel's

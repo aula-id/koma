@@ -148,7 +148,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         active_skill_names,
         active_skill_dirs,
         skill_scope: None,
-        skill_rank: session_ref.map(|s| crate::app::skill_rank::ranker(state.rest.config.clone(), s.settings.clone())),
+        skill_rank: session_ref
+            .map(|s| crate::app::skill_rank::ranker(state.rest.config.clone(), s.settings.clone())),
         mcp_manager,
         bash_saving,
         bash_log_dir,
@@ -671,14 +672,14 @@ fn canonicalize_and_contain(
     requested: &std::path::Path,
     roots: &[std::path::PathBuf],
 ) -> Result<std::path::PathBuf, String> {
-    let canon = requested.canonicalize().map_err(|e| {
+    let canon = crate::tool::winpath::canonical(requested).map_err(|e| {
         format!(
             "workspace '{}' could not be resolved: {e}",
             requested.display()
         )
     })?;
     let contained = roots.iter().any(|root| {
-        root.canonicalize()
+        crate::tool::winpath::canonical(root)
             .map(|canon_root| canon.starts_with(&canon_root))
             .unwrap_or(false)
     });

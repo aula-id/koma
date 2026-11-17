@@ -27,7 +27,7 @@ const catalogueRequests = () => req.mock.calls.map(([request]) => request as { r
 function switchSnapshot(session: string, loadedSkillNames: string[]) {
   useKoma.getState().push({
     k: 'Snapshot', session, loadedSkillNames, state: 'idle', messages: [], title: '',
-    subagents: [], bash: [], fileChanges: [], attachments: [], pendingSteer: [],
+    subagents: [], bash: [], attachments: [], pendingSteer: [],
     awaitingApproval: false, palette: useKoma.getState().palette,
   } as any)
 }
@@ -133,9 +133,9 @@ function menuButton(name: string) {
   return [...(skillMenu()?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((button) => button.textContent === name)
 }
 
-async function mount(width: number) {
+async function mount(width: number, height = 700) {
   const screen = await render(
-    <div data-test-host style={{ width, height: 700, overflow: 'hidden' }}>
+    <div data-test-host style={{ width, height, overflow: 'hidden', position: 'relative' }}>
       <SkillsPanel />
     </div>,
   )
@@ -223,7 +223,7 @@ describe.sequential('Skills panel browser contracts', () => {
 
   it('labels refresh as a request-driven rescan in the Skills header', async () => {
     const screen = await render(
-      <div style={{ width: 320, height: 700 }}>
+      <div style={{ width: 320, height: 700, position: 'relative' }}>
         <Sidebar width={320} view="skills" />
       </div>,
     )
@@ -276,7 +276,7 @@ describe.sequential('Skills panel browser contracts', () => {
 
   it('defers guided discovery until the target and avoids duplicate requests under StrictMode', async () => {
     useKoma.setState({ refreshSkills: realRefreshSkills })
-    const screen = await render(<StrictMode><SkillsPanel /></StrictMode>)
+    const screen = await render(<div style={{ width: 320, height: 700, position: 'relative' }}><StrictMode><SkillsPanel /></StrictMode></div>)
     await nextPaint()
     expect(catalogueRequests()).toHaveLength(1)
     replyToCatalogue(catalogueRequests()[0], ['skill-0'])
@@ -394,6 +394,8 @@ describe.sequential('Skills panel browser contracts', () => {
     const add = host.querySelector<HTMLButtonElement>('[data-tour="skills-add"]')!
     expect(add.disabled).toBe(true)
     expect(add.title).toContain('Open a project')
+    expect(add.getAttribute('aria-describedby')).toBe('skills-add-reason')
+    expect(host.querySelector('#skills-add-reason')?.textContent).toBe('Open a project first so Koma knows where to save the skill.')
     add.click()
     expect(document.querySelector('[data-tour="skills-add-methods"]')).toBeNull()
     expect(req.mock.calls.some(([request]) => request.r === 'NewSession')).toBe(false)
@@ -541,6 +543,87 @@ describe.sequential('Skills panel browser contracts', () => {
     search.focus()
     expect(document.activeElement).toBe(search)
     expect(getComputedStyle(rows[2]).outlineStyle).not.toBe('solid')
+  })
+
+  describe('pagination', () => {
+    const many = Array.from({ length: 120 }, (_, index) => ({
+      skillId: `bulk-${String(index).padStart(3, '0')}`,
+      generation: `generation-${index}`,
+      name: `bulk-${String(index).padStart(3, '0')}`,
+      description: `Bulk ${index}`,
+      triggers: '',
+      sourceTier: 'global',
+      scope: 'global' as const,
+      sourcePath: `/skills/bulk-${index}/SKILL.md`,
+    }))
+    const pagerText = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-tour="skills-pager"] span')?.textContent
+    const optionsOnPage = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    const button = (host: HTMLElement, label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
+
+    beforeEach(() => useKoma.setState({ skills: many, loadedSkillNames: [] }))
+
+    it('shows one page of rows with a pager and moves with Next', async () => {
+      const { host } = await mount(320, 400)
+      const size = optionsOnPage(host).length
+      expect(size).toBeGreaterThan(3)
+      expect(size).toBeLessThan(120)
+      expect(pagerText(host)).toBe(`1-${size} of 120`)
+      expect(button(host, 'Previous page').disabled).toBe(true)
+      button(host, 'Next page').click()
+      await nextPaint()
+      expect(pagerText(host)).toBe(`${size + 1}-${Math.min(size * 2, 120)} of 120`)
+      expect(optionsOnPage(host)[0].dataset.skillId).toBe(`bulk-${String(size).padStart(3, '0')}`)
+    })
+
+    it('returns to page one when the search text changes', async () => {
+      const { host } = await mount(320, 400)
+      button(host, 'Next page').click()
+      await nextPaint()
+      expect(pagerText(host)?.startsWith('1-')).toBe(false)
+      useKoma.setState({ skillQuery: 'bulk-0' })
+      await nextPaint()
+      expect(optionsOnPage(host)[0].dataset.skillId).toBe('bulk-000')
+    })
+
+    it('keeps a Ctrl selection across pages and applies the menu to it', async () => {
+      const { host } = await mount(320, 400)
+      const first = optionsOnPage(host)[0]
+      first.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+      await nextPaint()
+      expect(useKoma.getState().skillSelection).toEqual(['bulk-000'])
+      button(host, 'Next page').click()
+      await nextPaint()
+      expect(useKoma.getState().skillSelection).toEqual(['bulk-000'])
+      const other = optionsOnPage(host)[1]
+      other.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+      await nextPaint()
+      expect(useKoma.getState().skillSelection).toHaveLength(2)
+      openSkillMenu(other)
+      await nextPaint()
+      expect(skillMenu()?.textContent).toContain('2 selected')
+    })
+
+    it('moves focus to the next page from the last row and keeps one tab stop', async () => {
+      const { host } = await mount(320, 400)
+      const rows = optionsOnPage(host)
+      const last = rows[rows.length - 1]
+      last.focus()
+      last.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      await nextPaint()
+      await nextPaint()
+      const active = document.activeElement as HTMLElement
+      expect(active.dataset.skillId).toBe(`bulk-${String(rows.length).padStart(3, '0')}`)
+      expect(optionsOnPage(host).filter((row) => row.tabIndex === 0)).toEqual([active])
+    })
+
+    it('fills the sidebar height with the footer inside the host', async () => {
+      const { host } = await mount(320, 400)
+      const root = host.querySelector<HTMLElement>('[data-tour="skills-panel"]')!
+      expect(getComputedStyle(root).position).toBe('absolute')
+      expect(root.getBoundingClientRect().height).toBe(host.getBoundingClientRect().height)
+      const add = host.querySelector<HTMLElement>('[data-tour="skills-add"]')!.getBoundingClientRect()
+      expect(add.bottom).toBeLessThanOrEqual(host.getBoundingClientRect().bottom)
+    })
   })
 
   it('traps duplicate-dialog focus and restores the opener on Escape', async () => {

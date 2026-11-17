@@ -52,7 +52,7 @@ def digest(path):
 def inputs():
     paths = [ROOT / 'scripts/prepare-terminal.py']
     for name in ['src', 'assets']:
-        paths.extend(p for p in (ROOT / 'src-term' / name).rglob('*') if p.is_file())
+        paths.extend(p for p in (ROOT / 'src-term' / name).rglob('*') if p.is_file() and p.name != '.DS_Store')
     paths.extend(ROOT / 'src-term' / name for name in ['package.json', 'bun.lock', 'tsconfig.json'])
     return {p.relative_to(ROOT).as_posix(): digest(p) for p in sorted(paths)}
 

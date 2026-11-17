@@ -16,7 +16,8 @@ use crate::app::runtime::client::{HostCtl, StreamView};
 use crate::ipc::proto::ClientRequest;
 
 use super::dispatch_forward::{
-    forward_config_req, forward_or_host, forward_paste, write_attach_scratch,
+    forward_config_req, forward_or_host, forward_paste, handle_upload_chunk, inline_payload_fits,
+    push_skill_failure, write_attach_scratch, UploadChunk,
 };
 use super::dispatch_git;
 use super::proto::GuiReq;
@@ -272,6 +273,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             args,
             env,
             url,
+            extras,
         } => {
             forward_config_req(
                 &ctx.req,
@@ -285,8 +287,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                     args,
                     env,
                     url,
+                    extras,
                 },
             );
+        }
+        GuiReq::ImportMcpJson { text } => {
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::ImportMcpJson { text });
         }
         GuiReq::DeleteMcpServer { uuid } => {
             forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteMcpServer { uuid });
@@ -302,6 +308,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
                     let _ = tx.send(ClientRequest::GetMcpStatus { request_id });
+                }
+            }
+        }
+        GuiReq::RestartMcpServer { uuid } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::RestartMcpServer { uuid });
+                }
+            }
+        }
+        GuiReq::ApproveMcpProjectServer { uuid, approved } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ApproveMcpProjectServer { uuid, approved });
                 }
             }
         }
@@ -426,7 +446,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitBranchList { request_id } => dispatch_git::git_branch_list(&ctx.ctl, request_id),
         // Source Control multi-repo picker (discover + set-active). Same host-local
         // routing as `GitBranchList`/`SetGitKey` above.
-        GuiReq::GitRepos => dispatch_git::git_repos(&ctx.ctl),
+        GuiReq::GitRepos { force } => dispatch_git::git_repos(&ctx.ctl, force),
         GuiReq::SetActiveRepo { root } => dispatch_git::set_active_repo(&ctx.ctl, root),
         GuiReq::GitCheckout { ref_name, root } => {
             dispatch_git::git_checkout(&ctx.ctl, ref_name, root)
@@ -927,6 +947,24 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             session_epoch,
             tab_id,
         } => {
+            if !inline_payload_fits(data_b64.len()) {
+                crate::model::store::append_global_error_log(
+                    "skill upload rejected",
+                    &format!(
+                        "inline InstallSkillZip route: a {}-byte payload exceeds the IPC frame limit",
+                        data_b64.len()
+                    ),
+                );
+                push_skill_failure(
+                    &ctx.loop_proxy,
+                    request_id,
+                    session_epoch,
+                    tab_id,
+                    name,
+                    "Skill package is too large for this upload route".into(),
+                );
+                return;
+            }
             let request = ClientRequest::InstallSkillZip {
                 target,
                 name,
@@ -942,6 +980,30 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::SkillMutation(request),
             );
         }
+        GuiReq::SkillUploadChunk {
+            target,
+            name,
+            upload_id,
+            offset,
+            total,
+            data_b64,
+            request_id,
+            session_epoch,
+            tab_id,
+        } => handle_upload_chunk(
+            ctx,
+            UploadChunk {
+                target,
+                name,
+                upload_id,
+                offset,
+                total,
+                data_b64,
+                request_id,
+                session_epoch,
+                tab_id,
+            },
+        ),
         GuiReq::DownloadSkillZip {
             skill_id,
             generation,

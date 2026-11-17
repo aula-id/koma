@@ -21,9 +21,9 @@ Related chrome (not CodingPanel itself):
 |---------|----------|
 | Terminal tabs | `TerminalTab.tsx`, tab `kind: 'terminal'` |
 | Language server install UI | Settings → Language servers; CLI `koma lsp …` |
-| Language packs / environments | **BottomPanel** tab `packs` (`CodingPacks.tsx`) — same dock signature as Tasks; **not** a floating dialog |
+| Language packs / environments | **BottomPanel** tab `packs` ("Language Packs", `CodingPacks.tsx`) — same dock signature as Tasks; **not** a floating dialog |
 | Tasks / Problems / LSP drawers | `BottomPanel.tsx` shared tablist |
-| Diff tabs | Explore / Git file-changed → Monaco **diff** (Monarch only; no LSP on that path) |
+| Diff tabs | Chat-panel file-changed / Git → Monaco **diff** (Monarch only; no LSP on that path) |
 
 Still **out of scope**:
 
@@ -83,7 +83,7 @@ Diff editor path stays Monarch-only (syntax highlighting without host LSP).
 3. FS op
 4. Structured result push
 
-Ops: tree (lazy dirs; skip `.git` / `node_modules` / `target` / `.koma`), read + fingerprint, save with expected fingerprint (conflict on mismatch), create file/dir, delete, rename.
+Ops: tree (lazy dirs; skip `.git` / `.koma` / `node_modules` / `target`), read + fingerprint, save with expected fingerprint (conflict on mismatch), create file/dir, delete, rename.
 
 Binary: null-byte check on first 8KB. Read size cap applies.
 
@@ -100,7 +100,7 @@ GuiReq / HostCtl surface document sync + completion/hover/definition/references/
 ## Tab identity
 
 ```ts
-| { id: string; kind: 'codingFile'; root: string; path: string; title: string }
+| { id: string; kind: 'codingFile'; root: string; path: string; title: string; preview?: boolean }
 // id = file:<root>:<path>  — stable for dedup; dirty ● on title
 ```
 
@@ -110,9 +110,9 @@ Other main-area kinds include `diff`, `terminal`, `settings`, extension panels, 
 
 Built-in `ACTIVITY_BAR_ITEMS` / `SidebarView` include:
 
-`explore` · `coding` · `git` · `mcp` · `connector` · `importGraph` · `agents` · `usage` · `store` · `remote`
+`explore` (labelled **Chat**) · `coding` · `diagram` · `design` · `git` · `mcp` · `connector` · `importGraph` · `agents` · `skills` · `usage` · `store` · `remote`
 
-Settings / Help / Tutorial are pinned footer chrome (not `SidebarView` values). Extension panel icons can appear on the bar via the same order/hidden machinery.
+Settings / Help / Tutorial are pinned footer chrome (not `SidebarView` values). Selecting `diagram` or `design` with no open tab or `.koma` file of that kind opens a singleton `welcome` tab (`kind: 'welcome'`, via `maybeOpenWelcomeTab`). Extension panel icons can appear on the bar via the same order/hidden machinery.
 
 ## Security
 

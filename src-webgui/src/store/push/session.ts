@@ -69,9 +69,6 @@ export function pushSession(set: StoreSet, get: StoreGet, env: PushEnvelope): bo
               title: env.title,
               subagents: env.subagents,
               bash: env.bash,
-              // Defensive fallback: tolerates a host build that hasn't started
-              // projecting fileChanges[] on the Snapshot envelope yet.
-              fileChanges: env.fileChanges ?? [],
               // planTodos is adopted below from the snapshot in every mode (Plan file,
               // SDLC graph, or Auto memory/TODO.md).
               // Defensive fallback: tolerates a host build that hasn't started

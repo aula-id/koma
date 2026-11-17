@@ -21,7 +21,7 @@
 use anyhow::{Context, Result};
 use include_dir::{include_dir, Dir};
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wry::http::{Request, Response, StatusCode};
 
 /// OS file drops navigate the document to `file://…` and replace the GUI with a
@@ -196,19 +196,45 @@ static WEBUI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-webgui/dist");
 
 /// Guess a MIME type from a file extension for the `koma://` protocol handler.
 fn mime_for(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("") {
-        "html" => "text/html",
-        "js" => "text/javascript",
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "js" | "mjs" => "text/javascript",
         "css" => "text/css",
-        "json" => "application/json",
+        "json" | "map" => "application/json",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
         "ttf" => "font/ttf",
         "otf" => "font/otf",
         "svg" => "image/svg+xml",
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "xml" => "application/xml",
         _ => "application/octet-stream",
     }
+}
+
+/// Image MIME for the `koma://localhost/image/` route, by case-insensitive extension.
+/// `None` for anything that is not an allowlisted image type.
+fn image_mime(p: &Path) -> Option<&'static str> {
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        _ => return None,
+    })
 }
 
 /// Handle a `koma://localhost/<path>` request by serving the matching file out
@@ -269,13 +295,8 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
         if let Ok(decoded) = percent_decode_str(encoded).decode_utf8() {
             let p = std::path::Path::new(decoded.as_ref());
             if p.is_absolute() && p.exists() {
-                let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "gif" => "image/gif",
-                    "webp" => "image/webp",
-                    "svg" => "image/svg+xml",
-                    _ => "application/octet-stream",
+                let Some(mime) = image_mime(p) else {
+                    return not_found_response();
                 };
                 if let Ok(bytes) = std::fs::read(p) {
                     return Response::builder()
@@ -320,11 +341,30 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
 /// plain missing file) is logged via `append_global_error_log` since it's the shape of
 /// an escape attempt, not ordinary 404 traffic.
 fn handle_extension_request(path: &str) -> Response<Cow<'static, [u8]>> {
+    let extensions_dir = match crate::model::store::extensions_dir() {
+        Ok(d) => d,
+        Err(_) => return internal_error_response(),
+    };
+    serve_extension_file(&extensions_dir, path, cfg!(windows))
+}
+
+/// Core of [`handle_extension_request`], with the extensions dir and platform passed in.
+/// The path is percent-decoded exactly once BEFORE the id/rest split and the safety
+/// checks, so `%2e%2e`, `%5c` and `%2f` cannot smuggle an escape past them.
+fn serve_extension_file(
+    extensions_dir: &Path,
+    path: &str,
+    windows: bool,
+) -> Response<Cow<'static, [u8]>> {
     let path = path.trim_start_matches('/');
+    let Ok(decoded) = percent_encoding::percent_decode_str(path).decode_utf8() else {
+        return not_found_response();
+    };
+    let path: &str = decoded.as_ref();
     let (id, rest) = path.split_once('/').unwrap_or((path, ""));
     let rest = if rest.is_empty() { "index.html" } else { rest };
 
-    let (Some(safe_id), Some(rel)) = (safe_ext_id(id), safe_ext_rel_path(rest)) else {
+    let (Some(safe_id), Some(rel)) = (safe_ext_id(id), safe_ext_rel_path_for(rest, windows)) else {
         crate::model::store::append_global_error_log(
             "gui",
             &format!("koma://extension rejected unsafe request path: id={id:?} rest={rest:?}"),
@@ -332,10 +372,6 @@ fn handle_extension_request(path: &str) -> Response<Cow<'static, [u8]>> {
         return not_found_response();
     };
 
-    let extensions_dir = match crate::model::store::extensions_dir() {
-        Ok(d) => d,
-        Err(_) => return internal_error_response(),
-    };
     let file_path = extensions_dir.join(safe_id).join("ui").join(&rel);
 
     match std::fs::read(&file_path) {
@@ -369,24 +405,8 @@ fn safe_ext_id(id: &str) -> Option<&str> {
 /// (there, guarding zip-entry names against zip-slip) applied here to protocol-request
 /// paths instead: reject an absolute path or any `..` component; empty and `.` components
 /// are dropped.
-fn safe_ext_rel_path(name: &str) -> Option<PathBuf> {
-    if name.starts_with('/') || name.starts_with('\\') {
-        return None; // absolute
-    }
-    let mut out = PathBuf::new();
-    for part in name.split('/') {
-        match part {
-            "" | "." => continue,
-            ".." => return None, // escape attempt
-            _ => {
-                if part.contains('\\') {
-                    return None; // windows-style separator sneaking in
-                }
-                out.push(part);
-            }
-        }
-    }
-    Some(out)
+fn safe_ext_rel_path_for(name: &str, windows: bool) -> Option<PathBuf> {
+    crate::app::ext::install::safe_rel_path_for(name, windows)
 }
 
 /// Shared 404 body for both `koma://` request kinds (baked-in host UI + extension UI).
@@ -519,9 +539,16 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // own tao example (github.com/tauri-apps/muda examples/tao.rs): build the
     // `Menu` + submenus after the window exists, then `init_for_nsapp()` (main
     // thread only — `run_gui` never leaves the main thread before this point).
+    //
+    // The `Menu` must outlive the event loop: muda's About item (the only one
+    // here that is not a bare AppKit selector) stores a raw pointer to its
+    // Rust-side `MenuChild` and dereferences it on click. Dropping the menu at
+    // the end of this block freed that child, so clicking About hit a dead
+    // pointer and aborted the whole app. `native_menu` is held by the event
+    // loop closure below.
     #[cfg(target_os = "macos")]
-    {
-        use muda::{Menu, PredefinedMenuItem, Submenu};
+    let native_menu = {
+        use muda::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
 
         let menu_bar = Menu::new();
 
@@ -529,7 +556,20 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // Quit item is enough (`Cmd+Q` otherwise has nowhere to route either).
         let app_menu = Submenu::new("koma", true);
         let _ = menu_bar.append(&app_menu);
-        let _ = app_menu.append(&PredefinedMenuItem::quit(None));
+        let _ = app_menu.append_items(&[
+            &PredefinedMenuItem::about(
+                Some("About koma"),
+                Some(AboutMetadata {
+                    name: Some("koma".into()),
+                    version: Some(env!("CARGO_PKG_VERSION").into()),
+                    short_version: Some(crate::app::version::short_sha(env!("KOMA_GIT_SHA"))),
+                    copyright: Some("Licensed under Apache-2.0".into()),
+                    ..Default::default()
+                }),
+            ),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::quit(None),
+        ]);
 
         let edit_menu = Submenu::new("Edit", true);
         let _ = menu_bar.append(&edit_menu);
@@ -544,7 +584,8 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         ]);
 
         menu_bar.init_for_nsapp();
-    }
+        menu_bar
+    };
 
     // --- 2. Host-relay wiring --------------------------------------------------
     // The GUI host IS the daemon client, but this main thread is owned by tao/GTK
@@ -649,9 +690,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         // Palette now rides `Snapshot.palette` (pushed live), so only the platform
         // hint the React chrome reads at boot is injected here.
         .with_initialization_script(format!(
-            "window.__komaOS='{}';window.__komaOpaque={};",
+            "window.__komaOS='{}';window.__komaOpaque={};window.__komaBuild={};",
             std::env::consts::OS,
-            !transparent
+            !transparent,
+            crate::app::version::build_info_json()
         ))
         .with_url("koma://localhost/index.html")
         .with_navigation_handler(|url| allow_webview_navigation(&url))
@@ -800,6 +842,8 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut launcher_install = Some(proxy.clone());
     event_loop.run(move |event, target, control_flow| {
+        #[cfg(target_os = "macos")]
+        let _keep_menu_alive = &native_menu;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(install_proxy) = launcher_install.take() {
             if let Err(e) = std::thread::Builder::new()

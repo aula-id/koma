@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, Component, File, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { Check, Component, File, FolderOpen, Frame, MessageSquare, Pencil, Search, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
 import { DesignLayers } from '../DesignLayers'
-import { Empty, IconBtn } from './helpers'
+import { AddBtn, Empty, EmptyState, IconBtn, NoProjectState, NoWorkspaceState, WelcomeLink } from './helpers'
 import { Select, Segmented } from './form'
 import { useKoma } from '../../store/koma'
-import { fileKey, isMissingCodingDirError, mintRequestId, type FileTreeEntry } from '../../store/coding'
+import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
 import {
   COMPONENT_MIME,
   addDesignToken,
@@ -18,10 +18,7 @@ import {
   designFileName,
   designQueryNode,
   dropDesignToken,
-  importFigToDesign,
   isDesignPath,
-  serializeDesign,
-  writeDesignAsset,
   resolveRef,
   setDesignMode,
   setDesignTokenValue,
@@ -30,11 +27,13 @@ import {
   type DesignToken,
   type DesignTokenKind,
 } from '../../lib/design'
+import { isEditorTabActive } from '../../lib/welcome'
 import { resolveDesignPanelTab } from '../../lib/designPanelTab'
 import { emitDesignLayer } from '../../lib/designUi'
+import { importFigFile } from '../../lib/design/importFigFile'
 import { designPngBase64 } from '../../lib/designRender'
-import { utf8ToBase64 } from '../../lib/diagramNotes'
 import type { DesignFileState } from '../../store/design'
+import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 const EMPTY_ROOTS: string[] = []
 const EMPTY_DESIGN_DOCS: Record<string, DesignFileState> = {}
@@ -189,11 +188,6 @@ export function TokenEditor({ root, path, doc, query = '', onCommit }: { root: s
   )
 }
 
-function rootLabel(root: string): string {
-  const parts = root.split('/').filter(Boolean)
-  return parts[parts.length - 1] || root
-}
-
 function InlineNameInput({
   initial,
   placeholder,
@@ -270,6 +264,9 @@ export function DesignPanel() {
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
+  const designActive = useKoma((s) => isEditorTabActive('design', s.ui))
+  const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const [browseFiles, setBrowseFiles] = useState(false)
 
   const [panel, setPanel] = useState<'file' | 'assets'>('file')
   const [filesOpen, setFilesOpen] = useState(false)
@@ -283,6 +280,8 @@ export function DesignPanel() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
+
+  useEffect(() => setBrowseFiles(false), [activeTabId])
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -330,8 +329,8 @@ export function DesignPanel() {
     setDesignPanelTab(designTab.id)
   }, [designTab, setDesignPanelTab])
 
-  if (sessionId === null) return <Empty>Open a project to use Design</Empty>
-  if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+  if (sessionId === null) return <NoProjectState feature="Design" />
+  if (workdir.length === 0) return <NoWorkspaceState />
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((entry) => !entry.isDir && isDesignPath(entry.path))
   const gone = isMissingCodingDirError(dir?.error)
@@ -368,6 +367,8 @@ export function DesignPanel() {
   const selection = fileUi?.selection ?? []
   const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null
 
+  const editorMode = designActive && !browseFiles
+  const shownPanel = editorMode ? panel : 'file'
   const query = assetQuery.trim().toLowerCase()
   const fileNeedle = fileQuery.trim().toLowerCase()
   const listedFiles = fileNeedle
@@ -386,7 +387,20 @@ export function DesignPanel() {
             disabled={creating || renaming != null || deleting != null}
           />
         </div>
+        {designActive && (
+          <button
+            type="button"
+            aria-label="Files"
+            aria-pressed={browseFiles}
+            title={browseFiles ? 'Back to editor tools' : 'Show design files'}
+            onClick={() => setBrowseFiles((v) => !v)}
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${browseFiles ? 'text-koma-fg' : 'text-koma-dim'}`}
+          >
+            <FolderOpen size={14} />
+          </button>
+        )}
       </div>
+      {editorMode && (
       <div className="flex-none px-2 pb-1.5">
         <Segmented
           value={panel}
@@ -397,13 +411,15 @@ export function DesignPanel() {
           onChange={setPanel}
         />
       </div>
-      {panel === 'file' ? (
+      )}
+      {shownPanel === 'file' ? (
         <div className="flex min-h-0 flex-1 flex-col">
+          {!editorMode && (
           <AccordionSection
             title="Files"
-            open={filesOpen}
+            // The file list is only shown when no design editor is active, so it is the sole section and stays open.
+            open
             onToggle={() => setFilesOpen((value) => !value)}
-            fill={false}
             action={(
               <div className="flex items-center">
                 <button
@@ -448,38 +464,19 @@ export function DesignPanel() {
                     const file = event.target.files?.[0]
                     event.target.value = ''
                     if (!file || !activeRoot) return
-                    void file.arrayBuffer().then(async (buffer) => {
-                      const imported = await importFigToDesign(buffer)
-                      if (imported.error) return
-                      for (const image of imported.images ?? []) writeDesignAsset(req, activeRoot, image.path, image.bytes)
-                      const name = designFileName(file.name.replace(/\.fig$/i, '')) ?? `import-${Date.now()}.kdsgn`
-                      const path = name.startsWith('.koma/') ? name : `.koma/${name}`
-                      req({
-                        r: 'FileWriteBytes',
-                        root: activeRoot,
-                        path,
-                        bytesB64: utf8ToBase64(serializeDesign(imported.doc)),
-                        overwrite: false,
-                        requestId: mintRequestId(),
-                      })
-                      openDesignTab(activeRoot, path)
-                    })
+                    void importFigFile(file, activeRoot, req, openDesignTab)
                   }}
                 />
-                <button
-                  type="button"
-                  aria-label="New design"
-                  title="New design"
+                <AddBtn
+                  label="New design"
+                  text="New"
                   onClick={() => {
                     setFilesOpen(true)
                     setCreating(true)
                     setRenaming(null)
                     setDeleting(null)
                   }}
-                  className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-                >
-                  <Plus size={13} />
-                </button>
+                />
               </div>
             )}
           >
@@ -493,11 +490,12 @@ export function DesignPanel() {
                 className="mx-2 mb-1 mt-1 h-7 w-[calc(100%-1rem)] rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
             ) : null}
-            <div className="max-h-[8.75rem] overflow-y-auto">
+            <div>
               <FileList
                 activeRoot={activeRoot}
                 files={listedFiles}
-                emptyLabel={fileNeedle ? 'No matches' : 'No designs'}
+                emptyLabel={fileNeedle ? 'No designs match' : 'No designs'}
+                onNew={() => { setFilesOpen(true); setCreating(true); setRenaming(null); setDeleting(null) }}
                 creating={creating}
                 renaming={renaming}
                 deleting={deleting}
@@ -518,6 +516,8 @@ export function DesignPanel() {
               />
             </div>
           </AccordionSection>
+          )}
+          {editorMode && (
           <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)} fill>
             {open?.loading ? (
               <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
@@ -540,6 +540,7 @@ export function DesignPanel() {
               <p className="px-3 text-[12px] text-koma-dim">Open a design to see its layers</p>
             )}
           </AccordionSection>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -672,10 +673,12 @@ function FileList({
   onCancelDelete,
   onConfirmDelete,
   onMenu,
+  onNew,
 }: {
   activeRoot: string | null
   files: FileTreeEntry[]
   emptyLabel?: string
+  onNew?: () => void
   creating: boolean
   renaming: string | null
   deleting: string | null
@@ -743,7 +746,7 @@ function FileList({
                   <File size={13} className="flex-none opacity-70" />
                   <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                 </button>
-                <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100">
+                <div className="flex max-w-0 flex-none items-center overflow-hidden opacity-0 transition-[max-width,opacity] duration-100 group-hover:max-w-[56px] group-hover:opacity-100 group-has-[:focus-visible]:max-w-[56px] group-has-[:focus-visible]:opacity-100">
                   <IconBtn label="Rename" onClick={() => onAskRename(entry.path)}><Pencil size={12} /></IconBtn>
                   <IconBtn label="Delete" tone="red" onClick={() => onAskDelete(entry.path)}><Trash2 size={12} /></IconBtn>
                 </div>
@@ -752,7 +755,20 @@ function FileList({
             )}
           </div>
         )
-      }) : !creating ? <Empty>{emptyLabel}</Empty> : null}
+      }) : !creating ? (
+        emptyLabel === 'No designs' ? (
+          <EmptyState
+            icon={Frame}
+            title="No designs yet"
+            primary={onNew ? { label: 'New design', onClick: onNew } : undefined}
+            footer={<WelcomeLink which="design" />}
+          >
+            Designs are sketches of screens and layouts. Make one, then ask Koma to build it.
+          </EmptyState>
+        ) : (
+          <Empty>{emptyLabel}</Empty>
+        )
+      ) : null}
     </>
   )
 }

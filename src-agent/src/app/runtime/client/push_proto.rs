@@ -16,9 +16,10 @@
 
 pub(super) use super::push_rows::{
     PushAnalyticsModel, PushAnalyticsSeriesPoint, PushAttachment, PushBashJob, PushCooking,
-    PushFileChange, PushFileTreeEntry, PushHistory, PushMcpServer, PushMcpStatusServer, PushModel,
-    PushMsg, PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute,
-    PushSubAgent, PushToolCall, PushUsageDay, PushUsageModel,
+    PushFileChange, PushFileTreeEntry, PushHistory, PushMcpProject, PushMcpServer,
+    PushMcpStatusServer, PushModel, PushMsg, PushPalette, PushPaletteInfo, PushPendingCall,
+    PushPlanTodo, PushProvider, PushRoute, PushSubAgent, PushToolCall, PushUsageDay,
+    PushUsageModel,
 };
 
 fn default_push_short_send_n_80() -> i64 {
@@ -327,6 +328,10 @@ pub(super) enum PushEnvelope {
         /// (`true` = show onboarding).
         #[serde(rename = "firstRun")]
         needs_onboarding: bool,
+        /// The foreground session's project `.mcp.json` (path and read error); its rows ride
+        /// `mcp` with `scope: "project"`. Absent when the workspace has no such file.
+        #[serde(rename = "mcpProject", skip_serializing_if = "Option::is_none")]
+        mcp_project: Option<PushMcpProject>,
     },
     /// One-shot live model-id catalogue for `provider` (uuid), answering a
     /// `ListModels` — the Connector ModelForm REPLACES its model-id picker options with
@@ -1246,7 +1251,7 @@ pub(super) fn push_skill_detail_values(
     );
 }
 
-pub(super) fn push_skill_op(
+pub(crate) fn push_skill_op(
     push: &dyn Fn(String),
     request_id: String,
     session_epoch: u64,

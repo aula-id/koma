@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use super::catalog::{self, ServerSpec};
 use super::resolve::{self, Source};
+use crate::tool::winpath::strip_verbatim;
 
 /// Default timeout for LSP request/response round-trips.
 const REQ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -215,6 +216,8 @@ struct OpenDoc {
     /// LSP languageId sent on didOpen (used to detect language switches).
     language_id: String,
     version: i32,
+    /// URI exactly as sent to the server (the map key is [`uri_key`]).
+    uri: String,
     /// Last known full text — needed to re-didOpen after a crash/restart.
     text: String,
 }
@@ -302,9 +305,7 @@ impl UninitializedSession {
             Ok(()) => Ok(self.session),
             Err(e) => {
                 // Kill the orphan child — Child does not kill on Drop.
-                let mut session = self.session;
-                let _ = session.child.kill();
-                let _ = session.child.wait();
+                kill_tree(self.session.child);
                 Err(e)
             }
         }
@@ -359,14 +360,13 @@ impl LspManager {
 
     /// Kill every live server. Called on host-relay teardown.
     pub fn cleanup_all(&mut self) {
-        let uris: Vec<String> = self.docs.keys().cloned().collect();
+        let uris: Vec<String> = self.docs.values().map(|d| d.uri.clone()).collect();
         for uri in uris {
             self.did_close(&uri);
         }
         self.spawning.clear();
-        for (_, mut s) in self.servers.drain() {
-            let _ = s.child.kill();
-            let _ = s.child.wait();
+        for (_, s) in self.servers.drain() {
+            kill_tree(s.child);
         }
         // Clear the footer Language Servers list.
         push_runtime_snapshot(&*self.push, &[], true, &[]);
@@ -415,7 +415,7 @@ impl LspManager {
         } else {
             derived
         };
-        if let Some(existing) = self.docs.get(&uri) {
+        if let Some(existing) = self.docs.get(&uri_key(&uri)) {
             // Same language: treat as a full-document change. Language switch:
             // close and fall through so the server sees a fresh didOpen.
             if existing.language_id == language_id {
@@ -480,12 +480,13 @@ impl LspManager {
         }
 
         self.docs.insert(
-            uri,
+            uri_key(&uri),
             OpenDoc {
                 server_id: spawn_id,
                 root: root_path,
                 language_id: language_id.to_string(),
                 version,
+                uri,
                 text: text.to_string(),
             },
         );
@@ -500,7 +501,7 @@ impl LspManager {
         self.ensure_server_alive_for_uri(&uri)?;
         let doc = self
             .docs
-            .get_mut(&uri)
+            .get_mut(&uri_key(&uri))
             .ok_or_else(|| "document not open".to_string())?;
         doc.version = doc.version.saturating_add(1);
         doc.text = text.to_string();
@@ -522,14 +523,14 @@ impl LspManager {
         let abs = abs_path(root, path)?;
         let uri = path_to_uri(&abs);
         if let Some(t) = text {
-            if let Some(doc) = self.docs.get_mut(&uri) {
+            if let Some(doc) = self.docs.get_mut(&uri_key(&uri)) {
                 doc.text = t.to_string();
             }
         }
         self.ensure_server_alive_for_uri(&uri)?;
         let server_id = self
             .docs
-            .get(&uri)
+            .get(&uri_key(&uri))
             .map(|d| d.server_id.clone())
             .ok_or_else(|| "document not open".to_string())?;
         let session = self
@@ -553,9 +554,10 @@ impl LspManager {
     }
 
     pub fn did_close(&mut self, uri: &str) {
-        let Some(doc) = self.docs.remove(uri) else {
+        let Some(doc) = self.docs.remove(&uri_key(uri)) else {
             return;
         };
+        let uri = doc.uri.as_str();
         if let Some(session) = self.servers.get_mut(&doc.server_id) {
             if !session.is_dead() {
                 let params = serde_json::json!({
@@ -884,7 +886,7 @@ impl LspManager {
                     .ok_or("Language edit has no URI")?;
                 if self
                     .docs
-                    .get(uri)
+                    .get(&uri_key(uri))
                     .is_none_or(|doc| i64::from(doc.version) != version)
                 {
                     return Err("Language edit targets an obsolete document version".into());
@@ -911,7 +913,7 @@ impl LspManager {
         let uri = path_to_uri(&abs);
         let doc = self
             .docs
-            .get(&uri)
+            .get(&uri_key(&uri))
             .ok_or_else(|| "document not open in LSP".to_string())?;
         Ok((uri, doc.server_id.clone()))
     }
@@ -1010,7 +1012,7 @@ impl LspManager {
         } else {
             derived
         };
-        if let Some(existing) = self.docs.get(&uri) {
+        if let Some(existing) = self.docs.get(&uri_key(&uri)) {
             if existing.language_id == language_id {
                 self.did_change(root, path, text)?;
                 return Ok(DidOpenPrep::Done);
@@ -1111,9 +1113,8 @@ impl LspManager {
     ) -> Result<(), String> {
         let queued = self.spawning.remove(&spawn_id).unwrap_or_default();
         // If a racer already finished (shouldn't with claim), kill the loser.
-        if let Some(mut old) = self.servers.insert(spawn_id.clone(), session) {
-            let _ = old.child.kill();
-            let _ = old.child.wait();
+        if let Some(old) = self.servers.insert(spawn_id.clone(), session) {
+            kill_tree(old.child);
         }
         self.emit_runtime();
         self.finish_did_open_notify(&spawn_id, uri, &language_id, &text, root_path)?;
@@ -1156,12 +1157,13 @@ impl LspManager {
         }
 
         self.docs.insert(
-            uri,
+            uri_key(&uri),
             OpenDoc {
                 server_id: spawn_id.to_string(),
                 root: root_path,
                 language_id: language_id.to_string(),
                 version,
+                uri,
                 text: text.to_string(),
             },
         );
@@ -1171,19 +1173,17 @@ impl LspManager {
 
     /// Kill a live server after its last document closed (idle shutdown).
     fn shutdown_server(&mut self, server_id: &str) {
-        if let Some(mut session) = self.servers.remove(server_id) {
+        if let Some(session) = self.servers.remove(server_id) {
             let _ = session.notify("shutdown", serde_json::json!(null));
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            kill_tree(session.child);
         }
         push_runtime_snapshot(&*self.push, &[], false, &[server_id]);
     }
 
     /// Kill + remove a dead session. Docs stay so revive can re-open them.
     fn drop_dead_server(&mut self, server_id: &str) {
-        if let Some(mut session) = self.servers.remove(server_id) {
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+        if let Some(session) = self.servers.remove(server_id) {
+            kill_tree(session.child);
         }
         push_runtime_snapshot(&*self.push, &[], false, &[server_id]);
     }
@@ -1191,7 +1191,7 @@ impl LspManager {
     fn ensure_server_alive_for_uri(&mut self, uri: &str) -> Result<(), String> {
         let server_id = self
             .docs
-            .get(uri)
+            .get(&uri_key(uri))
             .map(|d| d.server_id.clone())
             .ok_or_else(|| "document not open".to_string())?;
         self.ensure_server_alive(&server_id)
@@ -1230,7 +1230,7 @@ impl LspManager {
 
         let root = docs[0].1.root.clone();
         // Derive extension from first doc URI path for spawn resolve.
-        let sample_path = uri_to_path_lossy(&docs[0].0);
+        let sample_path = uri_to_path_lossy(&docs[0].1.uri);
         let ext = Path::new(&sample_path)
             .extension()
             .and_then(|e| e.to_str())
@@ -1249,7 +1249,7 @@ impl LspManager {
         self.spawn_into_slot(server_id, spec, &binary, &args, &root)?;
 
         // Re-open every previously tracked document with its last known text.
-        for (uri, doc) in docs {
+        for (key, doc) in docs {
             let version = doc.version.max(1);
             {
                 let session = self
@@ -1258,7 +1258,7 @@ impl LspManager {
                     .ok_or_else(|| "server missing after revive".to_string())?;
                 let params = serde_json::json!({
                     "textDocument": {
-                        "uri": uri,
+                        "uri": doc.uri,
                         "languageId": doc.language_id,
                         "version": version,
                         "text": doc.text,
@@ -1266,7 +1266,7 @@ impl LspManager {
                 });
                 session.notify("textDocument/didOpen", params)?;
             }
-            if let Some(d) = self.docs.get_mut(&uri) {
+            if let Some(d) = self.docs.get_mut(&key) {
                 d.version = version;
                 d.server_id = server_id.to_string();
             }
@@ -1299,7 +1299,7 @@ impl ServerSession {
             "processId": std::process::id(),
             "clientInfo": { "name": "koma", "version": env!("CARGO_PKG_VERSION") },
             "rootUri": root_uri,
-            "rootPath": root.to_string_lossy(),
+            "rootPath": strip_verbatim(&root.to_string_lossy()),
             "capabilities": {
                 "textDocument": {
                     "synchronization": {
@@ -2023,7 +2023,7 @@ fn workspace_server_id(kind: &str, root: &Path) -> String {
     use sha2::{Digest, Sha256};
     format!(
         "{kind}@{:x}",
-        Sha256::digest(root.to_string_lossy().as_bytes())
+        Sha256::digest(root_identity(root).as_bytes())
     )
 }
 
@@ -2074,34 +2074,12 @@ fn resolve_spawn(
             }
         }
     }
-    if let Some(p) = which_binary(binary_name) {
+    if let Some(p) = resolve::find_on_path(binary_name) {
         return Ok((session_id, p, args.to_vec()));
     }
     Err(format!(
         "language server '{binary_name}' not installed (Settings → Language servers)"
     ))
-}
-
-fn which_binary(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        #[cfg(windows)]
-        {
-            let cmd = dir.join(format!("{name}.cmd"));
-            if cmd.is_file() {
-                return Some(cmd);
-            }
-            let exe = dir.join(format!("{name}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
-        }
-    }
-    None
 }
 
 // ─── Path / URI helpers ──────────────────────────────────────────────────────
@@ -2127,14 +2105,105 @@ fn abs_path(root: &str, path: &str) -> Result<PathBuf, String> {
 }
 
 fn path_to_uri(path: &Path) -> String {
-    url::Url::from_file_path(path)
+    let path = PathBuf::from(strip_verbatim(&path.to_string_lossy()));
+    url::Url::from_file_path(&path)
         .map(|uri| uri.to_string())
-        .unwrap_or_else(|_| format!("file://{}", path.to_string_lossy()))
+        .unwrap_or_else(|_| fallback_file_uri(&path.to_string_lossy()))
+}
+
+/// `file://` URI for a path `Url::from_file_path` rejected (e.g. a Windows path
+/// on a unix host): backslashes become slashes and a drive path gets its leading slash.
+fn fallback_file_uri(path: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+    const UNSAFE: &AsciiSet = &CONTROLS.add(b' ').add(b'#').add(b'?').add(b'%');
+    let slashed = path.replace('\\', "/");
+    let encoded = utf8_percent_encode(&slashed, UNSAFE);
+    if slashed.starts_with("//") {
+        format!("file:{encoded}")
+    } else if slashed.starts_with('/') {
+        format!("file://{encoded}")
+    } else {
+        format!("file:///{encoded}")
+    }
+}
+
+/// Canonical map key for a file URI: percent-decoded path with a Windows drive
+/// letter upper-cased. Servers echo `file:///c%3A/x`, `file:///C:/x`, ...; all
+/// of them map to one key.
+fn uri_key(uri: &str) -> String {
+    let rest = uri
+        .strip_prefix("file://")
+        .or_else(|| uri.strip_prefix("file:"))
+        .unwrap_or(uri);
+    let decoded = percent_encoding::percent_decode_str(rest)
+        .decode_utf8_lossy()
+        .into_owned();
+    match decoded.as_bytes() {
+        [b'/', d, b':', ..] if d.is_ascii_alphabetic() => {
+            format!(
+                "/{}{}",
+                d.to_ascii_uppercase() as char,
+                decoded.get(2..).unwrap_or_default()
+            )
+        }
+        _ => decoded,
+    }
+}
+
+/// Stable text for hashing a root: verbatim prefix dropped, drive letter
+/// upper-cased and separators unified. Unix paths are unchanged.
+fn root_identity(root: &Path) -> String {
+    let s = strip_verbatim(&root.to_string_lossy());
+    match s.as_bytes() {
+        [d, b':', ..] if d.is_ascii_alphabetic() => {
+            format!(
+                "{}{}",
+                d.to_ascii_uppercase() as char,
+                s.get(1..).unwrap_or_default().replace('\\', "/")
+            )
+        }
+        _ => s,
+    }
+}
+
+/// Args for `taskkill` that kill a pid and its whole descendant tree.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn taskkill_args(pid: u32) -> [String; 4] {
+    ["/PID".into(), pid.to_string(), "/T".into(), "/F".into()]
+}
+
+/// Kill a language server and reap it.
+///
+/// On Windows an npm server is `cmd.exe` -> `node.exe`; `Child::kill` alone would
+/// orphan node and keep the install dir locked. `taskkill /T` is slow enough to
+/// matter while the manager lock is held, so it runs on its own thread.
+#[cfg(windows)]
+fn kill_tree(child: Child) {
+    let _ = std::thread::Builder::new()
+        .name("lsp-kill".into())
+        .spawn(move || {
+            let mut child = child;
+            let mut cmd = Command::new("taskkill");
+            cmd.args(taskkill_args(child.id()))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            crate::tool::shell::no_console_window(&mut cmd);
+            let _ = cmd.status();
+            let _ = child.kill();
+            let _ = child.wait();
+        });
+}
+
+#[cfg(not(windows))]
+fn kill_tree(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Map a file path to the Monaco / LSP language id (best-effort).
 pub fn language_id_for_path(path: &str) -> &'static str {
-    let file = path.rsplit('/').next().unwrap_or(path);
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let ext = file
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())
@@ -2294,10 +2363,9 @@ fn uri_to_path_lossy(uri: &str) -> String {
         .or_else(|| uri.strip_prefix("file:"))
         .unwrap_or(uri);
     // Percent-decode a few common sequences; enough for ordinary paths.
-    let decoded = rest
-        .replace("%20", " ")
-        .replace("%5B", "[")
-        .replace("%5D", "]");
+    let decoded = percent_encoding::percent_decode_str(rest)
+        .decode_utf8_lossy()
+        .into_owned();
     // On Windows file:///C:/... — strip leading slash before drive.
     if decoded.len() >= 3
         && decoded.as_bytes()[0] == b'/'
@@ -2619,10 +2687,12 @@ pub(crate) fn reply_workspace_edit(
 impl LspManager {
     pub(crate) fn did_change_watched_files(&self, changes: &[(PathBuf, u32)]) {
         for server in self.servers.values() {
+            let root = PathBuf::from(strip_verbatim(&server.root.to_string_lossy()));
             let changes: Vec<_> = changes
                 .iter()
-                .filter(|(path, _)| path.starts_with(&server.root))
-                .map(|(path, kind)| serde_json::json!({"uri":path_to_uri(path),"type":kind}))
+                .map(|(path, kind)| (PathBuf::from(strip_verbatim(&path.to_string_lossy())), kind))
+                .filter(|(path, _)| path.starts_with(&root))
+                .map(|(path, kind)| serde_json::json!({"uri":path_to_uri(&path),"type":kind}))
                 .collect();
             if !changes.is_empty() {
                 let _ = server.notify(
@@ -2637,6 +2707,87 @@ impl LspManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uri_key_unifies_windows_drive_spellings() {
+        let k = uri_key("file:///C:/x/a.ts");
+        assert_eq!(k, "/C:/x/a.ts");
+        assert_eq!(uri_key("file:///c%3A/x/a.ts"), k);
+        assert_eq!(uri_key("file:///c:/x/a.ts"), k);
+        assert_eq!(uri_key("file:///home/u/a%20b.ts"), "/home/u/a b.ts");
+        assert_eq!(
+            uri_key(&path_to_uri(Path::new("/tmp/a b.ts"))),
+            uri_key("file:///tmp/a%20b.ts")
+        );
+    }
+
+    #[test]
+    fn validate_edit_versions_accepts_any_uri_spelling() {
+        let mut m = LspManager::new(|_| {});
+        m.docs.insert(
+            uri_key("file:///C:/x/a.ts"),
+            OpenDoc {
+                server_id: "s".into(),
+                root: PathBuf::from("/x"),
+                language_id: "typescript".into(),
+                version: 3,
+                uri: "file:///C:/x/a.ts".into(),
+                text: String::new(),
+            },
+        );
+        let edit = |v: i64| serde_json::json!({"documentChanges":[{"textDocument":{"uri":"file:///c%3A/x/a.ts","version":v}}]});
+        assert!(m.validate_edit_versions(&edit(3)).is_ok());
+        assert!(m.validate_edit_versions(&edit(2)).is_err());
+    }
+
+    #[test]
+    fn strip_verbatim_drops_only_drive_and_unc_prefixes() {
+        assert_eq!(strip_verbatim(r"\\?\C:\a\b"), r"C:\a\b");
+        assert_eq!(strip_verbatim(r"\\?\UNC\h\s\f"), r"\\h\s\f");
+        assert_eq!(strip_verbatim(r"C:\a"), r"C:\a");
+        assert_eq!(strip_verbatim("/home/a"), "/home/a");
+        assert_eq!(strip_verbatim(r"\\?\Volume{1234}\a"), r"\\?\Volume{1234}\a");
+    }
+
+    #[test]
+    fn root_identity_is_stable_across_windows_spellings() {
+        assert_eq!(root_identity(Path::new(r"\\?\c:\x\y")), "C:/x/y");
+        assert_eq!(root_identity(Path::new(r"C:\x\y")), "C:/x/y");
+        assert_eq!(root_identity(Path::new("/projects/a")), "/projects/a");
+        assert_eq!(
+            workspace_server_id("vtsls", Path::new(r"C:\x")),
+            workspace_server_id("vtsls", Path::new(r"\\?\C:\x"))
+        );
+    }
+
+    #[test]
+    fn taskkill_args_kill_the_tree() {
+        assert_eq!(taskkill_args(42), ["/PID", "42", "/T", "/F"]);
+    }
+
+    #[test]
+    fn language_id_ignores_backslash_directories() {
+        assert_eq!(language_id_for_path(r"C:\a.b\file"), "plaintext");
+        assert_eq!(language_id_for_path(r"C:\a.b\file.rs"), "rust");
+    }
+
+    #[test]
+    fn uri_to_path_lossy_decodes_escapes() {
+        assert_eq!(uri_to_path_lossy("file:///c%3A/x/a%20b.ts"), "c:/x/a b.ts");
+    }
+
+    #[test]
+    fn fallback_file_uri_handles_backslash_paths() {
+        assert_eq!(fallback_file_uri(r"C:\x\a b.ts"), "file:///C:/x/a%20b.ts");
+        assert_eq!(fallback_file_uri(r"\\h\s\f"), "file://h/s/f");
+        assert_eq!(fallback_file_uri("/a/b"), "file:///a/b");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watched_path_filter_matches_after_stripping_verbatim() {
+        assert!(Path::new(&strip_verbatim(r"\\?\C:\w\a.rs")).starts_with(r"C:\w"));
+    }
 
     #[test]
     fn language_servers_are_isolated_by_workspace() {
