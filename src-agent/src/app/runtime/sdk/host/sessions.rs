@@ -586,7 +586,7 @@ fn is_live(host: &dyn SessionHost, id: &str) -> bool {
 }
 
 /// The session dir of a registry row, when the row names a valid bucket.
-fn dir_of(host: &dyn SessionHost, row: &RegRowFullCreated) -> Option<PathBuf> {
+pub(super) fn dir_of(host: &dyn SessionHost, row: &RegRowFullCreated) -> Option<PathBuf> {
     if !valid_hash(&row.pwd_hash) || !valid_id(&row.uuid) {
         return None;
     }
@@ -756,7 +756,7 @@ fn bound(adapter: &mut Adapter) -> Result<&mut Connection, RpcError> {
         .ok_or_else(|| RpcError::reason(Reason::WrongBinding, "no session bound"))
 }
 
-fn object(params: Value) -> Result<Map<String, Value>, RpcError> {
+pub(super) fn object(params: Value) -> Result<Map<String, Value>, RpcError> {
     match params {
         Value::Object(map) => Ok(map),
         _ => Err(RpcError::reason(Reason::OutOfRange, "params must be an object")),
@@ -765,7 +765,7 @@ fn object(params: Value) -> Result<Map<String, Value>, RpcError> {
 
 /// `session_id`: required, and a well-formed id. An id koma could not have
 /// minted names no session.
-fn session_id(map: &Map<String, Value>) -> Result<String, RpcError> {
+pub(super) fn session_id(map: &Map<String, Value>) -> Result<String, RpcError> {
     match map.get("session_id") {
         Some(Value::String(id)) if !id.is_empty() && id.chars().count() <= 64 => {
             if valid_id(id) {
@@ -781,11 +781,11 @@ fn session_id(map: &Map<String, Value>) -> Result<String, RpcError> {
     }
 }
 
-fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
+pub(super) fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
     serde_json::to_value(value).map_err(|e| RpcError::new("internal", e.to_string()))
 }
 
-fn out_of_range(message: impl Into<String>) -> RpcError {
+pub(super) fn out_of_range(message: impl Into<String>) -> RpcError {
     RpcError::reason(Reason::OutOfRange, message)
 }
 
@@ -797,7 +797,7 @@ fn bad_cursor() -> RpcError {
     RpcError::reason(Reason::BadCursor, "the cursor does not decode")
 }
 
-fn not_found() -> RpcError {
+pub(super) fn not_found() -> RpcError {
     RpcError::reason(Reason::NotFound, "unknown session")
 }
 
@@ -811,7 +811,7 @@ fn partial_delete(message: String) -> RpcError {
 }
 
 /// A registry failure: `sqlite_busy` when SQLite reported contention.
-fn registry_error(error: anyhow::Error) -> RpcError {
+pub(super) fn registry_error(error: anyhow::Error) -> RpcError {
     let busy = error.chain().any(|cause| {
         matches!(
             cause.downcast_ref::<rusqlite::Error>(),
