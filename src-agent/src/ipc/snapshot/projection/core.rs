@@ -87,6 +87,8 @@ pub fn session_snapshot(
         .map(|r| r.model_id)
         .unwrap_or_default();
 
+    let (awaiting_approval, approval_reason, pending_tool_calls, tool_idx) = rt.approval_view();
+
     SessionSnapshot {
         id: rt.id.clone(),
         turn: rt.active_turn.as_ref().or(rt.last_turn.as_ref()).cloned(),
@@ -106,10 +108,10 @@ pub fn session_snapshot(
         tokens_cached: rt.tokens_cached,
         context_usage: rt.context_usage,
         waiting: rt.waiting,
-        awaiting_approval: rt.awaiting_approval,
-        approval_reason: rt.approval_reason.clone(),
-        pending_tool_calls: rt.pending_tool_calls.clone(),
-        tool_idx: rt.tool_idx,
+        awaiting_approval,
+        approval_reason,
+        pending_tool_calls,
+        tool_idx,
         working: rt.is_ui_busy(),
         finished_unseen: rt.finished_unseen,
         subagents: rt.subagents.iter().map(subagent_snapshot).collect(),

@@ -136,6 +136,64 @@ class ConfigConformance(unittest.IsolatedAsyncioTestCase):
             self.assertIs(main.config.main_fallback, MainFallback.UNCONFIGURED)
             self.assertIs(main.config.route('main').reason, RouteReason.UNASSIGNED)
 
+    async def test_host_tool_policy_set(self):
+        async with self.client().host() as host:
+            before = (await host.config_get()).revision
+            first = await host.config_tool_policy_set(['web_fetch', 'computer_*'])
+            self.assertTrue(first.changed)
+            self.assertEqual(first.deny, ('web_fetch', 'computer_*'))
+            self.assertEqual(first.config.view.value, 'global')
+            self.assertNotEqual(first.config.revision, before)
+            again = await host.config_tool_policy_set(('web_fetch', 'computer_*'), if_revision=first.config.revision)
+            self.assertFalse(again.changed)
+            with self.assertRaises(RemoteError) as ctx:
+                await host.config_tool_policy_set(['bash'], if_revision='0000000000000000')
+            self.assertEqual(ctx.exception.reason, 'stale')
+            with self.assertRaises(RemoteError) as ctx:
+                await host.config_tool_policy_set(['two words'])
+            self.assertEqual(ctx.exception.reason, 'out_of_range')
+            cleared = await host.config_tool_policy_set([])
+            self.assertEqual((cleared.changed, cleared.deny), (True, ()))
+            with self.assertRaises(TypeError):
+                await host.config_tool_policy_set('bash')
+
+    async def test_session_tool_policy_set_keeps_session_info_fresh(self):
+        s = await self.client().create('/fake/work')
+        before = s.session_info
+        result = await s.config_tool_policy_set(['bash'])
+        self.assertTrue(result.changed)
+        self.assertEqual(result.propagation.bound.value, 'reloaded')
+        self.assertGreater(s.session_info.observed_at_ms, before.observed_at_ms)
+
+    async def test_host_subagent_risky_set(self):
+        async with self.client().host() as host:
+            before = (await host.config_get()).revision
+            first = await host.config_subagent_risky_set('parent')
+            self.assertTrue(first.changed)
+            self.assertEqual(first.mode, 'parent')
+            self.assertEqual(first.config.view.value, 'global')
+            self.assertNotEqual(first.config.revision, before)
+            again = await host.config_subagent_risky_set('parent', if_revision=first.config.revision)
+            self.assertFalse(again.changed)
+            with self.assertRaises(RemoteError) as ctx:
+                await host.config_subagent_risky_set('deny', if_revision='0000000000000000')
+            self.assertEqual(ctx.exception.reason, 'stale')
+            with self.assertRaises(RemoteError) as ctx:
+                await host.config_subagent_risky_set('allow')
+            self.assertEqual(ctx.exception.reason, 'out_of_range')
+            reset = await host.config_subagent_risky_set('classifier')
+            self.assertEqual((reset.changed, reset.mode), (True, 'classifier'))
+            with self.assertRaises(TypeError):
+                await host.config_subagent_risky_set(None)
+
+    async def test_session_subagent_risky_set_keeps_session_info_fresh(self):
+        s = await self.client().create('/fake/work')
+        before = s.session_info
+        result = await s.config_subagent_risky_set('deny')
+        self.assertTrue(result.changed)
+        self.assertEqual(result.propagation.bound.value, 'reloaded')
+        self.assertGreater(s.session_info.observed_at_ms, before.observed_at_ms)
+
     async def test_host_skill_roots_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = os.path.realpath(tmp)
@@ -347,11 +405,15 @@ class ConfigConformance(unittest.IsolatedAsyncioTestCase):
         await host.config_models_delete('model-orphan', dry_run=True)
         await host.config_models_delete('model-orphan')
         await host.config_roles_unassign('awareness')
+        await host.config_tool_policy_set([])
         await host.config_skill_roots_set([])
+        await host.config_subagent_risky_set('classifier')
         self.assertEqual(host_flags, {('config.get', False): False, ('config.providers.delete', True): False,
                                       ('config.models.delete', True): False,
                                       ('config.models.delete', False): True,
                                       ('config.roles.unassign', False): True,
+                                      ('config.tool_policy.set', False): True,
+                                      ('config.subagent_risky.set', False): True,
                                       ('config.skill_roots.set', False): True})
 
 

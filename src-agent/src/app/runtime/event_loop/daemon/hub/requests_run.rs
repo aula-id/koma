@@ -36,7 +36,7 @@ pub(crate) fn run_state(state: &AppState) -> anyhow::Result<RunState> {
         effort: settings.effort.clone(),
         mode: rt.agent_mode.label().into(),
         working: rt.is_working(),
-        awaiting_approval: rt.awaiting_approval,
+        awaiting_approval: rt.approval_parked(),
         security_enabled: state.rest.security_enabled,
         security_running: false,
         yolo_armed: state.rest.yolo_armed,

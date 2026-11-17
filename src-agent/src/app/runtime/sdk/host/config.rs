@@ -16,7 +16,7 @@ use crate::app::runtime::sdk::{
     Adapter,
 };
 use crate::ipc::proto::{ClientRequest, RunState};
-use crate::model::app_config::{ApiType, AppConfig, ModelRole};
+use crate::model::app_config::{ApiType, AppConfig, ModelRole, SubagentRisky};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -314,6 +314,10 @@ pub enum Change {
     DeleteProvider(String),
     DeleteModel(String),
     UnassignRole(ModelRole),
+    /// Replace `tool_policy.deny`; the patterns are already validated.
+    SetToolDeny(Vec<String>),
+    /// Replace `subagent_risky`.
+    SetSubagentRisky(SubagentRisky),
     /// Replace `extra_skill_roots`; the paths are already validated.
     SetSkillRoots(Vec<PathBuf>),
 }
@@ -324,6 +328,14 @@ pub enum Effect {
     Removed(Removal),
     /// The entry that held the role, or `None` when nobody did.
     Released(Option<String>),
+    /// Whether the deny list differed from the one stored.
+    ToolDeny {
+        changed: bool,
+    },
+    /// Whether `subagent_risky` differed from the one stored.
+    SubagentRisky {
+        changed: bool,
+    },
     /// Whether the list of skill roots differed from the one stored.
     SkillRoots {
         changed: bool,
@@ -353,6 +365,16 @@ impl Change {
             Change::UnassignRole(role) => {
                 Ok(Effect::Released(configure::unassign_role(config, *role)))
             }
+            Change::SetToolDeny(deny) => {
+                let changed = config.tool_policy.deny != *deny;
+                config.tool_policy.deny = deny.clone();
+                Ok(Effect::ToolDeny { changed })
+            }
+            Change::SetSubagentRisky(mode) => {
+                let changed = config.subagent_risky != *mode;
+                config.subagent_risky = *mode;
+                Ok(Effect::SubagentRisky { changed })
+            }
             Change::SetSkillRoots(roots) => {
                 let changed = config.extra_skill_roots != *roots;
                 config.extra_skill_roots = roots.clone();
@@ -376,6 +398,8 @@ impl Change {
                 .models
                 .iter()
                 .any(|m| m.effective_roles().contains(role)),
+            (Change::SetToolDeny(deny), _) => config.tool_policy.deny == *deny,
+            (Change::SetSubagentRisky(mode), _) => config.subagent_risky == *mode,
             (Change::SetSkillRoots(roots), _) => config.extra_skill_roots == *roots,
             _ => false,
         }
@@ -455,7 +479,10 @@ pub fn commit(
     } = prepared;
     if matches!(
         effect,
-        Effect::Released(None) | Effect::SkillRoots { changed: false }
+        Effect::Released(None)
+            | Effect::ToolDeny { changed: false }
+            | Effect::SubagentRisky { changed: false }
+            | Effect::SkillRoots { changed: false }
     ) {
         return Ok(Committed {
             lock,
@@ -677,6 +704,14 @@ pub fn handle_models_delete(r: Request, adapter: &mut Adapter) -> HandlerFuture<
 pub fn handle_roles_unassign(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(roles_unassign(r.params, adapter))
 }
+pub fn handle_tool_policy_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
+    Box::pin(tool_policy_set(r.params, adapter))
+}
+
+pub fn handle_subagent_risky_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
+    Box::pin(subagent_risky_set(r.params, adapter))
+}
+
 pub fn handle_skill_roots_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(skill_roots_set(r.params, adapter))
 }
@@ -810,11 +845,82 @@ async fn roles_unassign(params: Value, adapter: &mut Adapter) -> Result<Value, R
         write(adapter, Change::UnassignRole(role), if_revision, false).await?;
     let previous = match effect {
         Effect::Released(previous) => previous,
-        Effect::Removed(_) | Effect::SkillRoots { .. } => None,
+        Effect::Removed(_)
+        | Effect::ToolDeny { .. }
+        | Effect::SubagentRisky { .. }
+        | Effect::SkillRoots { .. } => None,
     };
     let result = json!({
         "changed": previous.is_some(),
         "previous_model_uuid": previous,
+        "config": to_value(&view)?,
+        "propagation": to_value(&propagation)?,
+    });
+    Ok(with_session_info(result, adapter))
+}
+
+/// The `deny` param: tool names and globs, as a list. An empty list clears it.
+fn tool_deny_param(map: &Map<String, Value>) -> Result<Vec<String>, RpcError> {
+    let items = match map.get("deny") {
+        None => return Err(RpcError::reason(Reason::MissingParams, "deny is required")),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(out_of_range("deny must be a list of tool names or globs")),
+    };
+    let mut patterns = Vec::with_capacity(items.len());
+    for item in items {
+        patterns.push(
+            item.as_str()
+                .ok_or_else(|| out_of_range("every deny entry must be a string"))?
+                .to_string(),
+        );
+    }
+    crate::tool::policy::validate(&patterns).map_err(out_of_range)
+}
+
+/// `config.tool_policy.set`: replace the hard tool deny list. Only that key
+/// changes, under the SDK lock on a fresh read of the file. Daemons read the
+/// list from `config.json` on every tool call, so the change holds for running
+/// sessions and rooms as soon as the write lands.
+async fn tool_policy_set(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let map = object(params)?;
+    let deny = tool_deny_param(&map)?;
+    let if_revision = revision_param(&map)?;
+    let (effect, view, propagation) = write(
+        adapter,
+        Change::SetToolDeny(deny.clone()),
+        if_revision,
+        false,
+    )
+    .await?;
+    let changed = matches!(effect, Effect::ToolDeny { changed: true });
+    let result = json!({
+        "changed": changed,
+        "deny": deny,
+        "config": to_value(&view)?,
+        "propagation": to_value(&propagation)?,
+    });
+    Ok(with_session_info(result, adapter))
+}
+
+/// `config.subagent_risky.set`: choose what a sub-agent's risky tool call goes
+/// through. Only that key changes, under the SDK lock on a fresh read of the
+/// file. Running daemons pick it up through the catalogue reload broadcast, and
+/// it applies to sub-agents spawned after that.
+async fn subagent_risky_set(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let map = object(params)?;
+    let mode = match map.get("mode") {
+        None => return Err(RpcError::reason(Reason::MissingParams, "mode is required")),
+        Some(Value::String(value)) => SubagentRisky::parse(value)
+            .ok_or_else(|| out_of_range("mode must be 'classifier', 'parent' or 'deny'"))?,
+        Some(_) => return Err(out_of_range("mode must be a string")),
+    };
+    let if_revision = revision_param(&map)?;
+    let (effect, view, propagation) =
+        write(adapter, Change::SetSubagentRisky(mode), if_revision, false).await?;
+    let changed = matches!(effect, Effect::SubagentRisky { changed: true });
+    let result = json!({
+        "changed": changed,
+        "mode": mode.as_str(),
         "config": to_value(&view)?,
         "propagation": to_value(&propagation)?,
     });
@@ -1031,7 +1137,10 @@ async fn daemon_write(
             uuid: uuid.clone(),
             scope: "global".into(),
         },
-        Change::UnassignRole(_) | Change::SetSkillRoots(_) => {
+        Change::UnassignRole(_)
+        | Change::SetToolDeny(_)
+        | Change::SetSubagentRisky(_)
+        | Change::SetSkillRoots(_) => {
             return Err(RpcError::new(
                 "internal",
                 "this change has no daemon request",

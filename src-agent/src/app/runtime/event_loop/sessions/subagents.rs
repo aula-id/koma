@@ -100,6 +100,8 @@ pub(super) fn drain_subagents(
         let mut step_rollups: Vec<(String, String, u64, u64, u64, f64)> = Vec::new();
         if !events.is_empty() {
             dirty = true;
+            let reject_approvals = state.rest.sessions[idx].policy.approval
+                == crate::ipc::proto::turn::ApprovalPolicy::Reject;
             let sa = &mut state.rest.sessions[idx].subagents[i];
             for ev in events {
                 match ev {
@@ -214,6 +216,36 @@ pub(super) fn drain_subagents(
                         let first = result.lines().next().unwrap_or("").trim();
                         sa.transcript
                             .push(format!("✓ {name}: {}", trunc(first, 120)));
+                    }
+                    AgentEvent::ApprovalRequest {
+                        call_id,
+                        name,
+                        args,
+                    } => {
+                        let sig =
+                            crate::view::chat::transcript::format_tool_signature(&name, &args);
+                        sa.transcript.push(format!("? awaiting approval: {sig}"));
+                        if reject_approvals {
+                            // An unattended session rejects human approvals; the
+                            // call is answered at once and never parks.
+                            let _ = sa.approval_tx.send(
+                                crate::app::subagent::ApprovalDecision::Deny {
+                                    call_id,
+                                    result: crate::app::state::SessionRuntime::subagent_reject_result(),
+                                },
+                            );
+                        } else {
+                            sa.pending_approval = Some(crate::app::subagent::SubAgentApproval {
+                                call: crate::dto::chat::ToolCall {
+                                    id: call_id,
+                                    kind: "function".into(),
+                                    function: crate::dto::chat::FunctionCall {
+                                        name,
+                                        arguments: args,
+                                    },
+                                },
+                            });
+                        }
                     }
                     AgentEvent::Done(s) => {
                         sa.transcript.push(format!("done: {}", trunc(&s, 200)));

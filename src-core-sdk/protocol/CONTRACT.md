@@ -318,7 +318,7 @@ hello may carry four optional keys after the v1 keys:
  "capabilities":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach"],
  "methods":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach",
             "config.get","config.providers.delete","config.models.delete","config.roles.unassign",
-            "config.skill_roots.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
+            "config.tool_policy.set","config.subagent_risky.set","config.skill_roots.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
             "sessions.list","sessions.rename","sessions.delete","sessions.stop","sessions.transcript","usage.query",
             "skills.list","skills.get","skills.read_file","skills.install","skills.remove","skills.create","skills.update"],
  "features":["errors.reason","state.session_info","create.name","config.lock"],
@@ -365,7 +365,7 @@ Methods fall into families:
 |---|---|
 | legacy session | `state`, `submit`, `enqueue`, `interrupt`, `interrupt_and_submit`, `approve` |
 | binders | `create`, `resume` |
-| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}`, `config.skill_roots.set` |
+| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}`, `config.tool_policy.set`, `config.subagent_risky.set`, `config.skill_roots.set` |
 | coding-scoped | `sessions.info`, `config.get{view:"session"}`, `config.roles.unassign{scope:"session"}`, `config.effort.get`, `config.effort.set`, `config.limits.get`, `config.limits.set` |
 | other | `configure`, `detach` |
 
@@ -464,8 +464,8 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `wrong_binding` | `invalid_state` | not_sent | any (E1, E2) | the call is not allowed in this binding |
 | `already_bound` | `invalid_state` | not_sent | binders (E3) | a binding is held |
 | `peer_unsupported` | `invalid_state` | not_sent | calls that need the daemon | the daemon lacks the needed feature |
-| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a `sessions.transcript` of a room; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.skill_roots.set` root that is not an absolute path to an existing directory, is listed twice, or contains or sits inside a koma skills directory |
-| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.skill_roots.set`, `skills.update` | none of the required alternatives was given |
+| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a `sessions.transcript` of a room; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.tool_policy.set` `deny` entry that is empty, longer than 200 characters, or holds whitespace, a comma or a control character, or a `deny` list of more than 256 entries; a `config.skill_roots.set` root that is not an absolute path to an existing directory, is listed twice, or contains or sits inside a koma skills directory; a `config.subagent_risky.set` `mode` that is not one of the three names |
+| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.tool_policy.set`, `config.subagent_risky.set`, `config.skill_roots.set`, `skills.update` | none of the required alternatives was given |
 | `conflicting_params` | `invalid_request` | not_sent | `config.roles.unassign`, `skills.install` | params that exclude each other were combined (`if_revision` with session scope; both or neither of `data_b64` and `path`) |
 | `bad_cursor` | `invalid_request` | not_sent | `sessions.list`, `skills.list` | the cursor does not decode |
 | `invalid_name` | `invalid_request` | not_sent | `create`, `sessions.rename`, `skills.*` | a name breaks its rule or holds control characters |
@@ -551,7 +551,7 @@ room's start log, scrubbed). `layer_rejected` and `rejected_by_room` carry
 Config writes are made in one of two ways, and a client sees the difference
 only in `propagation` and in the possible errors.
 
-Adapter writes (UNBOUND, and global `config.roles.unassign` and `config.skill_roots.set` in any binding):
+Adapter writes (UNBOUND, and global `config.roles.unassign`, `config.tool_policy.set`, `config.subagent_risky.set` and `config.skill_roots.set` in any binding):
 the adapter takes the SDK config lock, loads and validates the config file,
 compares `if_revision`, applies the change, saves through a temporary file and
 rename, and reads the file back. It then rebinds sessions and agents on disk
@@ -730,6 +730,90 @@ Propagation  = {bound?: string, broadcast?: string, rebind?: string, rooms?: str
 * Errors: `out_of_range`, `conflicting_params`, `stale`, `lock_timeout`,
   `config_unreadable`, `save_failed`, `unverified`; for session scope also
   `daemon_refused` and `partial_apply`.
+* Idempotency: idempotent (`changed:false` on repeat).
+
+### `config.tool_policy.set`
+
+* Binding: any.
+* Params: `{deny: [string(1..200)] (≤ 256), if_revision?: string}`. `deny` is
+  the whole hard tool deny list: tool names, each with optional `*` (any run of
+  characters) and `?` (one character), matched against the whole tool name and
+  case-sensitively (`"web_fetch"`, `"computer_*"`, `"mcp__*"`). An empty list
+  clears it. A call replaces the list; it never merges. A missing `deny` is
+  `missing_params`. An entry holds no whitespace, comma or control character,
+  and a repeated entry is stored once.
+* Result: `{changed: bool, deny: [string], config: ConfigView (view "global"),
+  propagation, session_info?}`. `changed` is false, and nothing is written, when
+  the stored list already equals `deny`.
+* A denied tool is never advertised to a model, and a call to it is refused
+  with a tool error (`error: tool '<name>' is disabled by the tool policy and
+  cannot be used`) on every path a call can take: the coding turn loop (including a
+  call the model wrote as plain text instead of the structured field), plan
+  mode, sub-agents, resumed sessions, MCP and extension tools, and rooms. The
+  refusal never starts the tool and never ends the turn. The list is checked on
+  every call, so it holds for sessions and rooms that are already running as
+  soon as the write lands.
+* The list in force is the union of this key and the environment variable
+  `KOMA_TOOL_DENY` (comma or whitespace separated, same patterns) in the
+  process that runs the tool. The environment variable has no wire method and
+  is read on every check; a host that launches koma sets it to make the list
+  impossible to change through a client.
+* Only this key of `config.json` changes, as an adapter write in every binding
+  (see Writes and propagation). The list is empty by default, and an empty list
+  leaves `config.json` byte-identical to one that never had the key.
+* Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
+  `config_unreadable`, `save_failed`, `unverified`.
+* Idempotency: idempotent (`changed:false` on repeat).
+
+### `config.subagent_risky.set`
+
+* Binding: any.
+* Params: `{mode: "classifier"|"parent"|"deny", if_revision?: string}`. `mode` is
+  what a sub-agent's risky tool call goes through before it runs. A risky call
+  is a call to `write`, `edit`, `delete`, `bash`, `git_operator`,
+  `web_download`, `browser_tabs`, `browser_interact` or `browser_evaluate`, and,
+  under `parent` and `deny` only, a `git_worktree` call with `action:"remove"`.
+  These are the tools the coding session itself asks its owner about in Normal
+  mode. MCP and extension tool calls (`mcp__*`) are not gated by this policy,
+  and neither are sub-agent tools that write small state of their own, such as
+  `checklist`, `todo`, `remember`, `forget` and `git_cred`. A
+  missing `mode` is `missing_params`; any other value is `out_of_range`.
+  * `classifier` (the default): the tool-call classifier decides and no human
+    is asked. An unavailable classifier blocks the call.
+  * `parent`: the call parks on the parent session's approval prompt and runs
+    only after the owner approves it. The sub-agent waits; other tools of the
+    same sub-agent do not run meanwhile.
+  * `deny`: the call is refused without running and without asking anyone.
+* Result: `{changed: bool, mode: string, config: ConfigView (view "global"),
+  propagation, session_info?}`. `changed` is false, and nothing is written,
+  when the stored mode already equals `mode`.
+* Under `parent`, the parked call is shown on the parent session as an ordinary
+  tool approval: `state.awaiting_approval` is true, `state.pending_approval` and
+  `state.gate` (`kind:"tool"`) are set, and `approval_reason` starts with
+  `sub-agent #<n> (<agent>) wants to run <tool>:` and then the first 200
+  characters of the arguments. Its `call_id` is `subagent-<n>:<id>`, where `<id>`
+  is the sub-agent's own call id, so it never collides with a call of the
+  session. The method `approve` answers it like any other tool approval, with
+  `external_approvals:true` as usual: `approve:true` lets that one call run,
+  `approve:false` refuses that call only, and the sub-agent and the session's turn
+  carry on. The session's own parked call, if any, is shown and answered first;
+  with several sub-agents parked, the lowest sub-agent id is shown first. A
+  session with `policy.approval:"reject"` refuses the call at once (the sub-agent
+  sees `{"error":"approval_rejected","executed":false}`) and nothing parks. With
+  no client attached, a parked sub-agent call is refused after the same timeout
+  as the session's own parked calls. The plan restriction of the parent still
+  applies after an approval: approving never lets a sub-agent write in Plan mode.
+* A tool on the hard deny list (`config.tool_policy.set`, `KOMA_TOOL_DENY`) is
+  refused before this policy is consulted, so no `mode` lets a sub-agent run it.
+* Sub-agents started after the daemon has loaded the new value use it. A
+  sub-agent that is already running keeps the mode it started with, so set the
+  mode before any session starts.
+* Only this key of `config.json` changes, as an adapter write in every binding
+  (see Writes and propagation). The default leaves `config.json` byte-identical
+  to one that never had the key. A `config.json` that holds any other value, a
+  non-string included, reads as `deny`.
+* Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
+  `config_unreadable`, `save_failed`, `unverified`.
 * Idempotency: idempotent (`changed:false` on repeat).
 
 ### `config.skill_roots.set`

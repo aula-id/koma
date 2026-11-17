@@ -293,11 +293,23 @@ impl RoomToolRouter {
 
 impl ToolRouter for RoomToolRouter {
     fn advertised(&self) -> Vec<ToolSpec> {
-        self.tools.clone()
+        let denied = crate::tool::policy::current();
+        let mut tools = self.tools.clone();
+        tools.retain(|t| !denied.iter().any(|p| crate::tool::policy::glob_match(p, &t.name)));
+        tools
     }
 
     fn run(&self, call: &ToolCall) -> ToolRun {
         let name = call.function.name.as_str();
+        // The hard deny list covers the room's own tools (shelf, coordinator)
+        // as well as the host's.
+        if crate::tool::policy::is_denied(name) {
+            return ToolRun {
+                result: crate::tool::policy::refusal(name),
+                events: Vec::new(),
+                ..Default::default()
+            };
+        }
         // Only tools this lane was offered may run; a forged name is refused.
         if !self.tools.iter().any(|t| t.name == name) {
             return ToolRun {

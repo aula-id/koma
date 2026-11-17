@@ -31,7 +31,11 @@ pub mod context;
 pub mod engine;
 pub mod event;
 pub mod spawn;
+#[cfg(test)]
+mod tool_deny_tests;
 pub(crate) mod usage_math;
+#[cfg(test)]
+mod risky_tests;
 
 // Re-exports form the intended public surface for the later wiring stage. The
 // loop + spawn entry points are not referenced yet, so silence the unused-import
@@ -44,6 +48,29 @@ pub use spawn::spawn_subagent;
 
 // `PendingSubagent` is referenced from `AppStateRest` and both spawn paths the
 // moment the queue is wired in, so it is a live part of the public surface.
+
+/// The parent's answer to an [`AgentEvent::ApprovalRequest`], sent down a
+/// sub-agent's approval channel. `Deny` carries the tool result the sub-agent
+/// sees in place of running the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Approve { call_id: String },
+    Deny { call_id: String, result: String },
+}
+
+impl ApprovalDecision {
+    pub fn call_id(&self) -> &str {
+        match self {
+            Self::Approve { call_id } | Self::Deny { call_id, .. } => call_id,
+        }
+    }
+}
+
+/// A risky call a running sub-agent has parked on its parent's approval prompt.
+#[derive(Debug, Clone)]
+pub struct SubAgentApproval {
+    pub call: crate::dto::chat::ToolCall,
+}
 
 /// Hard cap on the number of sub-agents that may run CONCURRENTLY. Both spawn
 /// paths (the model-callable `task` tool and the `/task` slash command) refuse
@@ -102,6 +129,13 @@ pub struct SubAgent {
     /// settles the agent). Restored/shadow records carry an inert sender nothing
     /// drains. Not persisted (runtime-only, like `rx`/`abort`).
     pub inject_tx: UnboundedSender<String>,
+    /// Sender end of the APPROVAL channel: the parent's answer to this agent's
+    /// parked risky call (`subagent_risky = parent`). Restored/shadow records
+    /// carry an inert sender nothing reads.
+    pub approval_tx: UnboundedSender<ApprovalDecision>,
+    /// The risky call this agent is waiting on the parent for, if any. Set while
+    /// `Running` only; cleared when answered.
+    pub pending_approval: Option<SubAgentApproval>,
     /// Human-readable transcript lines accumulated from the event stream.
     pub transcript: Vec<String>,
     /// The sub-agent's structured conversation, replaced wholesale on each

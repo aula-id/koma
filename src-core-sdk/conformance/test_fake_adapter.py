@@ -15,7 +15,7 @@ PROTOCOL = HERE.parent / 'protocol'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-          'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+                  'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
 SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
             'sessions.transcript']
 SKILLS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
@@ -220,6 +220,66 @@ class Conformance(unittest.TestCase):
             call(5, 'room.send', text='hi')])
         for frame in frames:
             schema.validate(frame)
+
+    def test_tool_policy_set(self):
+        _, replies = self.replies('config', [
+            call(1, 'config.get'),
+            call(2, 'config.tool_policy.set'),
+            call(3, 'config.tool_policy.set', deny='bash'),
+            call(4, 'config.tool_policy.set', deny=['']),
+            call(5, 'config.tool_policy.set', deny=['two words']),
+            call(6, 'config.tool_policy.set', deny=['a,b']),
+            call(7, 'config.tool_policy.set', deny=['bash'], if_revision='0000000000000000'),
+            call(8, 'config.tool_policy.set', deny=['web_fetch', 'computer_*', 'web_fetch']),
+            call(9, 'config.tool_policy.set', deny=['web_fetch', 'computer_*']),
+            call(10, 'config.get'),
+            call(11, 'config.tool_policy.set', deny=[]),
+            call(12, 'config.tool_policy.set', deny=[])])
+        self.assertReason(replies['2'], 'invalid_request', 'missing_params')
+        for number in '3456':
+            self.assertReason(replies[number], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['7'], 'invalid_state', 'stale')
+        first = replies['8']['result']
+        self.assertEqual((first['changed'], first['deny'], first['config']['view']),
+                         (True, ['web_fetch', 'computer_*'], 'global'))
+        self.assertEqual(first['propagation']['bound'], 'not_bound')
+        self.assertEqual((replies['9']['result']['changed'], replies['9']['result']['propagation']), (False, {}))
+        self.assertNotEqual(replies['1']['result']['revision'], replies['10']['result']['revision'])
+        self.assertEqual((replies['11']['result']['changed'], replies['11']['result']['deny']), (True, []))
+        self.assertEqual(replies['12']['result']['changed'], False)
+        schema = validator()
+        if schema is not None:
+            for number in '89':
+                schema.validate(replies[number])
+
+    def test_subagent_risky_set(self):
+        _, replies = self.replies('config', [
+            call(1, 'config.get'),
+            call(2, 'config.subagent_risky.set'),
+            call(3, 'config.subagent_risky.set', mode=1),
+            call(4, 'config.subagent_risky.set', mode='allow'),
+            call(5, 'config.subagent_risky.set', mode='Parent'),
+            call(6, 'config.subagent_risky.set', mode='deny', if_revision='0000000000000000'),
+            call(7, 'config.subagent_risky.set', mode='parent'),
+            call(8, 'config.subagent_risky.set', mode='parent'),
+            call(9, 'config.get'),
+            call(10, 'config.subagent_risky.set', mode='classifier'),
+            call(11, 'config.subagent_risky.set', mode='classifier')])
+        self.assertReason(replies['2'], 'invalid_request', 'missing_params')
+        for number in '345':
+            self.assertReason(replies[number], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['6'], 'invalid_state', 'stale')
+        first = replies['7']['result']
+        self.assertEqual((first['changed'], first['mode'], first['config']['view']), (True, 'parent', 'global'))
+        self.assertEqual(first['propagation']['bound'], 'not_bound')
+        self.assertEqual((replies['8']['result']['changed'], replies['8']['result']['propagation']), (False, {}))
+        self.assertNotEqual(replies['1']['result']['revision'], replies['9']['result']['revision'])
+        self.assertEqual((replies['10']['result']['changed'], replies['10']['result']['mode']), (True, 'classifier'))
+        self.assertEqual(replies['11']['result']['changed'], False)
+        schema = validator()
+        if schema is not None:
+            for number in '78':
+                schema.validate(replies[number])
 
     def test_skill_roots_set(self):
         import tempfile

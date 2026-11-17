@@ -19,9 +19,11 @@
 //!   Auto mode (an unavailable classifier auto-runs a risky call). A sub-agent
 //!   has no human to fall back to, so an unavailable classifier BLOCKS the risky
 //!   call instead — the safe default for an unattended actor.
-//! - **No human approval.** There is no `y/n`: a risky call is gated solely by
-//!   the tool-call classifier (TAC). When the harness is disabled (no Safeguard
-//!   route), TAC is "unavailable" and the fail-closed rule blocks the call.
+//! - **No human of its own.** By default (`subagent_risky = classifier`) a risky
+//!   call is gated solely by the tool-call classifier (TAC). When the harness is
+//!   disabled (no Safeguard route), TAC is "unavailable" and the fail-closed rule
+//!   blocks the call. `parent` hands the call to the parent session's approval
+//!   prompt instead, and `deny` refuses it; see [`risky_gate`].
 
 // Inert in Stage 1: the loop is fully implemented but not yet driven by the chat
 // loop / `task` tool, so its items are unreferenced from the binary until a later
@@ -42,6 +44,8 @@ use crate::service::StreamEvent;
 use crate::tool::ToolCtx;
 
 use super::event::AgentEvent;
+use super::ApprovalDecision;
+use crate::model::app_config::SubagentRisky;
 
 /// Send one event on the sub-agent channel, ignoring a closed receiver (the
 /// orchestrator dropped it — e.g. the sub-agent was killed — so the event is
@@ -56,6 +60,91 @@ fn emit(tx: &UnboundedSender<AgentEvent>, event: AgentEvent) {
 /// tool-call classifier before it runs.
 fn tool_is_risky(name: &str) -> bool {
     crate::tool::tool_is_risky(name)
+}
+
+/// `git_worktree remove` deletes a worktree, uncommitted work included. The main
+/// loop gates it in its own interception, which a sub-agent never runs, so under
+/// `parent` and `deny` it goes through [`risky_gate`] here. `classifier` leaves it
+/// as it was.
+fn worktree_remove_gated(policy: SubagentRisky, name: &str, args_json: &str) -> bool {
+    if name != "git_worktree" || policy == SubagentRisky::Classifier {
+        return false;
+    }
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(args_json);
+    serde_json::from_str::<serde_json::Value>(&sanitized)
+        .ok()
+        .and_then(|v| v.get("action").and_then(|a| a.as_str()).map(|a| a == "remove"))
+        .unwrap_or(false)
+}
+
+/// Decide a risky call under the `subagent_risky` policy. `None` lets it run;
+/// `Some(result)` is the tool result that replaces running it.
+///
+/// - `Classifier`: the classifier verdict decides; an unavailable classifier
+///   blocks (a sub-agent has no human to fall back to).
+/// - `Parent`: the call is announced on the event channel and waits for the
+///   parent's answer. A closed channel (the parent is gone) denies.
+/// - `Deny`: refused without asking anyone.
+pub(super) async fn risky_gate<F, Fut>(
+    policy: SubagentRisky,
+    call: &ToolCall,
+    tx: &UnboundedSender<AgentEvent>,
+    approval_rx: &mut UnboundedReceiver<ApprovalDecision>,
+    classify: F,
+) -> Option<String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = crate::app::harness::Verdict>,
+{
+    match policy {
+        SubagentRisky::Classifier => {
+            let verdict = classify().await;
+            if !verdict.available {
+                return Some(
+                    serde_json::json!({"error": "classifier_unavailable", "executed": false, "reason": verdict.reason})
+                        .to_string(),
+                );
+            }
+            if !verdict.allow {
+                return Some(format!("blocked by harness: {}", verdict.reason));
+            }
+            None
+        }
+        SubagentRisky::Deny => Some(
+            serde_json::json!({
+                "error": "subagent_risky_denied", "executed": false,
+                "reason": "sub-agent risky tool calls are disabled by the subagent_risky policy"
+            })
+            .to_string(),
+        ),
+        SubagentRisky::Parent => {
+            emit(
+                tx,
+                AgentEvent::ApprovalRequest {
+                    call_id: call.id.clone(),
+                    name: call.function.name.clone(),
+                    args: call.function.arguments.clone(),
+                },
+            );
+            loop {
+                match approval_rx.recv().await {
+                    // An answer for another call id is stale; keep waiting.
+                    Some(decision) if decision.call_id() != call.id => continue,
+                    Some(ApprovalDecision::Approve { .. }) => return None,
+                    Some(ApprovalDecision::Deny { result, .. }) => return Some(result),
+                    None => {
+                        return Some(
+                            serde_json::json!({
+                                "error": "approval_unavailable", "executed": false,
+                                "reason": "the parent session is gone, so the call was not approved"
+                            })
+                            .to_string(),
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Read the live parent restriction at each execution boundary and retain the
@@ -267,6 +356,10 @@ pub async fn run_agent_loop(
     // Reported model context; None selects the shared 128k fallback.
     context_window: Option<u64>,
     started_in_plan: bool,
+    // `subagent_risky` read from the config at spawn, and the channel the parent
+    // answers a parked risky call on (only read under `Parent`).
+    risky: SubagentRisky,
+    mut approval_rx: UnboundedReceiver<ApprovalDecision>,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -480,36 +573,39 @@ pub async fn run_agent_loop(
                 continue;
             }
 
+            // 4a2. Hard deny list, checked per call so a policy written after
+            //      this agent started still holds.
+            if crate::tool::policy::is_denied(&name) {
+                convo.push_tool(call.id.clone(), crate::tool::policy::refusal(&name));
+                continue;
+            }
+
             if let Err(reason) = check_delegated_plan(&ctx.plan_read_only, &mut plan_only, call) {
                 convo.push_tool(call.id.clone(), format!("blocked: {reason}"));
                 continue;
             }
 
-            // 4b. Risky calls (write/delete/edit/bash) must clear the tool-call
-            //     classifier first. FAIL CLOSED: an unavailable classifier blocks
-            //     the call (a sub-agent has no human to defer to).
+            // 4b. Risky calls (write/delete/edit/bash) are gated by the configured
+            //     `subagent_risky` policy: the tool-call classifier (default, FAIL
+            //     CLOSED when it is unavailable), the parent session's owner, or a
+            //     flat refusal.
             // sec_* tools are harness-exempt (see approval.rs) — only builtin risky tools gate.
-            if tool_is_risky(&name) {
-                let verdict = crate::app::harness::classify_toolcall(
-                    &client,
-                    &config,
-                    &settings,
-                    &task_intent,
-                    &name,
-                    &args_json,
-                )
+            if tool_is_risky(&name) || worktree_remove_gated(risky, &name, &args_json) {
+                let refusal = risky_gate(risky, call, &tx, &mut approval_rx, || {
+                    crate::app::harness::classify_toolcall(
+                        &client,
+                        &config,
+                        &settings,
+                        &task_intent,
+                        &name,
+                        &args_json,
+                    )
+                })
                 .await;
-                if !verdict.available {
-                    let result = serde_json::json!({"error": "classifier_unavailable", "executed": false, "reason": verdict.reason}).to_string();
+                if let Some(result) = refusal {
                     convo.push_tool(call.id.clone(), result);
                     continue;
                 }
-                if !verdict.allow {
-                    let result = format!("blocked by harness: {}", verdict.reason);
-                    convo.push_tool(call.id.clone(), result);
-                    continue;
-                }
-                // available && allow → fall through and run it.
             }
 
             // The parent's mode may change while the classifier is awaited.

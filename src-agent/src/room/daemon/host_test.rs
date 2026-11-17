@@ -507,3 +507,69 @@ fn a_lane_cannot_write_skills() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+
+fn router_for(avatar: &str, kind: LaneKind) -> RoomToolRouter {
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let coordinator = Arc::new(Coordinator::new(
+        WorkStore::open_in_memory().expect("store"),
+        Arc::clone(&shelf),
+        Arc::clone(&registry),
+    ));
+    let snapshot = registry.current();
+    let (tx, _rx) = unbounded_channel();
+    RoomToolRouter::new(
+        LaneRef {
+            avatar: avatar.into(),
+            kind,
+            assignment_id: None,
+            is_chief: avatar == "chief",
+            is_clerk: avatar == "clerk",
+        },
+        coordinator,
+        shelf,
+        Arc::new(std::sync::Mutex::new(Clerk::new())),
+        snapshot,
+        Arc::new(CtxBuiltins::from_ctx(context(std::path::Path::new(".")))),
+        tx,
+    )
+}
+
+#[test]
+fn a_denied_tool_is_not_offered_to_a_lane_and_the_router_refuses_it() {
+    use crate::tool::policy::{refusal, test_deny};
+    let router = router_for("red", LaneKind::Work);
+    let before: Vec<String> = router.advertised().into_iter().map(|s| s.name).collect();
+    assert!(before.iter().any(|n| n == "read"));
+    {
+        let _deny = test_deny(&["read", "web_*"]);
+        let after: Vec<String> = router.advertised().into_iter().map(|s| s.name).collect();
+        assert!(!after.iter().any(|n| n == "read" || n.starts_with("web_")));
+        assert!(after.iter().any(|n| n == "grep"));
+        let run = router.run(&call("read", json!({"path": "Cargo.toml"})));
+        assert_eq!(run.result, refusal("read"));
+    }
+    // The room's own tools are on the list's reach too.
+    let chief = router_for("chief", LaneKind::Work);
+    let _deny = test_deny(&["message_user", "list"]);
+    assert_eq!(chief.run(&call("message_user", json!({"text": "hi"}))).result, refusal("message_user"));
+    assert_eq!(chief.run(&call("list", json!({}))).result, refusal("list"));
+}
+
+#[test]
+fn room_builtins_refuse_a_denied_tool_on_every_path() {
+    use crate::tool::policy::{refusal, test_deny};
+    let host = CtxBuiltins::from_ctx(context(std::path::Path::new(".")));
+    // These three never reach `execute_tool`: the lane's own job and image code answers them.
+    let _deny = test_deny(&["bash_output", "bash_kill", "load_image", "bash", "skill_unload", "cd"]);
+    for tool in ["bash_output", "bash_kill", "bash", "skill_unload", "cd"] {
+        let out = host.run("red", LaneKind::Work, &call(tool, json!({"command": "echo x", "run_in_background": true})));
+        assert_eq!(out, refusal(tool), "{tool}");
+    }
+    let (out, messages) = host.run_with_messages("red", LaneKind::Work, &call("load_image", json!({"path": "a.png"})));
+    assert_eq!(out, refusal("load_image"));
+    assert!(messages.is_empty());
+    let (out, _) = host.run_with_messages("red", LaneKind::Work, &call("bash", json!({"command": "echo x"})));
+    assert_eq!(out, refusal("bash"));
+    assert!(!host.specs(LaneKind::Work).iter().any(|s| matches!(s.name.as_str(), "bash" | "load_image" | "cd")));
+}

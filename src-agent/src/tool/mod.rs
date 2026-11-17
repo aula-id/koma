@@ -33,6 +33,7 @@ pub mod memory;
 pub mod output;
 pub mod plan;
 mod plan_policy;
+pub mod policy;
 pub mod pong;
 pub mod recovery;
 
@@ -799,6 +800,7 @@ pub fn main_tool_names() -> Vec<String> {
             out.push(n);
         }
     }
+    policy::retain_allowed(&mut out);
     out
 }
 
@@ -976,6 +978,11 @@ fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
 
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].
 pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String {
+    // The hard deny list comes before anything else: no tool, MCP or not,
+    // runs by name when the host has switched it off.
+    if policy::is_denied(&call.function.name) {
+        return policy::refusal(&call.function.name);
+    }
     let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
