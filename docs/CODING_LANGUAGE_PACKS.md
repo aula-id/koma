@@ -4,7 +4,7 @@ Language Packs live in the **workspace BottomPanel** (same dock as Tasks,
 Problems, and Language Servers) — not a floating card. Open via:
 
 - Command palette: **Language Packs: Install, Update and Select Environment**
-- Status footer **Packs** control
+- Status footer **Packs** control (toggles the panel closed when the tab is already open)
 - Bottom panel tab **LANGUAGE PACKS**
 - Notebook kernel recovery (**Language Packs** action)
 
@@ -16,16 +16,16 @@ Match `CodingTasks` chrome. Do **not** reintroduce a floating
 | Rule | Detail |
 |------|--------|
 | Shell | `#workspace-bottom-panel` tab content only |
-| Title chrome | Owned by BottomPanel tablist (`TASKS · PROBLEMS · LANGUAGE SERVERS · LANGUAGE PACKS`) + collapse/close |
+| Title chrome | Owned by BottomPanel tablist (`TASKS · PROBLEMS · LANGUAGE SERVERS · LANGUAGE PACKS`) + maximize/close. Refresh and open-config icon buttons are header actions (`PanelActions` from `PanelChrome`) rendered into the tablist, not a row in the body |
 | Body root | `section` with `flex min-h-0 flex-1 flex-col overflow-hidden text-[11px]` — no rounded card, no own `X` |
-| Tool rows | Workspace strip + language/view strip; thin borders, compact muted controls |
-| Density | Separate Environment from Tools; one scrollable content body with 12px padding, 16px section gaps, maximum width 48rem |
-| Buttons | `flex h-6 items-center … rounded px-1.5 text-koma-dim hover:bg-koma-hover` |
-| Selects | `KomaSelect` + `h-6 … bg-koma-panel2 pl-2 text-[11px]` |
+| Tool rows | One wrapping strip with workspace, language and view controls; thin borders, compact muted controls |
+| Density | Separate Environment from Tools; one scrollable content body with 12px horizontal padding, 16px section gaps, maximum width 48rem (`max-w-3xl`) |
+| Buttons | `panelButton` / `panelIconButton` from `PanelChrome` (`flex h-6 … rounded px-1.5 text-koma-dim hover:bg-koma-hover`) |
+| Selects | `KomaSelect` + `panelSelect` (`h-6 … bg-koma-panel2 pl-2 text-[11px]`) |
 | Paths | Hidden behind (?) help, except the editable environment path and reviewed install commands |
 | Copy | Short names + status only. Explanations belong in click/keyboard-accessible (?) disclosures, not permanent paragraphs. |
 | Errors | compact `role="alert"` strip under tools (or toast for one-shots) |
-| Open API | `showCodingPacks()` → `setBottomPanelTab('packs')` (listener stays mounted with the panel) |
+| Open API | `showCodingPacks()` dispatches a `koma-coding-packs` window event; the mounted `CodingPacks` listener picks the workspace and calls `setBottomPanelTab('packs')` |
 | Install progress | Stays on Language Packs after `packApply` (live output + Stop). **Open in Tasks** is optional. |
 | Components | Tools always offers **Language server**, with debugger, runtime, and Python notebook kernel where applicable. Aligned checkbox · name · short status · (?) rows. |
 
@@ -33,8 +33,8 @@ Match `CodingTasks` chrome. Do **not** reintroduce a floating
 BottomPanel
 ├── tablist: Tasks | Problems | Language Servers | Language Packs
 └── packs tab
-    ├── row: workspace select · refresh · open .koma/coding.json
-    ├── row: language (bounded field, arrow inside) · Environment | Tools
+    ├── header actions (tablist): refresh · open coding configuration
+    ├── wrapping row: workspace select · language (bounded field, arrow inside) · Environment | Tools
     └── scrollable body
         ├── Environment: executable + Apply · Manage tools
         └── Tools: checkbox · component · Installed / Not installed / Manual setup · (?)

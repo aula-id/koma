@@ -45,8 +45,8 @@ engine, and every data-flow path end-to-end.
 ## 1. Stack and File Map
 
 **Runtime:** React 19, TypeScript 5.7, Vite 6, Tailwind CSS v4
-**State:** Zustand 5 (single store, ~885 lines)
-**Routing:** TanStack Router 1.87 (hash history, two routes: `/` and `/settings`)
+**State:** Zustand 5 (single store assembled in `store/koma.ts` from `store/actions/*` and `store/push/*`)
+**Routing:** TanStack Router 1.87 (hash history, one route: `/`)
 **Animations:** Framer Motion 12
 **Markdown:** Streamdown 2.5 (Vercel's streaming-safe renderer)
 **Code highlighting:** Shiki via `@streamdown/code` 1.1 (JS regex engine, no WASM)
@@ -54,7 +54,9 @@ engine, and every data-flow path end-to-end.
 **Lottie:** `lottie-react` 2.4 (cat mascot animations)
 **Icons:** `lucide-react` 1.23
 
-### File tree (48 source files)
+### File tree (abridged)
+
+`src/components/` holds well over a hundred files (tabs for coding, git, diagram, design, notebook, settings, help and more, plus their tests). This tree lists the files the sections below describe; list the directory for the rest.
 
 ```
 src-webgui/
@@ -65,7 +67,7 @@ src-webgui/
   vite-plugin-lottie.ts               # Build-time .lottie extractor
   public/
     fonts/                            # JetBrains Mono 400/500/700 woff2
-    lottie/                           # 4 cat .lottie animation archives
+    lottie/                           # 3 cat .lottie animation archives
   src/
     main.tsx                          # ReactDOM entry
     router.tsx                        # Hash router, route tree
@@ -73,11 +75,18 @@ src-webgui/
     styles.css                        # Tailwind v4 theme, @font-face, global chrome
     koma.d.ts                         # Window/global bridge types + GuiReq union
     vite-env.d.ts                     # Virtual module decl for lottie
-    store/koma.ts                     # Single Zustand store (885 lines)
+    store/koma.ts                     # Single Zustand store, assembled from the modules below
+    store/state.ts, initial.ts        # Store shape and initial slices (also applyPaletteVars)
+    store/actions/*.ts                # Action groups (session, tabs, git, skills, ...)
+    store/push/*.ts                   # Push-envelope reducers per domain
+    store/types/*.ts                  # PushEnvelope, ChatMessage, Tab, slice types
     types/config.ts                   # McpServer, Provider, Model, Role, Scope
     lib/toolSignature.ts              # Tool call display formatting
     components/
       AccordionSection.tsx            # Reusable collapsible section
+      BottomPanel.tsx                 # Workspace dock: Tasks / Problems / Language Servers / Language Packs
+      PanelChrome.tsx                 # Shared panel button styles, PanelActions slot, PanelBody, PanelEmpty
+      AboutKoma.tsx                   # About panel (build info) shown in Settings
       ActivityBar.tsx                 # Icon strip (left rail)
       ApprovalOverlay.tsx             # Risky tool approval modal
       CatMascot.tsx                   # Persistent cat mascot (lazy lottie)
@@ -93,7 +102,7 @@ src-webgui/
       RenameOverlay.tsx               # Session rename overlay
       ResizeHandles.tsx               # Custom window resize handles
       ResumePalette.tsx               # Session switcher overlay
-      Sidebar.tsx                     # Sidebar shell (3 views)
+      Sidebar.tsx                     # Sidebar shell (13 views)
       StartScreen.tsx                 # Pre-session landing page
       SwitchingOverlay.tsx            # Session swap loading screen
       TabBar.tsx                      # Tab strip
@@ -110,10 +119,13 @@ src-webgui/
         connector/
           ConnectorListView.tsx       # 3-accordion list (Providers/OAuth/Models)
           ModelForm.tsx               # Model create/edit with route picker
-          OAuthConnect.tsx            # OAuth connect flow (Connector)          ProviderForm.tsx            # Provider create/edit with presets
+          OAuthConnect.tsx            # OAuth connect flow (Connector)
+          ProviderForm.tsx            # Provider create/edit with presets
         mcp/
           McpEditView.tsx             # MCP server form
-          McpListView.tsx             # MCP server list with toggle/delete
+          McpListView.tsx             # MCP server list with toggle/restart/delete, project approval
+          McpImportView.tsx           # Paste JSON snippet (Claude Code / Cursor / VS Code)
+          mcpForm.ts                  # McpDraft <-> SetMcpServer request
 ```
 
 ---
@@ -124,7 +136,7 @@ src-webgui/
 
 2. **`src/router.tsx`**: TanStack Router with hash history; primary route is
    `RootLayout` / session chrome. Settings open as a **main-area tab**
-   (`openSettingsTab`), not a dead `/settings` stub route.
+   (`openSettingsTab`); there is no `/settings` route.
 
 3. **`src/routes/index.tsx` — `RootLayout`**:
    - Resolves `window.__komaOS` once (platform detection, injected by Rust host before boot).
@@ -147,7 +159,7 @@ The frontend communicates with the Rust host through two channels:
 
 ### Rust → JS: `window.__komaClient.push(json)`
 
-The Rust host calls `evaluate_script("window.__komaClient.push(\"...\")")` on the webview. The bridge is wired in `RootLayout`'s `useEffect` (routes/index.tsx:67-75):
+The Rust host calls `evaluate_script("window.__komaClient.push(\"...\")")` on the webview. The bridge is wired in `RootLayout`'s `useEffect` (`routes/index.tsx`):
 
 ```ts
 window.__komaClient = {
@@ -186,7 +198,7 @@ interface Window {
 
 ### Push Envelope (Rust → JS)
 
-Defined as `PushEnvelope` union in `store/koma.ts:187-304`, discriminated on `k`:
+Defined as the `PushEnvelope` union in `store/types/envelope.ts`, discriminated on `k`:
 
 | Variant | Key Fields | Purpose |
 |---------|-----------|---------|
@@ -206,7 +218,7 @@ Defined as `PushEnvelope` union in `store/koma.ts:187-304`, discriminated on `k`
 
 ### GuiReq (JS → Rust)
 
-Defined in `src/koma.d.ts:4-126` as a discriminated union on `r` (33 variants):
+Defined in `src/koma.d.ts` as a discriminated union on `r` (well over 150 variants; the list below is the core chat subset, the rest cover coding, git, skills, MCP, notebooks, terminals, remote hosts and so on):
 
 **Session control:** `Ready`, `Submit{text}`, `SelectSession{id}`, `NewSession`, `RefreshHub`, `CancelSwitch`, `Rename{name}`, `Interrupt`, `RewindTo{index}`, `Compact`, `SetMode{mode}`, `SetSessionMain{modelUuid?}`
 
@@ -229,7 +241,7 @@ Defined in `src/koma.d.ts:4-126` as a discriminated union on `r` (33 variants):
 
 ## 5. Zustand Store
 
-Single store at `src/store/koma.ts` (885 lines), created via `create<KomaState>()`.
+Single store created in `src/store/koma.ts` via `create<KomaState>()`. Types live in `src/store/types/`, initial values in `src/store/initial.ts`, action groups in `src/store/actions/`, and per-domain push reducers in `src/store/push/`. The slice lists below cover the chat core only; there are further slices (git, coding, skills, store, remote, activityBar, and others).
 
 ### Slices
 
@@ -261,9 +273,9 @@ Single store at `src/store/koma.ts` (885 lines), created via `create<KomaState>(
 
 ### Key Actions
 
-**`push(env: PushEnvelope)`** — the Rust→JS reducer. Giant `switch` on `env.k`:
+**`push(env: PushEnvelope)`** — the Rust→JS reducer (dispatches into `store/push/*`). Giant `switch` on `env.k`:
 
-- `Snapshot`: Wholesale replaces session fields. If `session.id` differs (session switch), clears `stream`/`reasoning`, resets tabs to chat-only. Calls `applyPaletteVars(env.palette)`.
+- `Snapshot`: Wholesale replaces session fields. If `session.id` differs (session switch), clears `stream`/`reasoning`, resets tabs to chat-only. Calls `applyPaletteVars(env.palette)` (`store/initial.ts`).
 - `StreamMsg`: `session.stream = env.text` (full replacement).
 - `Reasoning`: `session.reasoning = env.text` (full replacement).
 - `Status`: Updates `working`, usage counters, `mode`. Raises a new toast (deduped by text) when `toast` changes; bumps `toastSeq`.
@@ -305,7 +317,8 @@ Single store at `src/store/koma.ts` (885 lines), created via `create<KomaState>(
 ### Data Types (`src/types/config.ts`)
 
 - `Transport` — `'stdio' | 'http'`
-- `McpServer` — `{ id, name, enabled, transport, command, args, env, url }`
+- `McpServer` — `{ id, name, enabled, transport, command, args, env, url, toolCount, ... }` plus optional `connected`, `error`, `argv`, `envPairs`, `headers` (values masked), `cwd`, `startupTimeoutMs`, `toolTimeoutMs`, `allowedTools`, `disabledTools`, `scope` (`'user' | 'project'`), `approval` (`'approved' | 'pending' | 'changed'`), `overridden`
+- `McpProject` — `{ file, error? }` (the workspace `.mcp.json`)
 - `Provider` — `{ id, name, endpoint, hasKey, isKomaFree? }`
 - `OAuthProv` — `'OpenAI' | 'Kilo Code' | 'Anthropic'`
 - `Scope` — `'global' | 'local'`
@@ -329,11 +342,12 @@ The page is a frameless window rendered inside `#app` (a transparent-background 
 |  +--------------------------------------------------------------+|
 |  | ActivityBar | Sidebar (resizable) | main                     ||
 |  | (48px)      | (150-500px)         | (<Outlet />)            ||
-|  |  [Files]    |  [view header]      |  TabBar                 ||
-|  |  [Blocks]   |  [panel content]    |  ChatView / DiffTab     ||
-|  |  [Plug]     |                     |  ...                     ||
+|  |  [Chat]     |  [view header]      |  TabBar                 ||
+|  |  [Coding]   |  [panel content]    |  ChatView / DiffTab     ||
+|  |  [...]      |                     |  ...                     ||
 |  |  [Settings] |                     |  Composer                ||
 |  |             |                     |  UsageFooter             ||
+|  |             |                     |  BottomPanel (optional)  ||
 |  +--------------------------------------------------------------+|
 |  [ResumePalette overlay]                                         |
 |  [RenameOverlay overlay]                                         |
@@ -348,7 +362,8 @@ The page is a frameless window rendered inside `#app` (a transparent-background 
 - The `ActivityBar` + `Sidebar` + `main` are in a `flex` row.
 - The sidebar is resizable via a 5px drag grip (clamped 150–500px). A `startResize` handler tracks mouse on window for smooth drag.
 - The `main` column uses `flex-1 min-w-0` to fill remaining width.
-- The `.term-shell` class sets `max-width: 1024px` on the chat column, centered.
+- The `.term-shell` class sets `width: min(1024px, calc(100% - 48px))` on the chat column, centered.
+- `BottomPanel` (`BottomPanel.tsx`, mounted in `routes/index.tsx`) is the workspace dock under the main column. Tabs: Tasks, Problems, Language Servers, Language Packs (`bottomPanelTab`; `null` = closed). It opens from the UsageFooter task and language-pack buttons. Height is clamped between 160px and 75% of the parent (default 280, persisted in `localStorage` key `koma.bottom-panel.height`); the header has a maximise/restore button and a close button, and tab content stays mounted while hidden. Panels render header buttons into the dock through `PanelActions` (`PanelChrome.tsx`).
 - Diff tabs use the full width of `main`.
 - `#app` has `border-radius: 10px` (16px on macOS). The Rust host makes the window transparent, so `#app` is the visible canvas.
 
@@ -387,19 +402,24 @@ The page is a frameless window rendered inside `#app` (a transparent-background 
 
 A 48px-wide vertical icon strip on the left edge, VSCode-style:
 
-| Icon | View | Notes |
-|------|------|---------|
-| Files | explore | Plan / files / bash / agents |
-| Code2 | coding | File tree + Monaco coding tabs + host LSP |
-| GitBranch | git | Source control |
-| VectorSquare | mcp | MCP servers |
-| Brain | connector | Providers / models / OAuth |
-| Network | importGraph | Import graph |
-| Bot | agents | Agent definitions |
+| Icon | View id | Label |
+|------|---------|-------|
+| MessageSquare | explore | Chat |
+| Code2 | coding | Coding |
+| Shapes | diagram | Diagram |
+| Frame | design | Design |
+| GitBranch | git | Source Control |
+| VectorSquare | mcp | MCP |
+| Brain | connector | Connector |
+| Network | importGraph | Import Graph |
+| Bot | agents | Agents |
+| Library | skills | Skills |
 | ChartColumn | usage | Usage |
-| Blocks | store | Extension marketplace |
-| Server | remote | Remote SSH hosts |
-| (footer) | Settings / Help / Tutorial | Not SidebarView — open settings/help tabs or tutorial |
+| Blocks | store | Extensions |
+| Server | remote | Remote |
+| (footer) | Notifications / Help / Settings | Not SidebarView; open the notifications, help or settings tab |
+
+The list is `ACTIVITY_BAR_ITEMS` in `ActivityBar.tsx`. The first view keeps the id `explore` but is titled **Chat**; selecting it from the bar also focuses the chat tab. The bar shows a notification badge from the notification store (polled every 5s).
 
 **Navigation:** clicking the active view toggles the sidebar; a different view
 switches and opens the sidebar. Extension panel icons can share the bar’s
@@ -408,9 +428,9 @@ order/hidden/overflow machinery.
 ### Sidebar (`Sidebar.tsx`)
 
 Resizable panel (≈150–500px) with header title. Renders the panel for
-`SidebarView`:
+`SidebarView` (header titles come from `TITLES`; the `mcp` view is titled "MCP Servers"). Some views add a header refresh button (usage, git, mcp, skills, importGraph):
 
-`explore` · `coding` · `git` · `mcp` · `connector` · `importGraph` · `agents` · `usage` · `store` · `remote`
+`explore` · `git` · `coding` · `mcp` · `connector` · `importGraph` · `agents` · `skills` · `usage` · `store` · `remote` · `diagram` · `design`
 
 ---
 
@@ -422,19 +442,19 @@ VSCode-style tab strip at the top of the main content area.
 
 **Structure:**
 - `tabs[0]` is always the permanent, uncloseable **chat tab** (MessageSquare icon).
-- **Diff tabs** appear when the user clicks a file-changed row in the Explore panel. They have a FileDiff icon, basename as title, and a close button.
-- The TabBar is **hidden entirely** when only the chat tab exists (zero chrome cost).
+- **Diff tabs** appear when the user clicks a file-changed row in the Chat panel (`ExplorePanel.tsx`). They have a FileDiff icon, basename as title, and a close button.
+- The TabBar is **hidden entirely** when only the chat tab exists and there is a single editor group (zero chrome cost).
 - Active tab gets a 2px top accent line and raised background.
 - When two diff tabs share a basename, a dim parent-dir suffix disambiguates (VSCode pattern).
 - Tab close falls back to the left neighbour (tabs[0] is always there).
 
 ### Tab Types
 
+`Tab` is defined in `store/types/tabs.ts`. `{ id: 'chat', kind: 'chat' }` is permanent. Other kinds include `diff` (id `diff:${path}` from the Chat panel, `gitdiff:...` from Source Control, `commitdiff:...` from the commit graph), `settings`, `help`, `tutorial`, `notifications`, `welcome` (ids `welcome-diagram` and `welcome-design`, one per feature), `subagent`, `bash`, `agent`, `skill`, `uploadSkill`, `graph`, `importGraph`, `analytics`, `store`, `extension`, `codingFile`, `localFile`, `diagram`, `design` and terminal/git workbench tabs. Editor groups are managed by `store/editorGroups.ts`. Diff tab shape:
+
 ```ts
-type Tab =
-  | { id: 'chat'; kind: 'chat' }                          // permanent
-  | { id: `diff:${path}`; kind: 'diff'; path; title;      // opened from Explore
-      diff?: DiffPayload; loading: boolean }
+{ id: string; kind: 'diff'; path: string; title: string;
+  diff?: DiffPayload; loading: boolean; staged?: boolean; commitSha?: string }
 ```
 
 ### Tab Lifecycle
@@ -444,7 +464,9 @@ type Tab =
 3. **Close**: `closeTab(id)` — removes the tab; if it was active, activates the left neighbour. Chat tab cannot close.
 4. **Session switch**: Resets tabs to `[makeChatTab()]`.
 
-### TabbedMain (`routes/index.tsx:192-215`)
+### TabbedMain (`routes/index.tsx`, abridged)
+
+The sketch below shows the original chat-plus-diff shape; the real component also mounts the other tab kinds and editor groups.
 
 ```tsx
 <div className="flex h-full w-full min-w-0 flex-col">
@@ -474,7 +496,7 @@ The chat is hidden via CSS `hidden` class when a diff tab is active — it is **
 
 ## 10. Chat View
 
-**`ChatView.tsx`** (473 lines) — the full chat view. Layout:
+**`ChatView.tsx`** — the full chat view. Layout:
 
 ```
 +------------------------------------------------------------------+
@@ -515,13 +537,13 @@ The `Message` function dispatches by role and kind:
 
 ## 11. Composer
 
-**`Composer.tsx`** (375 lines) — pinned at the bottom of the chat view.
+**`Composer.tsx`** — pinned at the bottom of the chat view.
 
 ### Layout
 
 ```
 +---------------------------------------------------------------+
-| [pending steer queue indicator] (max 5 items)                 |
+| [pending steer queue indicator]                               |
 | +-----------------------------------------------------------+ |
 | | [CatMascot (absolute top-right)]                          | |
 | | [Thinking bubble (absolute above cat, random word/1s)]    | |
@@ -538,19 +560,19 @@ The `Message` function dispatches by role and kind:
 ### Features
 
 - **Auto-grow textarea**: Grows up to 200px, then scrolls.
-- **Submit**: Enter (no Shift) fires `submit()`. Shift+Enter inserts a newline.
+- **Submit**: Ctrl+Enter / Cmd+Enter fires `submit()` (while a turn is working it queues the message). Plain Enter inserts a newline.
 - **Staged rewind**: If a rewind is staged (from edit pencil), fires `RewindTo(index)` FIRST, then `Submit(text)`.
-- **Steer cap**: Max 5 queued mid-turn submits (shown as preview chips above the card).
+- **Steer queue**: mid-turn submits are queued (shown as preview chips above the card; Ctrl/Cmd+X clears them).
 - **Thinking bubble**: Shows a random word from `wanderer.json` every 1s while the turn is working.
 - **Cat mascot**: Lottie animation, swaps to a random cat on each send.
 
-### File Attachment (images only)
+### File Attachment (images and text files)
 
-- **Paste**: Ctrl+V → reads clipboard image → `AttachFile` GuiReq.
-- **Drag-drop**: Drop image on composer → `AttachFile`.
-- **File picker**: Paperclip button → native file dialog → images only → `AttachFile`.
+- **Paste**: Ctrl+V → clipboard image → `AttachFile`; large pasted text collapses into a chip via `AttachPaste`; pasted text over 2 MB (`PASTE_SOFT_MAX_BYTES`) is refused with an error toast.
+- **Drag-drop**: images → `AttachFile`; text files → `AttachPaste`.
+- **File picker**: Paperclip button → native file dialog → same handling.
 - **Omnisearch pick**: `composerInsert` signal → appends path text to draft (not routed through AttachPath).
-- Non-image files are silently skipped.
+- Files that are neither text nor image are rejected with an error toast (`previewDroppedFile` in `lib/filePreview.ts`).
 - Attachment chips appear above the textarea with name + X remove button.
 - Remove sends `RemoveAttachment { markerN }`.
 
@@ -583,7 +605,7 @@ Custom Shiki highlighter supporting: TypeScript, TSX, JavaScript, JSX, Python, R
 
 ## 13. Tool Call Display
 
-### ToolCallRow (in `ChatView.tsx:125-213`)
+### ToolCallRow (in `ChatView.tsx`)
 
 Each tool call renders:
 
@@ -643,7 +665,7 @@ When `pendingCall.name === 'plan_ready'`:
 
 ## 15. Accordion System
 
-**`AccordionSection.tsx`** (37 lines) — reusable VSCode-style collapsible section.
+**`AccordionSection.tsx`** — reusable VSCode-style collapsible section.
 
 ### Props
 
@@ -652,8 +674,12 @@ When `pendingCall.name === 'plan_ready'`:
   title: string
   open: boolean
   onToggle: () => void
-  action?: ReactNode    // e.g. AddBtn, visible on hover
-  children: ReactNode
+  action?: ReactNode    // e.g. AddBtn
+  children?: ReactNode
+  fill?: boolean        // default true: open section fills leftover height
+  shrink?: boolean      // non-filling only: shrink and scroll when the panel is short
+  minHeight?: number    // floor (px) for an open filling section
+  count?: number        // shown after the title; pass only when > 0
 }
 ```
 
@@ -661,25 +687,25 @@ When `pendingCall.name === 'plan_ready'`:
 
 - **Open**: `flex-1 min-h-0` — fills remaining parent height and scrolls internally.
 - **Closed**: `flex-none` — collapses to just the header.
-- **Header**: 22px tall, `bg-koma-head`, hover bg. ChevronRight rotates 90° when open. The `action` slot is hidden until the group is hovered (progressive disclosure).
+- **Header**: 24px tall, `bg-koma-head`, hover bg. ChevronRight rotates 90° when open; the toggle button sets `aria-expanded` and `aria-controls`. The `action` slot is always visible; the header is an `@container`, so a labelled `AddBtn` drops its text below 200px.
 - **CSS transition**: `transition-transform` on the chevron for smooth rotation.
 
 ### Where Used
 
 | AccordionGroup | Sections |
 |---------------|----------|
-| **ExplorePanel** | Plan, File changed, Bash, Agents |
+| **ExplorePanel** | Plan (or Todo / SDLC), Files changed, Bash, Agents |
 | **ConnectorListView** | Providers, OAuth, Models |
 
 ---
 
 ## 16. Explore Panel
 
-**`ExplorePanel.tsx`** (224 lines) — the sidebar's "Explore" view. Four `AccordionSection`s:
+**`ExplorePanel.tsx`** — the sidebar's **Chat** view (view id `explore`, formerly titled Explorer). Four `AccordionSection`s:
 
 ### Plan
 
-- **Title**: `Plan · N/M` (completed/total).
+- **Title**: `Plan · N/M` (completed/total) in plan mode, `Todo · N/M` otherwise (bare `Plan`/`Todo` when empty); an SDLC rail replaces it in SDLC mode.
 - **Items**: `PlanTodoEntry[]` with status icons:
   - Pending → Circle
   - In-progress → CircleDot (accent)
@@ -690,7 +716,7 @@ When `pendingCall.name === 'plan_ready'`:
 
 ### File Changed
 
-- **Title**: `File changed · N`.
+- **Title**: `Files changed · N`.
 - **Items**: `FileChangeEntry[]` with git-style badges:
   - `A` (added) → success/green
   - `M` (modified) → accent
@@ -699,6 +725,7 @@ When `pendingCall.name === 'plan_ready'`:
 
 ### Bash
 
+- **Title**: `Bash · N`.
 - **Reversed order** (newest first).
 - **Items**: `BashJobEntry[]` with terminal icon, command, status badge — includes **foreground** jobs that park the turn as well as true background jobs.
 - **Kill button** (while running) → sends `KillBash` with parsed numeric ID.
@@ -706,6 +733,7 @@ When `pendingCall.name === 'plan_ready'`:
 
 ### Agents
 
+- **Title**: `Agents · N`.
 - **Reversed order**.
 - **Items**: `SubAgentEntry[]` with bot icon, name, status badge.
 - **Kill button** (while running, requires `id`) → sends `KillSubagent`.
@@ -722,15 +750,15 @@ When `pendingCall.name === 'plan_ready'`:
 Three `AccordionSection`s:
 
 #### Providers
+- On first run (no providers, OAuth connections or models) an `EmptyState` titled "Connect an AI" offers "Sign in with an account" and "Add an API key".
 - Lists real providers (koma-free hidden from the list).
 - Add / Edit (pencil) / Delete (arm-delete: click once to reveal confirm, click again to delete).
 - `ProviderForm`: Name, Endpoint, API Key (password field, never prefilled — daemon doesn't send plaintext keys).
-- **Marketplace presets** (9): OpenRouter, DeepSeek, Mimo, OpenAI, Groq, Together, Fireworks, Mistral, DeepInfra. Or Custom.
+- **Marketplace presets** (`PREDEFINED` in `ProviderForm.tsx`): Koma, NetraRuntime, GismaPro, OpenRouter. Or Custom.
 - Selecting a preset auto-fills Name + Endpoint.
 
 #### OAuth
-- Shows OpenAI / Kilo Code / Anthropic buttons.
-- Stubbed — no backend yet.
+- Lists the live OAuth connections (`oauth.conns`: email, plan, provider tag) with an arm-confirm Disconnect; the connect flow is `OAuthConnect`.
 
 #### Models
 - Lists real models (free-flagged hidden).
@@ -750,21 +778,28 @@ This flow works identically for Providers, Models, Themes, and KomaFree — all 
 
 ## 18. MCP Panel
 
-**`McpPanel.tsx`** — master-detail with slide animation (same pattern as Connector).
+**`McpPanel.tsx`** — master-detail with slide animation (same pattern as Connector). The panel refreshes live status (`GetMcpStatus`) when opened; the sidebar header has a "Refresh MCP status" button.
 
 ### List View (`McpListView.tsx`)
 
-- Server list with enable toggle (green/grey dot), edit (pencil), delete (arm-delete).
+- User servers (`scope !== 'project'`) with enable toggle, restart (`RestartMcpServer { uuid }`), edit (pencil) and delete (arm-delete); an Import button opens `McpImportView`.
 - Toggle sends `EnableMcpServer { uuid, enabled }`.
+- Project servers (`scope === 'project'`, read from the workspace `.mcp.json`, `config.mcpProject = { file, error? }`) are listed separately with an approval state (`approved` / `pending` / `changed`). Approve/deny sends `ApproveMcpProjectServer { uuid, approved }`; only approved servers are started.
+
+### Import View (`McpImportView.tsx`)
+
+Pastes a JSON snippet (Claude Code, Cursor or VS Code style) and sends `ImportMcpJson { text }`.
 
 ### Edit View (`McpEditView.tsx`)
 
-Form fields:
+Form fields (draft in `mcpForm.ts`):
 - Name
 - Enabled toggle
 - Transport: Segmented control (stdio / http)
-- **stdio mode**: Command, Args (space-joined string), Env (`K=V, K2=V2` format)
-- **http mode**: URL
+- **stdio mode**: Command, Arguments (one per line), Environment (`KEY=value` per line), Working directory (defaults to the session folder)
+- **http mode**: URL, Headers (`Name: value` per line; saved values are masked and left as-is to keep them)
+- Both: Startup timeout (seconds, placeholder 20), Tool timeout (seconds, placeholder 60), Allowed tools and Disabled tools (comma separated, `*` wildcard; empty allowed = all)
+- `${VAR}` in values is read from the environment by the host.
 
 New server: `uuid` is null (daemon mints one).
 Edit: `uuid` is the existing server's id.
@@ -828,7 +863,7 @@ When the ResumePalette is open, it can emit `RefreshHub` requests to re-discover
 
 ## 21. Diff Tabs and Monaco Editor
 
-### DiffTab (`DiffTab.tsx`, 282 lines)
+### DiffTab (`DiffTab.tsx`)
 
 Lazy-loaded via `React.lazy()` — the Monaco chunk never loads until the first diff tab is opened.
 
@@ -851,11 +886,11 @@ Lazy-loaded via `React.lazy()` — the Monaco chunk never loads until the first 
 
 ## 22. File Attachment Flow
 
-### Image Attachments (drag-drop / paste / file picker)
+### Image Attachments (drag-drop / paste / file picker; text files go through `AttachPaste`)
 
-1. User drops/pastes image on Composer → `Composer.tsx:158-173` → `attachFiles()`.
-2. Only images accepted: `if (!file.type.startsWith('image/')) continue`.
-3. Read bytes as base64 → `req({ r: 'AttachFile', name, bytesB64, mime })`.
+1. User drops/pastes an image on Composer → `attachFiles()` in `Composer.tsx`.
+2. Images and text files accepted (see Composer above); other files are rejected with a toast.
+3. For images, read bytes as base64 → `req({ r: 'AttachFile', name, bytesB64, mime })`.
 4. Host persists to scratch path, ingests via existing attachment core.
 5. Next `Snapshot`: `attachments: AttachmentEntry[]` arrives — full array replaced.
 6. Composer shows chips with name + X remove button.
@@ -874,7 +909,7 @@ Lazy-loaded via `React.lazy()` — the Monaco chunk never loads until the first 
 
 ## 23. Onboarding
 
-**`Onboarding.tsx`** (449 lines) — multi-step wizard with progress dots.
+**`Onboarding.tsx`** — multi-step wizard with progress dots.
 
 ### Steps
 
@@ -917,18 +952,18 @@ function useNeedsOnboarding() {
 - **New session** button → `req({ r: 'NewSession' })`.
 - **Recent sessions** list from `hub.history`.
 - Clicking a session → `req({ r: 'SelectSession', id })`.
-- **About koma** section.
+- **About koma** section (build info is shown in Settings, About, via `AboutKoma.tsx` and `lib/buildInfo.ts` reading `window.__komaBuild`).
 - Uses `useContainerWidth()` hook (ResizeObserver) for responsive layout.
 
 ---
 
 ## 25. Toasts
 
-### ToastContainer (`ToastContainer.tsx`, 68 lines)
+### ToastContainer (`ToastContainer.tsx`)
 
 **Source**: Host pushes `Status` envelopes with `toast`/`toastKind` fields.
 
-**Position**: Top-right corner, `z-index: 70`.
+**Position**: Top-right corner (`top-12`), `z-index: 70`.
 
 **Raise logic** (store):
 - Only raises a NEW toast when `env.toast` differs from the current toast text (deduped — the host re-pushes the same live toast on every Status tick).
@@ -938,6 +973,7 @@ function useNeedsOnboarding() {
 **Auto-dismiss**:
 - Error toasts: 7s (`ERROR_MS`).
 - Info toasts: 4s (`INFO_MS`).
+- Confirm toasts (those with an `action`, see `lib/toast-confirm.ts`) stay until accepted or dismissed.
 - Timer keyed on `toast.id` for reset.
 
 **Render**: Framer Motion entry/exit. AlertTriangle icon for errors, Info icon for info. Manual close via X button (only clears if id still matches).
@@ -1016,23 +1052,27 @@ The host pushes `PaletteColors` on every `Snapshot` and `Config`. `applyPaletteV
 
 ### Lottie
 
-4 cat animations in `public/lottie/*.lottie`. Extracted at build time by `vite-plugin-lottie.ts` (unzips dotLottie archives, inlines raster assets as base64 data URIs, exposes parsed JSON as `virtual:lottie-animations`). The `CatMascotLottie` component uses `lottie-react` to render in a loop, swapping to a random cat on each submit.
+3 cat animations in `public/lottie/*.lottie`. Extracted at build time by `vite-plugin-lottie.ts` (unzips dotLottie archives, inlines raster assets as base64 data URIs, exposes parsed JSON as `virtual:lottie-animations`). The `CatMascotLottie` component uses `lottie-react` to render in a loop, swapping to a random cat on each submit.
 
 ---
 
 ## 28. Keyboard Shortcuts
 
-Keyboard handling is decentralized — there are NO global keyboard shortcut bindings.
+Keyboard handling is mostly per component, plus a few window-level listeners in `routes/index.tsx`.
 
 | Shortcut | Handler | Where |
 |----------|---------|-------|
-| **Enter** (Composer textarea, no Shift) | `submit()` | `Composer.tsx:141-146` |
-| **Shift+Enter** | Newline (default textarea behavior) | `Composer.tsx:141-146` |
+| **Ctrl/Cmd+Enter** (Composer) | `submit()` (queues while working); plain Enter is a newline | `Composer.tsx` |
+| **Ctrl/Cmd+X** (Composer, steer queue non-empty) | Clear queued follow-ups | `Composer.tsx` |
+| **Ctrl/Cmd+B** | `BackgroundAll` (outside Monaco editors) | `routes/index.tsx` |
+| **Ctrl/Cmd+R** | `Resend` (always swallowed so the webview never reloads) | `routes/index.tsx` |
+| **Ctrl/Cmd+\\** | Split the active tab into an editor group, or flip the split direction | `routes/index.tsx` |
+| **Ctrl/Cmd+1..8** | Focus editor group N | `routes/index.tsx` |
 | **Escape** | Close overlays (ResumePalette, RenameOverlay, OmniSearchPalette, ModelPicker, ModeSelector, Select/Combobox) | Each component's `onKey` listener |
-| **Enter** (RenameOverlay input) | `confirm()` | `RenameOverlay.tsx:60` |
-| **Tab/Space** (tab strip items) | `activateTab()` | `TabBar.tsx:69-71` |
+| **Enter** (RenameOverlay input) | `confirm()` | `RenameOverlay.tsx` |
+| **Tab/Space** (tab strip items) | `activateTab()` | `TabBar.tsx` |
 
-No app-wide Cmd+K, Cmd+P, or chord shortcuts.
+No app-wide Cmd+K or Cmd+P palette shortcuts.
 
 ---
 
@@ -1041,7 +1081,7 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 | Component | File | Purpose |
 |-----------|------|---------|
 | `AccordionSection` | `AccordionSection.tsx` | Reusable VSCode-style collapsible section |
-| `ActivityBar` | `ActivityBar.tsx` | 48px icon strip (Explore/MCP/Connector + Settings) |
+| `ActivityBar` | `ActivityBar.tsx` | 48px icon strip (13 reorderable views + Notifications/Help/Settings) |
 | `ApprovalOverlay` | `ApprovalOverlay.tsx` | Risky tool call approval card |
 | `CatMascot` | `CatMascot.tsx` | Persistent cat mascot with error boundary + lazy Lottie |
 | `CatMascotLottie` | `CatMascotLottie.tsx` | Lottie player leaf, random cat swap on trigger |
@@ -1056,7 +1096,7 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 | `RenameOverlay` | `RenameOverlay.tsx` | Session rename input (wiggle on outside click) |
 | `ResizeHandles` | `ResizeHandles.tsx` | 8 custom window resize handles (frameless window) |
 | `ResumePalette` | `ResumePalette.tsx` | Session switcher overlay (cooking + history, filtered) |
-| `Sidebar` | `Sidebar.tsx` | Shell: header + Explore/MCP/Connector panel |
+| `Sidebar` | `Sidebar.tsx` | Shell: header + the active view's panel |
 | `StartScreen` | `StartScreen.tsx` | Pre-session landing with recent sessions + New |
 | `SwitchingOverlay` | `SwitchingOverlay.tsx` | Full-screen loading spinner during session swap |
 | `TabBar` | `TabBar.tsx` | VSCode-style tab strip (chat + diff tabs) |
@@ -1064,7 +1104,11 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 | `ToastContainer` | `ToastContainer.tsx` | Animated toast notifications (error/info, auto-dismiss) |
 | `UsageFooter` | `UsageFooter.tsx` | Statusline: mode badge, activity pulse, token counts, compact btn |
 | `komaShiki` | `komaShiki.ts` | Trimmed Shiki highlighter (16 langs, JS engine, no WASM) |
-| `ExplorePanel` | `panels/ExplorePanel.tsx` | Plan todos, File changes, Bash jobs, Sub-agents |
+| `ExplorePanel` | `panels/ExplorePanel.tsx` | Chat view: plan todos, files changed, bash jobs, sub-agents |
+| `BottomPanel` | `BottomPanel.tsx` | Tasks / Problems / Language Servers / Language Packs dock |
+| `PanelChrome` | `PanelChrome.tsx` | `PanelActions`, `PanelBody`, `PanelEmpty`, shared button classes |
+| `AboutPanel` | `AboutKoma.tsx` | Version and build details (Settings, About) |
+| `WelcomeTab` | `WelcomeTab.tsx` | Welcome page for Diagram and Design |
 | `ConnectorPanel` | `panels/ConnectorPanel.tsx` | Provider/Model/OAuth management |
 | `McpPanel` | `panels/McpPanel.tsx` | MCP server management |
 | `ConnectorListView` | `panels/connector/ConnectorListView.tsx` | 3-accordion list |
@@ -1076,10 +1120,11 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 | `GitPanel` | `panels/GitPanel.tsx` | Source control |
 | `TerminalTab` | `TerminalTab.tsx` | Integrated terminal tabs |
 | `ProblemsDrawer` / `LspDrawer` | drawers | Diagnostics + language-server runtime |
-| `McpListView` | `panels/mcp/McpListView.tsx` | MCP server list with toggle/delete |
+| `McpListView` | `panels/mcp/McpListView.tsx` | MCP server list with toggle/restart/delete, project approval |
+| `McpImportView` | `panels/mcp/McpImportView.tsx` | JSON snippet import |
 | `McpEditView` | `panels/mcp/McpEditView.tsx` | MCP server create/edit form |
 | `form.tsx` | `panels/form.tsx` | Form primitives: Field, TextInput, Toggle, Segmented, Chips, Select, Combobox |
-| `helpers.tsx` | `panels/helpers.tsx` | Row, IconBtn, Empty, ScopePill, AddBtn, DetailHeader, FormActions |
+| `helpers.tsx` | `panels/helpers.tsx` | Row, IconBtn, Empty, EmptyState, NoProjectState, NoWorkspaceState, ScopePill, AddBtn (optional visible `text`), DetailHeader, FormActions |
 
 ---
 
@@ -1087,19 +1132,21 @@ No app-wide Cmd+K, Cmd+P, or chord shortcuts.
 
 | Constant | Value | Where |
 |----------|-------|-------|
-| Default window size | 1024×680 | `gui/mod.rs` WindowBuilder |
+| Default window size | 1024×680 | `src-agent/src/app/runtime/gui/mod.rs` |
 | Titlebar height | 32px | `#titlebar` CSS |
 | ActivityBar width | 48px | `w-12` class |
 | Sidebar min/max | 150–500px | `SIDEBAR_MIN`/`SIDEBAR_MAX` |
-| Chat max-width | 1024px | `.term-shell` CSS |
+| Chat max-width | min(1024px, 100% - 48px) | `.term-shell` CSS |
 | Textarea max-height | 200px | Composer auto-grow |
-| Steer queue cap | 5 | Composer |
+| Paste size limit | 2 MB | `lib/pasteText.ts` |
 | Toast auto-dismiss (error) | 7s | `ToastContainer.tsx` |
 | Toast auto-dismiss (info) | 4s | `ToastContainer.tsx` |
 | SwitchingOverlay hint | 10s | `SwitchingOverlay.tsx` |
 | SwitchingOverlay auto-cancel | 25s | `SwitchingOverlay.tsx` |
 | Monaco chunk | lazy-loaded | `React.lazy()` |
 | Shiki languages | 16 | `komaShiki.ts` |
+| Skill zip upload limit | 256 MiB, sent in 4 MiB chunks | `lib/skillUpload.ts` (mirrors `src-agent/src/model/skill/persistence.rs`) |
+| Bottom panel height | 160px to 75% of parent, default 280 | `BottomPanel.tsx` |
 | Scrollbar width | 3px | `::-webkit-scrollbar` |
 | `#app` border-radius | 10px (16px macOS) | `styles.css` |
 | Cat mascot swap | Per submit | `CatMascotLottie.tsx` |

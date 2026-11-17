@@ -1,117 +1,137 @@
-# Cyber mode
+# Secure room
 
 A coding agent with a security lane bolted on the side is the wrong shape: the
 capability leaks, the boundary is wherever the prompt last said it was, and a
-"confirmed" finding turns out to be a tool exit code. This document is the
-contract the code enforces, and where each piece of it lives.
+"confirmed" finding turns out to be a tool exit code. The secure room is its own
+daemon and its own module, and this document is the contract the code enforces.
 
-## The three lanes
+The room replaces the earlier Cyber mode (`src-security`, the `sec_*` tool
+catalog, the Docker egress boundary and `app/sec`), which no longer exists.
 
-Capability is a matrix, enforced at dispatch by `app/sec/lane.rs`. A sentence in a
-prompt is advice; the matrix is checked before a tool is admitted.
+## Separation from the coding chat
 
-| capability          | research | red | blue |
-|---------------------|----------|-----|------|
-| read source/corpus  | yes      | yes | yes  |
-| reach the network   | no       | yes | yes  |
-| start a listener    | no       | yes | no   |
-| propose a patch     | yes      | no  | yes  |
-| apply a patch       | no       | no  | no   |
+`src-agent/src/room/` is its own module and reads its registry from
+`src-misc/room`. The coding chat does not drive it. The only code outside
+`room/` that touches it is the `koma room` CLI (`room/cli.rs`), daemon startup in
+`main.rs`, the SDK room methods (`app/runtime/sdk/room`), and the read-only
+`secure_shelf` tool. The room runs as
+its own daemon kind, started with `koma --daemon --kind secure`. `/security` in
+the terminal hands the session to it, and `/security` again returns to the coding
+chat.
 
-Research reads without touching a target. Only red listens. Blue proposes but
-never applies, so a blue fix still goes through the user's own diff review. An
-unknown `sec_` tool is classified `network` — the strict side, because assuming a
-new tool is free lets the research lane open a socket.
+The room's session id is derived from the coding session that opened it:
+`room_session_id` in `room/mod.rs` (UUID v5 of `"secure-room:" + parent`). The
+terminal derives the same id in `roomSessionId` (`src-term/src/paths.ts`), and a
+test pins the two to the same values. The room's database is
+`<session dir>/room.sqlite`.
 
-The matrix is pinned in one test, so loosening it shows up as a diff.
+## Avatars, roles and lanes
 
-## The boundary
+`src-misc/room/avatars.toml` lists who is in the room; each avatar points at a
+role under `src-misc/room/roles/<role>/` (`role.toml`, `prompt.md`,
+`tools.toml`). Roles: chief, clerk, red, re, reviewer, reporter, researcher,
+builder, blue. The chief and the clerk are single; specialist roles may have
+several avatars (`red-web`, `red-api`).
 
-The guest is on an `--internal` Docker network. That is the whole guarantee: no
-gateway means nothing outside is reachable, whatever the guest believes. A proxy
-container is the only peer and the only route. Proxy environment variables are how
-a client *learns* the route, never the boundary itself — a test proves that a
-direct attempt at a correct IP still fails.
+What a role may do on the shelf is `shelf_allow` in its `role.toml`, enforced by
+`Shelf::call_as`. A sentence in a prompt is advice; the allow list is checked
+before a write. The reviewer cannot rewrite a claim, because that would move the
+revision the review is judging.
 
-The proxy is deny-by-default and CONNECT-only, re-checks every connection against
-a rules file it reloads on change, and refuses rather than tunnels. Unsupported
-protocols fail closed.
+Which role may take which assignment is `AssignmentKind::roles` in
+`room/types.rs`: probes go to red or re, verification to the reviewer, reports to
+the reporter, execution to the builder or blue.
 
-Runtime flags, so nothing depends on a setup step being remembered: non-root,
-`--cap-drop ALL`, `no-new-privileges`, read-only root with `/tmp` and `/artifacts`
-the only writable paths, no Docker socket.
+Every avatar has two loops (`room/lane`): a chat lane that answers the user and
+the Chief in short turns, and a work lane that runs one assignment. The actor
+(`room/actor`) owns both, and everything reaches it as one message on one
+channel.
 
-A proxy refusal carries an `X-Koma-Egress` header, so a blocked call is
-distinguishable from the target's own 403. Without it an egress stop was recorded
-as if the target had answered.
+The registry (`room/registry`) has three layers, lowest first: files embedded
+from `src-misc/room` (always valid), a template directory
+`<koma data dir>/room/`, and a per-session overlay `<session dir>/room/`. A
+broken overlay file is skipped with a warning and the embedded version stays in
+force. A turn keeps the snapshot it started with, so a reload never changes a
+running turn.
+
+## The shelf
+
+The only channel between agents (`room/shelf`). One SQLite table of
+`key -> (content, revision)` in WAL mode, with typed writers per kind and a key
+prefix each: `scope/`, `claims/`, `evidence/`, `verdicts/`, `findings/`,
+`reports/`, `assets/`, `trajectory/`, `results/`. A record is at most 128 KiB.
+
+Writes are compare-and-swap on `expected_revision`; assets and trajectories merge
+into the current revision instead. Results cite `{key, revision}` references and
+`verify_references` refuses one that changed or vanished, so a verdict always
+names the exact revision it judged.
+
+Verdicts are `confirmed`, `returned`, `dismissed` or `discarded`. A confirmed
+claim needs a published finding before its review can complete.
+
+## Proof and the oracle
+
+A claim may carry up to 16 `proof` entries, `{path, needle}`: this exact text is in
+this file. `room/oracle.rs` opens the file and looks, in the background and off
+every lane. The result is `grounded`, `refuted` or `unproven`, written under
+`notes/oracle/`. Only a program can establish that cited code is not there, so
+`refuted` goes back to the red lane that made the claim. `unproven` (no proof, no
+workspace, a path outside it, a file over 4 MiB, a needle under 8 characters) is
+held for review and never a rejection. `grounded` says the code exists, not that
+it is a bug; that stays the reviewer's call.
 
 ## Scope
 
-A versioned record. An edit bumps `version` and a call stamped with an older one is
-refused, never silently upgraded — broadening a scope mid-flight cannot turn an
-admitted call into an unchecked one. Absent scope means no network at all.
+Scope records on the shelf hold `allow` and `deny` lists (`room/clerk/scope.rs`).
+Matching is strict, because a false "in scope" hides a violation while a false
+"out of scope" costs the Chief a glance: an exact host, `*.example.com` for any
+depth of subdomain but not the apex, an IPv4 CIDR, and a deny entry always wins.
+Allowing `example.com` does not allow `app.example.com`.
 
-Exclusions are checked before targets, so an exclusion always wins. Host
-normalisation happens once at parse time. Redirect hops are re-admitted one by one
-and the first refusal names the hop that broke.
+## Finishing
 
-## Evidence and findings
+`assert_finishable` (`room/work/finish.rs`) is the rule for closing an
+engagement: all live assignments completed and passed, and every production
+result (a probe) covered by a passed verification of its claims, evidence and
+results. Otherwise the Chief gets the reason and cannot finish.
 
-A verdict alone is not proof. `confirmed` requires a handle that still resolves to
-retained bytes, and a confirmation whose evidence vanished is **demoted** to
-`unproven` in the report rather than dropped — losing it silently would look like
-it was never claimed.
+State changes for assignments and batches are pure functions in
+`room/transition.rs`: callers pass in what they observed and apply the result.
+Work that cannot be proven stopped is uncertain, never success.
 
-`untested` is a separate bucket from `unproven` throughout, because collapsing them
-is how a gap starts reading as a negative result.
+## The clerk
 
-Evidence keeps the raw bytes beside the redacted copy. Redaction that drops the
-original loses the thing worth keeping.
+An automatic sanity check over the work lanes (`room/clerk`). It speaks only to
+the Chief, cannot pause or stop anything, and never edits anyone's work; it
+raises a flag and the Chief decides.
 
-## The board
+Deterministic checks (`audit.rs`) run on every 4 s tick at no cost: out of scope,
+no scope record, stalled, unpublished work, repeated work, claims without
+evidence, contradictory severities, a review loop, a report due, duplicate
+claims. A model pass runs only while work is active, never twice at once, and
+only when something changed, at least 30 s apart for shelf-only changes.
 
-Shared by the lanes, transactional. Every read-modify-write takes an `flock`; atomic
-file replacement alone loses updates under concurrency, which the test proves with
-four real processes. The lock is kernel-released on death, so a crash does not wedge
-the board.
+## Reading a room from outside
 
-Claims are leased, so a crash is recoverable without a reaper. The
-duplicate-execution check runs at dispatch, *before* the tool, so two lanes cannot
-fire at one route.
-
-## Supervision
-
-Hypothesis cap, turn budget, rate and total caps. At the soft turn limit the run is
-warned once; at the hard limit it is paused rather than being allowed to finish a
-thought that already overran. Resuming grants turns instead of resetting the count,
-so a pause is not a free extension.
-
-## Degrading
-
-One missing dependency costs one tool, not the daemon. Registration is isolated per
-module; a tool whose dependency is absent is advertised as `unavailable` with an
-install hint and returns a typed `unavailable` if called. Nothing auto-installs, so
-the frame reader is never blocked by pip.
-
-## Where the browser sits
-
-`sec_browser` runs on the HOST, not in the guest — playwright pulls ~300 MB of
-driver that would load on every run even for pure-HTTP targets. `exec: browser` is a
-distinct class so the placement is visible. The browser is pointed at the run's
-egress proxy, which is what keeps a host-side navigation inside the scope.
+- `koma room trajectory [--goal KEY] [--format ascii|json|dot|mermaid]
+  [--view outline|layered] [--width COLS] [--session ID]` draws the map from the
+  shelf. It opens the database read-only, so it is safe against a live session.
+- `koma room attach --session ID` is a line client for a running secure daemon.
+- The `secure_shelf` tool (`tool/secure_shelf.rs`) lets the coding agent list the
+  project's room sessions, browse a shelf, read an item or a report. It never
+  writes.
 
 ## Verifying
 
-    cd src-security && python3 -m unittest discover -t .
+    cd src-agent && cargo test room
 
-Skips are real "unverified", with a stated reason. The boundary suite needs Docker
-and a built image; the browser suite needs playwright.
+CI also runs `koma --daemon --kind secure --daemon-selftest` (bind, accept, one
+client round trip, clean exit over the native IPC the chat uses).
 
 ## Known limits
 
-- macOS/colima will not bind-mount a newly created directory under `/tmp`; boundary
-  state lives under `$HOME` for that reason.
-- The daemon's package is shipped into the image as a copy. `test_hardening`
-  compares the two and fails on drift, so re-copy before building.
-- The image carries no per-tool CLIs; those show as `unavailable` with a hint until
-  installed.
+- The room does not isolate a target in a container or restrict the network. Scope
+  is checked by the clerk's audit and the lanes' tool rules, not by an egress
+  boundary.
+- The CWE "speculation" follow-up on confirmed verdicts is left out of the shelf
+  port.

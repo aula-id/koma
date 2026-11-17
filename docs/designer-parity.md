@@ -4,7 +4,9 @@
 **Koma revision:** `40a32a61` on branch `feature/ui-designer`  
 **OpenPencil revision:** `master` (not re-pinned this pass; feature doc dated 2026-03-07 in upstream)
 
-**Related Koma docs:** [`ARCH_DESIGN_WEBGUI.md`](ARCH_DESIGN_WEBGUI.md) (webgui shell, IPC) · implementation in `src-webgui/src/lib/design.ts`
+> **Note.** Sections 1, 5, 9, 10, 11 and 15 describe the designer at `40a32a61` and are kept as that review. Since then the model has gained gradient and image paints, effects and blend modes, a `grid` layout, boolean operations, polygon/star shapes, `section` frames, constraints, rich text runs, layout grids and ruler guides, pages (`activePage`, `pageViews`), and `.fig` import from the Design panel (`lib/design/importFig.ts`). Their "missing" rows predate that work. Sections 3, 4, 7, 8, 12 and 13 are updated to the current code layout.
+
+**Related Koma docs:** [`ARCH_DESIGN_WEBGUI.md`](ARCH_DESIGN_WEBGUI.md) (webgui shell, IPC) · implementation in `src-webgui/src/lib/design/`
 
 ---
 
@@ -26,7 +28,7 @@
 14. [Re-audit changelog](#14-re-audit-changelog)
 15. [Quick unparity checklist](#15-quick-unparity-checklist)
 
-**Scale (Koma designer):** `design.ts` ~3,079 LOC · `DesignTab.tsx` ~3,191 · `design.test.ts` ~1,025 · `designRender.ts` ~155
+**Scale (Koma designer, current):** `lib/design/*.ts` ~9,000 LOC (`model.ts` ~3,500) · `DesignTab.tsx` ~3,580 · `components/design/*` ~5,600 · `design.test.ts` ~1,900 · `designRender.ts` ~250
 
 ---
 
@@ -82,7 +84,7 @@ flowchart TB
   Files --> Tab[DesignTab]
   Layers --> UI[designUi + koma-design-layer]
   UI --> Tab
-  Tab --> Model[lib/design.ts]
+  Tab --> Model[lib/design/]
   Tab --> IPC[FileRead / FileSave]
   Tab --> Chat[designChatNote + PNG]
   Chat --> Composer[Composer chips]
@@ -93,12 +95,12 @@ flowchart TB
 |-------|-------|-------|
 | Shell | React 19, tab kind `design` | `routes/index.tsx`, `ActivityBar.tsx`, `Sidebar.tsx` |
 | Canvas | DOM nodes, SVG vectors | `components/DesignTab.tsx` |
-| Model | Pure TS, immutable updates | `lib/design.ts` |
-| Persistence | Zustand slice, not Monaco | `store/design.ts`, `actions/design.ts` |
+| Model | Pure TS, immutable updates | `lib/design/` (`lib/design.ts` re-exports `lib/design/index.ts`) |
+| Persistence | Zustand slice, not Monaco | `store/design.ts`, `store/actions/design.ts` |
 | Bridge | Custom events | `designUi.ts`, `koma-design-focus`, `koma-design-commit`, `koma-design-restore` |
 | Raster | Canvas2D | `lib/designRender.ts` |
 
-**File contract** (`design.ts` header):
+**File contract** (`lib/design/model.ts`, `isDesignPath`):
 
 - Path: `<workspace>/.koma/<name>.kdsgn` — **flat** (no nested paths under `.koma/`).
 - One file = tokens + components + **screens** (top-level nodes).
@@ -128,23 +130,24 @@ Reference: `packages/docs/overview/features.md`, `packages/core/src/io/formats.t
 
 | Field | Type | Role |
 |-------|------|------|
-| `version` | `1` | Schema version |
+| `version` | `1 \| 2` | Schema version (`parseDesign` rejects others; version 2 is written when the doc needs it) |
 | `modes` | `string[]` | e.g. `light`, `dark` |
 | `mode` | `string` | Active mode for `resolveRef` |
-| `snap` | `boolean?` | Grid snap (default omitted → off in serialize) |
-| `grid` | `number?` | Grid step (default 8) |
+| `snap` | `boolean` | Grid snap (off by default) |
+| `grid` | `number` | Grid step (`DESIGN_GRID`, default 8) |
 | `tokens` | `DesignToken[]` | Design tokens |
 | `components` | `DesignComponent[]` | Local components |
 | `screens` | `DesignNode[]` | Top-level artboards (any `DesignKind` since loose screens) |
+| `images`, `guides`, `libraries`, `activePage`, `pageViews` | optional | Image assets, ruler guides, linked libraries, page state |
 
-Parse/serialize: `parseDesign`, `serializeDesign` — invalid JSON yields `emptyDesign()` + error string.
+Parse/serialize (`lib/design/serialize.ts`): `parseDesign`, `serializeDesign` — invalid JSON yields `emptyDesign()` + error string.
 
 ### 4.2 `DesignNode` (selected fields)
 
 | Field | Notes |
 |-------|--------|
 | `kind` | `frame \| group \| rect \| ellipse \| line \| vector \| text \| instance` |
-| `layout`, `gap`, `pad`, `padTop/Right/Bottom/Left` | Flex auto-layout on frames |
+| `layout`, `gap`, `pad`, `padTop/Right/Bottom/Left` | Auto-layout on frames (`row \| column \| grid`) |
 | `wrap` | Multi-line flex flow |
 | `align`, `justify` | incl. `stretch`, `space` |
 | `wMode`, `hMode` | `hug \| fill \| fixed` |
@@ -165,11 +168,15 @@ Parse/serialize: `parseDesign`, `serializeDesign` — invalid JSON yields `empty
 ### 4.3 Instance overrides
 
 ```typescript
-type DesignOverride = { id: string; text?: string; fill?: DesignRef; visible?: boolean }
+type DesignOverride = {
+  id: string; text?: string; fill?: DesignRef; fills?: DesignPaint[]; stroke?: DesignRef; strokes?: DesignPaint[]
+  radius?: number | string; visible?: boolean; component?: string; opacity?: number
+  fontSize?: number; weight?: DesignWeight; color?: DesignRef; strokeWidth?: number; rotation?: number
+}
 ```
 
 - Resolved in `applyOverrides` → `resolveInstanceTree` (layout applied after override).
-- UI: `mergeDesignOverride` in `DesignTab` instance props.
+- UI: `mergeDesignOverride`, `findDesignOverride` and `effectiveInstanceChild` in the `DesignTab` and `components/design/DesignPropertyFields.tsx` instance props (the helpers are defined in `lib/design/model.ts`).
 
 OpenPencil/Figma: full symbol override maps (`InstanceOverrideState`, Kiwi fields) — stroke, typography, nested props, detach semantics.
 
@@ -179,7 +186,7 @@ OpenPencil/Figma: full symbol override maps (`InstanceOverrideState`, Kiwi field
 |------|------------------------|
 | 8 kinds | 17+ incl. SECTION, POLYGON, STAR, BOOLEAN_OPERATION, COMPONENT_SET, CONNECTOR, … |
 
-Source: `design.ts` vs `open-pencil/packages/scene-graph/src/types.ts`.
+Source: `lib/design/types.ts` vs `open-pencil/packages/scene-graph/src/types.ts`.
 
 ---
 
@@ -313,10 +320,12 @@ type DesignQuery =
 
 | Function | Output |
 |----------|--------|
-| `designChatText` | ` ```kdsgn\n` + JSON slice + `\n``` ` |
+| `designChatText` | ` ```html\n` + `designChatHtml` (`lib/design/chatHtml.ts`) + `\n``` ` for the queried screen or component |
 | `designCoordinateText` | Indented parent-relative boxes (cap 80 lines) |
 | `designChatNote` | Prose + coordinates + fence |
 | `designPngBase64` | Raster via `designRender.ts` → `AttachFile` |
+
+`queryDesign` still returns the JSON slice; the chat fence is HTML, and `splitDesignMessage` recognises both ` ```kdsgn ` and ` ```html ` fences (an html fence counts when its root carries `data-koma-name`).
 
 Composer: `designChatQueue`, chips, `splitDesignMessage` on send/recall.
 
@@ -325,9 +334,9 @@ Composer: `designChatQueue`, chips, `splitDesignMessage` on send/recall.
 - Prefer **screen** or **component** queries over dumping whole files.
 - Coordinates in notes are **parent-relative**; PNG is axis-aligned render (rotation applied in raster path for nodes).
 - Token names in slices are included only if referenced — agents should not invent token names not in slice.
-- Round-trip editing: agent should emit valid `DesignDoc` subset inside `kdsgn` fence; GUI does not auto-apply agent JSON without user/agent tool integration (today: human paste / future tool).
+- Round-trip editing: agent should emit a valid `DesignDoc` subset inside a `kdsgn` fence; GUI does not auto-apply agent JSON without user/agent tool integration (today: human paste / future tool).
 
-### 7.4 `design.ts` public API (grouped)
+### 7.4 `lib/design` public API (grouped)
 
 **I/O:** `parseDesign`, `serializeDesign`, `emptyDesign`, path helpers  
 **Tree:** `updateDesignNode`, `deleteDesignNode`, `placeDesignNode`, `moveDesignNode`, `reorderDesignNode`, `copyTree`  
@@ -337,7 +346,7 @@ Composer: `designChatQueue`, chips, `splitDesignMessage` on send/recall.
 **Edit ops:** `alignDesignNodes`, `nudgeDesignNodes`, `duplicateDesignNodes`, `designStyle` / `applyDesignStyle`, `wrapDesignNodes`, `unwrapDesignNode`  
 **Chat:** `queryDesign`, `designChatText`, `designChatNote`, `splitDesignMessage`, `designFenceTitle`
 
-Full export list: `rg '^export function' src-webgui/src/lib/design.ts`.
+Full export list: `rg '^export function' src-webgui/src/lib/design/`. Chat functions live in `chat.ts`, parse/serialize in `serialize.ts`, the rest mostly in `model.ts`.
 
 ---
 
@@ -361,7 +370,7 @@ Koma DOM canvas may show token colors; **PNG export** resolves `#` only in `desi
 
 ### 8.5 Undo
 
-Koma: in-tab stack, cap **50**. OpenPencil: inverse commands across operation types.
+Koma: in-tab stack, cap **200** (`UNDO_CAP` in `components/design/tabShared.ts`). OpenPencil: inverse commands across operation types.
 
 ### 8.6 Workspace integration
 
@@ -430,15 +439,15 @@ Assumes **keep `.kdsgn` + Composer** as source of truth.
 
 | Area | Path |
 |------|------|
-| Editor | `src-webgui/src/components/DesignTab.tsx` |
+| Editor | `src-webgui/src/components/DesignTab.tsx`, helpers in `components/design/` |
 | Sidebar | `src-webgui/src/components/panels/DesignPanel.tsx` |
 | Layers | `src-webgui/src/components/DesignLayers.tsx` |
 | Menu | `src-webgui/src/components/DesignMenu.tsx` |
-| Model | `src-webgui/src/lib/design.ts` |
-| Tests | `src-webgui/src/lib/design.test.ts` |
+| Model | `src-webgui/src/lib/design/` (`model.ts`, `types.ts`, `serialize.ts`, `chat.ts`, `paint.ts`, `boolean.ts`, `importFig.ts`) |
+| Tests | `src-webgui/src/lib/design.test.ts`, `lib/design/*.vitest.test.ts`, `store/design.test.ts` |
 | Raster | `src-webgui/src/lib/designRender.ts` |
 | UI bridge | `src-webgui/src/lib/designUi.ts` |
-| Store | `src-webgui/src/store/design.ts`, `actions/design.ts` |
+| Store | `src-webgui/src/store/design.ts`, `store/actions/design.ts` |
 | Chat | `store/actions/session.ts`, `components/Composer.tsx` |
 
 ### OpenPencil
@@ -455,7 +464,7 @@ Assumes **keep `.kdsgn` + Composer** as source of truth.
 
 ## 13. Tests & documentation
 
-**Koma `design.test.ts`:** paths, parse/serialize, layout/wrap, components/instances/overrides, group/snap/nudge/style, pen/vector, chat fences.
+**Koma `design.test.ts`** (plus `lib/design/chatHtml.vitest.test.ts`, `mechanics.vitest.test.ts`): paths, parse/serialize, layout/wrap, components/instances/overrides, group/snap/nudge/style, pen/vector, chat fences.
 
 **Missing:** DesignTab e2e; user-facing `docs/design.md` schema guide; README mention; Help/Tutorial tabs.
 

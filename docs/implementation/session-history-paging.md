@@ -1,5 +1,7 @@
 # Session history paging verification
 
+> Status note: this document records the verification of a paged session history design that is not present on this branch. There is no `SessionHistoryBrowser`, no `benchmark_registry_pages` test, no `idx_sessions_pwd_activity` index and no `--live-only`, `--query` or `--history-request` flag for `koma sessions`. Today `session_registry` (`src-agent/src/model/session_registry.rs`) has only the `idx_sessions_pwd` index, and `koma sessions --json` (`run_sessions_json` in `src-agent/src/main.rs`) returns the unpaged `{ live, history }` shape. Treat everything below as the historical record of that design, not a description of the current code.
+
 History uses registry metadata only. Folder identity is the stored `pwd_hash`; no history query canonicalizes workdirs or opens transcripts. Default pages have 50 rows, with a maximum of 100, a lookahead row, and scope-checked keyset cursors. Live exclusions use an indexed temporary table, avoiding the SQL parameter limit.
 
 Both GUI surfaces share `SessionHistoryBrowser` and retain separate host-scoped navigation state. History search requests are debounced by 200 ms. Row heights are measured; rendering uses viewport rows plus eight rows of overscan on either side and retains the focused row. TUI queries run in workers and its renderer slices rows before formatting them. Explicit action replies, rather than absence from a page, complete deletion.

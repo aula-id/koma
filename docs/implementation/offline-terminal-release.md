@@ -49,7 +49,9 @@ recovery, then exercises normal and hub startup through PTY/ConPTY, keyboard,
 resize down to the narrow-screen warning and back, and clean terminal restoration. It uses a local model/provider fixture and makes no live provider requests.
 
 Release builds upload workflow artifacts only. Matching native runners execute
-all four Unix artifacts, including cross-built Linux ARM64 and macOS Intel.
+all five Unix artifacts (Linux x64, the headless Linux x64 build, Linux ARM64,
+macOS ARM64 and macOS Intel), including the cross-built Linux ARM64 and macOS
+Intel binaries. The headless build must also link no GUI libraries.
 Windows executes its final binary before packaging; the administrative MSI
 extraction must contain the identical SHA-256 executable. Frozen Bun tests,
 TypeScript checks and Rust extraction tests run on all five architectures.

@@ -48,11 +48,13 @@ lines. Language keys are LSP language IDs (`typescriptreact` for TSX,
 
 Project `tasks` now configure Run/Build/Test commands; see
 [Project tasks](CODING_TASKS.md) for the schema, execution behavior, and native
-review cases. Toolchains, debug, structured tests and environment selection
-remain reserved for later increments. Format-on-save is also not implemented
-yet; use Format Document/Selection explicitly.
+review cases. The `debug` and `tests` arrays configure launch profiles and test
+runners; see [Workspace debugger](CODING_DEBUGGER.md) and
+[Test Explorer](CODING_TEST_EXPLORER.md). `toolchains` and `environment` are
+objects; the top-level `tasks`, `debug`, `tests` and `keybindings` fields must
+be arrays, and a wrong type is rejected with an error.
 
-The editor now supports `"formatOnSave": true` (default false) and
+The editor supports `"formatOnSave": true` (default false) and
 `"semanticHighlighting": false` (default true). Both accept per-language editor
 overrides. Formatting errors leave the file unsaved; disable format-on-save or
 repair the language server before retrying. The project configuration document

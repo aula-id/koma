@@ -21,7 +21,7 @@ build the engine. See the SDK guide for local/artifact installation and compatib
 
 Unknown commands (e.g. `koma docker`) print help and exit 1.
 
-Works on Linux, macOS, and Windows. On Windows, use the PowerShell installer — it downloads and runs the MSI directly. A separate Git Bash install is not required: the MSI uses Git for Windows when it is already present, and otherwise ships a fallback shell:
+Works on Linux, macOS, and Windows (x64 only on Windows). On Windows, use the PowerShell installer — it downloads and runs the MSI directly. A separate Git Bash install is not required: the MSI uses Git for Windows when it is already present, and otherwise ships a fallback shell:
 
 ```powershell
 irm https://koma.run/install.ps1 | iex
@@ -66,7 +66,7 @@ Ordinary launches always use the embedded terminal, even inside a checkout.
 
 ### Desktop GUI (optional)
 
-The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gui` cargo feature at build time, but you don't need to build it yourself on most platforms:
+The `koma gui` desktop client (a wry webview hosting the web UI built from `src-webgui`) is behind the `gui` cargo feature at build time, but you don't need to build it yourself on most platforms:
 
 - **macOS** — the install.sh binary already has `gui` baked in; `koma gui` just works. install.sh also adds a user-level app at `~/Applications/Koma.app` that opens the desktop client from Finder, Launchpad, and Spotlight.
 - **Linux** — the raw install.sh binary is GUI-featured and needs WebKitGTK 4.1, GTK 3, and libXtst at runtime. install.sh installs the missing shared libraries with apt (Debian, Ubuntu), dnf (Fedora, RHEL family) or pacman (Arch and derivatives). apt picks whichever package name exists (`libgtk-3-0` or `libgtk-3-0t64`), and dnf resolves each library by its soname. On Arch it runs `pacman -S` without `-y`, so a stale package database gets a printed `pacman -Syu` command instead of a partial upgrade. It also picks the GUI window for the whole machine and writes it to `/etc/koma/gui.conf`: Debian and Ubuntu keep the transparent window with rounded corners, other distros get an opaque window, because WebKitGTK 2.54 on a compositing desktop paints a transparent window only under the cursor. Override with `--gui-window=transparent` or `--gui-window=opaque`, and `koma doctor` shows the mode in use. The `koma` launcher still checks for them and prints an install command if they are missing. install.sh also installs a **user-level** `.desktop` entry + icons under `~/.local/share` so Koma appears in the app drawer (useful on immutable/atomic desktops like Fedora Bluefin where `.deb` is awkward). If you prefer a package that handles dependencies automatically, grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a system desktop entry that launches straight into `koma gui`. Prebuilt Linux binaries target **glibc 2.35 (Ubuntu 22.04 LTS)** and run on 22.04 and newer, current Fedora and Arch included.
@@ -82,7 +82,7 @@ python3 scripts/prepare-terminal.py
 cargo build --locked -p agent --features gui
 ```
 
-Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (`libwebkit2gtk-4.1-dev` on Debian/Ubuntu, `webkit2gtk4.1-devel` on Fedora, `webkit2gtk-4.1` on Arch), plus GTK3 and libsoup3. macOS and Windows use the system-provided webview (WebKit / WebView2) — no extra deps. The default build enables the GUI; use `--no-default-features` for a terminal-only build. The complete terminal payload is included in both.
+Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (`libwebkit2gtk-4.1-dev` on Debian/Ubuntu, `webkit2gtk4.1-devel` on Fedora, `webkit2gtk-4.1` on Arch), plus GTK3 and libsoup3. macOS and Windows use the system-provided webview (WebKit / WebView2) — no extra deps. Any build with the `gui` feature also needs Node and npm on `PATH` (the Rust build script runs `npm install` and `npm run build` in `src-webgui`; run `nvm use 24` first). The default build enables the GUI; use `--no-default-features` for a terminal-only build. The complete terminal payload is included in both.
 
 More at **[koma.run](https://koma.run)**.
 

@@ -26,7 +26,7 @@ not opt in keep receiving full snapshots.
 The transcript follows the newest 30 turns. Scrolling into older history mounts
 a moving window of at most 90 turns; crossing either edge pages in that direction
 and unmounts the far end. The window is also capped at 2 MiB of message content
-(`KOMA_TERM_WINDOW_BYTES`, in bytes); the first turn always mounts, however
+(`KOMA_TERM_WINDOW_BYTES`; sizes count string length, not encoded bytes); the first turn always mounts, however
 large. OpenTUI's native anchor keeps a retained turn in place during the layout
 change. Click `Latest` to return to the live tail. Conversation data stays in
 the client snapshot so older turns can be revisited.

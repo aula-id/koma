@@ -141,9 +141,9 @@ mutates any session state. This doubles as the permission list you see before
 installing: an extension that wants to spawn sub-agents has to say so, and you get
 to see it say so.
 
-There are eight grants today, covering five broad surfaces: reading/orchestrating
+There are nine grants today, covering six broad surfaces: reading/orchestrating
 sub-agents, managing sessions, injecting chat turns, invoking a model directly,
-publishing system-prompt context, backing an OAuth login, and registering models or
+publishing system-prompt context, backing an OAuth login, reading a connected OAuth token (`oauth:read`, the `oauth.token` broker verb), and registering models or
 key-backed providers into the catalogue. **The full reference — every grant, every
 verb it unlocks, every request/response shape, every error string, every numeric
 limit — is its own section below** ("Grants reference"); this section stays the
@@ -432,8 +432,9 @@ runs at every install (fresh, reinstall, or upgrade) and:
 
 - **replaces its own entries in place** — a row this SAME extension registered under the
   same declared name keeps its `uuid` (so it doesn't lose its identity) and its `enabled`
-  flag (so a user who disabled it stays disabled across an upgrade); only `command`/`args`/
-  `env` move to match the new version;
+  flag (so a user who disabled it stays disabled across an upgrade), plus whatever the user
+  tuned on the row (`env`, headers, timeouts, tool allow/deny lists); only `command`/`args`
+  move to match the new version;
 - **drops stale rows** — a name this extension declared before but no longer does is
   removed, so an upgrade that stops shipping a server doesn't leave a dead orphan behind;
 - **never touches a user-created row** (`ext_id: None`) or a row belonging to a DIFFERENT

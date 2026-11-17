@@ -26,11 +26,14 @@ the existing Zustand store action as the boundary.
 | ActivityBar menu items | `src-webgui/src/components/ActivityBar.tsx` |
 | Sidebar view type and panel routing | `src-webgui/src/components/Sidebar.tsx` |
 | New Sidebar panel | `src-webgui/src/components/panels/<Name>Panel.tsx` |
-| Tab state and open/close actions | `src-webgui/src/store/koma.ts` |
+| Tab type | `src-webgui/src/store/types/tabs.ts` |
+| Store state interface (`KomaState`) | `src-webgui/src/store/state.ts` |
+| Tab open/close actions | `src-webgui/src/store/actions/*.ts` (`session.ts`, `tabs.ts`, `welcome.ts`, ...) |
+| Host push reducers | `src-webgui/src/store/push/*.ts` |
 | Tab strip rendering | `src-webgui/src/components/TabBar.tsx` |
-| Main tab content routing | `src-webgui/src/routes/index.tsx` |
+| Main tab content routing (`TabBody`) | `src-webgui/src/routes/index.tsx` |
 | New tab content | `src-webgui/src/components/<Name>Tab.tsx` |
-| Rust bridge request types, if needed | `src-webgui/src/koma.d.ts` and the Rust GUI host |
+| Rust bridge request types, if needed | `src-webgui/src/koma.d.ts` (`GuiReq`) and the Rust GUI host |
 
 ## 1. Add the Sidebar view
 
@@ -48,21 +51,27 @@ export type SidebarView =
   | 'connector'
   | 'importGraph'
   | 'agents'
+  | 'skills'
   | 'usage'
   | 'store'
   | 'remote'
+  | 'diagram'
+  | 'design'
 
 const TITLES: Record<SidebarView, string> = {
-  explore: 'Explorer',
+  explore: 'Chat',
   coding: 'Coding',
   git: 'Source Control',
   mcp: 'MCP Servers',
   connector: 'Connector',
   importGraph: 'Import Graph',
   agents: 'Agents',
+  skills: 'Skills',
   usage: 'Usage',
   store: 'Extensions',
   remote: 'Remote',
+  diagram: 'Diagram',
+  design: 'Design',
 }
 ```
 
@@ -72,10 +81,11 @@ Add the panel beside the other panel branches:
 {view === 'tasks' && <TasksPanel />}
 ```
 
-(You must also extend `SidebarView` / `TITLES` with your new literal — the example
-above shows the **current** built-in set; a new view is an additive union member.)
+(You must also extend `SidebarView` / `TITLES` with your new literal. The example
+above shows the built-in set; a new view is an additive union member. The first
+view keeps the id `explore` but is titled and labelled "Chat".)
 
-`RootLayout` already stores `activeView` and handles the standard behavior:
+`RootLayout` (in `routes/index.tsx`) already stores `activeView` and handles the standard behavior:
 clicking the active icon collapses the Sidebar; clicking another icon selects
 that view and opens the Sidebar. No RootLayout change is required for a normal
 new menu item.
@@ -95,7 +105,9 @@ export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
 ```
 
 `ACTIVITY_BAR_ITEMS` uses the same `SidebarView` literal, so TypeScript catches a menu item
-that does not have a matching Sidebar view.
+that does not have a matching Sidebar view. The same list drives the Settings
+"Sidebar" section (order and hide toggles); items that are hidden or do not fit
+the bar height move into the "..." overflow menu.
 
 ## 3. Create the Sidebar panel
 
@@ -127,10 +139,16 @@ Keep panel-local interaction and display state in the panel when it does not
 need to coordinate with another component. Use the store for state shared with
 the tab or the host bridge.
 
+For empty states, reuse the primitives in `panels/helpers.tsx`: `Empty` for a
+single empty section of a populated panel, `EmptyState` for a panel with
+nothing in it (at most one primary and one secondary action), `NoProjectState`
+and `NoWorkspaceState` when the feature needs a project folder, and `AddBtn`
+(with a `label`, and optional visible `text`) for header actions.
+
 ## 4. Add the tab to the Zustand store
 
 For a singleton tab, add a fixed ID and a new `kind` to the `Tab` union in
-`src-webgui/src/store/koma.ts`:
+`src-webgui/src/store/types/tabs.ts`:
 
 ```tsx
 export type Tab =
@@ -139,13 +157,15 @@ export type Tab =
   // existing variants...
 ```
 
-Add the action to `KomaState`:
+Add the action to `KomaState` in `src-webgui/src/store/state.ts`:
 
 ```tsx
 openTasksTab: () => void
 ```
 
-Implement it beside `openSettingsTab` and `openHelpTab`:
+Implement it beside `openSettingsTab` and `openHelpTab` in
+`store/actions/session.ts` (add the name to that file's `Pick<KomaState, ...>`
+return type), or in the actions file for your feature:
 
 ```tsx
 openTasksTab: () => {
@@ -176,8 +196,14 @@ Use a fixed ID when there should be one tab for the feature:
 ```text
 settings
 help
+notifications
 graph
+import-graph
+analytics
+store
+upload-skill
 tasks
+welcome-diagram / welcome-design
 ```
 
 Use a stable, data-derived ID when users can open multiple instances, such as
@@ -186,11 +212,14 @@ file diffs:
 ```text
 diff:<path>
 gitdiff:<staged|unstaged>:<path>
+commitdiff:<sha>:<path>
+sa:<agentId>
+bash:<jobId>
 ```
 
 If a tab's identity can change after editing, keep its React identity stable
-and update its data key separately. The agent editor tabs follow this pattern
-in `koma.ts`.
+and update its data key separately. The agent editor tabs (`kind: 'agent'`)
+follow this pattern.
 
 ## 5. Add the tab content
 
@@ -216,9 +245,9 @@ export function TasksTab() {
 ```
 
 Replace the placeholder with the feature UI. Use `min-h-0 flex-1 overflow-y-auto`
-for scrollable tab content so it fits inside `TabbedMain`.
+for scrollable tab content so it fits inside the tab area.
 
-## 6. Render the tab from `TabbedMain`
+## 6. Render the tab from `TabBody`
 
 Import the tab in `src-webgui/src/routes/index.tsx`:
 
@@ -226,69 +255,36 @@ Import the tab in `src-webgui/src/routes/index.tsx`:
 import { TasksTab } from '../components/TasksTab'
 ```
 
-Add a branch to the `tabs.map(...)` expression in `TabbedMain`:
+Add a branch to the `kind` chain in `TabBody`:
 
 ```tsx
-) : t.kind === 'tasks' ? (
-  <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-    <TasksTab />
-  </div>
-) : null
+) : tab.kind === 'tasks' ? (
+  <TasksTab />
+) : null}
 ```
 
-Inactive tabs are hidden rather than unmounted. This preserves local component
-state while the user switches between tabs. Close the tab through the existing
-`closeTab` action; do not add a second close implementation in the tab content.
+`TabbedMain` wraps every non-chat tab in a container and gives inactive tabs the
+`hidden` class instead of unmounting them, so local component state survives tab
+switches. The same container handles editor groups and split layouts, so a tab
+body does not position itself. Close the tab through the existing `closeTab`
+action; do not add a second close implementation in the tab content.
 
 ## 7. Add the tab strip entry
 
-In `TabBar.tsx`, add an icon import and a closeable tab branch. The existing
-Settings, Help, Graph, Agent, and stream branches are good templates.
-
-The branch should:
-
-- call `activateTab(t.id)` when the tab body is clicked;
-- call `closeTab(t.id)` from its close button;
-- stop propagation on the close button;
-- use the shared `base`, `tone`, and active `accent` styling;
-- support Enter and Space when the tab body has `role="button"`.
-
-Example shape:
+`TabBar.tsx` renders every tab with one shared element, so a new tab does not
+need its own JSX branch. Add a `case` to `tabVisual` that returns the icon,
+label and title:
 
 ```tsx
-if (t.kind === 'tasks') {
-  return (
-    <div
-      key={t.id}
-      role="button"
-      tabIndex={0}
-      onClick={() => activateTab(t.id)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-      }}
-      title="Tasks"
-      className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-    >
-      {accent}
-      <ListTodo size={13} className="flex-none opacity-80" />
-      <span className="truncate">Tasks</span>
-      <button
-        onClick={(e) => {
-          e.stopPropagation()
-          closeTab(t.id)
-        }}
-        aria-label="Close tab"
-        title="Close"
-        className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-          active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-        }`}
-      >
-        <X size={12} />
-      </button>
-    </div>
-  )
-}
+case 'tasks':
+  return { Icon: ListTodo, label: 'Tasks', title: 'Tasks' }
 ```
+
+The shared element already provides click-to-activate, Enter and Space handling,
+drag reorder, the context menu, the active accent, and a close button that calls
+`requestClose`. `requestClose` routes to `closeTab` and adds the dirty-close
+confirmation for git tool, coding file, diagram and design tabs. Only extend
+`requestClose` if your tab can hold unsaved state.
 
 ## 8. Add host data only when needed
 
@@ -297,10 +293,12 @@ add the full request/reply path instead of fabricating data in the component:
 
 1. Add a `GuiReq` request type in `src-webgui/src/koma.d.ts`.
 2. Handle the request in the Rust GUI host.
-3. Add the Rust-to-JS push envelope type in `store/koma.ts`.
-4. Add a reducer case in `useKoma.push`.
+3. Add the Rust-to-JS push envelope type next to the other envelopes in `store/`.
+4. Add a reducer case in the matching `store/push/*.ts` module (`useKoma.push`
+   in `store/koma.ts` tries each `pushXxx` reducer in turn).
 5. Store the authoritative result in the appropriate Zustand slice.
-6. Add a store action such as `refreshTasks` that calls `req(...)`.
+6. Add a store action such as `refreshTasks` that calls `req(...)` with the new
+   `GuiReq`.
 7. Request data from the tab or panel when it becomes active.
 
 For a tab that must refresh whenever it is selected:
@@ -324,13 +322,14 @@ After adding a menu and tab:
 
 - `SidebarView` includes the new literal.
 - `Sidebar.tsx` has the title, import, and panel branch.
-- `ActivityBar.ITEMS` has the matching icon and label.
+- `ACTIVITY_BAR_ITEMS` has the matching icon and label.
 - The panel calls a store open-or-focus action.
-- `Tab` and `KomaState` include the new tab and action.
 - Repeated panel clicks focus one tab instead of duplicating it.
-- `TabBar` renders and closes the tab.
-- `TabbedMain` renders the tab and hides inactive content without unmounting it.
+- `Tab` and `KomaState` include the new tab and action.
+- `TabBar` (`tabVisual`) renders and closes the tab.
+- `TabBody` renders the tab and `TabbedMain` hides inactive content without unmounting it.
 - Closing the active tab returns focus through the existing `closeTab` behavior.
-- `cargo test` or the relevant GUI TypeScript/build command passes.
+- `npm test` (`vite build && vitest run`) in `src-webgui` passes; `npm run test:logic`
+  runs the non-browser project only.
 
 For architecture background, see [`ARCH_DESIGN_WEBGUI.md`](ARCH_DESIGN_WEBGUI.md).

@@ -4,7 +4,9 @@ Detailed architectural documentation of koma's terminal user interface and its c
 
 ## System Overview
 
-The TUI is a ratatui-based terminal application that runs as a thin client connecting to a headless session daemon over a Unix domain socket (a named pipe on Windows). The daemon owns the agent runtime, session locks, and all async work; the client handles rendering and input.
+Interactive `koma` has two terminal clients. Plain `koma` (and `koma agents`, `koma --resume`) spawns the OpenTUI client in `src-term` through `src-agent/src/app/term_preview.rs`; it starts a session daemon only when a session is opened. `koma legacy` runs the ratatui client in `src-agent`, which this document describes. Both attach to the same session daemon over the same IPC.
+
+The ratatui TUI is a terminal application that runs as a thin client connecting to a headless session daemon over a Unix domain socket (a named pipe on Windows). The daemon owns the agent runtime, session locks, and all async work; the client handles rendering and input.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -41,7 +43,7 @@ The TUI is a ratatui-based terminal application that runs as a thin client conne
 
 ## Daemon-Per-Session Model
 
-Every interactive `koma` invocation follows the same protocol:
+Every interactive `koma` invocation (`koma legacy` for the ratatui client) follows the same protocol:
 
 1. **Mint a UUID** for this session.
 2. **Ensure a daemon** is running for that UUID: try to `connect` to `~/.koma/run/<uuid>.sock` (on Windows, the named pipe `\\.\pipe\koma-<uuid>`). Success = daemon alive (attach as client). Connection refused = no daemon (spawn one and become it).
@@ -73,12 +75,12 @@ koma run --session SESSION_ID --unload-extension run.koma.example --status
 | Flag | Meaning |
 |---|---|
 | `--prompt` / `--prompt-file` | Exactly one required, except with `--status` |
+| `--system` / `--system-file` | Extra system-prompt suffix, appended last; mutually exclusive |
 | `--name` | Session display name |
 | `--workdir` / `--cwd` | Daemon spawn working directory |
 | `--session` | Reuse an existing session id (else mint) |
 | `--model` | Main model catalogue name, model id, or UUID |
-| `--effort` / `--mode` | Session reasoning effort and agent mode |
-| `--security on\|off` | Start/stop security; yolo requires it running |
+| `--effort` / `--mode` | Session reasoning effort and agent mode (`auto`, `normal`, `plan`, `yolo`, `sdlc`) |
 | `--max-tokens N` | Reply limit; zero uses the 128k fallback, bounded by context |
 | `--short-send on\|off` | DRSS master switch for this session |
 | `--context-window-limit N` | Context override, capped at 300,000; zero uses detection |
@@ -102,7 +104,7 @@ name, enable mode, active flag, and process state. `drss_active` describes the m
 request; `short_send` is the configured master switch. No credentials are included.
 Setup uses correlated `GetRunState` replies instead of blind sleeps: errors, missing
 confirmations, and rejected settings stop prompt submission. Explicitly loaded daemon
-extensions are given time to start before the prompt. Invalid/retired flags fail before
+extensions are given time to start before the prompt. Invalid/retired flags (for example `--security`) fail before
 attaching. Changing settings on a busy session is rejected; submitting a follow-up without
 setup retains the existing queue behavior.
 
@@ -164,6 +166,7 @@ Every message on the socket uses a fixed framing:
 | `BackgroundSubagent { id }` | Detach one blocking sub-agent (Ctrl+B on `$` selection) |
 | `BackgroundAllSubagents` | Detach all blocking sub-agents **and** promote still-blocking FG bash (composer Ctrl+B) |
 | `SetMcpServer`, `DeleteMcpServer`, `EnableMcpServer` | MCP server config management |
+| `ImportMcpJson`, `GetMcpStatus`, `RestartMcpServer`, `ApproveMcpProjectServer` | MCP JSON import, status, per-server restart, project `.mcp.json` approval |
 | `SetProvider`, `DeleteProvider` | Provider config management |
 | `SetModel`, `DeleteModel` | Model config management |
 | `SetTheme { name }` | Change the active theme |
@@ -384,16 +387,16 @@ Working directories are hashed via UUID v5 over the OID namespace to produce a s
 
 ## Model/Provider Integration
 
-### Five Model Roles
+### Model Roles (`ModelRole`)
 
 | Role | Purpose | Default |
 |---|---|---|
 | Main | Interactive chat | `koma/apple` (koma-free) when unconfigured; else catalogue Main |
-
 | Awareness | Project-doc summary | `openai/gpt-oss-20b` via Groq |
 | Safeguard | Safety classifier | `openai/gpt-oss-safeguard-20b` via Groq |
 | Compactor | Conversation compaction | Rides Main |
 | Planner | Plan mode execution | Falls back to Main |
+| CyberRed / CyberBlue / CyberResearch | Security lanes | Inherit Main's route when unassigned |
 
 ### Resolution Chain
 
@@ -469,7 +472,7 @@ An off-thread classifier that:
 ### Runtime Dependencies
 
 - `~/.koma/` directory (auto-created)
-- Python (optional): internet full-mode and security daemon
+- Python (optional): internet full-mode and security daemon (not supported on Windows)
 - MCP servers (optional): any MCP-compatible server
 
 ### Platform Support
@@ -478,7 +481,7 @@ An off-thread classifier that:
 |---|---|---|---|
 | macOS | Full | Full | WKWebView, muda menus, objc2-app-kit |
 | Linux | Full | Full | webkit2gtk, GTK webview attachment |
-| Windows | Full | Partial | WebView2 (ships with Win 10+) |
+| Windows | Full | Full | WebView2 (bundled with the MSI); security tools and full-internet mode unsupported |
 
 ### Key Constants
 
@@ -489,7 +492,7 @@ An off-thread classifier that:
 | `APPROVAL_PARK_TIMEOUT` | 30 min | Auto-deny if detached too long |
 | `MAX_SUBAGENTS` | 5 | Max concurrent sub-agents |
 | Default model | `koma/apple` (koma-free free tier) | `config.rs` `DEFAULT_MODEL` |
-| Max tool output | 400,000 chars | Truncation limit |
+| Max tool output | 200,000 chars (`MAX_TOOL_OUTPUT_CHARS`) | Truncation limit; `read`/`bash`/`grep`/`glob` use a 90,000-char window |
 | Max sub-agent report | 50,000 chars | Completion cap |
 | Tool poll interval | 4 ms | Per-client write poll |
 | Idle cadence | 100 ms | Sleep when no work |
@@ -504,10 +507,11 @@ Client sends `Detach` → daemon deregisters the client → client exits. The da
 ### Resume
 
 ```
-koma agents   # or koma --resume
+koma agents   # or koma --resume (OpenTUI hub)
+koma legacy agents   # ratatui hub
 ```
 
-1. Client enters `SessionHub` mode
+1. The ratatui client enters `SessionHub` mode
 2. Scans `~/.koma/run/*.sock` for live session-daemons (on Windows, the `\\.\pipe\koma-*` namespace instead), probing with `Status`
 3. Lists on-disk sessions from the SQLite registry
 4. User picks a session

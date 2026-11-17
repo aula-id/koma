@@ -37,7 +37,7 @@ The GUI is a native desktop window powered by **wry** (webview) + **tao** (event
 | Layer | Technology | Version |
 |---|---|---|
 | Windowing | tao | 0.35 |
-| Webview | wry | 0.52 |
+| Webview | wry | 0.55 |
 | Frontend framework | React | 19 |
 | State management | Zustand | — |
 | Code editor | Monaco Editor | — |
@@ -135,6 +135,10 @@ The React app calls `window.ipc.postMessage(JSON.stringify(msg))`. Messages are 
 { t: "req", r: "PlanDecision", decision: "approve" | "compact" | "deny" }
 { t: "req", r: "FileDiff", path: "..." }
 { t: "req", r: "SetMcpServer", ... }
+{ t: "req", r: "ImportMcpJson", ... }          // Claude Code / Cursor / VS Code snippets
+{ t: "req", r: "GetMcpStatus", ... }
+{ t: "req", r: "RestartMcpServer", ... }
+{ t: "req", r: "ApproveMcpProjectServer", ... } // .mcp.json approval gate
 { t: "req", r: "DeleteMcpServer", uuid: "..." }
 { t: "req", r: "EnableMcpServer", uuid: "...", enabled: true }
 { t: "req", r: "SetProvider", ... }
@@ -145,7 +149,12 @@ The React app calls `window.ipc.postMessage(JSON.stringify(msg))`. Messages are 
 { t: "req", r: "ListRoutes", provider: "...", modelId: "..." }
 { t: "req", r: "SetTheme", name: "..." }
 { t: "req", r: "SetupKomaFree" }
+{ t: "req", r: "GitRepos", force: false }     // repo picker; force = rescan
+{ t: "req", r: "SetActiveRepo", root: "..." }
+{ t: "req", r: "SkillUploadChunk", ... }      // chunked skill zip upload
 ```
+
+This list is a representative subset. The full set of requests is the `GuiReq` enum in `src-agent/src/app/runtime/gui/proto.rs` (git, skills, agents, OAuth, extensions, keys, usage and more).
 
 ### Outbound (Rust → JS)
 
@@ -176,6 +185,8 @@ The host-relay thread calls `window.__komaClient.push(jsonString)` via `evaluate
 // Provider route list for Connector picker
 { k: "RouteList", ... }
 ```
+
+Also a subset: the full envelope union is `src-webgui/src/store/types/envelope.ts` (it also carries `StreamDelta`, `Config`, `GitStatus`, `RepoList`, `McpStatus`, `LspDiagnostics` and others).
 
 ## Dual Routing: Attached vs Pre-Session
 
@@ -275,7 +286,7 @@ On Windows these are named pipes instead of unix-domain sockets (`\\.\pipe\koma-
 |---|---|---|
 | `MAX_FRAME_BYTES` | 64 MiB | Max single IPC frame payload |
 | Default model | `koma/apple` (koma-free) | Free-tier soft default |
-| Max tool output | 400,000 chars | Truncation limit for tool results |
+| Max tool output | 200,000 chars | Truncation limit for tool results |
 | Max sub-agent report | 50,000 chars | Sub-agent completion cap |
 | Approval park timeout | 30 minutes | How long a tool approval waits |
 | Self-exit grace | ~1 second | Daemon waits before exiting after last client |
@@ -290,5 +301,5 @@ On Windows these are named pipes instead of unix-domain sockets (`\\.\pipe\koma-
 | State model | Zustand store (React) | AppState (Rust struct, redraw on dirty flag) |
 | Daemon connection | Host-relay thread (same IPC protocol) | Client loop (same IPC protocol) |
 | Config mutations | Dual-routed (daemon or host-relay) | Driven through Mode::Settings editors |
-| Session switching | Hub overlay (JS) | SessionHub mode (ratatui) |
+| Session switching | ResumePalette overlay (JS) | SessionHub mode (ratatui) |
 | File attachments | Drag-drop, paste, omnisearch picker | Paste from clipboard, @-palette |

@@ -67,14 +67,15 @@ Rust replies asynchronously with a push envelope tagged by `k`:
   "error": null,
   "keyName": null,
   "inProgress": null,
-  "conflicted": []
+  "conflicted": [],
+  "pushMode": null
 }
 ```
 
 The authoritative request and push unions are declared in:
 
 - `src-webgui/src/koma.d.ts` for `GuiReq`;
-- `src-webgui/src/store/koma.ts` for `PushEnvelope`;
+- `src-webgui/src/store/types/envelope.ts` for `PushEnvelope`;
 - `src-agent/src/app/runtime/gui/proto.rs` for Rust request deserialization;
 - `src-agent/src/app/runtime/client/push_proto.rs` for Rust push serialization.
 
@@ -111,6 +112,7 @@ The store's `req` action is the single request helper:
 ```ts
 // src-webgui/src/store/koma.ts
 req: (g) => {
+  // ...notification-origin capture and coding-service routing for file requests...
   try {
     window.ipc?.postMessage(JSON.stringify({ t: 'req', ...g }))
   } catch {
@@ -118,6 +120,11 @@ req: (g) => {
   }
 }
 ```
+
+The store is composed in `koma.ts` from per-area modules: action creators in
+`src-webgui/src/store/actions/`, push reducers in `src-webgui/src/store/push/`
+(`useKoma.push()` tries each in turn), and the state and envelope types in
+`state.ts` and `types/`.
 
 A component normally calls a store action instead of constructing the bridge
 payload itself. For example:
@@ -249,7 +256,7 @@ window.__komaClient = {
 }
 ```
 
-Add the push variant to `PushEnvelope` in `store/koma.ts`:
+Add the push variant to `PushEnvelope` (`store/types/envelope.ts`):
 
 ```ts
 export type TaskEntry = {
@@ -317,12 +324,12 @@ not resurrect the tab or overwrite current data.
 `GitStatus` is a good template for data that belongs to the host and is useful
 without an attached session:
 
-1. JavaScript calls `refreshGitStatus()` in `store/koma.ts`.
+1. JavaScript calls `refreshGitStatus()` in `store/actions/git.ts`.
 2. Rust deserializes `GuiReq::GitStatus` in `gui/proto.rs`.
 3. `gui/dispatch.rs` sends `HostCtl::GitStatus`.
 4. The host computes status in the client Git module.
 5. Rust emits `PushEnvelope::GitStatus`.
-6. The `GitStatus` reducer replaces the `git` store slice.
+6. The `GitStatus` reducer in `store/push/git.ts` replaces the `git` store slice.
 7. `GitPanel` and `UsageFooter` render the result.
 
 Relevant Rust files include `dispatch_git.rs`, `git.rs`,
@@ -338,7 +345,7 @@ Relevant Rust files include `dispatch_git.rs`, `git.rs`,
 actual path is:
 
 ```text
-ExplorePanel
+ExplorePanel (the Chat side panel)
   -> openDiffTab(path)
   -> req({ r: 'FileDiff', path })
   -> GuiReq::FileDiff
@@ -352,9 +359,10 @@ ExplorePanel
 
 The implementation points are:
 
-1. `src-webgui/src/components/sidebar/ExplorePanel.tsx` calls
-   `openDiffTab(f.path)` when a changed file is clicked.
-2. `src-webgui/src/store/koma.ts:2542` creates or focuses the stable
+1. `src-webgui/src/components/panels/ExplorePanel.tsx` (the first side panel,
+   labelled Chat; its view id is still `explore`) calls `openDiffTab(f.path)`
+   when a changed file is clicked.
+2. `openDiffTab` in `src-webgui/src/store/actions/tabs.ts` creates or focuses the stable
    `diff:<path>` tab, marks it `loading: true`, and sends
    `{ r: 'FileDiff', path }`.
 3. `src-agent/src/app/runtime/gui/proto.rs` defines `GuiReq::FileDiff`.
@@ -367,7 +375,7 @@ The implementation points are:
 7. `src-agent/src/app/runtime/client/push_proto.rs` emits
    `PushEnvelope::FileDiff`, including `path`, `original`, `modified`,
    `error`, `binary`, and `origin`.
-8. `src-webgui/src/store/koma.ts:2015` finds `diff:<path>`. If the tab was
+8. The `FileDiff` case in `src-webgui/src/store/push/coding.ts` finds `diff:<path>`. If the tab was
    closed, it ignores the reply; otherwise it stores the `DiffPayload` and
    clears `loading`.
 9. `src-webgui/src/components/DiffTab.tsx` renders the stored payload or its
@@ -443,17 +451,17 @@ files to inspect:
 
 | Symptom | Stage and files to inspect |
 |---|---|
-| Clicking the UI does not produce a request | **Store action:** the feature action in `src-webgui/src/store/koma.ts`; confirm it sets loading and calls `req`. |
+| Clicking the UI does not produce a request | **Store action:** the feature action in `src-webgui/src/store/actions/`; confirm it sets loading and calls `req`. |
 | The request has the wrong tag or fields | **Web request contract:** `src-webgui/src/koma.d.ts` and the action's `{ r: ... }` payload. |
 | Rust never receives or deserializes the request | **Webview bridge and Rust protocol:** `src-agent/src/app/runtime/gui/mod.rs` and `src-agent/src/app/runtime/gui/proto.rs` (`ClientMsg`/`GuiReq`). |
 | Rust deserializes the request but nothing runs | **Dispatcher:** `src-agent/src/app/runtime/gui/dispatch.rs`; confirm the new `GuiReq` branch is present and sends the intended control message. |
 | The request runs on the wrong owner, or fails only without a session | **Routing:** `dispatch.rs` and `dispatch_forward.rs`; check attached-daemon versus `HostCtl`/host-fallback behavior. |
 | The host or daemon computes a result but no push appears | **Worker and relay:** the relevant `src-agent/src/app/runtime/client/` worker, `host.rs`/`push_loop.rs`, and the path that emits the GUI push. |
-| A push is emitted but has the wrong tag or shape | **Push contract:** `src-agent/src/app/runtime/client/push_proto.rs`, `src-webgui/src/store/koma.ts`, and `src-webgui/src/koma.d.ts`. |
+| A push is emitted but has the wrong tag or shape | **Push contract:** `src-agent/src/app/runtime/client/push_proto.rs`, `src-webgui/src/store/types/envelope.ts`, and `src-webgui/src/koma.d.ts`. |
 | Rust logs a push but the web UI never sees it | **Event and callback bridge:** `UserEvent::Push` in `src-agent/src/app/runtime/gui/mod.rs` and `window.__komaClient.push` in `src-webgui/src/routes/index.tsx`. |
-| The push reaches JavaScript but the spinner never clears | **Reducer:** the matching `push()` case in `src-webgui/src/store/koma.ts`; verify success, empty, and error all set `loading: false`. |
-| Data appears in the wrong tab or an old result wins | **Correlation and stale-reply guard:** the request key, echoed push key, and reducer check in `store/koma.ts`. |
-| Data from another session reappears after switching or detaching | **Session reset:** the session-change branch and `detachSession()` in `src-webgui/src/store/koma.ts`; invalidate old keys and session-scoped slices. |
+| The push reaches JavaScript but the spinner never clears | **Reducer:** the matching case in `src-webgui/src/store/push/` (called from `push()` in `store/koma.ts`); verify success, empty, and error all set `loading: false`. |
+| Data appears in the wrong tab or an old result wins | **Correlation and stale-reply guard:** the request key, echoed push key, and reducer check in `store/push/`. |
+| Data from another session reappears after switching or detaching | **Session reset:** the `switched` branch of the `Snapshot` case in `src-webgui/src/store/push/session.ts` and `detachSession()` in `src-webgui/src/store/actions/session.ts`; invalidate old keys and session-scoped slices. |
 
 When debugging, log the request tag, correlation key, session identity (when
 applicable), and push tag at each boundary. A successful computation is not a
@@ -465,7 +473,7 @@ successful round trip until the matching reducer accepts it.
       `src-webgui/src/koma.d.ts` and to the Rust `GuiReq` enum in
       `src-agent/src/app/runtime/gui/proto.rs`.
 - [ ] Add the push type on both sides: the TypeScript `PushEnvelope` union in
-      `src-webgui/src/store/koma.ts` and the Rust push serialization in
+      `src-webgui/src/store/types/envelope.ts` and the Rust push serialization in
       `src-agent/src/app/runtime/client/push_proto.rs`.
 - [ ] Add one store action that owns the request payload and lifecycle; call the
       shared `req` helper instead of posting IPC from a component.
