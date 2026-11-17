@@ -18,7 +18,7 @@ from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseRes
 from .types import (ApprovalResult, Attachment, Binary, DetachResult, Hello, Policy,
                     ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy,
                     ConfigView, EffortOptions, EffortResult, Limits, ModelDeleteResult, ProviderDeleteResult,
-                    PublicRole, RoleUnassignResult, SessionInfo, CreateWarning, _create_warnings,
+                    PublicRole, RoleUnassignResult, SkillRootsResult, SessionInfo, CreateWarning, _create_warnings,
                     SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SessionTranscript,
                     SkillDetail,
                     SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult, UsageReport)
@@ -29,6 +29,15 @@ _ROLES = ("main", "awareness", "safeguard", "compactor", "planner")
 
 def _unassign_params(role: PublicRole | str, if_revision: str | None) -> dict[str, Any]:
     params: dict[str, Any] = {"role": _role_param(role), "scope": "global"}
+    if if_revision is not None:
+        params["if_revision"] = if_revision
+    return params
+
+
+def _skill_roots_params(roots: Sequence[str], if_revision: str | None) -> dict[str, Any]:
+    if isinstance(roots, str) or not all(isinstance(root, str) for root in roots):
+        raise TypeError("roots must be a list of paths")
+    params: dict[str, Any] = {"roots": list(roots)}
     if if_revision is not None:
         params["if_revision"] = if_revision
     return params
@@ -265,6 +274,7 @@ _RESULTS: dict[str, Any] = {
     "config.providers.delete": ProviderDeleteResult.from_wire,
     "config.models.delete": ModelDeleteResult.from_wire,
     "config.roles.unassign": RoleUnassignResult.from_wire,
+    "config.skill_roots.set": SkillRootsResult.from_wire,
     "config.effort.get": EffortOptions.from_wire,
     "config.effort.set": EffortResult.from_wire,
     "config.limits.get": _validate_limits,
@@ -600,6 +610,13 @@ class Host(HostCalls):
         return RoleUnassignResult.from_wire(
             await self._call("config.roles.unassign", _unassign_params(role, if_revision), mutation=True))
 
+    async def config_skill_roots_set(self, roots: Sequence[str], *,
+                                     if_revision: str | None = None) -> SkillRootsResult:
+        """Replace the external skill roots with `roots` (absolute paths of existing directories; `[]`
+        clears them). Only that key of config.json changes, so a key another writer saved is kept."""
+        return SkillRootsResult.from_wire(
+            await self._call("config.skill_roots.set", _skill_roots_params(roots, if_revision), mutation=True))
+
     async def close(self) -> None:
         async with self._lock:
             t, self._transport = self._transport, None
@@ -724,6 +741,14 @@ class Session(HostCalls):
         result = await self._request("config.roles.unassign", _unassign_params(role, if_revision), mutation=True)
         self._apply_info(result)
         return RoleUnassignResult.from_wire(result)
+
+    async def config_skill_roots_set(self, roots: Sequence[str], *,
+                                     if_revision: str | None = None) -> SkillRootsResult:
+        """Replace the external skill roots, as `Host.config_skill_roots_set` does."""
+        result = await self._request("config.skill_roots.set", _skill_roots_params(roots, if_revision),
+                                     mutation=True)
+        self._apply_info(result)
+        return SkillRootsResult.from_wire(result)
 
     async def clear_main_pin(self) -> RoleUnassignResult:
         """Clear this session's Main pin, so Main follows the global assignment. Resets effort."""

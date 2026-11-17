@@ -651,6 +651,21 @@ class RoleUnassignResult:
                    _optional_session_info(d))
 
 @dataclass(frozen=True)
+class SkillRootsResult:
+    """`roots` are the stored paths, in order. `changed` is false when the list already matched."""
+    changed: bool
+    roots: tuple[str, ...]
+    config: ConfigView
+    propagation: Propagation
+    session_info: SessionInfo | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SkillRootsResult:
+        d = _object(value, "result")
+        return cls(_flag(d, "changed"), _texts(d["roots"], "roots", 64),
+                   ConfigView.from_wire(d["config"]), Propagation.from_wire(d["propagation"]),
+                   _optional_session_info(d))
+
+@dataclass(frozen=True)
 class EffortOptions:
     """`options` starts with `"default"`; `selected` is `"default"` when the model default is used."""
     state: EffortState

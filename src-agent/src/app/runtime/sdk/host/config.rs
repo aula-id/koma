@@ -94,9 +94,8 @@ impl ConfigStore {
     fn dir(&self) -> Result<PathBuf, RpcError> {
         match &self.dir {
             Some(dir) => Ok(dir.clone()),
-            None => crate::model::store::base_dir().map_err(|e| {
-                RpcError::reason(Reason::IoError, format!("koma data dir: {e}"))
-            }),
+            None => crate::model::store::base_dir()
+                .map_err(|e| RpcError::reason(Reason::IoError, format!("koma data dir: {e}"))),
         }
     }
 
@@ -315,6 +314,8 @@ pub enum Change {
     DeleteProvider(String),
     DeleteModel(String),
     UnassignRole(ModelRole),
+    /// Replace `extra_skill_roots`; the paths are already validated.
+    SetSkillRoots(Vec<PathBuf>),
 }
 
 /// What a write did, or would do on a dry run.
@@ -323,6 +324,10 @@ pub enum Effect {
     Removed(Removal),
     /// The entry that held the role, or `None` when nobody did.
     Released(Option<String>),
+    /// Whether the list of skill roots differed from the one stored.
+    SkillRoots {
+        changed: bool,
+    },
 }
 
 impl Change {
@@ -348,6 +353,11 @@ impl Change {
             Change::UnassignRole(role) => {
                 Ok(Effect::Released(configure::unassign_role(config, *role)))
             }
+            Change::SetSkillRoots(roots) => {
+                let changed = config.extra_skill_roots != *roots;
+                config.extra_skill_roots = roots.clone();
+                Ok(Effect::SkillRoots { changed })
+            }
         }
     }
 
@@ -366,6 +376,7 @@ impl Change {
                 .models
                 .iter()
                 .any(|m| m.effective_roles().contains(role)),
+            (Change::SetSkillRoots(roots), _) => config.extra_skill_roots == *roots,
             _ => false,
         }
     }
@@ -442,7 +453,10 @@ pub fn commit(
         after,
         effect,
     } = prepared;
-    if matches!(effect, Effect::Released(None)) {
+    if matches!(
+        effect,
+        Effect::Released(None) | Effect::SkillRoots { changed: false }
+    ) {
         return Ok(Committed {
             lock,
             effect,
@@ -663,6 +677,9 @@ pub fn handle_models_delete(r: Request, adapter: &mut Adapter) -> HandlerFuture<
 pub fn handle_roles_unassign(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(roles_unassign(r.params, adapter))
 }
+pub fn handle_skill_roots_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
+    Box::pin(skill_roots_set(r.params, adapter))
+}
 pub fn handle_effort_get(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(effort_get(r.params, adapter))
 }
@@ -793,11 +810,91 @@ async fn roles_unassign(params: Value, adapter: &mut Adapter) -> Result<Value, R
         write(adapter, Change::UnassignRole(role), if_revision, false).await?;
     let previous = match effect {
         Effect::Released(previous) => previous,
-        Effect::Removed(_) => None,
+        Effect::Removed(_) | Effect::SkillRoots { .. } => None,
     };
     let result = json!({
         "changed": previous.is_some(),
         "previous_model_uuid": previous,
+        "config": to_value(&view)?,
+        "propagation": to_value(&propagation)?,
+    });
+    Ok(with_session_info(result, adapter))
+}
+
+/// Most roots one call may set.
+const MAX_SKILL_ROOTS: usize = 64;
+const MAX_ROOT_CHARS: usize = 4096;
+
+/// The `roots` param: absolute paths, as a list. An empty list clears them.
+fn skill_roots_param(map: &Map<String, Value>) -> Result<Vec<PathBuf>, RpcError> {
+    let items = match map.get("roots") {
+        None => return Err(RpcError::reason(Reason::MissingParams, "roots is required")),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(out_of_range("roots must be a list of paths")),
+    };
+    if items.len() > MAX_SKILL_ROOTS {
+        return Err(out_of_range(format!(
+            "roots has at most {MAX_SKILL_ROOTS} entries"
+        )));
+    }
+    let mut roots = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item
+            .as_str()
+            .ok_or_else(|| out_of_range("every root must be a string"))?;
+        if text.is_empty()
+            || text.chars().count() > MAX_ROOT_CHARS
+            || text.chars().any(char::is_control)
+        {
+            return Err(out_of_range(
+                "a root must be a path of 1 to 4096 characters with no control characters",
+            ));
+        }
+        let path = PathBuf::from(text);
+        if !path.is_absolute() {
+            return Err(out_of_range(format!(
+                "root {text} must be an absolute path"
+            )));
+        }
+        roots.push(path);
+    }
+    Ok(roots)
+}
+
+/// `config.skill_roots.set`: replace the external skill roots. Only that key
+/// changes, under the SDK lock on a fresh read of the file, so a key another
+/// writer saved meanwhile is kept.
+async fn skill_roots_set(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let map = object(params)?;
+    let requested = skill_roots_param(&map)?;
+    let if_revision = revision_param(&map)?;
+    let workdir = adapter
+        .binding
+        .coding_mut()
+        .and_then(|c| c.projection.session.as_ref().map(|s| PathBuf::from(&s.cwd)));
+    let valid = crate::model::skill::valid_extra_skill_roots(workdir.as_deref(), &requested);
+    if valid.len() != requested.len() {
+        let kept: HashSet<usize> = valid.iter().map(|root| root.config_index).collect();
+        let first = (0..requested.len())
+            .find(|index| !kept.contains(index))
+            .map(|index| requested[index].display().to_string())
+            .unwrap_or_default();
+        return Err(out_of_range(format!(
+            "root {first} must be an existing directory, listed once, and not contain or sit inside a koma skills directory"
+        )));
+    }
+    let roots: Vec<PathBuf> = valid.into_iter().map(|root| root.path).collect();
+    let (effect, view, propagation) = write(
+        adapter,
+        Change::SetSkillRoots(roots.clone()),
+        if_revision,
+        false,
+    )
+    .await?;
+    let changed = matches!(effect, Effect::SkillRoots { changed: true });
+    let result = json!({
+        "changed": changed,
+        "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
         "config": to_value(&view)?,
         "propagation": to_value(&propagation)?,
     });
@@ -934,10 +1031,10 @@ async fn daemon_write(
             uuid: uuid.clone(),
             scope: "global".into(),
         },
-        Change::UnassignRole(_) => {
+        Change::UnassignRole(_) | Change::SetSkillRoots(_) => {
             return Err(RpcError::new(
                 "internal",
-                "role release has no daemon request",
+                "this change has no daemon request",
             ))
         }
     };
