@@ -1,8 +1,9 @@
 // Content for the shared bottom panel.
 import { useMemo } from 'react'
-import { AlertCircle, AlertTriangle, Info } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react'
 import { useKoma, type LspDiagnostic } from '../store/koma'
 import { uriToPath } from '../lib/lsp-bridge'
+import { PanelBody, PanelEmpty, baseName, panelRow } from './PanelChrome'
 
 type Row = LspDiagnostic & { fileLabel: string }
 
@@ -27,7 +28,7 @@ export function ProblemsDrawer() {
     const out: Row[] = []
     for (const [uri, list] of Object.entries(diagnostics)) {
       const abs = uriToPath(uri) ?? uri
-      const fileLabel = abs.split('/').pop() ?? abs
+      const fileLabel = baseName(abs)
       for (const d of list) {
         out.push({ ...d, uri: d.uri || uri, fileLabel })
       }
@@ -43,17 +44,18 @@ export function ProblemsDrawer() {
   }, [diagnostics])
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto font-mono text-[11px]">
+    <PanelBody className="font-mono text-[11px]">
       {rows.length === 0 ? (
-        <div className="px-3 py-4 text-koma-dim">No problems</div>
+        <PanelEmpty icon={<CheckCircle2 size={16} />}>No problems detected</PanelEmpty>
       ) : (
-        <ul className="divide-y divide-koma-border/60">
+        <ul>
           {rows.map((r, i) => (
             <li key={`${r.uri}:${r.line}:${r.character}:${i}`}>
               <button
                 type="button"
                 onClick={() => openDiagnostic(r.uri, r.line, r.character)}
-                className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-koma-hover"
+                title={r.message}
+                className={`${panelRow} hover:bg-koma-hover`}
               >
                 <SeverityIcon severity={r.severity} />
                 <span className="min-w-0 flex-1 truncate text-koma-fg">
@@ -72,6 +74,6 @@ export function ProblemsDrawer() {
           ))}
         </ul>
       )}
-    </div>
+    </PanelBody>
   )
 }

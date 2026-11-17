@@ -15,6 +15,7 @@ import { remoteActions } from './actions/remote'
 import { sessionActions } from './actions/session'
 import { skillActions } from './actions/skills'
 import { tabActions } from './actions/tabs'
+import { welcomeActions } from './actions/welcome'
 import { initialCoding } from './coding'
 import { initialDesign } from './design'
 import { initialDiagram } from './diagram'
@@ -350,6 +351,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   ...codingActions(set, get),
   ...diagramActions(set, get),
   ...designActions(set, get),
+  ...welcomeActions(set, get),
 }))
 
 // Capture at state publication, before rendering/expiration can replace a toast.

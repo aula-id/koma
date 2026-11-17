@@ -20,6 +20,8 @@ export type Tab =
   // Singleton Tutorial coach tab (NLP + driver.js). ActivityBar above Help.
   | { id: 'tutorial'; kind: 'tutorial' }
   | { id: 'notifications'; kind: 'notifications' }
+  // Singleton Welcome page for the Diagram / Design features. Id is 'welcome-diagram' or 'welcome-design'.
+  | { id: 'welcome-diagram' | 'welcome-design'; kind: 'welcome'; which: 'diagram' | 'design' }
   | {
       // Stable id — `diff:${path}` for a File-changed diff (find-by-path is
       // trivial), or `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}` for a

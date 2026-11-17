@@ -1,6 +1,6 @@
 import { useNotifications, notificationRequest } from '../lib/notifications'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, Bell, Shapes, Frame, Library } from 'lucide-react'
+import { MessageSquare, GitBranch, Blocks, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2, VectorSquare, Brain, Network, Server, Bell, Shapes, Frame, Library } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -39,7 +39,7 @@ const iconBtn =
 // plug into this same shape; adding one here is the only change that wave
 // needs on the ActivityBar side.
 export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
-  { view: 'explore', icon: Files, label: 'Explore' },
+  { view: 'explore', icon: MessageSquare, label: 'Chat' },
   { view: 'coding', icon: Code2, label: 'Coding' },
   { view: 'diagram', icon: Shapes, label: 'Diagram' },
   { view: 'design', icon: Frame, label: 'Design' },

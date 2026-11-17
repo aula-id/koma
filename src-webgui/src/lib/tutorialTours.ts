@@ -51,7 +51,7 @@ export const TOUR_CATALOGUE: TourMeta[] = [
   {
     id: 'activity-bar',
     title: 'Activity bar',
-    blurb: 'Left strip of panels — Explore, Git, Agents, and more.',
+    blurb: 'Left strip of panels — Chat, Git, Agents, and more.',
     kind: 'spotlight',
   },
   {
@@ -227,7 +227,7 @@ async function ensureSidebarView(view: string, panelSel?: string): Promise<boole
       mcp: 'MCP',
       remote: 'Remote',
       store: 'Extensions',
-      explore: 'Explore',
+      explore: 'Chat',
       coding: 'Coding',
       usage: 'Usage',
       importGraph: 'Import Graph',

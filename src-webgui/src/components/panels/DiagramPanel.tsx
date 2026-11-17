@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, File, Pencil, Trash2, X } from 'lucide-react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { File, Pencil, Trash2 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { AddBtn, Empty, IconBtn } from './helpers'
+import { AddBtn, Empty, IconBtn, InlineNameInput, WelcomeLink } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
@@ -17,66 +17,6 @@ const PALETTE_GROUPS = ['Basic', 'Flowchart', 'Containers', 'Database'] as const
 const EMPTY_ROOTS: string[] = []
 
 
-function InlineNameInput({
-  initial,
-  placeholder,
-  onSubmit,
-  onCancel,
-}: {
-  initial: string
-  placeholder: string
-  onSubmit: (value: string) => void
-  onCancel: () => void
-}) {
-  const [value, setValue] = useState(initial)
-  useEffect(() => {
-    const el = document.getElementById('diagram-name-input') as HTMLInputElement | null
-    el?.focus()
-    el?.select()
-  }, [])
-  const commit = () => {
-    const v = value.trim()
-    if (!v) {
-      onCancel()
-      return
-    }
-    onSubmit(v)
-  }
-  return (
-    <form
-      className="flex min-w-0 flex-1 items-center gap-1"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault()
-        commit()
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <input
-        id="diagram-name-input"
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            onCancel()
-          }
-        }}
-        onBlur={() => {
-          if (!value.trim()) onCancel()
-        }}
-        className="h-5 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
-      />
-      <IconBtn label="Confirm" tone="emerald" onClick={commit}>
-        <Check size={12} />
-      </IconBtn>
-      <IconBtn label="Cancel" tone="red" onClick={onCancel}>
-        <X size={12} />
-      </IconBtn>
-    </form>
-  )
-}
 
 function ShapeTile({ entry }: { entry: DiagramPaletteEntry }) {
   return (
@@ -319,7 +259,10 @@ export function DiagramPanel() {
                 )
               })
             ) : !creating ? (
-              <Empty>No diagrams</Empty>
+              <>
+                <Empty>No diagrams</Empty>
+                <WelcomeLink which="diagram" />
+              </>
             ) : null}
           </>
         )}

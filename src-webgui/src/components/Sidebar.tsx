@@ -26,7 +26,7 @@ type SidebarProps = {
 }
 
 const TITLES: Record<SidebarView, string> = {
-  explore: 'Explorer',
+  explore: 'Chat',
   git: 'Source Control',
   coding: 'Coding',
   mcp: 'MCP Servers',

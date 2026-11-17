@@ -4,10 +4,10 @@ import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
 import { DesignLayers } from '../DesignLayers'
-import { Empty, IconBtn } from './helpers'
+import { Empty, IconBtn, WelcomeLink } from './helpers'
 import { Select, Segmented } from './form'
 import { useKoma } from '../../store/koma'
-import { fileKey, isMissingCodingDirError, mintRequestId, type FileTreeEntry } from '../../store/coding'
+import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
 import {
   COMPONENT_MIME,
   addDesignToken,
@@ -18,10 +18,7 @@ import {
   designFileName,
   designQueryNode,
   dropDesignToken,
-  importFigToDesign,
   isDesignPath,
-  serializeDesign,
-  writeDesignAsset,
   resolveRef,
   setDesignMode,
   setDesignTokenValue,
@@ -32,8 +29,8 @@ import {
 } from '../../lib/design'
 import { resolveDesignPanelTab } from '../../lib/designPanelTab'
 import { emitDesignLayer } from '../../lib/designUi'
+import { importFigFile } from '../../lib/design/importFigFile'
 import { designPngBase64 } from '../../lib/designRender'
-import { utf8ToBase64 } from '../../lib/diagramNotes'
 import type { DesignFileState } from '../../store/design'
 import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
@@ -444,22 +441,7 @@ export function DesignPanel() {
                     const file = event.target.files?.[0]
                     event.target.value = ''
                     if (!file || !activeRoot) return
-                    void file.arrayBuffer().then(async (buffer) => {
-                      const imported = await importFigToDesign(buffer)
-                      if (imported.error) return
-                      for (const image of imported.images ?? []) writeDesignAsset(req, activeRoot, image.path, image.bytes)
-                      const name = designFileName(file.name.replace(/\.fig$/i, '')) ?? `import-${Date.now()}.kdsgn`
-                      const path = name.startsWith('.koma/') ? name : `.koma/${name}`
-                      req({
-                        r: 'FileWriteBytes',
-                        root: activeRoot,
-                        path,
-                        bytesB64: utf8ToBase64(serializeDesign(imported.doc)),
-                        overwrite: false,
-                        requestId: mintRequestId(),
-                      })
-                      openDesignTab(activeRoot, path)
-                    })
+                    void importFigFile(file, activeRoot, req, openDesignTab)
                   }}
                 />
                 <button
@@ -748,7 +730,12 @@ function FileList({
             )}
           </div>
         )
-      }) : !creating ? <Empty>{emptyLabel}</Empty> : null}
+      }) : !creating ? (
+        <>
+          <Empty>{emptyLabel}</Empty>
+          {emptyLabel === 'No designs' ? <WelcomeLink which="design" /> : null}
+        </>
+      ) : null}
     </>
   )
 }
