@@ -122,7 +122,11 @@ impl Grep {
 
             let rel_display = ws_canon
                 .iter()
-                .find_map(|ws| abs_path.strip_prefix(ws).ok().map(|r| ws.join(r)))
+                .enumerate()
+                .find_map(|(i, ws)| {
+                    let r = abs_path.strip_prefix(ws).ok()?;
+                    Some(ctx.workspaces.get(i)?.join(r))
+                })
                 .map(|abs| super::model_display_path(&ctx.workspaces, &abs))
                 .unwrap_or_else(|| abs_path.display().to_string());
 
@@ -256,7 +260,11 @@ impl Glob {
                     let abs = entry.path();
                     let rel = cache_roots
                         .iter()
-                        .find_map(|ws| abs.strip_prefix(ws).ok().map(|r| ws.join(r)))
+                        .enumerate()
+                        .find_map(|(i, ws)| {
+                            let r = abs.strip_prefix(ws).ok()?;
+                            Some(ctx.workspaces.get(i)?.join(r))
+                        })
                         .map(|abs_path| super::model_display_path(&ctx.workspaces, &abs_path))
                         .unwrap_or_else(|| abs.display().to_string());
                     if matcher.is_match(rel.as_str()) {

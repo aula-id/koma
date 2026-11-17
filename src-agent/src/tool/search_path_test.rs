@@ -72,3 +72,22 @@ fn missing_file_lists_nearest_existing_directory() {
     assert!(out.contains("here.txt"), "{out}");
     let _ = std::fs::remove_dir_all(&ws);
 }
+
+#[cfg(unix)]
+#[test]
+fn multi_workspace_grep_displays_the_configured_root_not_the_canonical_one() {
+    let real = tmp("mreal");
+    let other = tmp("mother");
+    std::fs::write(real.join("a.txt"), "needle\n").unwrap();
+    let link = std::env::temp_dir().join(format!("koma-search-mlink-{}", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let ctx = ctx_for(vec![link.clone(), other.clone()]);
+    let out = Grep
+        .run(&ctx, &json!({"pattern": "needle", "glob": "**/*.txt"}))
+        .unwrap();
+    assert!(out.contains(&link.to_string_lossy().to_string()), "{out}");
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_dir_all(&real);
+    let _ = std::fs::remove_dir_all(&other);
+}
