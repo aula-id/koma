@@ -1,4 +1,5 @@
 //! Curated standalone coding components. No extension host is loaded.
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -20,10 +21,9 @@ pub(crate) fn component_binary(id: &str) -> Option<PathBuf> {
         serde_json::from_slice(&std::fs::read(base.join("current.json")).ok()?).ok()?;
     let path = base.join(record.get("binary")?.as_str()?);
     if path.is_file()
-        && path
-            .canonicalize()
+        && winpath::canonical(&path)
             .ok()?
-            .starts_with(base.canonicalize().ok()?)
+            .starts_with(winpath::canonical(&base).ok()?)
     {
         Some(path)
     } else {

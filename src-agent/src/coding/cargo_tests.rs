@@ -1,4 +1,5 @@
 //! Stable Cargo artifact identities; runs inside the task supervisor's process tree.
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -72,7 +73,7 @@ pub(super) fn main() -> Result<()> {
         .context("Missing Cargo test recipe")?;
     anyhow::ensure!(raw.len() <= 256 * 1024, "Cargo recipe is too large");
     let recipe: Recipe = serde_json::from_str(&raw)?;
-    let root = std::env::current_dir()?.canonicalize()?;
+    let root = winpath::canonical(&std::env::current_dir()?)?;
     let mut build = Command::new(&recipe.command);
     build
         .args(["test", "--no-run", "--message-format=json"])
@@ -97,7 +98,7 @@ pub(super) fn main() -> Result<()> {
                         value["target"]["kind"]
                     ]);
                     let key = format!("{:x}", Sha256::digest(identity.to_string().as_bytes()));
-                    let path = Path::new(binary).canonicalize()?;
+                    let path = winpath::canonical(Path::new(binary))?;
                     let source = value["target"]["src_path"].as_str().unwrap_or("");
                     let file = Path::new(source)
                         .strip_prefix(&root)

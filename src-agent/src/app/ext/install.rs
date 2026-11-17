@@ -476,6 +476,23 @@ pub(crate) fn safe_exec_rel(exec: &str, base: &Path) -> Result<PathBuf> {
 /// component). Empty and `.` components are dropped; a trailing slash yields the
 /// directory path.
 fn safe_rel_path(name: &str) -> Option<PathBuf> {
+    safe_rel_path_for(name, cfg!(windows))
+}
+
+/// Windows device names that cannot be used as a file stem.
+fn is_windows_reserved_stem(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && matches!(stem.as_bytes().get(3), Some(b'1'..=b'9')))
+}
+
+/// Platform-parameterised core of [`safe_rel_path`]; `windows` selects the extra
+/// Windows-only rejections. Absolute paths, `..`, backslashes and NUL are rejected
+/// everywhere; on Windows also ':' (drive prefix / alternate data stream), names ending
+/// in '.' or ' ', and reserved device names. On other platforms ':' stays legal.
+pub(crate) fn safe_rel_path_for(name: &str, windows: bool) -> Option<PathBuf> {
     if name.starts_with('/') || name.starts_with('\\') {
         return None; // absolute
     }
@@ -485,14 +502,29 @@ fn safe_rel_path(name: &str) -> Option<PathBuf> {
             "" | "." => continue,
             ".." => return None, // zip-slip
             _ => {
-                if part.contains('\\') {
-                    return None; // windows-style separator sneaking in
+                if part.contains('\\') || part.contains('\0') {
+                    return None;
+                }
+                if windows
+                    && (part.contains(':')
+                        || part.ends_with('.')
+                        || part.ends_with(' ')
+                        || is_windows_reserved_stem(part))
+                {
+                    return None;
                 }
                 out.push(part);
             }
         }
     }
-    Some(out)
+    if out
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// The serde wire string for a manifest enum (`Tier`/`ExtensionKind`/`Grant`), which
@@ -515,4 +547,49 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap_or('0'));
     }
     s
+}
+
+#[cfg(test)]
+mod safe_rel_path_tests {
+    use super::*;
+
+    #[test]
+    fn matrix() {
+        for w in [true, false] {
+            assert_eq!(
+                safe_rel_path_for("a/b.css", w),
+                Some(PathBuf::from("a/b.css"))
+            );
+            assert_eq!(safe_rel_path_for("", w), Some(PathBuf::new()));
+            for bad in ["../x", "/x", "\\x", "a\\b", "a/../b", "a\0b"] {
+                assert_eq!(safe_rel_path_for(bad, w), None, "{bad} windows={w}");
+            }
+        }
+        for bad in [
+            "C:/Windows/win.ini",
+            "C:x",
+            "a.txt:s",
+            "con",
+            "a/NUL.txt",
+            "x.",
+            "a/com1",
+            "lpt9.x",
+            "x ",
+        ] {
+            assert_eq!(safe_rel_path_for(bad, true), None, "{bad}");
+            assert!(
+                safe_rel_path_for(bad, false).is_some(),
+                "{bad} must stay legal off Windows"
+            );
+        }
+        assert_eq!(
+            safe_rel_path_for("a:b.css", false),
+            Some(PathBuf::from("a:b.css"))
+        );
+        assert_eq!(safe_rel_path_for("com0", true), Some(PathBuf::from("com0")));
+        assert_eq!(
+            safe_rel_path_for("console.js", true),
+            Some(PathBuf::from("console.js"))
+        );
+    }
 }

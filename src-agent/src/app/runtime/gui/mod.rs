@@ -21,7 +21,7 @@
 use anyhow::{Context, Result};
 use include_dir::{include_dir, Dir};
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wry::http::{Request, Response, StatusCode};
 
 /// OS file drops navigate the document to `file://…` and replace the GUI with a
@@ -196,19 +196,45 @@ static WEBUI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-webgui/dist");
 
 /// Guess a MIME type from a file extension for the `koma://` protocol handler.
 fn mime_for(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("") {
-        "html" => "text/html",
-        "js" => "text/javascript",
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "js" | "mjs" => "text/javascript",
         "css" => "text/css",
-        "json" => "application/json",
+        "json" | "map" => "application/json",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
         "ttf" => "font/ttf",
         "otf" => "font/otf",
         "svg" => "image/svg+xml",
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "xml" => "application/xml",
         _ => "application/octet-stream",
     }
+}
+
+/// Image MIME for the `koma://localhost/image/` route, by case-insensitive extension.
+/// `None` for anything that is not an allowlisted image type.
+fn image_mime(p: &Path) -> Option<&'static str> {
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        _ => return None,
+    })
 }
 
 /// Handle a `koma://localhost/<path>` request by serving the matching file out
@@ -269,13 +295,8 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
         if let Ok(decoded) = percent_decode_str(encoded).decode_utf8() {
             let p = std::path::Path::new(decoded.as_ref());
             if p.is_absolute() && p.exists() {
-                let mime = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "gif" => "image/gif",
-                    "webp" => "image/webp",
-                    "svg" => "image/svg+xml",
-                    _ => "application/octet-stream",
+                let Some(mime) = image_mime(p) else {
+                    return not_found_response();
                 };
                 if let Ok(bytes) = std::fs::read(p) {
                     return Response::builder()
@@ -320,11 +341,30 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
 /// plain missing file) is logged via `append_global_error_log` since it's the shape of
 /// an escape attempt, not ordinary 404 traffic.
 fn handle_extension_request(path: &str) -> Response<Cow<'static, [u8]>> {
+    let extensions_dir = match crate::model::store::extensions_dir() {
+        Ok(d) => d,
+        Err(_) => return internal_error_response(),
+    };
+    serve_extension_file(&extensions_dir, path, cfg!(windows))
+}
+
+/// Core of [`handle_extension_request`], with the extensions dir and platform passed in.
+/// The path is percent-decoded exactly once BEFORE the id/rest split and the safety
+/// checks, so `%2e%2e`, `%5c` and `%2f` cannot smuggle an escape past them.
+fn serve_extension_file(
+    extensions_dir: &Path,
+    path: &str,
+    windows: bool,
+) -> Response<Cow<'static, [u8]>> {
     let path = path.trim_start_matches('/');
+    let Ok(decoded) = percent_encoding::percent_decode_str(path).decode_utf8() else {
+        return not_found_response();
+    };
+    let path: &str = decoded.as_ref();
     let (id, rest) = path.split_once('/').unwrap_or((path, ""));
     let rest = if rest.is_empty() { "index.html" } else { rest };
 
-    let (Some(safe_id), Some(rel)) = (safe_ext_id(id), safe_ext_rel_path(rest)) else {
+    let (Some(safe_id), Some(rel)) = (safe_ext_id(id), safe_ext_rel_path_for(rest, windows)) else {
         crate::model::store::append_global_error_log(
             "gui",
             &format!("koma://extension rejected unsafe request path: id={id:?} rest={rest:?}"),
@@ -332,10 +372,6 @@ fn handle_extension_request(path: &str) -> Response<Cow<'static, [u8]>> {
         return not_found_response();
     };
 
-    let extensions_dir = match crate::model::store::extensions_dir() {
-        Ok(d) => d,
-        Err(_) => return internal_error_response(),
-    };
     let file_path = extensions_dir.join(safe_id).join("ui").join(&rel);
 
     match std::fs::read(&file_path) {
@@ -369,24 +405,8 @@ fn safe_ext_id(id: &str) -> Option<&str> {
 /// (there, guarding zip-entry names against zip-slip) applied here to protocol-request
 /// paths instead: reject an absolute path or any `..` component; empty and `.` components
 /// are dropped.
-fn safe_ext_rel_path(name: &str) -> Option<PathBuf> {
-    if name.starts_with('/') || name.starts_with('\\') {
-        return None; // absolute
-    }
-    let mut out = PathBuf::new();
-    for part in name.split('/') {
-        match part {
-            "" | "." => continue,
-            ".." => return None, // escape attempt
-            _ => {
-                if part.contains('\\') {
-                    return None; // windows-style separator sneaking in
-                }
-                out.push(part);
-            }
-        }
-    }
-    Some(out)
+fn safe_ext_rel_path_for(name: &str, windows: bool) -> Option<PathBuf> {
+    crate::app::ext::install::safe_rel_path_for(name, windows)
 }
 
 /// Shared 404 body for both `koma://` request kinds (baked-in host UI + extension UI).

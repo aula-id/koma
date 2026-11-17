@@ -42,6 +42,7 @@ pub mod session_lock;
 pub mod session_registry;
 pub mod settings;
 pub mod skill;
+pub(crate) mod slash;
 pub mod store;
 pub mod usage;
 pub mod web_search;
