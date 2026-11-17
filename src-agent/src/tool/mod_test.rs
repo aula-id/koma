@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
+use serde_json::json;
 
 #[test]
 fn security_tools_are_not_builtin_or_allowed_in_plan() {
@@ -451,4 +452,158 @@ fn built_in_and_main_advertised_tool_names_are_unique() {
         advertised_unique.len(),
         "main advertised tool names must be unique"
     );
+}
+
+// --- skill roots are read-only to the agent's file tools ---
+
+struct SkillRootFixture {
+    base: PathBuf,
+    workspace: PathBuf,
+    extra_root: PathBuf,
+    skill_dir: PathBuf,
+}
+
+impl SkillRootFixture {
+    fn new(tag: &str) -> Self {
+        let base = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "koma-skill-roots-{tag}-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+        let workspace = base.join("workspace");
+        let extra_root = base.join("team-skills");
+        let skill_dir = extra_root.join("review");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "original skill").unwrap();
+        std::fs::write(skill_dir.join("helper.md"), "original helper").unwrap();
+        Self {
+            base,
+            workspace,
+            extra_root,
+            skill_dir,
+        }
+    }
+
+    /// A context bound to the workspace, with the skill loaded.
+    fn ctx(&self, active: bool) -> ToolCtx {
+        ToolCtx {
+            plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            workspace: self.workspace.clone(),
+            workspaces: vec![self.workspace.clone()],
+            dir_cache: Arc::new(std::sync::RwLock::new(DirCache::default())),
+            memory_dir: None,
+            worktrees_dir: None,
+            download_dir: None,
+            scratch_dir: None,
+            internet_mode: crate::model::settings::InternetMode::default(),
+            ssh_key: None,
+            skill_registry: None,
+            active_skill_names: None,
+            active_skill_dirs: if active {
+                vec![self.skill_dir.clone()]
+            } else {
+                Vec::new()
+            },
+            skill_scope: None,
+            skill_rank: None,
+            mcp_manager: None,
+            bash_saving: true,
+            bash_log_dir: None,
+            session_dir: None,
+            allow_scratch: true,
+            sdlc_assess: false,
+            sdlc_active_node_id: None,
+            search_engine: None,
+            call_track: CallTrack::new(),
+        }
+    }
+
+    fn assert_untouched(&self) {
+        assert_eq!(
+            std::fs::read_to_string(self.skill_dir.join("SKILL.md")).unwrap(),
+            "original skill"
+        );
+        assert_eq!(
+            std::fs::read_to_string(self.skill_dir.join("helper.md")).unwrap(),
+            "original helper"
+        );
+        assert!(!self.skill_dir.join("planted.md").exists());
+        assert!(!self.extra_root.join("planted.md").exists());
+    }
+}
+
+impl Drop for SkillRootFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// Run write, edit and delete on `path`; each must fail and change nothing.
+fn assert_mutations_refused(fixture: &SkillRootFixture, ctx: &ToolCtx, path: &Path) {
+    let path = path.to_str().unwrap();
+    let write = fs::Write.run(ctx, &json!({"path": path, "content": "planted"}));
+    assert!(write.is_err(), "write must refuse {path}: {write:?}");
+    let edit = fs::Edit.run(
+        ctx,
+        &json!({"path": path, "old": "original", "new": "planted"}),
+    );
+    assert!(edit.is_err(), "edit must refuse {path}: {edit:?}");
+    let delete = fs::Delete.run(ctx, &json!({"path": path}));
+    assert!(delete.is_err(), "delete must refuse {path}: {delete:?}");
+    fixture.assert_untouched();
+}
+
+#[test]
+fn write_edit_and_delete_refuse_paths_under_an_extra_skill_root() {
+    let fixture = SkillRootFixture::new("extra");
+    let ctx = fixture.ctx(false);
+    assert_mutations_refused(&fixture, &ctx, &fixture.skill_dir.join("SKILL.md"));
+    assert_mutations_refused(&fixture, &ctx, &fixture.skill_dir.join("helper.md"));
+    // A new file beside the skills, and one in a new directory under the root.
+    let write = fs::Write.run(
+        &ctx,
+        &json!({"path": fixture.extra_root.join("planted.md").to_str().unwrap(), "content": "x"}),
+    );
+    assert!(write.is_err(), "{write:?}");
+    let nested = fs::Write.run(
+        &ctx,
+        &json!({"path": fixture.extra_root.join("new-skill/SKILL.md").to_str().unwrap(), "content": "x"}),
+    );
+    assert!(nested.is_err(), "{nested:?}");
+    assert!(!fixture.extra_root.join("new-skill").exists());
+    fixture.assert_untouched();
+}
+
+#[test]
+fn write_edit_and_delete_refuse_paths_under_an_active_skill_dir() {
+    let fixture = SkillRootFixture::new("active");
+    let ctx = fixture.ctx(true);
+    assert_mutations_refused(&fixture, &ctx, &fixture.skill_dir.join("SKILL.md"));
+    assert_mutations_refused(&fixture, &ctx, &fixture.skill_dir.join("helper.md"));
+    // Loading the skill widens reads only: the dotdot form is refused as well.
+    let escaped = fixture.workspace.join("../team-skills/review/helper.md");
+    assert_mutations_refused(&fixture, &ctx, &escaped);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_symlink_into_a_skill_root_does_not_open_it_to_writes() {
+    let fixture = SkillRootFixture::new("link");
+    std::os::unix::fs::symlink(&fixture.extra_root, fixture.workspace.join("linked")).unwrap();
+    let ctx = fixture.ctx(true);
+    assert_mutations_refused(&fixture, &ctx, Path::new("linked/review/helper.md"));
+}
+
+#[test]
+fn read_sees_an_active_skill_dir_and_not_an_inactive_one() {
+    let fixture = SkillRootFixture::new("read");
+    let helper = fixture.skill_dir.join("helper.md");
+    let args = json!({"path": helper.to_str().unwrap()});
+    let loaded = fs::Read.run(&fixture.ctx(true), &args).unwrap();
+    assert!(loaded.contains("original helper"), "{loaded}");
+    // The same file is out of reach until the skill is loaded.
+    assert!(fs::Read.run(&fixture.ctx(false), &args).is_err());
+    fixture.assert_untouched();
 }

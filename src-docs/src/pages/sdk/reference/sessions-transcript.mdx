@@ -1,0 +1,48 @@
+---
+title: sessions.transcript
+description: Read a coding session's stored messages without starting its daemon.
+method: sessions.transcript
+---
+
+# sessions.transcript
+
+Read a coding session's stored messages without starting its daemon.
+
+Send a session_id. since is the last message id you saw (default 0) and limit is 1 to 500 (default 100). The call works in every binding.
+
+```json
+{
+  "id": "12",
+  "method": "sessions.transcript",
+  "params": {
+    "session_id": "9d1e6c4a7b2f4a0e8c3d5b7f1a2e4c68",
+    "since": 0,
+    "limit": 100
+  }
+}
+```
+
+The result holds session_id, live, messages and next_since. Each message has id, role, text and created_at, and truncated true when text was cut at 262144 bytes. Messages come oldest first. An id only grows and is never reused, so pass the last id back as since to read on. next_since is the id of the last message of the page when more follow, and null otherwise.
+
+The read happens in the adapter, from the session's message archive on disk. It starts no daemon and sends nothing to one, so a session that is not live reads the same as a running one. live says whether a daemon is running now. The archive is never created, migrated or written; a session that stored nothing yet has no messages.
+
+Every configured secret value, and the userinfo of every URL, is replaced with [redacted] in text. If the configuration cannot be read, the call fails with config_unreadable instead of returning text it could not scrub.
+
+A room is refused with out_of_range: read it with room.history. An id that names no session is not_found. A busy archive is unavailable with reason sqlite_busy.
+
+The shared error object has code, message, and delivery. delivery is not_sent or unknown. A rejected turn disposition is a result, described on the turns page.
+
+## Python
+
+```python
+page = await host.sessions_transcript(session_id, limit=100)
+while page.next_since is not None:
+    page = await host.sessions_transcript(session_id, since=page.next_since, limit=100)
+```
+
+## TypeScript
+
+```ts
+const page = await host.readTranscript({ session_id: sessionId, limit: 100 });
+const more = await host.readTranscript({ session_id: sessionId, since: page.next_since ?? 0 });
+```

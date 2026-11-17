@@ -1,9 +1,9 @@
 export const METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve', 'configure', 'detach'] as const;
 /** The ten v1 methods. hello `capabilities` always lists exactly these. */
 export type V1Method = typeof METHODS[number];
-export const CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.subagent_risky.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set'] as const;
+export const CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign', 'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set'] as const;
 export type ConfigMethod = typeof CONFIG_METHODS[number];
-export const SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop'] as const;
+export const SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop', 'sessions.transcript'] as const;
 export const USAGE_METHODS = ['usage.query'] as const;
 export const SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create', 'skills.update'] as const;
 export const ROOM_METHODS = ['room.list', 'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control', 'room.status', 'room.history', 'room.shelf.list', 'room.item', 'room.trajectory', 'room.reports', 'room.spend', 'room.team.get', 'room.models.set', 'room.avatars.upsert', 'room.avatars.remove'] as const;
@@ -145,6 +145,8 @@ export interface ConfigGetParams { view?: ConfigViewName }
 export interface ProviderDeleteParams { provider_uuid: string; if_revision?: string; dry_run?: boolean }
 export interface ModelDeleteParams { model_uuid: string; if_revision?: string; dry_run?: boolean }
 export interface RoleUnassignParams { role: PublicRole; scope?: ConfigViewName; if_revision?: string }
+export interface ToolPolicySetParams { deny: string[]; if_revision?: string }
+export interface SkillRootsSetParams { roots: string[]; if_revision?: string }
 /** What a sub-agent's risky tool call goes through: the classifier (default), the parent session's approval, or a refusal. */
 export type SubagentRiskyMode = 'classifier' | 'parent' | 'deny';
 export interface SubagentRiskySetParams { mode: SubagentRiskyMode; if_revision?: string }
@@ -156,6 +158,8 @@ export interface MutationResult { config: ConfigView; propagation: Propagation; 
 export interface ProviderDeleteResult extends MutationResult { dry_run: boolean; removed: { provider_uuid: string; models_removed: string[]; main_reset: boolean } }
 export interface ModelDeleteResult extends MutationResult { dry_run: boolean; removed: { model_uuid: string; roles_released: PublicRole[]; main_reset: boolean } }
 export interface RoleUnassignResult extends MutationResult { changed: boolean; previous_model_uuid: string | null }
+export interface ToolPolicyResult extends MutationResult { changed: boolean; deny: string[] }
+export interface SkillRootsResult extends MutationResult { changed: boolean; roots: string[] }
 export interface SubagentRiskyResult extends MutationResult { changed: boolean; mode: string }
 export interface EffortOptions { state: Open<'ready' | 'loading' | 'unsupported'>; options: string[]; selected: string; note: string | null; main_model_uuid: string | null }
 export interface EffortResult { effort: string; main_model_uuid: string | null; superseded: boolean; session_info?: SessionInfo }
@@ -175,6 +179,11 @@ export interface SessionRenameParams { session_id: string; name: string }
 export interface SessionRenameResult { session: SessionRow }
 export interface SessionDeleteResult { deleted: true; kind: Open<'coding' | 'room'>; orphaned_room_session_id: string | null }
 export interface SessionStopResult { stopped: true; was_live: boolean }
+export interface SessionTranscriptParams { session_id: string; since?: number; limit?: number }
+/** `id` only grows and is never reused. `truncated` is present (true) when `text` was cut at 262144 bytes. */
+export interface TranscriptMessage { id: number; role: 'system' | 'user' | 'assistant' | 'tool'; text: string; created_at: number; truncated?: true }
+/** Messages with an id above `since`, oldest first. Pass `next_since` back as `since` for the next page. */
+export interface SessionTranscript { session_id: string; live: boolean; messages: TranscriptMessage[]; next_since: number | null }
 
 export type UsageGroupBy = 'none' | 'model' | 'role' | 'session';
 export type UsageBucketSize = 'none' | 'hour' | 'day' | 'week';

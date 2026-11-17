@@ -166,6 +166,8 @@ pub fn spawn_subagent(
                 )
         });
     }
+    // Hard deny list: an agent definition cannot list its way past it.
+    crate::tool::policy::retain_allowed(&mut tools);
     mcp_tools.retain(|definition| tools.contains(&definition.function.name));
     let convo = context::build_seed(
         agent,

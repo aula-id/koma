@@ -84,7 +84,9 @@ the binding; mutations then check `stale`
 `dry_run` returns the computed effect with the current view and empty
 `propagation`; `config.models.delete` with any `scope` other than `"global"` is
 `out_of_range`; session-scope `config.roles.unassign` clears the Main pin (effort
-resets to `default`). `config.subagent_risky.set` validates `mode` (`missing_params`, then
+resets to `default`). `config.tool_policy.set` validates `deny` (`missing_params`, then
+`out_of_range` per entry), then `if_revision`, then `stale`; an equal list is
+`changed:false` with empty `propagation`. `config.subagent_risky.set` validates `mode` (`missing_params`, then
 `out_of_range`), then `if_revision`, then `stale`; an equal mode is `changed:false` with empty
 `propagation`. An unassigned `compactor`, `awareness` or `planner` reports
 `origin:"inherit_main"` with Main's route and `model_uuid:null`; an unassigned
@@ -125,7 +127,10 @@ is `invalid_state`/`live`; the bound coding session, rooms and sessions that are
 not live are renamed; `sessions.info` follows. `sessions.delete` checks, in order,
 `not_found`, `bound_self`, `live`, `session_locked`. `sessions.stop` of an id
 that is not live (or unknown) answers `was_live:false`. These calls never end the
-process. Bound sessions and rooms report `bound:true`.
+process. Bound sessions and rooms report `bound:true`. `sessions.transcript` reads
+stored messages: `sess-coding-b` (not live) holds four, the third flagged
+`truncated`, and `sess-coding-a` (live) two; a room is `out_of_range`, an unknown
+id `not_found`, and `sess-busy` `sqlite_busy`.
 
 Usage (scenarios `usage` and the room ones). The ledger has twelve rows from
 `NOW - 40 days` on: eleven inside the default 30 days, for sessions

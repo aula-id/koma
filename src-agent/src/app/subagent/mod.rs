@@ -31,6 +31,8 @@ pub mod context;
 pub mod engine;
 pub mod event;
 pub mod spawn;
+#[cfg(test)]
+mod tool_deny_tests;
 pub(crate) mod usage_math;
 #[cfg(test)]
 mod risky_tests;

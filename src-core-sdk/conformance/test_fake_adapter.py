@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,8 +15,9 @@ PROTOCOL = HERE.parent / 'protocol'
 V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_and_submit', 'approve',
       'configure', 'detach']
 CONFIG = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
-          'config.subagent_risky.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
-SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop']
+                  'config.tool_policy.set', 'config.subagent_risky.set', 'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
+SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
+            'sessions.transcript']
 SKILLS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
           'skills.update']
 ROOM = ['room.list', 'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control',
@@ -219,6 +221,37 @@ class Conformance(unittest.TestCase):
         for frame in frames:
             schema.validate(frame)
 
+    def test_tool_policy_set(self):
+        _, replies = self.replies('config', [
+            call(1, 'config.get'),
+            call(2, 'config.tool_policy.set'),
+            call(3, 'config.tool_policy.set', deny='bash'),
+            call(4, 'config.tool_policy.set', deny=['']),
+            call(5, 'config.tool_policy.set', deny=['two words']),
+            call(6, 'config.tool_policy.set', deny=['a,b']),
+            call(7, 'config.tool_policy.set', deny=['bash'], if_revision='0000000000000000'),
+            call(8, 'config.tool_policy.set', deny=['web_fetch', 'computer_*', 'web_fetch']),
+            call(9, 'config.tool_policy.set', deny=['web_fetch', 'computer_*']),
+            call(10, 'config.get'),
+            call(11, 'config.tool_policy.set', deny=[]),
+            call(12, 'config.tool_policy.set', deny=[])])
+        self.assertReason(replies['2'], 'invalid_request', 'missing_params')
+        for number in '3456':
+            self.assertReason(replies[number], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['7'], 'invalid_state', 'stale')
+        first = replies['8']['result']
+        self.assertEqual((first['changed'], first['deny'], first['config']['view']),
+                         (True, ['web_fetch', 'computer_*'], 'global'))
+        self.assertEqual(first['propagation']['bound'], 'not_bound')
+        self.assertEqual((replies['9']['result']['changed'], replies['9']['result']['propagation']), (False, {}))
+        self.assertNotEqual(replies['1']['result']['revision'], replies['10']['result']['revision'])
+        self.assertEqual((replies['11']['result']['changed'], replies['11']['result']['deny']), (True, []))
+        self.assertEqual(replies['12']['result']['changed'], False)
+        schema = validator()
+        if schema is not None:
+            for number in '89':
+                schema.validate(replies[number])
+
     def test_subagent_risky_set(self):
         _, replies = self.replies('config', [
             call(1, 'config.get'),
@@ -247,6 +280,42 @@ class Conformance(unittest.TestCase):
         if schema is not None:
             for number in '78':
                 schema.validate(replies[number])
+
+    def test_skill_roots_set(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            one, two = os.path.realpath(tmp), os.path.realpath(os.path.join(tmp, 'sub'))
+            os.mkdir(two)
+            _, replies = self.replies('config', [
+                call(1, 'config.get'),
+                call(2, 'config.skill_roots.set'),
+                call(3, 'config.skill_roots.set', roots='x'),
+                call(4, 'config.skill_roots.set', roots=['relative']),
+                call(5, 'config.skill_roots.set', roots=[os.path.join(tmp, 'absent')]),
+                call(6, 'config.skill_roots.set', roots=[one, one]),
+                call(7, 'config.skill_roots.set', roots=[one], if_revision='0000000000000000'),
+                call(8, 'config.skill_roots.set', roots=[one, two]),
+                call(9, 'config.skill_roots.set', roots=[one, two]),
+                call(10, 'config.get'),
+                call(11, 'config.skill_roots.set', roots=[]),
+                call(12, 'config.skill_roots.set', roots=[]),
+                call(13, 'config.skill_roots.set', roots=[one], if_revision='0000000000000000')])
+            self.assertReason(replies['2'], 'invalid_request', 'missing_params')
+            for number in '3456':
+                self.assertReason(replies[number], 'invalid_request', 'out_of_range')
+            self.assertReason(replies['7'], 'invalid_state', 'stale')
+            first = replies['8']['result']
+            self.assertEqual((first['changed'], first['roots'], first['config']['view']), (True, [one, two], 'global'))
+            self.assertEqual(first['propagation']['bound'], 'not_bound')
+            self.assertEqual((replies['9']['result']['changed'], replies['9']['result']['propagation']), (False, {}))
+            self.assertNotEqual(replies['1']['result']['revision'], replies['10']['result']['revision'])
+            self.assertEqual((replies['11']['result']['changed'], replies['11']['result']['roots']), (True, []))
+            self.assertEqual(replies['12']['result']['changed'], False)
+            self.assertReason(replies['13'], 'invalid_state', 'stale')
+            schema = validator()
+            if schema is not None:
+                for number in '89':
+                    schema.validate(replies[number])
 
     def test_config_unbound(self):
         result, replies = self.replies('config', [
@@ -499,6 +568,36 @@ class Conformance(unittest.TestCase):
         self.assertNotIn('sess-coding-b', ids)
         self.assertFalse(next(r for r in replies['18']['result']['sessions'] if r['session_id'] == 'sess-coding-a')['live'])
         self.assertEqual(result.returncode, 0)
+
+    def test_sessions_transcript(self):
+        _, replies = self.replies('sessions', [
+            call(1, 'sessions.transcript', session_id='sess-coding-b'),
+            call(2, 'sessions.transcript', session_id='sess-coding-b', limit=2),
+            call(3, 'sessions.transcript', session_id='sess-coding-b', since=2, limit=2),
+            call(4, 'sessions.transcript', session_id='sess-coding-a'),
+            call(5, 'sessions.transcript', session_id='sess-coding-c'),
+            call(6, 'sessions.transcript', session_id=ROOM_A),
+            call(7, 'sessions.transcript', session_id='missing'),
+            call(8, 'sessions.transcript', session_id='sess-coding-b', since=-1),
+            call(9, 'sessions.transcript', session_id='sess-coding-b', limit=501),
+            call(10, 'sessions.transcript', session_id='sess-busy'),
+            call(11, 'sessions.transcript')])
+        stopped = replies['1']['result']
+        self.assertEqual((stopped['session_id'], stopped['live'], stopped['next_since']), ('sess-coding-b', False, None))
+        self.assertEqual([m['id'] for m in stopped['messages']], [1, 2, 3, 4])
+        self.assertEqual(stopped['messages'][1]['text'], 'key = [redacted]')
+        self.assertNotIn('truncated', stopped['messages'][0])
+        self.assertIs(stopped['messages'][2]['truncated'], True)
+        first = replies['2']['result']
+        self.assertEqual(([m['id'] for m in first['messages']], first['next_since']), ([1, 2], 2))
+        rest = replies['3']['result']
+        self.assertEqual(([m['id'] for m in rest['messages']], rest['next_since']), ([3, 4], None))
+        self.assertTrue(replies['4']['result']['live'])
+        self.assertEqual(replies['5']['result']['messages'], [])
+        for n in ('6', '8', '9', '11'):
+            self.assertReason(replies[n], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['7'], 'not_found', 'not_found')
+        self.assertReason(replies['10'], 'unavailable', 'sqlite_busy')
 
     def test_sessions_bound_self(self):
         _, replies = self.replies('sessions', [

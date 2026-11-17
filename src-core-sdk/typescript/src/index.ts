@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { Transport, isRoomEvent, type Incoming } from './transport.js';
 import { configureParams, local, object, string, textId, validateInput, validatePolicy } from './validate.js';
-import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method, type SessionInfo, type ConfigView, type ConfigGetParams, type ProviderDeleteParams, type ProviderDeleteResult, type ModelDeleteParams, type ModelDeleteResult, type RoleUnassignParams, type RoleUnassignResult, type SubagentRiskySetParams, type SubagentRiskyResult, type EffortGetParams, type EffortOptions, type EffortSetParams, type EffortResult, type Limits, type LimitsSetParams, type LimitsResult, type HelloLimits, type Warning, type SessionsListParams, type SessionsListResult, type SessionRenameParams, type SessionRenameResult, type SessionDeleteResult, type SessionStopResult, type UsageQueryParams, type UsageResult, type SkillsListParams, type SkillsListResult, type SkillGetParams, type SkillDetail, type SkillReadFileParams, type SkillFileResult, type SkillCreateParams, type SkillWriteResult, type SkillUpdateParams, type SkillUpdateResult, type SkillInstallParams, type SkillRemoveParams, type SkillRemoveResult, type RoomsListParams, type RoomsListResult, type RoomOpenParams, type RoomAttachParams, type AttachResult, type RoomCloseResult, type RoomSendParams, type RoomSendResult, type RoomControlParams, type RoomStatus, type RoomHistoryParams, type RoomHistoryResult, type ShelfListParams, type ShelfListResult, type ShelfItem, type GoalParams, type TrajectoryResult, type ReportsParams, type ReportsResult, type SpendResult, type Team, type TeamGetParams, type TeamModelParams, type TeamAvatarUpsertParams, type TeamAvatarRemoveParams, type TeamWriteResult, type TeamAvatarRemoveResult, type TeamTarget, type RoomEvent } from './types.js';
+import { DeliveryUnknownError, SdkError, TurnReplacedError, type ClientOptions, type ConfigureOptions, type ConfigureResult, type CreateOptions, type ResumeOptions, type RequestOptions, type State, type Hello, type Input, type SubmitResult, type EnqueueResult, type InterruptResult, type ReplacementResult, type Event, type Turn, type Method, type SessionInfo, type ConfigView, type ConfigGetParams, type ProviderDeleteParams, type ProviderDeleteResult, type ModelDeleteParams, type ModelDeleteResult, type RoleUnassignParams, type RoleUnassignResult, type ToolPolicySetParams, type ToolPolicyResult, type SubagentRiskySetParams, type SubagentRiskyResult, type SkillRootsSetParams, type SkillRootsResult, type EffortGetParams, type EffortOptions, type EffortSetParams, type EffortResult, type Limits, type LimitsSetParams, type LimitsResult, type HelloLimits, type Warning, type SessionsListParams, type SessionsListResult, type SessionRenameParams, type SessionRenameResult, type SessionDeleteResult, type SessionStopResult, type SessionTranscript, type SessionTranscriptParams, type UsageQueryParams, type UsageResult, type SkillsListParams, type SkillsListResult, type SkillGetParams, type SkillDetail, type SkillReadFileParams, type SkillFileResult, type SkillCreateParams, type SkillWriteResult, type SkillUpdateParams, type SkillUpdateResult, type SkillInstallParams, type SkillRemoveParams, type SkillRemoveResult, type RoomsListParams, type RoomsListResult, type RoomOpenParams, type RoomAttachParams, type AttachResult, type RoomCloseResult, type RoomSendParams, type RoomSendResult, type RoomControlParams, type RoomStatus, type RoomHistoryParams, type RoomHistoryResult, type ShelfListParams, type ShelfListResult, type ShelfItem, type GoalParams, type TrajectoryResult, type ReportsParams, type ReportsResult, type SpendResult, type Team, type TeamGetParams, type TeamModelParams, type TeamAvatarUpsertParams, type TeamAvatarRemoveParams, type TeamWriteResult, type TeamAvatarRemoveResult, type TeamTarget, type RoomEvent } from './types.js';
 export * from './types.js';
 
 /** A stateless adapter is replaced once this many requests were sent, well before the per-process cap. */
@@ -30,10 +30,34 @@ function unassignParams(params: RoleUnassignParams): Record<string, unknown> {
   return out;
 }
 
+/** `deny` must be a list of strings; the adapter checks the patterns. */
+function toolPolicyParams(params: ToolPolicySetParams): Record<string, unknown> {
+  const out = plain(params);
+  local(() => {
+    const deny: unknown = out.deny;
+    if (!Array.isArray(deny)) throw new Error('deny must be a list of tool names or globs');
+    out.deny = [...deny];
+    for (const entry of deny) string(entry, true);
+  });
+  return out;
+}
+
 /** `mode` must be a string; the adapter checks which one. */
 function subagentRiskyParams(params: SubagentRiskySetParams): Record<string, unknown> {
   const out = plain(params);
   local(() => string(out.mode, true));
+  return out;
+}
+
+/** `roots` must be a list of strings; the adapter checks that they are existing directories. */
+function skillRootsParams(params: SkillRootsSetParams): Record<string, unknown> {
+  const out = plain(params);
+  local(() => {
+    const roots: unknown = out.roots;
+    if (!Array.isArray(roots)) throw new Error('roots must be a list of paths');
+    out.roots = [...roots];
+    for (const root of roots) string(root, true);
+  });
   return out;
 }
 
@@ -155,6 +179,13 @@ abstract class HostCalls {
   /** Stops the session's daemon, which disconnects every client of it. */
   async stopSession(params: { session_id: string }, request?: RequestOptions): Promise<SessionStopResult> {
     return this.request('sessions.stop', plain(params, ['session_id']), request);
+  }
+  /**
+   * The stored messages of a coding session, read from disk: no daemon is started, so a session that is not live
+   * reads the same as a running one. Secrets are scrubbed. A room is refused (`out_of_range`): use `history`.
+   */
+  async readTranscript(params: SessionTranscriptParams, request?: RequestOptions): Promise<SessionTranscript> {
+    return this.request('sessions.transcript', plain(params, ['session_id']), request);
   }
   async queryUsage(params?: UsageQueryParams, request?: RequestOptions): Promise<UsageResult> {
     return this.request('usage.query', plain(params), request);
@@ -285,9 +316,17 @@ export class Host extends HostCalls {
   async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
     return this.request('config.roles.unassign', unassignParams(params), request);
   }
+  /** Replace the hard tool deny list (tool names and `*`/`?` globs; [] clears it). A denied tool is never offered to a model and its calls are refused on every path. Only that key of config.json changes. */
+  async setToolPolicy(params: ToolPolicySetParams, request?: RequestOptions): Promise<ToolPolicyResult> {
+    return this.request('config.tool_policy.set', toolPolicyParams(params), request);
+  }
   /** Choose what a sub-agent's risky tool call goes through: `classifier` (default), `parent` (it parks on the parent session's approval, answered with `approve`) or `deny`. Only that key of config.json changes. */
   async setSubagentRisky(params: SubagentRiskySetParams, request?: RequestOptions): Promise<SubagentRiskyResult> {
     return this.request('config.subagent_risky.set', subagentRiskyParams(params), request);
+  }
+  /** Replace the external skill roots (absolute paths of existing directories; [] clears them). Only that key of config.json changes. */
+  async setSkillRoots(params: SkillRootsSetParams, request?: RequestOptions): Promise<SkillRootsResult> {
+    return this.request('config.skill_roots.set', skillRootsParams(params), request);
   }
   async close(): Promise<void> {
     this.closed = true;
@@ -352,9 +391,17 @@ export class Session extends HostCalls {
   async unassignRole(params: RoleUnassignParams, request?: RequestOptions): Promise<RoleUnassignResult> {
     return this.observe(await this.request<RoleUnassignResult>('config.roles.unassign', unassignParams(params), request));
   }
+  /** Replace the hard tool deny list, as Host.setToolPolicy does. */
+  async setToolPolicy(params: ToolPolicySetParams, request?: RequestOptions): Promise<ToolPolicyResult> {
+    return this.observe(await this.request<ToolPolicyResult>('config.tool_policy.set', toolPolicyParams(params), request));
+  }
   /** Set the sub-agent risky-tool mode, as Host.setSubagentRisky does. */
   async setSubagentRisky(params: SubagentRiskySetParams, request?: RequestOptions): Promise<SubagentRiskyResult> {
     return this.observe(await this.request<SubagentRiskyResult>('config.subagent_risky.set', subagentRiskyParams(params), request));
+  }
+  /** Replace the external skill roots, as Host.setSkillRoots does. */
+  async setSkillRoots(params: SkillRootsSetParams, request?: RequestOptions): Promise<SkillRootsResult> {
+    return this.observe(await this.request<SkillRootsResult>('config.skill_roots.set', skillRootsParams(params), request));
   }
   /** Clear this session's Main pin, so Main follows the global assignment. Resets effort. */
   async clearMainPin(request?: RequestOptions): Promise<RoleUnassignResult> {

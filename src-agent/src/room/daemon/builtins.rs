@@ -202,6 +202,9 @@ const NO_GIT: &str = "error: git is not available in the secure room";
 
 impl BuiltinHost for CtxBuiltins {
     fn run_with_messages(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> (String, Vec<crate::dto::chat::ChatMessage>) {
+        if crate::tool::policy::is_denied(&call.function.name) {
+            return (crate::tool::policy::refusal(&call.function.name), Vec::new());
+        }
         if call.function.name == "load_image" {
             return self.load_image(avatar, kind, call);
         }
@@ -210,6 +213,11 @@ impl BuiltinHost for CtxBuiltins {
 
     fn run(&self, avatar: &str, kind: LaneKind, call: &ToolCall) -> String {
         let name = call.function.name.as_str();
+        // `bash_output`, `bash_kill`, the lane's skill and background-job paths
+        // do not reach `execute_tool`, so the list is asked here too.
+        if crate::tool::policy::is_denied(name) {
+            return crate::tool::policy::refusal(name);
+        }
         if name == "load_image" {
             return self.load_image(avatar, kind, call).0;
         }
@@ -296,9 +304,12 @@ impl BuiltinHost for CtxBuiltins {
     }
 
     fn specs(&self, kind: LaneKind) -> Vec<ToolSpec> {
-        match kind {
+        let mut specs = match kind {
             LaneKind::Chat => self.chat_specs.clone(),
             LaneKind::Work => self.work_specs.clone(),
-        }
+        };
+        let denied = crate::tool::policy::current();
+        specs.retain(|s| !denied.iter().any(|p| crate::tool::policy::glob_match(p, &s.name)));
+        specs
     }
 }

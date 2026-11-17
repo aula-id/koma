@@ -137,10 +137,22 @@ pub const ROUTES: &[Route] = &[
         config::handle_roles_unassign,
     ),
     route(
+        "config.tool_policy.set",
+        Family::Host,
+        ANY,
+        config::handle_tool_policy_set,
+    ),
+    route(
         "config.subagent_risky.set",
         Family::Host,
         ANY,
         config::handle_subagent_risky_set,
+    ),
+    route(
+        "config.skill_roots.set",
+        Family::Host,
+        ANY,
+        config::handle_skill_roots_set,
     ),
     route(
         "config.effort.get",
@@ -195,6 +207,13 @@ pub const ROUTES: &[Route] = &[
         Family::Host,
         ANY,
         super::host::sessions::handle_stop,
+    ),
+    // A read of the archive on disk: no daemon is started or asked.
+    route(
+        "sessions.transcript",
+        Family::Host,
+        ANY,
+        super::host::transcript::handle_transcript,
     ),
     // The ledger is global, so any binding may read it.
     route("usage.query", Family::Host, ANY, usage::handle_query),

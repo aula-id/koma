@@ -898,6 +898,44 @@
               "minLength": 1
             },
             "method": {
+              "const": "config.tool_policy.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "deny": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "maxItems": 256
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "deny"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
               "const": "config.subagent_risky.set"
             },
             "params": {
@@ -917,6 +955,44 @@
               },
               "required": [
                 "mode"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "config.skill_roots.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "maxItems": 64
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "roots"
               ]
             }
           },
@@ -1225,6 +1301,45 @@
                 "session_id": {
                   "type": "string",
                   "minLength": 1
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "const": "sessions.transcript"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "since": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
                 }
               },
               "required": [
@@ -3603,6 +3718,38 @@
         "propagation"
       ]
     },
+    "tool_policy_result": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "maxItems": 256
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "changed",
+        "deny",
+        "config",
+        "propagation"
+      ]
+    },
     "subagent_risky_result": {
       "type": "object",
       "properties": {
@@ -3629,6 +3776,37 @@
       "required": [
         "changed",
         "mode",
+        "config",
+        "propagation"
+      ]
+    },
+    "skill_roots_result": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 64
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "changed",
+        "roots",
         "config",
         "propagation"
       ]
@@ -3883,6 +4061,73 @@
       "required": [
         "stopped",
         "was_live"
+      ]
+    },
+    "transcript_message": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "text",
+        "created_at"
+      ]
+    },
+    "session_transcript_result": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transcript_message"
+          },
+          "maxItems": 500
+        },
+        "next_since": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      },
+      "required": [
+        "session_id",
+        "live",
+        "messages",
+        "next_since"
       ]
     },
     "usage_totals": {
@@ -6107,7 +6352,13 @@
                   "$ref": "#/$defs/role_unassign_result"
                 },
                 {
+                  "$ref": "#/$defs/tool_policy_result"
+                },
+                {
                   "$ref": "#/$defs/subagent_risky_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_roots_result"
                 },
                 {
                   "$ref": "#/$defs/effort_options_result"
@@ -6140,6 +6391,9 @@
                 },
                 {
                   "$ref": "#/$defs/session_stop_result"
+                },
+                {
+                  "$ref": "#/$defs/session_transcript_result"
                 },
                 {
                   "$ref": "#/$defs/usage_result"

@@ -318,8 +318,8 @@ hello may carry four optional keys after the v1 keys:
  "capabilities":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach"],
  "methods":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach",
             "config.get","config.providers.delete","config.models.delete","config.roles.unassign",
-            "config.subagent_risky.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
-            "sessions.list","sessions.rename","sessions.delete","sessions.stop","usage.query",
+            "config.tool_policy.set","config.subagent_risky.set","config.skill_roots.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
+            "sessions.list","sessions.rename","sessions.delete","sessions.stop","sessions.transcript","usage.query",
             "skills.list","skills.get","skills.read_file","skills.install","skills.remove","skills.create","skills.update"],
  "features":["errors.reason","state.session_info","create.name","config.lock"],
  "events":["state","output_append","turn"],
@@ -365,7 +365,7 @@ Methods fall into families:
 |---|---|
 | legacy session | `state`, `submit`, `enqueue`, `interrupt`, `interrupt_and_submit`, `approve` |
 | binders | `create`, `resume` |
-| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}`, `config.subagent_risky.set` |
+| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}`, `config.tool_policy.set`, `config.subagent_risky.set`, `config.skill_roots.set` |
 | coding-scoped | `sessions.info`, `config.get{view:"session"}`, `config.roles.unassign{scope:"session"}`, `config.effort.get`, `config.effort.set`, `config.limits.get`, `config.limits.set` |
 | other | `configure`, `detach` |
 
@@ -464,8 +464,8 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `wrong_binding` | `invalid_state` | not_sent | any (E1, E2) | the call is not allowed in this binding |
 | `already_bound` | `invalid_state` | not_sent | binders (E3) | a binding is held |
 | `peer_unsupported` | `invalid_state` | not_sent | calls that need the daemon | the daemon lacks the needed feature |
-| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.subagent_risky.set` `mode` that is not one of the three names |
-| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.subagent_risky.set`, `skills.update` | none of the required alternatives was given |
+| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a `sessions.transcript` of a room; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.tool_policy.set` `deny` entry that is empty, longer than 200 characters, or holds whitespace, a comma or a control character, or a `deny` list of more than 256 entries; a `config.skill_roots.set` root that is not an absolute path to an existing directory, is listed twice, or contains or sits inside a koma skills directory; a `config.subagent_risky.set` `mode` that is not one of the three names |
+| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.tool_policy.set`, `config.subagent_risky.set`, `config.skill_roots.set`, `skills.update` | none of the required alternatives was given |
 | `conflicting_params` | `invalid_request` | not_sent | `config.roles.unassign`, `skills.install` | params that exclude each other were combined (`if_revision` with session scope; both or neither of `data_b64` and `path`) |
 | `bad_cursor` | `invalid_request` | not_sent | `sessions.list`, `skills.list` | the cursor does not decode |
 | `invalid_name` | `invalid_request` | not_sent | `create`, `sessions.rename`, `skills.*` | a name breaks its rule or holds control characters |
@@ -488,9 +488,9 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `read_only` | `invalid_state` | not_sent | skill writes | the tier is not editable |
 | `unsafe_yaml` | `invalid_state` | not_sent | `skills.update` | the skill's frontmatter cannot be rewritten safely |
 | `lock_timeout` | `unavailable` | not_sent | config writes | the SDK config lock was not acquired in time |
-| `config_unreadable` | `unavailable` | not_sent | `config.*` | the config file is corrupt or unreadable; it is left untouched |
+| `config_unreadable` | `unavailable` | not_sent | `config.*`, `sessions.transcript` | the config file is corrupt or unreadable; it is left untouched |
 | `save_failed` | `unavailable` | not_sent | config writes in the adapter | the save failed and the file is verified unchanged |
-| `sqlite_busy` | `unavailable` | not_sent | `sessions.rename`, `sessions.list` | the session registry was busy |
+| `sqlite_busy` | `unavailable` | not_sent | `sessions.rename`, `sessions.list`, `sessions.transcript` | the session registry, or the session's message archive, was busy |
 | `query_timeout` | `unavailable` | not_sent | `usage.query` | the 2 second deadline passed |
 | `frame_limit` | `unavailable` | not_sent | reads | the result would exceed the frame |
 | `io_error` | `unavailable` | not_sent | reads and pre-write steps | a file or database read failed, the bound session connection was already lost, or the daemon answered a read with an unexpected reply |
@@ -551,7 +551,7 @@ room's start log, scrubbed). `layer_rejected` and `rejected_by_room` carry
 Config writes are made in one of two ways, and a client sees the difference
 only in `propagation` and in the possible errors.
 
-Adapter writes (UNBOUND, and global `config.roles.unassign` and `config.subagent_risky.set` in any binding):
+Adapter writes (UNBOUND, and global `config.roles.unassign`, `config.tool_policy.set`, `config.subagent_risky.set` and `config.skill_roots.set` in any binding):
 the adapter takes the SDK config lock, loads and validates the config file,
 compares `if_revision`, applies the change, saves through a temporary file and
 rename, and reads the file back. It then rebinds sessions and agents on disk
@@ -732,6 +732,39 @@ Propagation  = {bound?: string, broadcast?: string, rebind?: string, rooms?: str
   `daemon_refused` and `partial_apply`.
 * Idempotency: idempotent (`changed:false` on repeat).
 
+### `config.tool_policy.set`
+
+* Binding: any.
+* Params: `{deny: [string(1..200)] (≤ 256), if_revision?: string}`. `deny` is
+  the whole hard tool deny list: tool names, each with optional `*` (any run of
+  characters) and `?` (one character), matched against the whole tool name and
+  case-sensitively (`"web_fetch"`, `"computer_*"`, `"mcp__*"`). An empty list
+  clears it. A call replaces the list; it never merges. A missing `deny` is
+  `missing_params`. An entry holds no whitespace, comma or control character,
+  and a repeated entry is stored once.
+* Result: `{changed: bool, deny: [string], config: ConfigView (view "global"),
+  propagation, session_info?}`. `changed` is false, and nothing is written, when
+  the stored list already equals `deny`.
+* A denied tool is never advertised to a model, and a call to it is refused
+  with a tool error (`error: tool '<name>' is disabled by the tool policy and
+  cannot be used`) on every path a call can take: the coding turn loop (including a
+  call the model wrote as plain text instead of the structured field), plan
+  mode, sub-agents, resumed sessions, MCP and extension tools, and rooms. The
+  refusal never starts the tool and never ends the turn. The list is checked on
+  every call, so it holds for sessions and rooms that are already running as
+  soon as the write lands.
+* The list in force is the union of this key and the environment variable
+  `KOMA_TOOL_DENY` (comma or whitespace separated, same patterns) in the
+  process that runs the tool. The environment variable has no wire method and
+  is read on every check; a host that launches koma sets it to make the list
+  impossible to change through a client.
+* Only this key of `config.json` changes, as an adapter write in every binding
+  (see Writes and propagation). The list is empty by default, and an empty list
+  leaves `config.json` byte-identical to one that never had the key.
+* Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
+  `config_unreadable`, `save_failed`, `unverified`.
+* Idempotency: idempotent (`changed:false` on repeat).
+
 ### `config.subagent_risky.set`
 
 * Binding: any.
@@ -770,6 +803,8 @@ Propagation  = {bound?: string, broadcast?: string, rebind?: string, rooms?: str
   no client attached, a parked sub-agent call is refused after the same timeout
   as the session's own parked calls. The plan restriction of the parent still
   applies after an approval: approving never lets a sub-agent write in Plan mode.
+* A tool on the hard deny list (`config.tool_policy.set`, `KOMA_TOOL_DENY`) is
+  refused before this policy is consulted, so no `mode` lets a sub-agent run it.
 * Sub-agents started after the daemon has loaded the new value use it. A
   sub-agent that is already running keeps the mode it started with, so set the
   mode before any session starts.
@@ -780,6 +815,34 @@ Propagation  = {bound?: string, broadcast?: string, rebind?: string, rooms?: str
 * Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
   `config_unreadable`, `save_failed`, `unverified`.
 * Idempotency: idempotent (`changed:false` on repeat).
+
+### `config.skill_roots.set`
+
+* Binding: any.
+* Params: `{roots: [string(1..4096)] (≤ 64), if_revision?: string}`. `roots` is
+  the whole list of external skill roots (the `extra_skill_roots` that
+  `skills.list` shows as tiers `extra-root:<index>`, index by position), in
+  order. An empty list clears them. A call replaces the list; it never merges.
+  A missing `roots` is `missing_params`.
+* Every root must be an absolute path to an existing directory, listed once,
+  and must not contain or sit inside koma's global skills directory or, in a
+  coding binding, the bound session's project skills directories. Otherwise the
+  call is `out_of_range` and nothing is written. The adapter stores each root
+  as its resolved path, and `roots` in the result are those stored paths.
+* Result: `{changed: bool, roots: [string], config: ConfigView (view "global"),
+  propagation, session_info?}`. `changed` is false, and nothing is written, when
+  the stored list already equals `roots`.
+* Only this key of `config.json` changes. The write is an adapter write in
+  every binding (see Writes and propagation): under the SDK config lock, on a
+  fresh read of the file, so a key that another writer saved meanwhile is kept.
+  A bound daemon is asked to reload the catalogue, which makes it reload the
+  roots. A session's skill catalogue is rebuilt as for any skill change (see
+  `propagation.skills` under Skill methods), and a room reads it when it starts.
+* Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
+  `config_unreadable`, `save_failed`, `unverified`.
+* Idempotency: idempotent (`changed:false` on repeat).
+* Skill roots are read-only to the agent: the `write`, `edit` and `delete`
+  tools refuse paths under them, loaded or not.
 
 ### `config.effort.get`
 
@@ -925,6 +988,39 @@ Shapes used here are defined under Session info and Config methods.
   stop it from another adapter), `still_running` (`unknown`: the daemon is
   still alive afterwards).
 * Idempotency: idempotent.
+
+### `sessions.transcript`
+
+```
+TranscriptMessage = {id: int, role: "system"|"user"|"assistant"|"tool", text: string,
+                     created_at: int, truncated?: true}
+```
+
+* Binding: any.
+* Params: `{session_id: string(1..64), since?: int >= 0 = 0, limit?: 1..500 = 100}`.
+* Result: `{session_id: string, live: bool, messages: [TranscriptMessage], next_since: int|null}`.
+* Reads the session's stored messages, oldest first, those with `id` above
+  `since`. `id` is the position in the session's append-only archive: it only
+  grows, it is never reused, and it is stable across calls, so a client keeps
+  the last `id` it saw and passes it back as `since`. The archive is the full
+  history, not the compacted working context, and holds the text of each
+  message and tool result as stored, not the tool call arguments.
+* The read is in process. It starts no daemon and sends nothing to one, so a
+  session that is not live reads the same as a running one; `live` says
+  whether a daemon is running now, and a live session may have newer messages
+  by the next call. It never creates, migrates or writes the archive; a
+  session with no archive yet gives no messages.
+* Secrets are scrubbed: every configured secret value and the userinfo of
+  every URL in `text` become `[redacted]` (see Secrets). The call fails with
+  `config_unreadable` rather than return text it could not scrub.
+* `text` is cut at 262144 bytes, at a character boundary, and the message
+  carries `truncated:true`. A page also ends before its text passes 8 MiB,
+  but always holds at least one message. `next_since` is the `id` of the last
+  message of the page when more messages follow, else `null`.
+* A room is not read here: `out_of_range`; use `room.history`. An id that
+  names no session is `not_found`.
+* Errors: `out_of_range`, `not_found`, `config_unreadable`, `sqlite_busy`, `io_error`.
+* Idempotency: read.
 
 ## Usage methods
 
@@ -1705,6 +1801,7 @@ with `reason:"frame_limit"`. New mutation results are bounded by construction
 1000-path companion list), so a committed mutation never loses its result.
 
 Every new list is paged or capped. `sessions.list`, `skills.list`,
+`sessions.transcript` (by `since`, the message `id`),
 `room.list`, `room.shelf.list` and `room.reports` are paged by `cursor`, and
 `room.history` by `line_seq`; `RoomStatus.events` is the newest 60 and
 `AttachResult.tail` the newest `tail` lines; `usage.query` groups are capped by `limit` (`groups_truncated`) and

@@ -173,7 +173,9 @@ export default defineConfig({
         ['approve', '/sdk/reference/approve'],
         ['detach', '/sdk/reference/detach'],
         ['configure', '/sdk/reference/configure'],
+        ['config.tool_policy.set', '/sdk/reference/config-tool-policy-set'],
         ['config.subagent_risky.set', '/sdk/reference/config-subagent-risky-set'],
+        ['sessions.transcript', '/sdk/reference/sessions-transcript'],
       ]),
     ],
     '/extension': [

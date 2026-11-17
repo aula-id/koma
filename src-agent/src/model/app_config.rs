@@ -747,6 +747,19 @@ impl<'de> Deserialize<'de> for SubagentRisky {
     }
 }
 
+/// `tool_policy` in `config.json`: tool names and globs that never run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolPolicy {
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+impl ToolPolicy {
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty()
+    }
+}
+
 /// Global user-facing configuration (theme + accent + provider/model catalogue).
 ///
 /// All fields carry `#[serde(default)]` so the struct round-trips cleanly
@@ -815,6 +828,10 @@ pub struct AppConfig {
     /// it is the default, so an unchanged install keeps a byte-identical config.
     #[serde(default, skip_serializing_if = "SubagentRisky::is_default")]
     pub subagent_risky: SubagentRisky,
+    /// The hard tool deny list (see `tool::policy`). Absent from the file while
+    /// empty, so an unchanged install keeps a byte-identical config.
+    #[serde(default, skip_serializing_if = "ToolPolicy::is_empty")]
+    pub tool_policy: ToolPolicy,
     /// Ciphertext this process could not open. A later save writes it back
     /// instead of the empty string left in memory. Not persisted.
     #[serde(skip)]
@@ -854,6 +871,7 @@ impl Default for AppConfig {
             ext_preferred_models: std::collections::BTreeMap::new(),
             extra_skill_roots: Vec::new(),
             subagent_risky: SubagentRisky::default(),
+            tool_policy: ToolPolicy::default(),
             kept_unreadable: Vec::new(),
         }
     }

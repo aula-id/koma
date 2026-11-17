@@ -204,6 +204,17 @@ the index. The `[N]` convention is documented in `src-misc/system-tools.txt`.
 blobs in `messages.sqlite`; the short-send layer controls how much of the archive
 re-enters each API request.
 
+**Hard tool deny list.** `tool/policy.rs` holds names and `*`/`?` globs of tools
+that never run. The list is the union of `KOMA_TOOL_DENY` (comma or whitespace
+separated, read on every check) and `tool_policy.deny` in `config.json` (set
+through the SDK method `config.tool_policy.set`, re-read when the file changes).
+It is empty by default. A denied tool is dropped from every advertised list (the
+main turn, sub-agents, rooms) and refused with a tool error in `execute_tool`,
+in `process_tools` before any intercept, bridge or approval prompt (so a call
+harvested from plain text is refused too), in the sub-agent loop and in the room
+router and builtins. A host that embeds koma uses it instead of relying on a
+gateway to strip tools.
+
 ---
 
 ## 6. Tool-Approval Harness
