@@ -1035,6 +1035,9 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
 /// Update the session security working set after a successful catalog/run touch.
 /// Find which workspace contains the given absolute path.
 pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
+    // Roots are compared in their plain form, so a verbatim `abs` from a raw
+    // canonicalize elsewhere must be brought to the same form (Windows only).
+    let abs = winpath::display_path(abs);
     for ws in workspaces {
         let ws = winpath::canonical(ws).unwrap_or_else(|_| ws.clone());
         if abs.starts_with(&ws) {

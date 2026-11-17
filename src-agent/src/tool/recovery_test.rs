@@ -15,7 +15,7 @@ fn context() -> ToolCtx {
     ToolCtx {
         plan_read_only: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         workspace: std::path::PathBuf::from("."),
-                workspaces: vec![std::path::PathBuf::from(".")],
+        workspaces: vec![std::path::PathBuf::from(".")],
         dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
         memory_dir: None,
         worktrees_dir: None,
@@ -48,7 +48,8 @@ impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("koma-recovery-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let root = root.canonicalize().unwrap();
+        // Same plain form the tools resolve to (no `\\?\` prefix on Windows).
+        let root = crate::tool::winpath::canonical(&root).unwrap();
         let mut ctx = context();
         ctx.workspace = root.clone();
         ctx.workspaces = vec![root.clone()];
