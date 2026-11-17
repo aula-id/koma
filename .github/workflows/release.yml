@@ -183,7 +183,8 @@ jobs:
           set -euo pipefail
           py=python3
           command -v python3 >/dev/null || py=python
-          "$py" scripts/stamp-release.py "${GITHUB_REF_NAME#v}"
+          # WiX takes digits only: the MSI gets MAJOR.MINOR.PATCH, koma.exe the full tag.
+          "$py" scripts/stamp-release.py --msi "${GITHUB_REF_NAME#v}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
