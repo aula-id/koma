@@ -128,6 +128,7 @@ type Page =
   | { path: '/sdk/reference/interrupt'; render: 'static' }
   | { path: '/sdk/reference/policy'; render: 'static' }
   | { path: '/sdk/reference/resume'; render: 'static' }
+  | { path: '/sdk/reference/sessions-transcript'; render: 'static' }
   | { path: '/sdk/reference/state-method'; render: 'static' }
   | { path: '/sdk/reference/state'; render: 'static' }
   | { path: '/sdk/reference/submit'; render: 'static' }

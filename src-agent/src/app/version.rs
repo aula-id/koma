@@ -388,20 +388,17 @@ fn spawn_check_unless(disabled: bool, tx: tokio::sync::mpsc::UnboundedSender<Ver
     });
 }
 
-/// Debug-only switch for tests and smokes that must not reach the network:
-/// `KOMA_TEST_OFFLINE=1` turns the update check off. Release builds always check.
+/// `KOMA_NO_UPDATE_CHECK=1` turns the update check off in every build, for hosts
+/// with no network (containers, on-prem). Debug builds also honour
+/// `KOMA_TEST_OFFLINE=1`, which tests and smokes use for the same purpose.
 fn update_check_disabled() -> bool {
+    let opted_out = offline_switch_set(std::env::var_os("KOMA_NO_UPDATE_CHECK").as_deref());
     #[cfg(debug_assertions)]
-    {
-        offline_switch_set(std::env::var_os("KOMA_TEST_OFFLINE").as_deref())
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        false
-    }
+    let opted_out =
+        opted_out || offline_switch_set(std::env::var_os("KOMA_TEST_OFFLINE").as_deref());
+    opted_out
 }
 
-#[cfg(debug_assertions)]
 fn offline_switch_set(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| value == "1")
 }
@@ -587,7 +584,6 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn the_offline_switch_needs_exactly_one() {
         assert!(offline_switch_set(Some("1".as_ref())));
@@ -597,7 +593,6 @@ mod tests {
         assert!(!offline_switch_set(Some("true".as_ref())));
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn a_disabled_check_starts_no_fetch_thread() {
         // A started thread would hold the sender until its fetch ends, so the
