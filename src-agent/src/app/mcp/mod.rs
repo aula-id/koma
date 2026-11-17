@@ -1156,6 +1156,7 @@ async fn connect_one(
     // The whole connect (transport build + MCP initialize + first tool list) is
     // wrapped in a single timeout so a server that hangs at any stage is abandoned.
     let tail = Arc::new(Mutex::new(String::new()));
+    let drain: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
     let fut = async {
         let service: RunningService<RoleClient, ()> = match server.transport {
             McpTransport::Stdio => {
@@ -1224,7 +1225,7 @@ async fn connect_one(
                     // Drains for the child's whole life so a full pipe never
                     // blocks the server; ends on EOF.
                     let tail = Arc::clone(&tail);
-                    tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         use tokio::io::AsyncBufReadExt;
                         let mut lines = tokio::io::BufReader::new(stderr).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
@@ -1232,6 +1233,7 @@ async fn connect_one(
                             resolve::push_tail(&mut t, &line, resolve::STDERR_TAIL_BYTES);
                         }
                     });
+                    *drain.lock().unwrap_or_else(|p| p.into_inner()) = Some(task);
                 }
                 ().serve(transport)
                     .await
@@ -1270,8 +1272,17 @@ async fn connect_one(
         Ok(res) => res,
         Err(_) => Err(format!("connect timed out after {}s", startup.as_secs())),
     };
-    result.map_err(|msg| {
-        let t = tail.lock().unwrap_or_else(|p| p.into_inner());
-        resolve::with_stderr(msg, &t)
-    })
+    match result {
+        Ok(ok) => Ok(ok),
+        Err(msg) => {
+            // The child may have died a moment ago with its last words still in the
+            // pipe: give the drain a short chance to reach EOF before reading the tail.
+            let task = drain.lock().unwrap_or_else(|p| p.into_inner()).take();
+            if let Some(task) = task {
+                let _ = tokio::time::timeout(std::time::Duration::from_millis(500), task).await;
+            }
+            let t = tail.lock().unwrap_or_else(|p| p.into_inner());
+            Err(resolve::with_stderr(msg, &t))
+        }
+    }
 }

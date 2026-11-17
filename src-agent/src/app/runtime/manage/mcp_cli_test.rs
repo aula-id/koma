@@ -287,3 +287,12 @@ fn usage_exits_two() {
     assert_eq!(o.code, 2);
     assert!(err.contains("usage: koma mcp"));
 }
+
+#[test]
+fn scrub_url_hides_userinfo_and_query() {
+    use super::scrub_url;
+    assert_eq!(scrub_url("https://x/mcp"), "https://x/mcp");
+    assert_eq!(scrub_url("https://x/mcp?key=abc"), "https://x/mcp?***");
+    assert_eq!(scrub_url("https://u:p@h:8/m"), "https://***@h:8/m");
+    assert_eq!(scrub_url("https://h/a@b"), "https://h/a@b");
+}

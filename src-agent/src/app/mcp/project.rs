@@ -330,7 +330,9 @@ pub(crate) fn root_key(root: &Path) -> String {
 /// resolves outside the root (a symlink), is larger than 1 MiB or cannot be read.
 pub(crate) fn read_project_file(root: &Path) -> Result<Option<String>, String> {
     let file = root.join(".mcp.json");
-    if !file.exists() {
+    // `symlink_metadata` so a dangling symlink counts as present (and then fails the
+    // canonicalize below) instead of letting a write follow it out of the root.
+    if file.symlink_metadata().is_err() {
         return Ok(None);
     }
     let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());

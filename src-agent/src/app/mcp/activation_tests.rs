@@ -172,3 +172,30 @@ async fn project_overlay_is_idempotent_hides_base_tools_and_tears_down() {
     assert!(manager.server_errors().is_empty());
     assert_eq!(manager.tool_names(), vec!["mcp__run_koma_scope__inspect"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn connect_error_carries_stderr_of_a_child_that_died_at_startup() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = McpServerEntry {
+        uuid: "u".into(),
+        name: "dies".into(),
+        enabled: true,
+        transport: McpTransport::Stdio,
+        command: "/bin/sh".into(),
+        args: vec!["-c".into(), "echo boom-from-child >&2; exit 1".into()],
+        env: Vec::new(),
+        url: String::new(),
+        headers: Vec::new(),
+        cwd: None,
+        startup_timeout_ms: None,
+        tool_timeout_ms: None,
+        allowed_tools: Vec::new(),
+        disabled_tools: Vec::new(),
+        ext_id: None,
+    };
+    for _ in 0..5 {
+        let err = rt.block_on(connect_one(&server)).err().unwrap_or_default();
+        assert!(err.contains("boom-from-child"), "stderr missing: {err}");
+    }
+}

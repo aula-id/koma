@@ -321,5 +321,12 @@ fn write_project_file_refuses_symlink_outside_and_oversize() {
         std::os::unix::fs::symlink(&outside, root.join(".mcp.json")).unwrap();
         assert!(write_project_file(&root, "{\"a\":1}").is_err());
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), "{}");
+
+        // A dangling symlink must not be written through either.
+        std::fs::remove_file(root.join(".mcp.json")).unwrap();
+        let ghost = base.join("ghost.json");
+        std::os::unix::fs::symlink(&ghost, root.join(".mcp.json")).unwrap();
+        assert!(write_project_file(&root, "{\"a\":1}").is_err());
+        assert!(!ghost.exists());
     }
 }

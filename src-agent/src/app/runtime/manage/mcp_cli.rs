@@ -34,8 +34,36 @@ pub(crate) fn mask_value(v: &str) -> String {
     }
 }
 
+/// `url` without credentials: userinfo and the query string (where `?key=…` tokens live)
+/// are replaced by `***`.
+fn scrub_url(url: &str) -> String {
+    let (base, has_query) = match url.split_once(['?', '#']) {
+        Some((b, _)) => (b, true),
+        None => (url, false),
+    };
+    let base = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.find('/') {
+                Some(i) => rest.split_at(i),
+                None => (rest, ""),
+            };
+            match authority.rsplit_once('@') {
+                Some((_, host)) => format!("{scheme}://***@{host}{path}"),
+                None => base.to_string(),
+            }
+        }
+        None => base.to_string(),
+    };
+    if has_query {
+        format!("{base}?***")
+    } else {
+        base
+    }
+}
+
 fn masked(e: &McpServerEntry) -> McpServerEntry {
     let mut e = e.clone();
+    e.url = scrub_url(&e.url);
     for (_, v) in e.env.iter_mut().chain(e.headers.iter_mut()) {
         *v = mask_value(v);
     }
@@ -56,7 +84,7 @@ fn target_text(e: &McpServerEntry) -> String {
             .chain(e.args.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" "),
-        McpTransport::Http => e.url.clone(),
+        McpTransport::Http => scrub_url(&e.url),
     }
 }
 
@@ -335,6 +363,17 @@ fn store_entries(
             };
             let mut count = 0;
             for entry in &entries {
+                if entry
+                    .env
+                    .iter()
+                    .chain(entry.headers.iter())
+                    .any(|(_, v)| mask_value(v) != *v)
+                {
+                    warnings.push(format!(
+                        "'{}': .mcp.json is meant to be committed; prefer ${{VAR}} references over literal secrets",
+                        entry.name
+                    ));
+                }
                 let exists = text
                     .as_deref()
                     .and_then(|t| remove_server_from_text(t, &entry.name).ok().flatten())
