@@ -1,5 +1,5 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { File, Pencil, Trash2, Workflow } from 'lucide-react'
+import { File, FolderOpen, Pencil, Trash2, Workflow } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { AddBtn, Empty, EmptyState, IconBtn, InlineNameInput, NoProjectState, NoWorkspaceState, WelcomeLink } from './helpers'
@@ -54,13 +54,17 @@ export function DiagramPanel() {
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
   const diagramActive = useKoma((s) => isEditorTabActive('diagram', s.ui))
+  const activeTabId = useKoma((s) => s.ui.activeTabId)
 
+  const [browseFiles, setBrowseFiles] = useState(false)
   const [shapesOpen, setShapesOpen] = useState(true)
   const [diagramsOpen, setDiagramsOpen] = useState(true)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
+
+  useEffect(() => setBrowseFiles(false), [activeTabId])
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -102,6 +106,7 @@ export function DiagramPanel() {
   if (sessionId === null) return <NoProjectState feature="Diagram" />
   if (workdir.length === 0) return <NoWorkspaceState />
 
+  const editorMode = diagramActive && !browseFiles
   const startCreate = () => { setCreating(true); setRenaming(null); setDeleting(null) }
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((e) => !e.isDir && isDiagramPath(e.path))
@@ -145,8 +150,20 @@ export function DiagramPanel() {
             disabled={creating || renaming != null || deleting != null}
           />
         </div>
+        {diagramActive && (
+          <button
+            type="button"
+            aria-label="Files"
+            aria-pressed={browseFiles}
+            title={browseFiles ? 'Back to editor tools' : 'Show diagram files'}
+            onClick={() => setBrowseFiles((v) => !v)}
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${browseFiles ? 'text-koma-fg' : 'text-koma-dim'}`}
+          >
+            <FolderOpen size={14} />
+          </button>
+        )}
       </div>
-      {diagramActive && (
+      {editorMode && (
       <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false} shrink>
         <div className="flex flex-col gap-1 px-2 py-1.5">
           {PALETTE_GROUPS.map((group) => (
@@ -162,6 +179,7 @@ export function DiagramPanel() {
         </div>
       </AccordionSection>
       )}
+      {!editorMode && (
       <AccordionSection
         title="Diagrams"
         open={diagramsOpen}
@@ -277,6 +295,7 @@ export function DiagramPanel() {
           </>
         )}
       </AccordionSection>
+      )}
       {menu ? (
         <div
           className="fixed z-[80] min-w-[140px] rounded border border-koma-border bg-koma-panel py-1 shadow-lg"

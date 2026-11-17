@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, Component, File, Frame, MessageSquare, Pencil, Search, Trash2, X } from 'lucide-react'
+import { Check, Component, File, FolderOpen, Frame, MessageSquare, Pencil, Search, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
@@ -265,6 +265,8 @@ export function DesignPanel() {
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
   const designActive = useKoma((s) => isEditorTabActive('design', s.ui))
+  const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const [browseFiles, setBrowseFiles] = useState(false)
 
   const [panel, setPanel] = useState<'file' | 'assets'>('file')
   const [filesOpen, setFilesOpen] = useState(false)
@@ -278,6 +280,8 @@ export function DesignPanel() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [menu, setMenu] = useState<null | { x: number; y: number; path: string }>(null)
+
+  useEffect(() => setBrowseFiles(false), [activeTabId])
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -363,6 +367,8 @@ export function DesignPanel() {
   const selection = fileUi?.selection ?? []
   const viewDoc = open && !open.loading ? (focusId ? componentView(open.doc, focusId) ?? open.doc : open.doc) : null
 
+  const editorMode = designActive && !browseFiles
+  const shownPanel = editorMode ? panel : 'file'
   const query = assetQuery.trim().toLowerCase()
   const fileNeedle = fileQuery.trim().toLowerCase()
   const listedFiles = fileNeedle
@@ -381,7 +387,20 @@ export function DesignPanel() {
             disabled={creating || renaming != null || deleting != null}
           />
         </div>
+        {designActive && (
+          <button
+            type="button"
+            aria-label="Files"
+            aria-pressed={browseFiles}
+            title={browseFiles ? 'Back to editor tools' : 'Show design files'}
+            onClick={() => setBrowseFiles((v) => !v)}
+            className={`flex h-6 w-6 flex-none items-center justify-center rounded hover:bg-koma-hover hover:text-koma-fg ${browseFiles ? 'text-koma-fg' : 'text-koma-dim'}`}
+          >
+            <FolderOpen size={14} />
+          </button>
+        )}
       </div>
+      {editorMode && (
       <div className="flex-none px-2 pb-1.5">
         <Segmented
           value={panel}
@@ -392,14 +411,15 @@ export function DesignPanel() {
           onChange={setPanel}
         />
       </div>
-      {panel === 'file' ? (
+      )}
+      {shownPanel === 'file' ? (
         <div className="flex min-h-0 flex-1 flex-col">
+          {!editorMode && (
           <AccordionSection
             title="Files"
-            // An empty list can't be collapsed: its empty state is the first-run welcome.
-            open={filesOpen || (files.length === 0 && !fileNeedle)}
+            // The file list is only shown when no design editor is active, so it is the sole section and stays open.
+            open
             onToggle={() => setFilesOpen((value) => !value)}
-            fill={false}
             action={(
               <div className="flex items-center">
                 <button
@@ -470,7 +490,7 @@ export function DesignPanel() {
                 className="mx-2 mb-1 mt-1 h-7 w-[calc(100%-1rem)] rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
             ) : null}
-            <div className={files.length === 0 && !fileNeedle ? 'max-h-none' : 'max-h-[8.75rem] overflow-y-auto'}>
+            <div>
               <FileList
                 activeRoot={activeRoot}
                 files={listedFiles}
@@ -496,7 +516,8 @@ export function DesignPanel() {
               />
             </div>
           </AccordionSection>
-          {designActive && (
+          )}
+          {editorMode && (
           <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)} fill>
             {open?.loading ? (
               <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
