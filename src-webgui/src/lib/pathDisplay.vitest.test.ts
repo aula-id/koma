@@ -30,6 +30,7 @@ describe('fileUrl', () => {
     expect(fileUrl('\\\\?\\C:\\a\\x.png')).toBe('file:///C:/a/x.png')
     expect(fileUrl('\\\\srv\\share\\x')).toBe('file://srv/share/x')
     expect(fileUrl('/home/a/x.png')).toBe('file:///home/a/x.png')
+    expect(fileUrl('/home/a/b\\c.png')).toBe('file:///home/a/b%5Cc.png')
   })
 })
 

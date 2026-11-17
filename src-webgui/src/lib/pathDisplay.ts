@@ -16,7 +16,7 @@ const encodeSegments = (path: string): string =>
 
 /** `file://` URL for an absolute POSIX, drive-letter or UNC path in any separator style. */
 export function fileUrl(abs: string): string {
-  const norm = stripVerbatim(abs).replace(/\\/g, '/')
+  const norm = toSlashIfWindows(abs)
   if (norm.startsWith('//')) return `file:${encodeSegments(norm)}`
   if (norm.startsWith('/')) return `file://${encodeSegments(norm)}`
   return `file:///${encodeSegments(norm)}`
