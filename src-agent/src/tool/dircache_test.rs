@@ -75,3 +75,29 @@ fn search_multi_root_basename_strips_prefix() {
     assert!(results.iter().any(|r| r.contains("[0]README.md")));
     assert!(results.iter().any(|r| r.contains("[1]pkg/README.md")));
 }
+
+#[test]
+fn to_slash_keeps_backslash_off_windows() {
+    assert_eq!(super::super::winpath::to_slash("a\\b", false), "a\\b");
+    assert_eq!(super::super::winpath::to_slash("a\\b", true), "a/b");
+}
+
+#[cfg(unix)]
+#[test]
+fn index_keeps_backslash_file_name_on_posix() {
+    let tmp = std::env::temp_dir().join(format!("koma-dc-bs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("a\\b.txt"), "x").unwrap();
+    let cache = Arc::new(RwLock::new(DirCache::default()));
+    reindex(vec![tmp.clone()], cache.clone());
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if cache.read().is_ok_and(|c| !c.indexing && c.version > 0) {
+            break;
+        }
+    }
+    let files = cache.read().unwrap().files.clone();
+    assert_eq!(files, vec!["a\\b.txt".to_string()]);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

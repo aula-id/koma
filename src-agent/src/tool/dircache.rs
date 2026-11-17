@@ -108,10 +108,10 @@ pub fn reindex(roots: Vec<PathBuf>, cache: Arc<RwLock<DirCache>>) {
                 if dent.file_type().is_some_and(|t| t.is_file()) {
                     if let Ok(rel) = dent.path().strip_prefix(root) {
                         // Normalize to forward-slash protocol strings so
-                        // downstream rfind('/') / trim_end_matches('/') works
-                        // regardless of OS (the ignore crate yields native `\`
-                        // separators on Windows).
-                        let path = rel.to_string_lossy().replace('\\', "/");
+                        // downstream rfind('/') / trim_end_matches('/') works.
+                        // Only Windows yields native `\` separators; on POSIX a
+                        // backslash is part of the file name and is kept.
+                        let path = super::winpath::to_slash(&rel.to_string_lossy(), cfg!(windows));
                         if multi {
                             files.push(format!("[{i}]{path}"));
                         } else {

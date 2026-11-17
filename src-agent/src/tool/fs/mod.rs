@@ -64,7 +64,7 @@ fn display_key(ctx: &ToolCtx, path: &Path) -> String {
                     path.strip_prefix(plain).ok().map(Path::to_path_buf)
                 })
         })
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .map(|rel| crate::tool::winpath::to_slash(&rel.to_string_lossy(), cfg!(windows)))
         .min_by_key(|s| s.len())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }

@@ -455,10 +455,32 @@ fn built_in_and_main_advertised_tool_names_are_unique() {
 
 #[test]
 fn normalize_tool_path_maps_per_platform() {
-    assert_eq!(normalize_tool_path_for("/c/Users/x", true), r"C:\Users\x");
-    assert_eq!(normalize_tool_path_for("src/a.rs", true), r"src\a.rs");
-    assert_eq!(normalize_tool_path_for("/tmp/x", true), r"\tmp\x");
-    assert_eq!(normalize_tool_path_for("a\\b", false), "a/b");
+    let no = |_: &str| false;
+    let yes = |_: &str| true;
+    assert_eq!(
+        normalize_tool_path_for("/c/Users/x", true, &no),
+        r"C:\Users\x"
+    );
+    assert_eq!(normalize_tool_path_for("src/a.rs", true, &no), r"src\a.rs");
+    assert_eq!(normalize_tool_path_for("/tmp/x", true, &no), r"\tmp\x");
+    assert_eq!(normalize_tool_path_for("a\\b", false, &no), "a/b");
+    assert_eq!(normalize_tool_path_for("a\\b", false, &yes), "a\\b");
+    assert_eq!(normalize_tool_path_for("a/b", false, &no), "a/b");
+}
+
+#[cfg(unix)]
+#[test]
+fn literal_backslash_file_resolves_on_posix() {
+    let tmp = std::env::temp_dir().join(format!("koma-bs-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("a\\b.txt"), "x").unwrap();
+    let ws = vec![tmp.clone()];
+    assert!(literal_path_exists("a\\b.txt", &ws));
+    assert_eq!(normalize_tool_path("a\\b.txt", &ws), "a\\b.txt");
+    assert!(!literal_path_exists("c\\d.txt", &ws));
+    assert_eq!(normalize_tool_path("c\\d.txt", &ws), "c/d.txt");
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

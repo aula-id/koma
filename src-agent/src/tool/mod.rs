@@ -802,15 +802,40 @@ pub fn main_tool_names() -> Vec<String> {
     out
 }
 
-fn normalize_tool_path(path: &str) -> String {
-    normalize_tool_path_for(path, cfg!(windows))
+fn normalize_tool_path(path: &str, workspaces: &[PathBuf]) -> String {
+    normalize_tool_path_for(path, cfg!(windows), &|p| literal_path_exists(p, workspaces))
+}
+
+/// True when `p` names an existing entry literally (backslashes kept): an
+/// absolute path as-is, otherwise under any workspace root (after a `[N]` prefix).
+fn literal_path_exists(p: &str, workspaces: &[PathBuf]) -> bool {
+    let path = Path::new(p);
+    if path.is_absolute() {
+        return path.symlink_metadata().is_ok();
+    }
+    let (_, bare) = parse_ws_prefix(p);
+    let bare = if p.starts_with('[') {
+        bare.trim_start_matches(['/', '\\'])
+    } else {
+        bare
+    };
+    workspaces
+        .iter()
+        .any(|ws| ws.join(bare).symlink_metadata().is_ok())
 }
 
 /// Windows keeps native separators (UNC prefixes survive) and maps git-bash
-/// style `/c/x` onto `C:\x`; elsewhere backslashes become `/`.
-fn normalize_tool_path_for(path: &str, windows: bool) -> String {
+/// style `/c/x` onto `C:\x`. Elsewhere `\` is a legal file-name character, so a
+/// backslash path is converted to `/` only when it does not exist literally.
+fn normalize_tool_path_for(
+    path: &str,
+    windows: bool,
+    literal_exists: &dyn Fn(&str) -> bool,
+) -> String {
     if windows {
         winpath::msys_to_win(path).unwrap_or_else(|| path.replace('/', "\\"))
+    } else if !path.contains('\\') || literal_exists(path) {
+        path.to_string()
     } else {
         path.replace('\\', "/")
     }
@@ -828,7 +853,7 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
 
 /// Like [`resolve`], with an explicit scratch-root policy.
 pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Result<PathBuf> {
-    let normalized = normalize_tool_path(rel);
+    let normalized = normalize_tool_path(rel, workspaces);
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
@@ -900,7 +925,7 @@ pub fn resolve_read(
     session_dir: Option<&Path>,
     active_skill_dirs: &[PathBuf],
 ) -> Result<PathBuf> {
-    let normalized = normalize_tool_path(rel);
+    let normalized = normalize_tool_path(rel, workspaces);
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {

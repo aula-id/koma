@@ -138,8 +138,8 @@ impl Tool for GitOperator {
                 .ok_or_else(|| anyhow::anyhow!("cannot resolve home directory for SSH key path"))?;
             let key_path = home.join(".ssh").join(key);
             Some(format!(
-                "ssh -i '{}' -o IdentitiesOnly=yes -o BatchMode=yes",
-                key_path.display()
+                "ssh -i {} -o IdentitiesOnly=yes -o BatchMode=yes",
+                shell_single_quote(&key_path.to_string_lossy())
             ))
         } else {
             None
@@ -368,4 +368,33 @@ fn check_destructive(args: &[String]) -> Option<&'static str> {
     }
 
     None
+}
+
+/// POSIX single-quote `s` so a shell reads it back as one literal word. Git
+/// runs GIT_SSH_COMMAND through `sh` on every OS (git for Windows bundles one).
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_quote_escapes_embedded_quotes() {
+        assert_eq!(
+            shell_single_quote("/Users/o'brien/.ssh/id"),
+            r#"'/Users/o'\''brien/.ssh/id'"#
+        );
+        assert_eq!(shell_single_quote("/a b/id"), "'/a b/id'");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn single_quote_round_trips_through_sh() {
+        let raw = "/Users/o'brien/my key $HOME `x` \\id";
+        let script = format!("printf %s {}", shell_single_quote(raw));
+        let out = Command::new("sh").arg("-c").arg(script).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), raw);
+    }
 }
