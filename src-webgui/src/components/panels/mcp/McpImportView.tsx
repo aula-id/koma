@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Field, TextArea } from '../form'
+import { TextArea } from '../form'
+import { FormRow } from './McpGroup'
 import { DetailHeader, FormActions } from '../helpers'
 
 type Props = {
@@ -22,9 +23,14 @@ export function McpImportView({ onImport, onCancel }: Props) {
   return (
     <>
       <DetailHeader onBack={onCancel} title="Import JSON" />
-      <div className="flex-1 overflow-auto py-1">
-        <Field label="MCP servers JSON">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
+        <FormRow
+          label="MCP servers JSON"
+          htmlFor="mcp-import-json"
+          hint="Paste the mcpServers snippet from a server's README (Claude Code, Cursor or VS Code format)."
+        >
           <TextArea
+            id="mcp-import-json"
             value={text}
             rows={12}
             autoFocus
@@ -32,11 +38,7 @@ export function McpImportView({ onImport, onCancel }: Props) {
             placeholder={EXAMPLE}
             onChange={(e) => setText(e.target.value)}
           />
-          <span className="text-[10px] text-koma-fg opacity-40">
-            Paste the mcpServers snippet from a server&apos;s README (Claude Code, Cursor or VS Code
-            format).
-          </span>
-        </Field>
+        </FormRow>
       </div>
       <FormActions
         onCancel={onCancel}

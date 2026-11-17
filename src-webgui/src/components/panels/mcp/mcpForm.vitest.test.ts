@@ -3,7 +3,13 @@ import type { McpServer } from '../../../types/config'
 import {
   HEADER_KEEP,
   blankDraft,
+  badSeconds,
   draftToRequest,
+  envSummary,
+  headersSummary,
+  limitsHasValues,
+  limitsSummary,
+  toolsSummary,
   linesToList,
   linesToPairs,
   secToMs,
@@ -86,5 +92,37 @@ describe('mcpForm', () => {
     expect(secToMs('1.5')).toBe(1500)
     expect(secToMs('abc')).toBe(0)
     expect(secToMs('-3')).toBe(0)
+  })
+})
+
+describe('group summaries', () => {
+  it('describes empty and filled groups', () => {
+    const d = blankDraft()
+    expect(envSummary(d)).toBe('none')
+    expect(headersSummary(d)).toBe('none')
+    expect(limitsSummary(d)).toBe('default')
+    expect(toolsSummary(d)).toBe('all allowed')
+    d.envText = 'A=1\nB=2'
+    d.headersText = 'X: y'
+    d.cwd = '/tmp'
+    d.startupSec = '30'
+    d.toolSec = '1.5'
+    d.allowedText = 'a*, b'
+    d.disabledText = 'c'
+    expect(envSummary(d)).toBe('2 variables')
+    expect(headersSummary(d)).toBe('1 header')
+    expect(limitsSummary(d)).toBe('folder set, startup 30s, tool 1.5s')
+    expect(toolsSummary(d)).toBe('2 allowed, 1 disabled')
+    d.transport = 'http'
+    expect(limitsSummary(d)).toBe('startup 30s, tool 1.5s')
+  })
+  it('flags timeouts the host would ignore', () => {
+    expect(badSeconds('')).toBe(false)
+    expect(badSeconds('20')).toBe(false)
+    expect(badSeconds('abc')).toBe(true)
+    expect(badSeconds('0')).toBe(true)
+    const d = blankDraft()
+    d.toolSec = 'abc'
+    expect(limitsHasValues(d)).toBe(true)
   })
 })

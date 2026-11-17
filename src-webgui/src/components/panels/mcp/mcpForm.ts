@@ -164,3 +164,49 @@ export function draftToRequest(d: McpDraft, isNew: boolean): McpServerRequest {
     },
   }
 }
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+export function envSummary(d: McpDraft): string {
+  const n = linesToPairs(d.envText, '=').length
+  return n === 0 ? 'none' : plural(n, 'variable', 'variables')
+}
+
+export function headersSummary(d: McpDraft): string {
+  const n = linesToPairs(d.headersText, ':').length
+  return n === 0 ? 'none' : plural(n, 'header', 'headers')
+}
+
+function secLabel(text: string): string {
+  return `${secToMs(text) / 1000}s`
+}
+
+/** What the "working directory and timeouts" group holds; `cwd` only counts for stdio. */
+export function limitsSummary(d: McpDraft): string {
+  const parts: string[] = []
+  if (d.transport === 'stdio' && d.cwd.trim()) parts.push('folder set')
+  if (secToMs(d.startupSec) > 0) parts.push(`startup ${secLabel(d.startupSec)}`)
+  if (secToMs(d.toolSec) > 0) parts.push(`tool ${secLabel(d.toolSec)}`)
+  return parts.length ? parts.join(', ') : 'default'
+}
+
+export function toolsSummary(d: McpDraft): string {
+  const allowed = splitList(d.allowedText).length
+  const disabled = splitList(d.disabledText).length
+  const parts: string[] = []
+  if (allowed) parts.push(`${allowed} allowed`)
+  if (disabled) parts.push(`${disabled} disabled`)
+  return parts.length ? parts.join(', ') : 'all allowed'
+}
+
+/** A timeout the user typed that the host would ignore (not a positive number). */
+export function badSeconds(text: string): boolean {
+  return text.trim() !== '' && secToMs(text) === 0
+}
+
+/** True when the limits group holds anything worth showing expanded. */
+export function limitsHasValues(d: McpDraft): boolean {
+  return limitsSummary(d) !== 'default' || d.startupSec.trim() !== '' || d.toolSec.trim() !== ''
+}
