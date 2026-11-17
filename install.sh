@@ -26,6 +26,7 @@ INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
 # and break outside this cwd. Absolute values pass through unchanged.
 case "$INSTALL_DIR" in
     /*) ;;
+    [A-Za-z]:[\\/]*) ;;   # Windows drive path under Git Bash / MSYS: leave as is
     *)  INSTALL_DIR="$(pwd)/${INSTALL_DIR#./}" ;;
 esac
 
@@ -966,9 +967,11 @@ fi
 # KOMA_ICON_BASE=... (defaults to assets on main).
 # ---------------------------------------------------------------------------
 # Quote one Desktop Entry Exec argument: wrap in double quotes, backslash-escape
-# the characters the spec reserves inside quotes (\ " ` $).
+# the characters the spec reserves inside quotes (" ` $ and \). A literal
+# backslash needs four (string-escape pass, then quote pass); % is doubled
+# because Exec treats it as a field code.
 _desktop_quote() {
-    printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"`$]/\\&/g')"
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/["`$]/\\&/g' -e 's/%/%%/g')"
 }
 
 if [ "$_launcher_ok" != 1 ] && [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
