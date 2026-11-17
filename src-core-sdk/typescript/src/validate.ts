@@ -219,6 +219,18 @@ function validateSessionRow(x: unknown): void {
   object(x); string(x.session_id, true); fields(x, ['name', 'workdir', 'parent_session_id', 'room_session_id']); string(x.kind, true);
   nullableInt(x.created_at); nullableInt(x.updated_at); bool(x.live); nullableBool(x.working); bool(x.locked); bool(x.bound); bool(x.room_live);
 }
+function validateTranscript(x: Record<string, unknown>, params: Record<string, unknown>): void {
+  string(x.session_id, true); bool(x.live);
+  if (x.session_id !== params.session_id) throw new SdkError('protocol', 'Transcript does not match the call');
+  list(x.messages, m => {
+    object(m);
+    if (!Number.isSafeInteger(m.id) || (m.id as number) < 1) throw new SdkError('protocol', 'Invalid message id');
+    member(m.role, ['system', 'user', 'assistant', 'tool']); string(m.text); int(m.created_at);
+    if (m.truncated !== undefined && m.truncated !== true) throw new SdkError('protocol', 'truncated must be true when present');
+  });
+  if ((x.messages as unknown[]).length > 500) throw new SdkError('protocol', 'Too many messages');
+  if (x.next_since !== null && (!Number.isSafeInteger(x.next_since) || (x.next_since as number) < 1)) throw new SdkError('protocol', 'Invalid next_since');
+}
 function validateTotals(x: unknown): void {
   object(x); int(x.calls); int(x.tokens_in); int(x.tokens_cached); int(x.tokens_out); num(x.cost);
 }
@@ -408,6 +420,7 @@ export function validateResult(method: Method, result: unknown, params: Record<s
     string(result.kind, true); nullableString(result.orphaned_room_session_id); return;
   }
   if (method === 'sessions.stop') { if (result.stopped !== true) throw new SdkError('protocol', 'Invalid stop result'); bool(result.was_live); return; }
+  if (method === 'sessions.transcript') { validateTranscript(result, params); return; }
   if (method === 'usage.query') { validateUsage(result); return; }
   if ((SKILL_METHODS as readonly string[]).includes(method)) { validateSkills(method, result); return; }
   if ((ROOM_METHODS as readonly string[]).includes(method)) { validateRoom(method, result, params); return; }

@@ -123,7 +123,10 @@ is `invalid_state`/`live`; the bound coding session, rooms and sessions that are
 not live are renamed; `sessions.info` follows. `sessions.delete` checks, in order,
 `not_found`, `bound_self`, `live`, `session_locked`. `sessions.stop` of an id
 that is not live (or unknown) answers `was_live:false`. These calls never end the
-process. Bound sessions and rooms report `bound:true`.
+process. Bound sessions and rooms report `bound:true`. `sessions.transcript` reads
+stored messages: `sess-coding-b` (not live) holds four, the third flagged
+`truncated`, and `sess-coding-a` (live) two; a room is `out_of_range`, an unknown
+id `not_found`, and `sess-busy` `sqlite_busy`.
 
 Usage (scenarios `usage` and the room ones). The ledger has twelve rows from
 `NOW - 40 days` on: eleven inside the default 30 days, for sessions

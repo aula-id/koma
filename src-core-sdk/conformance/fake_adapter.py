@@ -19,7 +19,8 @@ V1_METHODS = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt',
               'interrupt_and_submit', 'approve', 'configure', 'detach']
 CONFIG_METHODS = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
                   'config.skill_roots.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
-SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop']
+SESSION_METHODS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
+                   'sessions.transcript']
 SKILL_METHODS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
                  'skills.update']
 ROOM_BINDERS = ['room.open', 'room.attach']
@@ -788,7 +789,47 @@ def sessions_stop(rid, params):
     row.update(live=False, working=False, locked=False)
     return response(rid, dict(stopped=True, was_live=True))
 
+# Stored messages by session: (id, role, text, created_at, truncated). Text is scrubbed, as the adapter scrubs it.
+TRANSCRIPTS = {
+    'sess-coding-a': [(1, 'user', 'run the tests', NOW - 600, False), (2, 'assistant', 'Running them now.', NOW - 590, False)],
+    'sess-coding-b': [(1, 'user', 'read the config', NOW - 7200, False),
+                      (2, 'tool', 'key = [redacted]', NOW - 7190, False),
+                      (3, 'tool', 'x' * 64 + ' (cut)', NOW - 7180, True),
+                      (4, 'assistant', 'Done.', NOW - 7170, False)],
+}
+
+def sessions_transcript(rid, params):
+    sid = params.get('session_id')
+    if not is_id(sid):
+        return invalid(rid, 'out_of_range', 'session_id must be a string of 1 to 64 characters')
+    since = params.get('since', 0)
+    if not is_int(since) or since < 0:
+        return invalid(rid, 'out_of_range', 'since must be an integer of 0 or more')
+    limit = params.get('limit', 100)
+    if not is_int(limit) or not 1 <= limit <= 500:
+        return invalid(rid, 'out_of_range', 'limit must be an integer from 1 to 500')
+    row = find_row(sid)
+    if row is None or not row['registered']:
+        return failure(rid, 'not_found', 'not_found', 'no session ' + sid)
+    if row['kind'] == 'room':
+        return invalid(rid, 'out_of_range', 'the session is a room; read it with room.history')
+    if row.get('busy'):
+        return failure(rid, 'unavailable', 'sqlite_busy', 'the session archive is busy')
+    later = [m for m in TRANSCRIPTS.get(sid, []) if m[0] > since]
+    page = later[:limit]
+    messages = []
+    for mid, role, text, at, truncated in page:
+        message = dict(id=mid, role=role, text=text, created_at=at)
+        if truncated:
+            message['truncated'] = True
+        messages.append(message)
+    more = len(later) > limit
+    return response(rid, dict(session_id=sid, live=row['live'], messages=messages,
+                              next_since=page[-1][0] if more else None))
+
 def sessions_call(rid, method, params):
+    if method == 'sessions.transcript':
+        return sessions_transcript(rid, params)
     if method == 'sessions.list':
         return sessions_list(rid, params)
     if method == 'sessions.rename':

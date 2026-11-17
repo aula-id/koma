@@ -61,6 +61,30 @@ test('sessions.delete and sessions.stop report their outcomes', async () => {
   } finally { await host.close(); await c.close(); }
 });
 
+test('sessions.transcript reads a stopped session in pages without a binding', async () => {
+  const c = client('sessions'), host = c.host();
+  try {
+    const whole = await host.readTranscript({ session_id: 'sess-coding-b' });
+    assert.deepEqual([whole.session_id, whole.live, whole.next_since], ['sess-coding-b', false, null]);
+    assert.deepEqual(whole.messages.map(m => m.id), [1, 2, 3, 4]);
+    assert.deepEqual(whole.messages.map(m => m.role), ['user', 'tool', 'tool', 'assistant']);
+    assert.deepEqual(whole.messages.map(m => m.truncated), [undefined, undefined, true, undefined]);
+    const first = await host.readTranscript({ session_id: 'sess-coding-b', limit: 3 });
+    assert.equal(first.messages.length, 3); assert.equal(first.next_since, 3);
+    const rest = await host.readTranscript({ session_id: 'sess-coding-b', since: first.next_since });
+    assert.deepEqual(rest.messages.map(m => m.id), [4]); assert.equal(rest.next_since, null);
+    assert.equal((await host.readTranscript({ session_id: 'sess-coding-a' })).live, true);
+    assert.deepEqual((await host.readTranscript({ session_id: 'sess-coding-c' })).messages, []);
+    await assert.rejects(host.readTranscript({ session_id: 'nope' }), e => e.code === 'not_found');
+    await assert.rejects(host.readTranscript({ session_id: 'sess-busy' }), e => e.reason === 'sqlite_busy');
+    await assert.rejects(host.readTranscript({ session_id: 'sess-coding-b', limit: 501 }), e => e.reason === 'out_of_range');
+    await assert.rejects(host.readTranscript({ session_id: 'sess-coding-b', since: -1 }), e => e.reason === 'out_of_range');
+    await assert.rejects(host.readTranscript({ session_id: '' }), e => e.code === 'invalid_input');
+    const room = (await host.listSessions({ kind: 'room' })).sessions[0].session_id;
+    await assert.rejects(host.readTranscript({ session_id: room }), e => e.reason === 'out_of_range');
+  } finally { await host.close(); await c.close(); }
+});
+
 test('create{name} applies the name, reports a failed rename and is gated on its feature', async () => {
   const c = client('sessions');
   try {
