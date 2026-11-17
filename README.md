@@ -84,3 +84,5 @@ These images come from Koma's scripted product showcase. The projects, tasks, pr
 Working with a team? [Koma Business](https://koma.run/biz/) brings planning, chat, and documents together. Koma Cloud is available to enterprises for deployment on their own servers. There's more in the [Koma whitepaper](https://koma.run/brand/whitepaper).
 
 Koma is licensed under [Apache 2.0](LICENSE). For platform requirements and source builds, see the [install and build guide](docs/INSTALL_AND_BUILD.md).
+
+For Linux GUI flicker on Intel Ivy Bridge with Hyprland/Wayland, see [Linux graphics troubleshooting](docs/LINUX_GRAPHICS.md).
