@@ -61,33 +61,6 @@ export function pushCoding(set: StoreSet, get: StoreGet, env: PushEnvelope): boo
         } else get().push(event)
         break
       }
-      case 'FileDiff':
-        set((s) => {
-          const id = `diff:${env.path}`
-          // Ignore a reply for a tab closed while the req was in flight.
-          if (!s.ui.tabs.some((t) => t.id === id)) return s
-          return {
-            ui: {
-              ...s.ui,
-              tabs: s.ui.tabs.map((t) =>
-                t.id === id && t.kind === 'diff'
-                  ? {
-                      ...t,
-                      loading: false,
-                      diff: {
-                        original: env.original,
-                        modified: env.modified,
-                        error: env.error,
-                        binary: env.binary,
-                        origin: env.origin ?? 'git',
-                      },
-                    }
-                  : t,
-              ),
-            },
-          }
-        })
-        break
       case 'LspStatus':
         set(() => ({
           lspServers: env.servers,

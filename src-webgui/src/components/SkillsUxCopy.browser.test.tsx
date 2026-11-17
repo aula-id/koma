@@ -429,7 +429,7 @@ describe.sequential('Skills UX copy and disclosures', () => {
     useKoma.getState().detachSession()
     const firstChatSnapshot = {
       k: 'Snapshot', session: 'first-chat', state: 'idle', messages: [], title: '', subagents: [], bash: [],
-      fileChanges: [], attachments: [], pendingSteer: [], awaitingApproval: false,
+      attachments: [], pendingSteer: [], awaitingApproval: false,
       palette: useKoma.getState().palette, loadedSkillNames: [],
     } as const
     useKoma.getState().push({ ...firstChatSnapshot, session: 'stale-in-flight-chat' } as any)

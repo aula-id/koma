@@ -32,8 +32,8 @@ import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { GitPushMenu } from '../GitPushMenu'
 
-// git-porcelain status char -> badge tone. Mirrors ExplorePanel's FILE_STATUS
-// idiom (added = good, modified = accent, deleted = error): A/? = new
+// git-porcelain status char -> badge tone (added = good, modified = accent,
+// deleted = error): A/? = new
 // (good), M = touched (accent), D = removed (error), R/C = a rename/copy
 // (warn — worth a second glance), U = unmerged/conflict (error, needs
 // attention).

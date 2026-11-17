@@ -97,7 +97,6 @@ export type {
   CatalogueProviderEntry,
   DiffPayload,
   DyingMark,
-  FileChangeEntry,
   HubCookingEntry,
   HubHistoryEntry,
   LoadPhase,

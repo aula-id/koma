@@ -5,7 +5,7 @@ import type { ChatMessage, PaletteInfo } from './chat'
 import type { ActivityCommit, CommitDetail, GitCommitNode } from './git'
 import type { InstalledExt, InstalledExtDetail, StoreDetail, StoreItem } from './marketplace'
 import type { OAuthConn, OAuthPhase, OAuthProviderEntry } from './oauth'
-import type { AttachmentEntry, BashJobEntry, BootstrapState, FileChangeEntry, HubCookingEntry, HubHistoryEntry, LoadPhase, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry, ToastEntry } from './session'
+import type { AttachmentEntry, BashJobEntry, BootstrapState, HubCookingEntry, HubHistoryEntry, LoadPhase, ModelRoute, PendingCall, PlanTodoEntry, SearchResultEntry, SubAgentEntry, ToastEntry } from './session'
 import type { Tab } from './tabs'
 import type { McpProject, McpServer, Model, Provider } from '../../types/config'
 
@@ -26,7 +26,6 @@ export type SessionSlice = {
   reasoning: string
   subagents: SubAgentEntry[]
   bash: BashJobEntry[]
-  fileChanges: FileChangeEntry[]
   // Session checklist (Explore). REPLACED wholesale on each Snapshot.
   // Plan → plan_todos.md, SDLC → L2 graph, otherwise memory/TODO.md.
   planTodos: PlanTodoEntry[]

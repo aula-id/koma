@@ -27,7 +27,7 @@ const catalogueRequests = () => req.mock.calls.map(([request]) => request as { r
 function switchSnapshot(session: string, loadedSkillNames: string[]) {
   useKoma.getState().push({
     k: 'Snapshot', session, loadedSkillNames, state: 'idle', messages: [], title: '',
-    subagents: [], bash: [], fileChanges: [], attachments: [], pendingSteer: [],
+    subagents: [], bash: [], attachments: [], pendingSteer: [],
     awaitingApproval: false, palette: useKoma.getState().palette,
   } as any)
 }

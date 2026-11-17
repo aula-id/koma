@@ -441,10 +441,6 @@ export type KomaState = {
   // AgentsPanel still finds THIS tab instead of opening a duplicate) and its
   // `agentId`. No-op if `oldAgentId === newAgentId` (a save with no rename).
   renameAgentTab: (oldAgentId: string | null, newAgentId: string) => void
-  // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
-  // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
-  // an already-open file refreshes it (same loading + re-request path).
-  openDiffTab: (path: string) => void
   // Re-fetch the Source Control "GIT" panel's status (branch/ahead-behind +
   // staged/unstaged lists). Fired on GitPanel mount/(re)activation, and once
   // at boot (routes/index.tsx) so the footer's branch indicator populates

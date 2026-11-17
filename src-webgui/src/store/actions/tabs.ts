@@ -4,25 +4,10 @@ import { emptyFileState, fileKey } from '../coding'
 import { dropDesignDocs, dropDesignFileUi } from '../design'
 import { dropDiagramDocs } from '../diagram'
 import { setSplitDir as applySplitDir, toggleSplitDir as flipSplitDir, insertGroup, neighbourInGroup, normalizeGroups, reorderTab, resizeSplit } from '../editorGroups'
-import { tabBaseName } from '../initial'
 import type { KomaState } from '../state'
-import type { Tab } from '../types/tabs'
 
-export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openDiffTab' | 'closeTab' | 'closeAllTabsExceptChat' | 'activateTab' | 'focusEditorGroup' | 'moveTabToGroup' | 'splitTab' | 'toggleSplitDir' | 'setSplitDir' | 'resizeEditorGroups'> {
+export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'closeTab' | 'closeAllTabsExceptChat' | 'activateTab' | 'focusEditorGroup' | 'moveTabToGroup' | 'splitTab' | 'toggleSplitDir' | 'setSplitDir' | 'resizeEditorGroups'> {
   return {
-  openDiffTab: (path) => {
-    const id = `diff:${path}`
-    set((s) => {
-      const exists = s.ui.tabs.some((t) => t.id === id)
-      const tabs: Tab[] = exists
-        ? s.ui.tabs.map((t) =>
-            t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
-          )
-        : [...s.ui.tabs, { id, kind: 'diff', path, title: tabBaseName(path), loading: true }]
-      return { ui: { ...s.ui, tabs, activeTabId: id } }
-    })
-    get().req({ r: 'FileDiff', path })
-  },
   closeTab: (id, opts) => {
     if (id === 'chat') return
     const gitTab = get().ui.tabs.find(t => t.id === id)
@@ -189,9 +174,7 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
       }
     })
     // A GIT-panel diff tab (has `staged`) re-requests via GitDiff, echoing
-    // the SAME staged/unstaged side it was opened for; a plain File-changed
-    // diff tab (no `staged`) re-requests via FileDiff — the two paths are
-    // NOT interchangeable (different host handlers, different tab-id scheme).
+    // the SAME staged/unstaged side it was opened for.
     if (isDiff && tab.kind === 'diff') {
       if (tab.commitSha !== undefined) {
         // A commit-graph diff tab re-requests via GitCommitDiff — checked FIRST
@@ -200,8 +183,6 @@ export function tabActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'openD
         get().req({ r: 'GitCommitDiff', sha: tab.commitSha, path: tab.path })
       } else if (tab.staged !== undefined) {
         get().req({ r: 'GitDiff', path: tab.path, staged: tab.staged })
-      } else {
-        get().req({ r: 'FileDiff', path: tab.path })
       }
     }
     // Re-focusing the Settings tab re-requests its values so they're fresh (the
