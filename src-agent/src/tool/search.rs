@@ -7,6 +7,7 @@
 use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 /// Search file contents by regular expression.
 pub struct Grep;
@@ -83,6 +84,11 @@ impl Grep {
 
         let mut matches: Vec<String> = Vec::new();
         let mut truncated = false;
+        let ws_canon: Vec<PathBuf> = ctx
+            .workspaces
+            .iter()
+            .map(|w| super::winpath::canonical(w).unwrap_or_else(|_| w.clone()))
+            .collect();
 
         let walk = ignore::WalkBuilder::new(base).build();
         'outer: for entry in walk {
@@ -94,15 +100,10 @@ impl Grep {
 
             // Apply glob filter against the workspace-relative path.
             if let Some(ref m) = glob_matcher {
-                let rel = ctx
-                    .workspaces
+                let rel = ws_canon
                     .iter()
-                    .enumerate()
-                    .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
-                    .map(|(i, r)| {
-                        let abs = ctx.workspaces[i].join(r);
-                        super::model_display_path(&ctx.workspaces, &abs)
-                    });
+                    .find_map(|ws| abs_path.strip_prefix(ws).ok().map(|r| ws.join(r)))
+                    .map(|abs| super::model_display_path(&ctx.workspaces, &abs));
                 match rel {
                     Some(ref r) if !m.is_match(r.as_str()) => continue,
                     None => continue,
@@ -119,15 +120,10 @@ impl Grep {
                 Err(_) => continue, // binary or unreadable child
             };
 
-            let rel_display = ctx
-                .workspaces
+            let rel_display = ws_canon
                 .iter()
-                .enumerate()
-                .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
-                .map(|(i, r)| {
-                    let abs = ctx.workspaces[i].join(r);
-                    super::model_display_path(&ctx.workspaces, &abs)
-                })
+                .find_map(|ws| abs_path.strip_prefix(ws).ok().map(|r| ws.join(r)))
+                .map(|abs| super::model_display_path(&ctx.workspaces, &abs))
                 .unwrap_or_else(|| abs_path.display().to_string());
 
             for (lineno, line) in content.lines().enumerate() {
@@ -218,7 +214,7 @@ impl Glob {
         // active skill dir), we must walk from base_abs directly instead of
         // filtering the workspace dir cache.
         let base_in_workspace = ctx.workspaces.iter().any(|ws| {
-            let ws = ws.canonicalize().unwrap_or_else(|_| ws.clone());
+            let ws = super::winpath::canonical(ws).unwrap_or_else(|_| ws.clone());
             base_abs.starts_with(&ws)
         });
 
@@ -237,7 +233,7 @@ impl Glob {
         let cache_roots: Vec<_> = ctx
             .workspaces
             .iter()
-            .map(|ws| ws.canonicalize().unwrap_or_else(|_| ws.clone()))
+            .map(|ws| super::winpath::canonical(ws).unwrap_or_else(|_| ws.clone()))
             .collect();
         let mut results: Vec<String> = if base_in_workspace && !cache_files.is_empty() {
             cache_files
@@ -258,15 +254,10 @@ impl Glob {
                 let entry = entry.map_err(super::recovery::walk_error)?;
                 if entry.file_type().is_some_and(|t| t.is_file()) {
                     let abs = entry.path();
-                    let rel = ctx
-                        .workspaces
+                    let rel = cache_roots
                         .iter()
-                        .enumerate()
-                        .find_map(|(i, ws)| abs.strip_prefix(ws).ok().map(|r| (i, r)))
-                        .map(|(i, r)| {
-                            let abs_path = ctx.workspaces[i].join(r);
-                            super::model_display_path(&ctx.workspaces, &abs_path)
-                        })
+                        .find_map(|ws| abs.strip_prefix(ws).ok().map(|r| ws.join(r)))
+                        .map(|abs_path| super::model_display_path(&ctx.workspaces, &abs_path))
                         .unwrap_or_else(|| abs.display().to_string());
                     if matcher.is_match(rel.as_str()) {
                         v.push(rel);
@@ -292,3 +283,7 @@ impl Glob {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+#[path = "search_path_test.rs"]
+mod path_tests;

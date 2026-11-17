@@ -512,7 +512,7 @@ pub(crate) fn write_tee_log(log_dir: &Path, command: &str, raw: &str) -> Option<
 
     gc_log_dir(log_dir);
 
-    Some(path.canonicalize().unwrap_or(path))
+    Some(super::winpath::canonical(&path).unwrap_or(path))
 }
 
 /// GC `log_dir`'s tee logs: delete the oldest `.log` files until at most 50

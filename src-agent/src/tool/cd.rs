@@ -60,14 +60,26 @@ pub fn resolve_cd_target(path: &str, cwd: &Path, workspaces: &[PathBuf]) -> Resu
             )
         });
     }
-    let as_path = Path::new(trimmed);
+    let mapped = map_cd_input(trimmed, cfg!(windows));
+    let as_path = Path::new(mapped.as_ref());
     if as_path.is_absolute() {
         Ok(as_path.to_path_buf())
     } else {
         // Relative → resolve against the CURRENT cwd (shell semantics). An empty
         // path degrades to the cwd itself (a no-op cd), matching a bare `cd`.
-        Ok(cwd.join(trimmed))
+        Ok(cwd.join(mapped.as_ref()))
     }
+}
+
+/// Map a Git-Bash style `/c/Users/x` input to `C:\Users\x` on Windows only.
+/// Off Windows the input is returned unchanged.
+fn map_cd_input(s: &str, windows: bool) -> std::borrow::Cow<'_, str> {
+    if windows {
+        if let Some(m) = super::winpath::msys_to_win(s) {
+            return std::borrow::Cow::Owned(m);
+        }
+    }
+    std::borrow::Cow::Borrowed(s)
 }
 
 /// Parse a string that is EXACTLY `[N]` (a non-negative integer in brackets,
@@ -150,5 +162,26 @@ impl Tool for Cd {
         }
         // Success — hand the canonical target back to the runtime to apply.
         Ok(format!("{CWD_CHANGE_PREFIX}{}", canonical.display()))
+    }
+}
+
+#[cfg(test)]
+mod map_cd_tests {
+    use super::map_cd_input;
+
+    #[test]
+    fn windows_maps_msys_drive() {
+        assert_eq!(map_cd_input("/c/Users/x", true), "C:\\Users\\x");
+    }
+
+    #[test]
+    fn windows_leaves_other_paths() {
+        assert_eq!(map_cd_input("/tmp/x", true), "/tmp/x");
+        assert_eq!(map_cd_input("//srv/x", true), "//srv/x");
+    }
+
+    #[test]
+    fn posix_leaves_msys_shape() {
+        assert_eq!(map_cd_input("/c/Users/x", false), "/c/Users/x");
     }
 }

@@ -28,13 +28,26 @@ const NOT_FOUND_MAX_ENTRIES: usize = 30;
 /// Entries are capped at [`NOT_FOUND_MAX_ENTRIES`] with a "… (N more)" note, and
 /// we always point at `glob` as the escape hatch.
 pub(super) fn not_found_help(ctx: &ToolCtx, abs: &Path, rel: &str) -> String {
-    // Parse workspace index from the path prefix.
-    let (ws_idx, _bare) = super::super::parse_ws_prefix(rel);
-    // Find which workspace contains the path, and use it as the floor.
-    let ws = super::super::find_workspace(&ctx.workspaces, abs)
-        .or_else(|| ctx.workspaces.get(ws_idx).cloned())
-        .or_else(|| ctx.workspaces.first().cloned())
-        .map(|p| p.canonicalize().unwrap_or(p))
+    // The workspace that actually contains `abs` is the floor; fall back to the
+    // `[N]` prefix of `rel`, then the first workspace.
+    let (prefix_idx, _bare) = super::super::parse_ws_prefix(rel);
+    let canon: Vec<std::path::PathBuf> = ctx
+        .workspaces
+        .iter()
+        .map(|w| super::super::winpath::canonical(w).unwrap_or_else(|_| w.clone()))
+        .collect();
+    let ws_idx =
+        canon
+            .iter()
+            .position(|w| abs.starts_with(w))
+            .unwrap_or(if prefix_idx < canon.len() {
+                prefix_idx
+            } else {
+                0
+            });
+    let ws = canon
+        .get(ws_idx)
+        .cloned()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     // Walk up `abs` to the nearest ancestor that exists AND is a directory,
@@ -61,7 +74,7 @@ pub(super) fn not_found_help(ctx: &ToolCtx, abs: &Path, rel: &str) -> String {
     let dir_rel = dir_abs
         .strip_prefix(&ws)
         .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| super::super::winpath::to_slash(&p.to_string_lossy(), cfg!(windows)))
         .unwrap_or_default();
 
     // List the ancestor's entries. Prefer the gitignore-aware cache; if it has
