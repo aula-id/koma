@@ -13,6 +13,7 @@ import {
   FilePlus,
   FolderPlus,
   MessageSquarePlus,
+  NotebookPen,
   Pencil,
   RefreshCw,
   Trash2,
@@ -33,7 +34,7 @@ import {
   type FileTreeEntry,
 } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { Empty, IconBtn } from './helpers'
+import { Empty, EmptyState, IconBtn, NoProjectState, NoWorkspaceState } from './helpers'
 import { Segmented, Select } from './form'
 import { CodingSearchPanel } from './CodingSearchPanel'
 import { pathBasename as rootLabel } from '../../lib/pathDisplay'
@@ -700,13 +701,13 @@ export function CodingPanel() {
   if (sessionId === null) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>Open a project to use Coding</Empty>
+        <NoProjectState feature="Coding" />
       </div>
     )
   }
 
   if (roots.length === 0) {
-    return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+    return <NoWorkspaceState />
   }
 
   return (
@@ -721,17 +722,17 @@ export function CodingPanel() {
           />
         </div>
         {sideTab === 'files' && !draft ? <>
-          <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
-            <RefreshCw size={12} />
-          </IconBtn>
-          <IconBtn label="New file in root" onClick={() => activeRoot && onStartCreate('', 'file')}>
+          <IconBtn label="New file" onClick={() => activeRoot && onStartCreate('', 'file')}>
             <FilePlus size={12} />
+          </IconBtn>
+          <IconBtn label="New folder" onClick={() => activeRoot && onStartCreate('', 'dir')}>
+            <FolderPlus size={12} />
           </IconBtn>
           <IconBtn label="New Notebook" onClick={() => activeRoot && showNewNotebook(activeRoot)}>
-            <FilePlus size={12} />
+            <NotebookPen size={12} />
           </IconBtn>
-          <IconBtn label="New folder in root" onClick={() => activeRoot && onStartCreate('', 'dir')}>
-            <FolderPlus size={12} />
+          <IconBtn label="Refresh" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
+            <RefreshCw size={12} />
           </IconBtn>
         </> : null}
       </div>
@@ -813,9 +814,18 @@ export function CodingPanel() {
                 />
               ))
             ) : !rootCreate ? (
-              <Empty>
-                {dropTargetPath === '' ? 'Drop files to upload' : 'Empty workspace'}
-              </Empty>
+              dropTargetPath === '' ? (
+                <Empty>Drop files to upload</Empty>
+              ) : (
+                <EmptyState
+                  icon={FolderOpen}
+                  title="This folder is empty"
+                  primary={{ label: 'New file', icon: <FilePlus size={14} />, onClick: () => onStartCreate('', 'file') }}
+                  secondary={{ label: 'New folder', onClick: () => onStartCreate('', 'dir') }}
+                >
+                  Ask Koma in the chat to create something, or add your own files.
+                </EmptyState>
+              )
             ) : null}
           </>
         )}

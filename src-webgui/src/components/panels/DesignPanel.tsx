@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Check, Component, File, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { Check, Component, File, Frame, MessageSquare, Pencil, Search, Trash2, X } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { KomaSelect } from '../KomaSelect'
 import { DesignLayers } from '../DesignLayers'
-import { Empty, IconBtn, WelcomeLink } from './helpers'
+import { AddBtn, Empty, EmptyState, IconBtn, NoProjectState, NoWorkspaceState, WelcomeLink } from './helpers'
 import { Select, Segmented } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
@@ -323,8 +323,8 @@ export function DesignPanel() {
     setDesignPanelTab(designTab.id)
   }, [designTab, setDesignPanelTab])
 
-  if (sessionId === null) return <Empty>Open a project to use Design</Empty>
-  if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+  if (sessionId === null) return <NoProjectState feature="Design" />
+  if (workdir.length === 0) return <NoWorkspaceState />
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((entry) => !entry.isDir && isDesignPath(entry.path))
   const gone = isMissingCodingDirError(dir?.error)
@@ -394,7 +394,8 @@ export function DesignPanel() {
         <div className="flex min-h-0 flex-1 flex-col">
           <AccordionSection
             title="Files"
-            open={filesOpen}
+            // An empty list can't be collapsed: its empty state is the first-run welcome.
+            open={filesOpen || (files.length === 0 && !fileNeedle)}
             onToggle={() => setFilesOpen((value) => !value)}
             fill={false}
             action={(
@@ -444,20 +445,16 @@ export function DesignPanel() {
                     void importFigFile(file, activeRoot, req, openDesignTab)
                   }}
                 />
-                <button
-                  type="button"
-                  aria-label="New design"
-                  title="New design"
+                <AddBtn
+                  label="New design"
+                  text="New"
                   onClick={() => {
                     setFilesOpen(true)
                     setCreating(true)
                     setRenaming(null)
                     setDeleting(null)
                   }}
-                  className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
-                >
-                  <Plus size={13} />
-                </button>
+                />
               </div>
             )}
           >
@@ -471,11 +468,12 @@ export function DesignPanel() {
                 className="mx-2 mb-1 mt-1 h-7 w-[calc(100%-1rem)] rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg outline-none"
               />
             ) : null}
-            <div className="max-h-[8.75rem] overflow-y-auto">
+            <div className={files.length === 0 && !fileNeedle ? 'max-h-none' : 'max-h-[8.75rem] overflow-y-auto'}>
               <FileList
                 activeRoot={activeRoot}
                 files={listedFiles}
-                emptyLabel={fileNeedle ? 'No matches' : 'No designs'}
+                emptyLabel={fileNeedle ? 'No designs match' : 'No designs'}
+                onNew={() => { setFilesOpen(true); setCreating(true); setRenaming(null); setDeleting(null) }}
                 creating={creating}
                 renaming={renaming}
                 deleting={deleting}
@@ -650,10 +648,12 @@ function FileList({
   onCancelDelete,
   onConfirmDelete,
   onMenu,
+  onNew,
 }: {
   activeRoot: string | null
   files: FileTreeEntry[]
   emptyLabel?: string
+  onNew?: () => void
   creating: boolean
   renaming: string | null
   deleting: string | null
@@ -731,10 +731,18 @@ function FileList({
           </div>
         )
       }) : !creating ? (
-        <>
+        emptyLabel === 'No designs' ? (
+          <EmptyState
+            icon={Frame}
+            title="No designs yet"
+            primary={onNew ? { label: 'New design', onClick: onNew } : undefined}
+            footer={<WelcomeLink which="design" />}
+          >
+            Designs are sketches of screens and layouts. Make one, then ask Koma to build it.
+          </EmptyState>
+        ) : (
           <Empty>{emptyLabel}</Empty>
-          {emptyLabel === 'No designs' ? <WelcomeLink which="design" /> : null}
-        </>
+        )
       ) : null}
     </>
   )

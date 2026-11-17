@@ -1,8 +1,8 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { File, Pencil, Trash2 } from 'lucide-react'
+import { File, Pencil, Trash2, Workflow } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BrailleSpinner } from '../BrailleSpinner'
-import { AddBtn, Empty, IconBtn, InlineNameInput, WelcomeLink } from './helpers'
+import { AddBtn, Empty, EmptyState, IconBtn, InlineNameInput, NoProjectState, NoWorkspaceState, WelcomeLink } from './helpers'
 import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import { fileKey, isMissingCodingDirError, type FileTreeEntry } from '../../store/coding'
@@ -97,8 +97,10 @@ export function DiagramPanel() {
     }
   }, [menu])
 
-  if (sessionId === null) return <Empty>Open a project to use Diagram</Empty>
-  if (workdir.length === 0) return <Empty>No workspaces configured. Add paths under Settings → Session → workdir.</Empty>
+  if (sessionId === null) return <NoProjectState feature="Diagram" />
+  if (workdir.length === 0) return <NoWorkspaceState />
+
+  const startCreate = () => { setCreating(true); setRenaming(null); setDeleting(null) }
 
   const files: FileTreeEntry[] = (dir?.entries ?? []).filter((e) => !e.isDir && isDiagramPath(e.path))
   const gone = isMissingCodingDirError(dir?.error)
@@ -161,7 +163,7 @@ export function DiagramPanel() {
         open={diagramsOpen}
         minHeight={120}
         onToggle={() => setDiagramsOpen((v) => !v)}
-        action={<AddBtn label="New diagram" onClick={() => { setCreating(true); setRenaming(null); setDeleting(null) }} />}
+        action={<AddBtn label="New diagram" text="New" onClick={startCreate} />}
       >
         {!activeRoot ? (
           <Empty>Select a workspace root</Empty>
@@ -259,10 +261,14 @@ export function DiagramPanel() {
                 )
               })
             ) : !creating ? (
-              <>
-                <Empty>No diagrams</Empty>
-                <WelcomeLink which="diagram" />
-              </>
+              <EmptyState
+                icon={Workflow}
+                title="No diagrams yet"
+                primary={{ label: 'New diagram', onClick: startCreate }}
+                footer={<WelcomeLink which="diagram" />}
+              >
+                Diagrams are drawings of how things connect, like a flowchart. Ask Koma to draw one, or make your own.
+              </EmptyState>
             ) : null}
           </>
         )}
