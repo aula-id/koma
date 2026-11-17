@@ -765,6 +765,39 @@ class SessionStopResult:
             raise ValueError("stop not acknowledged")
         return cls(True, _flag(d, "was_live"))
 
+@dataclass(frozen=True)
+class TranscriptMessage:
+    """One stored message. `id` only grows and is never reused; `truncated` means `text` was cut at 262144 bytes."""
+    id: int
+    role: Role
+    text: str
+    created_at: int
+    truncated: bool
+    @classmethod
+    def from_wire(cls, value: Any) -> TranscriptMessage:
+        d = _object(value, "message")
+        if type(d["id"]) is not int or d["id"] < 1:
+            raise ValueError("invalid id")
+        if d.get("truncated", True) is not True:
+            raise ValueError("truncated must be true when present")
+        return cls(d["id"], Role(d["role"]), _text(d, "text"), _count(d, "created_at"), "truncated" in d)
+
+@dataclass(frozen=True)
+class SessionTranscript:
+    """Messages with an id above `since`, oldest first. Pass `next_since` back as `since` for the next page."""
+    session_id: str
+    live: bool
+    messages: tuple[TranscriptMessage, ...]
+    next_since: int | None
+    @classmethod
+    def from_wire(cls, value: Any) -> SessionTranscript:
+        d = _object(value, "result")
+        next_since = d["next_since"]
+        if next_since is not None and (type(next_since) is not int or next_since < 1):
+            raise ValueError("invalid next_since")
+        return cls(_text(d, "session_id", nonempty=True), _flag(d, "live"),
+                   tuple(TranscriptMessage.from_wire(m) for m in _items(d["messages"], "messages", 500)), next_since)
+
 # Usage
 
 class LedgerState(_OpenEnum):

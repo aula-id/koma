@@ -363,11 +363,12 @@ const CONFIG_METHODS: [&str; 9] = [
 ];
 
 /// The session, usage, skills and room methods, in route-table order.
-const FAMILY_METHODS: [&str; 30] = [
+const FAMILY_METHODS: [&str; 31] = [
     "sessions.list",
     "sessions.rename",
     "sessions.delete",
     "sessions.stop",
+    "sessions.transcript",
     "usage.query",
     "skills.list",
     "skills.get",

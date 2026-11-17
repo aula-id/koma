@@ -190,6 +190,13 @@ pub const ROUTES: &[Route] = &[
         ANY,
         super::host::sessions::handle_stop,
     ),
+    // A read of the archive on disk: no daemon is started or asked.
+    route(
+        "sessions.transcript",
+        Family::Host,
+        ANY,
+        super::host::transcript::handle_transcript,
+    ),
     // The ledger is global, so any binding may read it.
     route("usage.query", Family::Host, ANY, usage::handle_query),
     // Skills run in-process on disk in every binding; no skill IPC is sent.

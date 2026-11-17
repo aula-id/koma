@@ -13,7 +13,7 @@ from .room_types import (AttachResult, AvatarRemoveResult, CloseReason, CloseRes
                          RoomEvent, RoomGapEvent, RoomLineEvent, RoomPage, RoomSpend, RoomStatus, RoomStatusEvent,
                          ReportPage, SendResult, SentResult, ShelfItem, ShelfPage, Team, TeamWriteResult, Trajectory)
 from .types import (Attachment, Hello, SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult,
-                    SkillDetail, SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult,
+                    SessionTranscript, SkillDetail, SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult,
                     UsageReport)
 
 if TYPE_CHECKING:
@@ -274,6 +274,19 @@ class HostCalls:
         """Stop a session's daemon. Every client of it is disconnected; a parked approval is lost."""
         return SessionStopResult.from_wire(await self._call(
             "sessions.stop", {"session_id": _id_param("session_id", session_id)}, mutation=True))
+
+    async def sessions_transcript(self, session_id: str, *, since: int = 0,
+                                  limit: int | None = None) -> SessionTranscript:
+        """The stored messages of a coding session, without starting its daemon. Secrets are scrubbed.
+
+        Pass the last message `id` you saw as `since` to read on; `next_since` is set when more follow.
+        """
+        params: dict[str, Any] = {"session_id": _id_param("session_id", session_id)}
+        if since != 0:
+            params["since"] = _int_in("since", since, 0, 9007199254740991)
+        if limit is not None:
+            params["limit"] = _int_in("limit", limit, 1, 500)
+        return SessionTranscript.from_wire(await self._call("sessions.transcript", params, mutation=False))
 
     async def usage_query(self, *, from_at: int | None = None, to_at: int | None = None,
                           session_id: str | None = None, workdir: str | None = None, group_by: str = "none",

@@ -938,6 +938,7 @@ fn hello_advertises_the_session_methods_and_bounds() {
         "sessions.rename",
         "sessions.delete",
         "sessions.stop",
+        "sessions.transcript",
     ] {
         assert!(methods.contains(&json!(method)), "{method}");
     }
@@ -1107,4 +1108,218 @@ async fn the_real_host_is_unreachable_from_unit_tests() {
     .await
     .unwrap();
     assert_eq!(stopped["was_live"], false);
+}
+
+// ── sessions.transcript ────────────────────────────────────────────────────
+
+const SECRET: &str = "sk-transcript-secret-value";
+
+/// An adapter whose config store holds one provider with `SECRET` as its key.
+fn adapter_with_secret(dir: &TempDir) -> Adapter {
+    use crate::model::app_config::{ApiType, AppConfig, ProviderConn};
+    let config = AppConfig {
+        providers: vec![ProviderConn {
+            uuid: "p-1".into(),
+            name: "p".into(),
+            api_type: ApiType::OpenAiCompatible,
+            endpoint: "http://127.0.0.1:9/v1".into(),
+            api_key: SECRET.into(),
+            ext_id: None,
+        }],
+        ..AppConfig::default()
+    };
+    let key = crate::model::secret_box::key_for_write().unwrap();
+    let bytes = config.to_disk_bytes(&key).unwrap();
+    crate::model::secret_box::write_private(&dir.0.join("config.json"), &bytes).unwrap();
+    let mut adapter = unbound();
+    adapter.config = super::host::config::ConfigStore::at(&dir.0);
+    adapter
+}
+
+async fn transcript(
+    fake: &Arc<Fake>,
+    adapter: &mut Adapter,
+    params: Value,
+) -> Result<Value, RpcError> {
+    super::host::transcript::transcript(fake.clone(), request("sessions.transcript", params), adapter)
+        .await
+}
+
+fn store(dir: &Path, role: crate::dto::chat::Role, text: &str) {
+    crate::model::msglog::append(dir, role, text, None, None).unwrap();
+}
+
+#[tokio::test]
+async fn transcript_reads_a_stopped_session_in_pages_and_scrubs_secrets() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    store(&dir, Role::User, "hello");
+    store(&dir, Role::Assistant, &format!("the key is {SECRET}"));
+    store(&dir, Role::Tool, "ls output");
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+
+    let all = transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap();
+    assert_eq!(all["session_id"], CODING_A);
+    assert_eq!(all["live"], false);
+    assert!(all["next_since"].is_null());
+    let messages = all["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["text"], "hello");
+    assert_eq!(messages[1]["text"], "the key is [redacted]");
+    assert_eq!(messages[2]["role"], "tool");
+    assert!(messages[0].get("truncated").is_none());
+    assert!(!all.to_string().contains(SECRET));
+
+    let first = transcript(&fake, &mut adapter, json!({"session_id": CODING_A, "limit": 2}))
+        .await
+        .unwrap();
+    assert_eq!(first["messages"].as_array().unwrap().len(), 2);
+    let since = first["next_since"].as_i64().unwrap();
+    assert_eq!(since, first["messages"][1]["id"].as_i64().unwrap());
+    let rest = transcript(&fake, &mut adapter, json!({"session_id": CODING_A, "since": since, "limit": 2}))
+        .await
+        .unwrap();
+    assert_eq!(rest["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(rest["messages"][0]["text"], "ls output");
+    assert!(rest["next_since"].is_null());
+}
+
+#[tokio::test]
+async fn transcript_marks_a_live_session_and_starts_and_stops_nothing() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    store(&dir, Role::User, "hi");
+    fake.set_live(CODING_A, false);
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    let result = transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap();
+    assert_eq!(result["live"], true);
+    assert!(fake.stops.lock().unwrap().is_empty());
+    assert!(fake.deletes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn transcript_of_a_session_without_an_archive_is_empty_and_creates_none() {
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    let result = transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap();
+    assert_eq!(result["messages"], json!([]));
+    assert!(result["next_since"].is_null());
+    assert!(!dir.join("messages.sqlite").exists());
+}
+
+#[tokio::test]
+async fn transcript_never_writes_the_archive() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    store(&dir, Role::User, "hi");
+    let before = std::fs::read(dir.join("messages.sqlite")).unwrap();
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(dir.join("messages.sqlite")).unwrap(), before);
+}
+
+#[tokio::test]
+async fn transcript_cuts_a_long_message_at_a_character_boundary() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    let long = "é".repeat(super::host::transcript::MAX_TEXT_BYTES);
+    store(&dir, Role::Tool, &long);
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    let result = transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap();
+    let message = &result["messages"][0];
+    assert_eq!(message["truncated"], true);
+    assert_eq!(
+        message["text"].as_str().unwrap().len(),
+        super::host::transcript::MAX_TEXT_BYTES
+    );
+}
+
+#[tokio::test]
+async fn transcript_page_stops_before_the_byte_bound() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    let big = "x".repeat(super::host::transcript::MAX_TEXT_BYTES);
+    for _ in 0..40 {
+        store(&dir, Role::Tool, &big);
+    }
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    let result = transcript(&fake, &mut adapter, json!({"session_id": CODING_A, "limit": 500}))
+        .await
+        .unwrap();
+    let held = result["messages"].as_array().unwrap().len();
+    assert_eq!(held, super::host::transcript::MAX_PAGE_BYTES / super::host::transcript::MAX_TEXT_BYTES);
+    assert_eq!(
+        result["next_since"].as_i64().unwrap(),
+        result["messages"][held - 1]["id"].as_i64().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn transcript_refuses_bad_params_unknown_sessions_and_rooms() {
+    let fake = Arc::new(Fake::new());
+    fake.add(CODING_A, 100);
+    let room = fake.add_room(CODING_A, 200);
+    let config = TempDir::new();
+    let mut adapter = adapter_with_secret(&config);
+    for params in [
+        json!({}),
+        json!({"session_id": 5}),
+        json!({"session_id": CODING_A, "since": -1}),
+        json!({"session_id": CODING_A, "since": "1"}),
+        json!({"session_id": CODING_A, "limit": 0}),
+        json!({"session_id": CODING_A, "limit": 501}),
+        json!({"session_id": room}),
+    ] {
+        let error = transcript(&fake, &mut adapter, params.clone()).await.unwrap_err();
+        assert_eq!(
+            (error.code, reason(&error)),
+            ("invalid_request", Some("out_of_range")),
+            "{params}"
+        );
+    }
+    for id in [CODING_B, "not-an-id"] {
+        let error = transcript(&fake, &mut adapter, json!({"session_id": id}))
+            .await
+            .unwrap_err();
+        assert_eq!((error.code, reason(&error)), ("not_found", Some("not_found")));
+    }
+}
+
+#[tokio::test]
+async fn transcript_fails_rather_than_skip_scrubbing_when_the_config_is_unreadable() {
+    use crate::dto::chat::Role;
+    let fake = Arc::new(Fake::new());
+    let dir = fake.add(CODING_A, 100);
+    store(&dir, Role::User, "hi");
+    let config = TempDir::new();
+    std::fs::write(config.0.join("config.json"), b"{ not json").unwrap();
+    let mut adapter = unbound();
+    adapter.config = super::host::config::ConfigStore::at(&config.0);
+    let error = transcript(&fake, &mut adapter, json!({"session_id": CODING_A}))
+        .await
+        .unwrap_err();
+    assert_eq!(reason(&error), Some("config_unreadable"));
 }
