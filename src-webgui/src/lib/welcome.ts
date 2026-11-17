@@ -17,3 +17,13 @@ const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 export function recentWelcomeFiles(paths: readonly string[], limit = 8): string[] {
   return [...paths].sort((a, b) => baseName(a).localeCompare(baseName(b))).slice(0, limit)
 }
+
+/** Kind of the focused tab in the focused editor group, if any. */
+export function activeTabKind(ui: { tabs: readonly Tab[]; activeTabId: string }): Tab['kind'] | undefined {
+  return ui.tabs.find((t) => t.id === ui.activeTabId)?.kind
+}
+
+/** True only while the focused tab is an editor of this kind (not merely open). */
+export function isEditorTabActive(kind: 'diagram' | 'design', ui: { tabs: readonly Tab[]; activeTabId: string }): boolean {
+  return activeTabKind(ui) === kind
+}

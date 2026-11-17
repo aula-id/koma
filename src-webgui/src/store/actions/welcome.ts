@@ -1,4 +1,4 @@
-import { shouldOpenWelcome, welcomeTabId, type WelcomeWhich } from '../../lib/welcome'
+import { activeTabKind, shouldOpenWelcome, welcomeTabId, type WelcomeWhich } from '../../lib/welcome'
 import type { StoreGet, StoreSet } from '../api'
 import { normalizeGroups } from '../editorGroups'
 import type { KomaState } from '../state'
@@ -15,8 +15,7 @@ export function welcomeActions(set: StoreSet, get: StoreGet): Pick<KomaState, 'o
       })
     },
     maybeOpenWelcomeTab: (which) => {
-      const { tabs, activeTabId } = get().ui
-      if (shouldOpenWelcome(which, tabs.find((t) => t.id === activeTabId)?.kind)) get().openWelcomeTab(which)
+      if (shouldOpenWelcome(which, activeTabKind(get().ui))) get().openWelcomeTab(which)
     },
   }
 }

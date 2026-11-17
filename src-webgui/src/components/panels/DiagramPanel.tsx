@@ -10,6 +10,7 @@ import { SHAPE_MIME, diagramFileName, isDiagramPath } from '../../lib/diagram'
 import { addDiagramFileToChat, copyDiagramFileMermaid } from '../../lib/diagramChat'
 import { DiagramRefMenuItems } from '../DiagramVisual'
 import { DIAGRAM_PALETTE, ShapePreview, type DiagramPaletteEntry } from '../diagram/DiagramShapePreview'
+import { isEditorTabActive } from '../../lib/welcome'
 import { pathBasename as rootLabel } from '../../lib/pathDisplay'
 
 const PALETTE_GROUPS = ['Basic', 'Flowchart', 'Containers', 'Database'] as const
@@ -52,6 +53,7 @@ export function DiagramPanel() {
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
+  const diagramActive = useKoma((s) => isEditorTabActive('diagram', s.ui))
 
   const [shapesOpen, setShapesOpen] = useState(true)
   const [diagramsOpen, setDiagramsOpen] = useState(true)
@@ -144,6 +146,7 @@ export function DiagramPanel() {
           />
         </div>
       </div>
+      {diagramActive && (
       <AccordionSection title="Shapes" open={shapesOpen} onToggle={() => setShapesOpen((v) => !v)} fill={false} shrink>
         <div className="flex flex-col gap-1 px-2 py-1.5">
           {PALETTE_GROUPS.map((group) => (
@@ -158,6 +161,7 @@ export function DiagramPanel() {
           ))}
         </div>
       </AccordionSection>
+      )}
       <AccordionSection
         title="Diagrams"
         open={diagramsOpen}

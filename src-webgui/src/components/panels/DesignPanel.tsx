@@ -27,6 +27,7 @@ import {
   type DesignToken,
   type DesignTokenKind,
 } from '../../lib/design'
+import { isEditorTabActive } from '../../lib/welcome'
 import { resolveDesignPanelTab } from '../../lib/designPanelTab'
 import { emitDesignLayer } from '../../lib/designUi'
 import { importFigFile } from '../../lib/design/importFigFile'
@@ -263,6 +264,7 @@ export function DesignPanel() {
   const renameCodingItem = useKoma((s) => s.renameCodingItem)
   const deleteCodingItem = useKoma((s) => s.deleteCodingItem)
   const req = useKoma((s) => s.req)
+  const designActive = useKoma((s) => isEditorTabActive('design', s.ui))
 
   const [panel, setPanel] = useState<'file' | 'assets'>('file')
   const [filesOpen, setFilesOpen] = useState(false)
@@ -494,6 +496,7 @@ export function DesignPanel() {
               />
             </div>
           </AccordionSection>
+          {designActive && (
           <AccordionSection title="Layers" open={layersOpen} onToggle={() => setLayersOpen((value) => !value)} fill>
             {open?.loading ? (
               <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-koma-dim">
@@ -516,6 +519,7 @@ export function DesignPanel() {
               <p className="px-3 text-[12px] text-koma-dim">Open a design to see its layers</p>
             )}
           </AccordionSection>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">

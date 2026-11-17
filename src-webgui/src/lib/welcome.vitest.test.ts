@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { recentWelcomeFiles, shouldOpenWelcome } from './welcome'
+import { isEditorTabActive, recentWelcomeFiles, shouldOpenWelcome } from './welcome'
+import type { Tab } from '../store/types/tabs'
 
 describe('shouldOpenWelcome', () => {
   it('opens whatever the active tab is, unless it is an editor of the same kind', () => {
@@ -21,5 +22,22 @@ describe('recentWelcomeFiles', () => {
   })
   it('returns an empty list for no files', () => {
     expect(recentWelcomeFiles([])).toEqual([])
+  })
+})
+
+describe('isEditorTabActive', () => {
+  const diagram = { id: 'd1', kind: 'diagram', root: '/r', path: 'a.diagram' } as unknown as Tab
+  const design = { id: 'g1', kind: 'design', root: '/r', path: 'a.design' } as unknown as Tab
+  const chat = { id: 'chat', kind: 'chat' } as unknown as Tab
+  it('is false with no tabs or an unknown active id', () => {
+    expect(isEditorTabActive('diagram', { tabs: [], activeTabId: 'chat' })).toBe(false)
+  })
+  it('is false when an editor of that kind is open but another tab is active', () => {
+    expect(isEditorTabActive('diagram', { tabs: [chat, diagram, design], activeTabId: 'chat' })).toBe(false)
+    expect(isEditorTabActive('design', { tabs: [chat, diagram, design], activeTabId: 'd1' })).toBe(false)
+  })
+  it('is true when the active tab is that kind', () => {
+    expect(isEditorTabActive('diagram', { tabs: [chat, diagram], activeTabId: 'd1' })).toBe(true)
+    expect(isEditorTabActive('design', { tabs: [chat, design], activeTabId: 'g1' })).toBe(true)
   })
 })
