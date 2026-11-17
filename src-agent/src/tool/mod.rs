@@ -832,11 +832,11 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let candidate = partial_canonicalize(as_path);
+        let candidate = partial_canon_checked(as_path, rel)?;
         // Historical exemption: absolute paths under process-global scratch.
         // SDLC execute/integrate disables this so mission binding cannot be bypassed.
         if allow_scratch {
-            let scratch = partial_canonicalize(&crate::model::store::scratch_root());
+            let scratch = partial_canon_lossy(&crate::model::store::scratch_root());
             if candidate.starts_with(&scratch) {
                 return Ok(candidate);
             }
@@ -868,7 +868,8 @@ pub fn resolve_in(workspaces: &[PathBuf], rel: &str, allow_scratch: bool) -> Res
         bare
     };
     let joined = ws.join(bare);
-    let candidate = partial_canonicalize(&joined);
+    let candidate = winpath::partial_canonical(&joined)
+        .map_err(|_| anyhow::anyhow!("{}", outside_workspace_message(bare, ws_idx)))?;
     if !candidate.starts_with(&ws) {
         bail!("{}", outside_workspace_message(bare, ws_idx));
     }
@@ -903,48 +904,23 @@ pub fn resolve_read(
     let rel = normalized.as_str();
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
-        let scratch = partial_canonicalize(&crate::model::store::scratch_root());
-        let candidate = partial_canonicalize(as_path);
+        let scratch = partial_canon_lossy(&crate::model::store::scratch_root());
+        let candidate = partial_canon_checked(as_path, rel)?;
         if candidate.starts_with(&scratch) {
             return resolve(workspaces, rel);
         }
         if let Some(session_dir) = session_dir {
-            let normalized = partial_canonicalize(as_path);
             let session_canon = canonicalize_or_verbatim(session_dir);
-            if normalized.starts_with(&session_canon) {
-                return Ok(normalized);
+            if candidate.starts_with(&session_canon) {
+                return Ok(candidate);
             }
         }
         for skill_dir in active_skill_dirs {
-            let normalized = partial_canonicalize(as_path);
             let skill_canon = canonicalize_or_verbatim(skill_dir);
-            if normalized.starts_with(&skill_canon) {
-                return Ok(normalized);
+            if candidate.starts_with(&skill_canon) {
+                return Ok(candidate);
             }
         }
-        let candidate = match winpath::canonical(as_path) {
-            Ok(p) => p,
-            Err(_) => {
-                let mut existing = as_path;
-                let mut tail: Vec<std::ffi::OsString> = Vec::new();
-                while !existing.exists() {
-                    match existing.file_name() {
-                        Some(n) => tail.push(n.to_os_string()),
-                        None => break,
-                    }
-                    match existing.parent() {
-                        Some(p) => existing = p,
-                        None => break,
-                    }
-                }
-                let mut base =
-                    winpath::canonical(existing).unwrap_or_else(|_| existing.to_path_buf());
-                for seg in tail.iter().rev() {
-                    base.push(seg);
-                }
-                base
-            }
-        };
         for ws in workspaces {
             let ws_canon = winpath::canonical(ws).unwrap_or_else(|_| ws.to_path_buf());
             if candidate.starts_with(&ws_canon) {
@@ -956,35 +932,21 @@ pub fn resolve_read(
     resolve(workspaces, rel)
 }
 
+/// Partial-canonicalize an absolute tool path; a `..` through a missing
+/// directory is an escape attempt and fails on every platform.
+fn partial_canon_checked(p: &Path, shown: &str) -> Result<PathBuf> {
+    winpath::partial_canonical(p)
+        .map_err(|_| anyhow::anyhow!("{}", outside_workspace_message(shown, 0)))
+}
+
+/// Partial-canonicalize a trusted root (never contains a missing `..`).
+fn partial_canon_lossy(p: &Path) -> PathBuf {
+    winpath::partial_canonical(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
 /// Canonicalize a path, falling back to verbatim if the OS can't resolve it.
 fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
     winpath::canonical(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
-/// Partial-canonicalize a path.
-fn partial_canonicalize(as_path: &Path) -> PathBuf {
-    match winpath::canonical(as_path) {
-        Ok(p) => p,
-        Err(_) => {
-            let mut existing = as_path;
-            let mut tail: Vec<std::ffi::OsString> = Vec::new();
-            while !existing.exists() {
-                match existing.file_name() {
-                    Some(n) => tail.push(n.to_os_string()),
-                    None => break,
-                }
-                match existing.parent() {
-                    Some(p) => existing = p,
-                    None => break,
-                }
-            }
-            let mut base = winpath::canonical(existing).unwrap_or_else(|_| existing.to_path_buf());
-            for seg in tail.iter().rev() {
-                base.push(seg);
-            }
-            base
-        }
-    }
 }
 
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`].

@@ -469,3 +469,28 @@ fn model_display_path_is_workspace_relative() {
         "src/a.rs"
     );
 }
+
+#[test]
+fn dotdot_through_missing_dir_is_rejected_everywhere() {
+    let base = std::env::temp_dir().join(format!("koma-dotdot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join("sub")).unwrap();
+    let wss = vec![ws.clone()];
+    let ws_canon = winpath::canonical(&ws).unwrap();
+
+    assert!(resolve_in(&wss, "newdir/../../escape.txt", false).is_err());
+    assert!(!ws.join("newdir").exists());
+    assert!(!base.join("escape.txt").exists());
+    let abs_bad = format!("{}/newdir/../../x", ws.display());
+    assert!(resolve_in(&wss, &abs_bad, false).is_err());
+    assert!(resolve_read(&wss, &abs_bad, None, &[]).is_err());
+    assert!(!ws.join("newdir").exists());
+
+    let ok = resolve_in(&wss, "sub/../ok.txt", false).unwrap();
+    assert!(ok.starts_with(&ws_canon));
+    let abs_ok = format!("{}/sub/../ok.txt", ws.display());
+    let ok = resolve_read(&wss, &abs_ok, None, &[]).unwrap();
+    assert!(ok.starts_with(&ws_canon));
+    let _ = std::fs::remove_dir_all(&base);
+}

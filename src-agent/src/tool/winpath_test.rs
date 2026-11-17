@@ -159,3 +159,70 @@ fn display_path_is_identity_off_windows() {
     let tmp = std::env::temp_dir();
     assert_eq!(canonical(&tmp).unwrap(), tmp.canonicalize().unwrap());
 }
+
+#[test]
+fn split_existing_rejects_parent_in_missing_tail() {
+    let ex = |q: &Path| q == Path::new("/ws");
+    assert_eq!(
+        split_existing(Path::new("/ws/newdir/../../x"), ex),
+        Err(PartialPathError::ParentInTail)
+    );
+}
+
+#[test]
+fn split_existing_allows_parent_in_existing_part() {
+    let ex = |q: &Path| {
+        q == Path::new("/ws") || q == Path::new("/ws/sub") || q == Path::new("/ws/sub/..")
+    };
+    let (e, tail) = split_existing(Path::new("/ws/sub/../new.txt"), ex).unwrap();
+    assert_eq!(e, PathBuf::from("/ws/sub/.."));
+    assert_eq!(tail, vec![OsString::from("new.txt")]);
+}
+
+#[test]
+fn split_existing_skips_curdir() {
+    let ex = |q: &Path| q == Path::new("/ws");
+    let (e, tail) = split_existing(Path::new("/ws/a/./b"), ex).unwrap();
+    assert_eq!(e, PathBuf::from("/ws"));
+    assert_eq!(tail, vec![OsString::from("b"), OsString::from("a")]);
+}
+
+#[test]
+fn safe_single_component_all_platforms() {
+    for w in [false, true] {
+        assert_eq!(safe_single_component("wt-1", w), Ok("wt-1"));
+        assert_eq!(safe_single_component("COM10", w), Ok("COM10"));
+        assert_eq!(safe_single_component("console", w), Ok("console"));
+        for bad in ["../x", "a/b", "a\\b", "", ".", "..", "a\0b"] {
+            assert!(
+                safe_single_component(bad, w).is_err(),
+                "{bad:?} windows={w}"
+            );
+        }
+    }
+}
+
+#[test]
+fn safe_single_component_windows_only_rules() {
+    for name in [
+        "C:evil", "a:stream", "CON", "con.txt", "com1", "name.", "name ", "Lpt9", "nul",
+    ] {
+        assert!(safe_single_component(name, true).is_err(), "{name:?}");
+        assert_eq!(safe_single_component(name, false), Ok(name), "{name:?}");
+    }
+}
+
+#[test]
+fn reserved_stems() {
+    assert!(is_windows_reserved_stem("AUX.log"));
+    assert!(is_windows_reserved_stem("lpt1"));
+    assert!(!is_windows_reserved_stem("COM0"));
+    assert!(!is_windows_reserved_stem("COM10"));
+    assert!(!is_windows_reserved_stem("conx"));
+}
+
+#[test]
+fn to_slash_is_windows_only() {
+    assert_eq!(to_slash("a\\b", false), "a\\b");
+    assert_eq!(to_slash("a\\b", true), "a/b");
+}

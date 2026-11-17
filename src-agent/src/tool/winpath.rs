@@ -3,7 +3,8 @@
 //! [`canonical`] touch the filesystem.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 /// Longest plain path (in chars) that legacy Win32 APIs accept without the verbatim prefix.
 const MAX_PLAIN_PATH: usize = 259;
@@ -220,6 +221,111 @@ pub(crate) fn display_path(p: &Path) -> PathBuf {
 /// `Path::canonicalize` without the Windows verbatim prefix.
 pub(crate) fn canonical(p: &Path) -> std::io::Result<PathBuf> {
     p.canonicalize().map(|c| display_path(&c))
+}
+
+/// A `..` sits in the part of a path that does not exist yet.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum PartialPathError {
+    ParentInTail,
+}
+
+/// Split `p` into its nearest existing ancestor and the missing tail (returned
+/// in reverse order, last component first). `..` is fine in the existing part
+/// (the OS resolves it) but any `..` in the missing tail is rejected, since the
+/// OS would resolve it later and could leave the workspace. Platform neutral.
+pub(crate) fn split_existing(
+    p: &Path,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<(PathBuf, Vec<OsString>), PartialPathError> {
+    let mut cur = p;
+    let mut tail: Vec<OsString> = Vec::new();
+    loop {
+        if exists(cur) {
+            break;
+        }
+        match cur.components().next_back() {
+            Some(Component::Normal(n)) => tail.push(n.to_os_string()),
+            Some(Component::CurDir) => {}
+            Some(Component::ParentDir) => return Err(PartialPathError::ParentInTail),
+            _ => break,
+        }
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => break,
+        }
+    }
+    Ok((cur.to_path_buf(), tail))
+}
+
+/// Canonicalize `p`, or its nearest existing ancestor plus the missing tail.
+/// Errors when the missing tail contains `..`.
+pub(crate) fn partial_canonical(p: &Path) -> std::io::Result<PathBuf> {
+    if let Ok(c) = canonical(p) {
+        return Ok(c);
+    }
+    let (existing, tail) = split_existing(p, |q| q.exists()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path escapes through '..' in a missing directory",
+        )
+    })?;
+    let mut base = canonical(&existing).unwrap_or(existing);
+    for seg in tail.iter().rev() {
+        base.push(seg);
+    }
+    Ok(base)
+}
+
+/// Windows device names (`CON`, `NUL`, `COM1`..`COM9`, `LPT1`..`LPT9`, ...) by
+/// the text before the first `.`, case-insensitive.
+pub(crate) fn is_windows_reserved_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || matches!(
+            stem.as_bytes(),
+            [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] if (b'1'..=b'9').contains(d)
+        )
+}
+
+/// A tool-supplied name that must be exactly one safe path component. Empty,
+/// NUL, separators (either kind), `.` and `..` are rejected everywhere. Only
+/// with `windows` set: `:` (drive-relative, alternate data stream), a trailing
+/// `.` or space, and reserved device names.
+pub(crate) fn safe_single_component(name: &str, windows: bool) -> Result<&str, &'static str> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err("name must be a single non-empty path component");
+    }
+    if name.contains(['\0', '/', '\\']) {
+        return Err("name must not contain separators or NUL");
+    }
+    let mut comps = Path::new(name).components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err("name must be a single path component");
+    }
+    if windows {
+        if name.contains(':') {
+            return Err("name must not contain ':'");
+        }
+        if name.ends_with(['.', ' ']) {
+            return Err("name must not end with '.' or space");
+        }
+        if is_windows_reserved_stem(name) {
+            return Err("name is a reserved device name");
+        }
+    }
+    Ok(name)
+}
+
+/// `\` -> `/` only when `windows`; POSIX file names may contain a backslash.
+pub(crate) fn to_slash(s: &str, windows: bool) -> String {
+    if windows {
+        s.replace('\\', "/")
+    } else {
+        s.to_string()
+    }
 }
 
 #[cfg(test)]
