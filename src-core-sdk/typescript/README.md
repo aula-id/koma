@@ -108,6 +108,8 @@ await host.deleteSession({ session_id });
 
 Listings never write lock files. `renameSession` of another live coding session fails with `reason: 'live'`; rename it from an adapter bound to it, or stop it first. `deleteSession` refuses the session this adapter holds (`bound_self`), a live one (`live`) and a locked one (`session_locked`). A failure after the removal started is a `DeliveryUnknownError` with `reason: 'partial_delete'` and `written: true`; repeating the call is valid. `stopSession` of an id that is not running answers `was_live: false`.
 
+`readTranscript({ session_id, since?, limit? })` returns the stored messages of a coding session (`id`, `role`, `text`, `created_at`, and `truncated` when `text` was cut), oldest first, with secrets scrubbed. It reads from disk and starts no daemon, so a session that is not live reads the same as a running one (`live` says which). Pass the last `id` you saw as `since`; `next_since` is set when more follow. A room is refused with `out_of_range`: use `history`.
+
 `create({ cwd, name })` names the session. It needs the adapter feature `create.name`; against an adapter without it the call fails locally with `unsupported_feature` before anything is sent. The name is trimmed and must be 1 to 200 characters without control characters. If the rename fails the session still exists, `session.warnings` holds `rename_failed`, and `session.sessionInfo.name` is the session id. See `examples/sessions.ts`.
 
 ## Usage

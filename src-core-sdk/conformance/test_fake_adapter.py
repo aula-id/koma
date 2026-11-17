@@ -15,7 +15,8 @@ V1 = ['create', 'resume', 'state', 'submit', 'enqueue', 'interrupt', 'interrupt_
       'configure', 'detach']
 CONFIG = ['config.get', 'config.providers.delete', 'config.models.delete', 'config.roles.unassign',
           'config.tool_policy.set', 'config.effort.get', 'config.effort.set', 'config.limits.get', 'config.limits.set']
-SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop']
+SESSIONS = ['sessions.info', 'sessions.list', 'sessions.rename', 'sessions.delete', 'sessions.stop',
+            'sessions.transcript']
 SKILLS = ['skills.list', 'skills.get', 'skills.read_file', 'skills.install', 'skills.remove', 'skills.create',
           'skills.update']
 ROOM = ['room.list', 'room.open', 'room.attach', 'room.close', 'room.send', 'room.interrupt', 'room.control',
@@ -501,6 +502,36 @@ class Conformance(unittest.TestCase):
         self.assertNotIn('sess-coding-b', ids)
         self.assertFalse(next(r for r in replies['18']['result']['sessions'] if r['session_id'] == 'sess-coding-a')['live'])
         self.assertEqual(result.returncode, 0)
+
+    def test_sessions_transcript(self):
+        _, replies = self.replies('sessions', [
+            call(1, 'sessions.transcript', session_id='sess-coding-b'),
+            call(2, 'sessions.transcript', session_id='sess-coding-b', limit=2),
+            call(3, 'sessions.transcript', session_id='sess-coding-b', since=2, limit=2),
+            call(4, 'sessions.transcript', session_id='sess-coding-a'),
+            call(5, 'sessions.transcript', session_id='sess-coding-c'),
+            call(6, 'sessions.transcript', session_id=ROOM_A),
+            call(7, 'sessions.transcript', session_id='missing'),
+            call(8, 'sessions.transcript', session_id='sess-coding-b', since=-1),
+            call(9, 'sessions.transcript', session_id='sess-coding-b', limit=501),
+            call(10, 'sessions.transcript', session_id='sess-busy'),
+            call(11, 'sessions.transcript')])
+        stopped = replies['1']['result']
+        self.assertEqual((stopped['session_id'], stopped['live'], stopped['next_since']), ('sess-coding-b', False, None))
+        self.assertEqual([m['id'] for m in stopped['messages']], [1, 2, 3, 4])
+        self.assertEqual(stopped['messages'][1]['text'], 'key = [redacted]')
+        self.assertNotIn('truncated', stopped['messages'][0])
+        self.assertIs(stopped['messages'][2]['truncated'], True)
+        first = replies['2']['result']
+        self.assertEqual(([m['id'] for m in first['messages']], first['next_since']), ([1, 2], 2))
+        rest = replies['3']['result']
+        self.assertEqual(([m['id'] for m in rest['messages']], rest['next_since']), ([3, 4], None))
+        self.assertTrue(replies['4']['result']['live'])
+        self.assertEqual(replies['5']['result']['messages'], [])
+        for n in ('6', '8', '9', '11'):
+            self.assertReason(replies[n], 'invalid_request', 'out_of_range')
+        self.assertReason(replies['7'], 'not_found', 'not_found')
+        self.assertReason(replies['10'], 'unavailable', 'sqlite_busy')
 
     def test_sessions_bound_self(self):
         _, replies = self.replies('sessions', [

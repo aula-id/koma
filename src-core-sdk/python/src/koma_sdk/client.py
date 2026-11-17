@@ -19,7 +19,8 @@ from .types import (ApprovalResult, Attachment, Binary, DetachResult, Hello, Pol
                     ReplacementResult, State, StateEvent, Turn, TurnResult, TurnStatus, Event, OutputAppendEvent, TurnEvent, ApprovalPolicy,
                     ConfigView, EffortOptions, EffortResult, Limits, ModelDeleteResult, ProviderDeleteResult,
                     PublicRole, RoleUnassignResult, ToolPolicyResult, SessionInfo, CreateWarning, _create_warnings,
-                    SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SkillDetail,
+                    SessionDeleteResult, SessionPage, SessionRenameResult, SessionStopResult, SessionTranscript,
+                    SkillDetail,
                     SkillFile, SkillPage, SkillRemoveResult, SkillUpdateResult, SkillWriteResult, UsageReport)
 
 
@@ -283,6 +284,7 @@ _RESULTS: dict[str, Any] = {
     "sessions.rename": SessionRenameResult.from_wire,
     "sessions.delete": SessionDeleteResult.from_wire,
     "sessions.stop": SessionStopResult.from_wire,
+    "sessions.transcript": SessionTranscript.from_wire,
     "usage.query": UsageReport.from_wire,
     "skills.list": SkillPage.from_wire,
     "skills.get": SkillDetail.from_wire,

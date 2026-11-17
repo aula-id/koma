@@ -319,7 +319,7 @@ hello may carry four optional keys after the v1 keys:
  "methods":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach",
             "config.get","config.providers.delete","config.models.delete","config.roles.unassign",
             "config.tool_policy.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
-            "sessions.list","sessions.rename","sessions.delete","sessions.stop","usage.query",
+            "sessions.list","sessions.rename","sessions.delete","sessions.stop","sessions.transcript","usage.query",
             "skills.list","skills.get","skills.read_file","skills.install","skills.remove","skills.create","skills.update"],
  "features":["errors.reason","state.session_info","create.name","config.lock"],
  "events":["state","output_append","turn"],
@@ -464,7 +464,7 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `wrong_binding` | `invalid_state` | not_sent | any (E1, E2) | the call is not allowed in this binding |
 | `already_bound` | `invalid_state` | not_sent | binders (E3) | a binding is held |
 | `peer_unsupported` | `invalid_state` | not_sent | calls that need the daemon | the daemon lacks the needed feature |
-| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.tool_policy.set` `deny` entry that is empty, longer than 200 characters, or holds whitespace, a comma or a control character, or a `deny` list of more than 256 entries |
+| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a `sessions.transcript` of a room; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.tool_policy.set` `deny` entry that is empty, longer than 200 characters, or holds whitespace, a comma or a control character, or a `deny` list of more than 256 entries |
 | `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.tool_policy.set`, `skills.update` | none of the required alternatives was given |
 | `conflicting_params` | `invalid_request` | not_sent | `config.roles.unassign`, `skills.install` | params that exclude each other were combined (`if_revision` with session scope; both or neither of `data_b64` and `path`) |
 | `bad_cursor` | `invalid_request` | not_sent | `sessions.list`, `skills.list` | the cursor does not decode |
@@ -488,9 +488,9 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `read_only` | `invalid_state` | not_sent | skill writes | the tier is not editable |
 | `unsafe_yaml` | `invalid_state` | not_sent | `skills.update` | the skill's frontmatter cannot be rewritten safely |
 | `lock_timeout` | `unavailable` | not_sent | config writes | the SDK config lock was not acquired in time |
-| `config_unreadable` | `unavailable` | not_sent | `config.*` | the config file is corrupt or unreadable; it is left untouched |
+| `config_unreadable` | `unavailable` | not_sent | `config.*`, `sessions.transcript` | the config file is corrupt or unreadable; it is left untouched |
 | `save_failed` | `unavailable` | not_sent | config writes in the adapter | the save failed and the file is verified unchanged |
-| `sqlite_busy` | `unavailable` | not_sent | `sessions.rename`, `sessions.list` | the session registry was busy |
+| `sqlite_busy` | `unavailable` | not_sent | `sessions.rename`, `sessions.list`, `sessions.transcript` | the session registry, or the session's message archive, was busy |
 | `query_timeout` | `unavailable` | not_sent | `usage.query` | the 2 second deadline passed |
 | `frame_limit` | `unavailable` | not_sent | reads | the result would exceed the frame |
 | `io_error` | `unavailable` | not_sent | reads and pre-write steps | a file or database read failed, the bound session connection was already lost, or the daemon answered a read with an unexpected reply |
@@ -909,6 +909,39 @@ Shapes used here are defined under Session info and Config methods.
   stop it from another adapter), `still_running` (`unknown`: the daemon is
   still alive afterwards).
 * Idempotency: idempotent.
+
+### `sessions.transcript`
+
+```
+TranscriptMessage = {id: int, role: "system"|"user"|"assistant"|"tool", text: string,
+                     created_at: int, truncated?: true}
+```
+
+* Binding: any.
+* Params: `{session_id: string(1..64), since?: int >= 0 = 0, limit?: 1..500 = 100}`.
+* Result: `{session_id: string, live: bool, messages: [TranscriptMessage], next_since: int|null}`.
+* Reads the session's stored messages, oldest first, those with `id` above
+  `since`. `id` is the position in the session's append-only archive: it only
+  grows, it is never reused, and it is stable across calls, so a client keeps
+  the last `id` it saw and passes it back as `since`. The archive is the full
+  history, not the compacted working context, and holds the text of each
+  message and tool result as stored, not the tool call arguments.
+* The read is in process. It starts no daemon and sends nothing to one, so a
+  session that is not live reads the same as a running one; `live` says
+  whether a daemon is running now, and a live session may have newer messages
+  by the next call. It never creates, migrates or writes the archive; a
+  session with no archive yet gives no messages.
+* Secrets are scrubbed: every configured secret value and the userinfo of
+  every URL in `text` become `[redacted]` (see Secrets). The call fails with
+  `config_unreadable` rather than return text it could not scrub.
+* `text` is cut at 262144 bytes, at a character boundary, and the message
+  carries `truncated:true`. A page also ends before its text passes 8 MiB,
+  but always holds at least one message. `next_since` is the `id` of the last
+  message of the page when more messages follow, else `null`.
+* A room is not read here: `out_of_range`; use `room.history`. An id that
+  names no session is `not_found`.
+* Errors: `out_of_range`, `not_found`, `config_unreadable`, `sqlite_busy`, `io_error`.
+* Idempotency: read.
 
 ## Usage methods
 
@@ -1689,6 +1722,7 @@ with `reason:"frame_limit"`. New mutation results are bounded by construction
 1000-path companion list), so a committed mutation never loses its result.
 
 Every new list is paged or capped. `sessions.list`, `skills.list`,
+`sessions.transcript` (by `since`, the message `id`),
 `room.list`, `room.shelf.list` and `room.reports` are paged by `cursor`, and
 `room.history` by `line_seq`; `RoomStatus.events` is the newest 60 and
 `AttachResult.tail` the newest `tail` lines; `usage.query` groups are capped by `limit` (`groups_truncated`) and
