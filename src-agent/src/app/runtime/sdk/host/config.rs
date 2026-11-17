@@ -315,6 +315,8 @@ pub enum Change {
     DeleteProvider(String),
     DeleteModel(String),
     UnassignRole(ModelRole),
+    /// Replace `tool_policy.deny`; the patterns are already validated.
+    SetToolDeny(Vec<String>),
 }
 
 /// What a write did, or would do on a dry run.
@@ -323,6 +325,10 @@ pub enum Effect {
     Removed(Removal),
     /// The entry that held the role, or `None` when nobody did.
     Released(Option<String>),
+    /// Whether the deny list differed from the one stored.
+    ToolDeny {
+        changed: bool,
+    },
 }
 
 impl Change {
@@ -348,6 +354,11 @@ impl Change {
             Change::UnassignRole(role) => {
                 Ok(Effect::Released(configure::unassign_role(config, *role)))
             }
+            Change::SetToolDeny(deny) => {
+                let changed = config.tool_policy.deny != *deny;
+                config.tool_policy.deny = deny.clone();
+                Ok(Effect::ToolDeny { changed })
+            }
         }
     }
 
@@ -366,6 +377,7 @@ impl Change {
                 .models
                 .iter()
                 .any(|m| m.effective_roles().contains(role)),
+            (Change::SetToolDeny(deny), _) => config.tool_policy.deny == *deny,
             _ => false,
         }
     }
@@ -442,7 +454,10 @@ pub fn commit(
         after,
         effect,
     } = prepared;
-    if matches!(effect, Effect::Released(None)) {
+    if matches!(
+        effect,
+        Effect::Released(None) | Effect::ToolDeny { changed: false }
+    ) {
         return Ok(Committed {
             lock,
             effect,
@@ -663,6 +678,9 @@ pub fn handle_models_delete(r: Request, adapter: &mut Adapter) -> HandlerFuture<
 pub fn handle_roles_unassign(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(roles_unassign(r.params, adapter))
 }
+pub fn handle_tool_policy_set(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
+    Box::pin(tool_policy_set(r.params, adapter))
+}
 pub fn handle_effort_get(r: Request, adapter: &mut Adapter) -> HandlerFuture<'_> {
     Box::pin(effort_get(r.params, adapter))
 }
@@ -793,11 +811,54 @@ async fn roles_unassign(params: Value, adapter: &mut Adapter) -> Result<Value, R
         write(adapter, Change::UnassignRole(role), if_revision, false).await?;
     let previous = match effect {
         Effect::Released(previous) => previous,
-        Effect::Removed(_) => None,
+        Effect::Removed(_) | Effect::ToolDeny { .. } => None,
     };
     let result = json!({
         "changed": previous.is_some(),
         "previous_model_uuid": previous,
+        "config": to_value(&view)?,
+        "propagation": to_value(&propagation)?,
+    });
+    Ok(with_session_info(result, adapter))
+}
+
+/// The `deny` param: tool names and globs, as a list. An empty list clears it.
+fn tool_deny_param(map: &Map<String, Value>) -> Result<Vec<String>, RpcError> {
+    let items = match map.get("deny") {
+        None => return Err(RpcError::reason(Reason::MissingParams, "deny is required")),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(out_of_range("deny must be a list of tool names or globs")),
+    };
+    let mut patterns = Vec::with_capacity(items.len());
+    for item in items {
+        patterns.push(
+            item.as_str()
+                .ok_or_else(|| out_of_range("every deny entry must be a string"))?
+                .to_string(),
+        );
+    }
+    crate::tool::policy::validate(&patterns).map_err(out_of_range)
+}
+
+/// `config.tool_policy.set`: replace the hard tool deny list. Only that key
+/// changes, under the SDK lock on a fresh read of the file. Daemons read the
+/// list from `config.json` on every tool call, so the change holds for running
+/// sessions and rooms as soon as the write lands.
+async fn tool_policy_set(params: Value, adapter: &mut Adapter) -> Result<Value, RpcError> {
+    let map = object(params)?;
+    let deny = tool_deny_param(&map)?;
+    let if_revision = revision_param(&map)?;
+    let (effect, view, propagation) = write(
+        adapter,
+        Change::SetToolDeny(deny.clone()),
+        if_revision,
+        false,
+    )
+    .await?;
+    let changed = matches!(effect, Effect::ToolDeny { changed: true });
+    let result = json!({
+        "changed": changed,
+        "deny": deny,
         "config": to_value(&view)?,
         "propagation": to_value(&propagation)?,
     });
@@ -934,10 +995,10 @@ async fn daemon_write(
             uuid: uuid.clone(),
             scope: "global".into(),
         },
-        Change::UnassignRole(_) => {
+        Change::UnassignRole(_) | Change::SetToolDeny(_) => {
             return Err(RpcError::new(
                 "internal",
-                "role release has no daemon request",
+                "this change has no daemon request",
             ))
         }
     };

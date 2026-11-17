@@ -553,6 +553,107 @@ async fn endpoint_userinfo_and_query_are_stripped() {
     assert_eq!(view["roles"][0]["provider_name"], "local");
 }
 
+// ── config.tool_policy.set ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tool_policy_set_replaces_only_that_key_and_is_idempotent() {
+    let (dir, store) = store_with_fixture();
+    let mut adapter = unbound(&store);
+    let before = store.read().unwrap();
+    assert!(before.config.tool_policy.deny.is_empty());
+
+    let first = call(
+        &mut adapter,
+        "config.tool_policy.set",
+        json!({"deny":["web_fetch","computer_*"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["deny"], json!(["web_fetch", "computer_*"]));
+    assert_eq!(first["config"]["view"], "global");
+    assert_no_secret(&first.to_string());
+    let after = store.read().unwrap();
+    assert_eq!(after.config.tool_policy.deny, vec!["web_fetch", "computer_*"]);
+    assert_eq!(after.config.providers.len(), before.config.providers.len());
+    assert_eq!(after.config.providers[0].api_key, PLANTED_KEY);
+
+    let bytes = dir.bytes();
+    let again = call(
+        &mut adapter,
+        "config.tool_policy.set",
+        json!({"deny":["web_fetch","computer_*"], "if_revision": after.revision}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["changed"], false);
+    assert_eq!(dir.bytes(), bytes);
+
+    let cleared = call(&mut adapter, "config.tool_policy.set", json!({"deny":[]}))
+        .await
+        .unwrap();
+    assert_eq!(cleared["changed"], true);
+    assert!(store.read().unwrap().config.tool_policy.deny.is_empty());
+}
+
+#[tokio::test]
+async fn tool_policy_set_keeps_a_key_another_writer_saved() {
+    let (dir, store) = store_with_fixture();
+    let mut adapter = unbound(&store);
+    let mut other = store.read().unwrap().config;
+    other
+        .providers
+        .push(provider("p-late", "late", "http://127.0.0.1:10/v1"));
+    write_config(&dir.config(), &other);
+    call(&mut adapter, "config.tool_policy.set", json!({"deny":["bash"]}))
+        .await
+        .unwrap();
+    let after = store.read().unwrap().config;
+    assert!(after.providers.iter().any(|p| p.uuid == "p-late"));
+    assert_eq!(after.tool_policy.deny, vec!["bash"]);
+}
+
+#[tokio::test]
+async fn tool_policy_set_refuses_bad_lists_before_writing() {
+    let (dir, store) = store_with_fixture();
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let too_many: Vec<String> = (0..300).map(|i| format!("t{i}")).collect();
+    let cases = [
+        (json!({}), "missing_params"),
+        (json!({"deny":"bash"}), "out_of_range"),
+        (json!({"deny":[1]}), "out_of_range"),
+        (json!({"deny":[""]}), "out_of_range"),
+        (json!({"deny":["two words"]}), "out_of_range"),
+        (json!({"deny":["a,b"]}), "out_of_range"),
+        (json!({"deny":too_many}), "out_of_range"),
+    ];
+    for (params, expected) in cases {
+        let error = call(&mut adapter, "config.tool_policy.set", params.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(reason(&error), Some(expected), "{params}");
+        assert_eq!(error.delivery, "not_sent", "{params}");
+    }
+    assert_eq!(dir.bytes(), bytes);
+}
+
+#[tokio::test]
+async fn tool_policy_set_refuses_a_stale_revision() {
+    let (dir, store) = store_with_fixture();
+    let bytes = dir.bytes();
+    let mut adapter = unbound(&store);
+    let error = call(
+        &mut adapter,
+        "config.tool_policy.set",
+        json!({"deny":["bash"], "if_revision":"0000000000000000"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&error), Some("stale"));
+    assert_eq!(dir.bytes(), bytes);
+}
+
 // ── session_info ───────────────────────────────────────────────────────────
 
 fn routes(main_origin: &str, main_uuid: &str) -> Value {
@@ -1334,6 +1435,31 @@ mod bound {
         let session = call(&mut adapter, "config.get", json!({})).await.unwrap();
         assert_eq!(session["view"], "session");
         assert_eq!(session["roles"][0]["provider_name"], "local");
+        let seen = requests(adapter, peer).await;
+        assert!(seen
+            .iter()
+            .any(|r| matches!(r, ClientRequest::ReloadGlobalCatalogue)));
+    }
+
+    #[tokio::test]
+    async fn tool_policy_in_a_coding_binding_is_written_here_and_reloaded_by_the_daemon() {
+        let (_dir, store) = store_with_fixture();
+        let (c, peer) = fake_daemon(Box::new(|request| match request {
+            ClientRequest::ReloadGlobalCatalogue => vec![E::Ack],
+            _ => readback(request, "").unwrap_or_default(),
+        }));
+        let mut adapter = coding(c, &store).await;
+        let result = call(
+            &mut adapter,
+            "config.tool_policy.set",
+            json!({"deny":["web_fetch"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["changed"], true);
+        assert_eq!(result["propagation"]["bound"], "reloaded");
+        assert!(result.get("session_info").is_some());
+        assert_eq!(store.read().unwrap().config.tool_policy.deny, vec!["web_fetch"]);
         let seen = requests(adapter, peer).await;
         assert!(seen
             .iter()

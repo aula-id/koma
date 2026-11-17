@@ -1,0 +1,43 @@
+---
+title: config.tool_policy.set
+description: Replace the hard tool deny list.
+method: config.tool_policy.set
+---
+
+# config.tool_policy.set
+
+Replace the hard tool deny list. A denied tool is never offered to a model, and a call to it is refused with a tool error on every path a call can take: the coding turn loop (including a call the model wrote as plain text), plan mode, sub-agents, resumed sessions, MCP and extension tools, and rooms. The refusal never starts the tool and never ends the turn.
+
+Check that `config.tool_policy.set` is in the hello `methods` first. An adapter without it answers `unsupported_method`.
+
+Send `deny`, the whole list. Each entry is a tool name. `*` stands for any run of characters and `?` for one character, and the pattern must match the whole name, case-sensitively: `web_fetch`, `computer_*`, `mcp__*`. An empty list clears the list. A call replaces the list and never merges. `if_revision` is optional and fails with `stale` when `config.json` has changed since that revision.
+
+```json
+{
+  "id": "12",
+  "method": "config.tool_policy.set",
+  "params": { "deny": ["web_fetch", "computer_*"] }
+}
+```
+
+The result has `changed`, `deny`, the fresh global `config` view and `propagation`. `changed` is false, and nothing is written, when the stored list already matches. Only the `tool_policy` key of `config.json` changes, under the SDK config lock, so a key another writer saved is kept.
+
+Running sessions and rooms read the list on every tool call, so a write holds for them at once.
+
+The list in force is also fed by the environment variable `KOMA_TOOL_DENY` (comma or whitespace separated, same patterns) in the process that runs the tool. A host that launches koma sets it to make the list impossible to change through a client. The list is empty by default, and nothing changes for a caller that never sets it.
+
+An entry that is empty, longer than 200 characters, or holds whitespace, a comma or a control character is `out_of_range`, as is a list of more than 256 entries. A missing `deny` is `missing_params`.
+
+## Python
+
+```python
+result = await host.config_tool_policy_set(["web_fetch", "computer_*"])
+print(result.changed, result.deny)
+```
+
+## TypeScript
+
+```ts
+const result = await host.setToolPolicy({ deny: ['web_fetch', 'computer_*'] });
+console.log(result.changed, result.deny);
+```

@@ -480,6 +480,13 @@ pub async fn run_agent_loop(
                 continue;
             }
 
+            // 4a2. Hard deny list, checked per call so a policy written after
+            //      this agent started still holds.
+            if crate::tool::policy::is_denied(&name) {
+                convo.push_tool(call.id.clone(), crate::tool::policy::refusal(&name));
+                continue;
+            }
+
             if let Err(reason) = check_delegated_plan(&ctx.plan_read_only, &mut plan_only, call) {
                 convo.push_tool(call.id.clone(), format!("blocked: {reason}"));
                 continue;

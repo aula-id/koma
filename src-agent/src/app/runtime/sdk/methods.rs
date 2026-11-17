@@ -137,6 +137,12 @@ pub const ROUTES: &[Route] = &[
         config::handle_roles_unassign,
     ),
     route(
+        "config.tool_policy.set",
+        Family::Host,
+        ANY,
+        config::handle_tool_policy_set,
+    ),
+    route(
         "config.effort.get",
         Family::Coding,
         CODING,
