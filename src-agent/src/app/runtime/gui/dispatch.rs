@@ -156,14 +156,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // thread; IFileDialog without the owner HWND opens behind the window
         // or not at all), so those hop to the tao loop and use this window
         // as parent.
-        GuiReq::NewSession { kill, folder } => {
-            if folder {
+        GuiReq::NewSession {
+            kill,
+            folder,
+            workdir,
+        } => {
+            if folder
+                || workdir
+                    .as_ref()
+                    .is_some_and(|path| !can_reuse_session_folder(path))
+            {
                 open_local_folder_picker(ctx, kill);
             } else {
-                let _ = ctx.ctl.send(HostCtl::New {
-                    workdir: None,
-                    kill,
-                });
+                let _ = ctx.ctl.send(HostCtl::New { workdir, kill });
             }
         }
         // A hub row's KILL button (a live session, or the attached one): the
@@ -1743,6 +1748,15 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
     }
 }
 
+fn can_reuse_session_folder(path: &std::path::Path) -> bool {
+    // Old sessions can point at the filesystem root, including through a symlink.
+    // Require an explicit folder choice before reusing such a broad workspace.
+    path.is_absolute()
+        && path
+            .canonicalize()
+            .is_ok_and(|resolved| resolved.parent().is_some() && resolved.is_dir())
+}
+
 // `write_attach_scratch`, `forward_paste`, `forward_config_req`, and `forward_or_host`
 // moved to the sibling `dispatch_forward` module (file size) — see the `use
 // super::dispatch_forward::{...}` import above.
@@ -1852,4 +1866,20 @@ fn spawn_second_gui_window(session_id: String, host_id: Option<String>) {
             fail(&format!("OpenSecondWindow spawn failed: {e}"));
         }
     });
+}
+
+#[cfg(test)]
+mod folder_reuse_tests {
+    use super::can_reuse_session_folder;
+    use std::path::Path;
+
+    #[test]
+    fn reuse_requires_an_existing_absolute_folder_below_root() {
+        let existing = std::env::current_dir().unwrap();
+        let root = existing.ancestors().last().unwrap();
+        assert!(can_reuse_session_folder(&existing));
+        assert!(!can_reuse_session_folder(root));
+        assert!(!can_reuse_session_folder(Path::new(".")));
+        assert!(!can_reuse_session_folder(&existing.join("Cargo.toml")));
+    }
 }

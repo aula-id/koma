@@ -473,6 +473,8 @@ pub(super) struct PushCooking {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dir_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) workdir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) current_dir: Option<bool>,
 }
 
@@ -485,6 +487,8 @@ pub(super) struct PushHistory {
     pub(super) name: String,
     pub(super) last_active: u64,
     pub(super) dir_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) workdir: Option<String>,
     pub(super) current_dir: bool,
 }
 

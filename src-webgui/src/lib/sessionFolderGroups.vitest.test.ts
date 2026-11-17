@@ -29,4 +29,18 @@ describe('sessionFolderGroups', () => {
     expect(groups[2]?.live[0]?.id).toBe('live-b')
     expect(groups[2]?.history[0]?.id).toBe('h3')
   })
+  it('keeps folders with the same basename separate and preserves their exact paths', () => {
+    const first = '/work/client one/docs'
+    const second = '/work/client two/docs'
+    const groups = groupRecentByFolder(
+      [{ kind: 'session', id: 'live', name: 'Live', dirLabel: 'docs', workdir: first }],
+      [
+        { id: 'h1', name: 'Same folder', lastActive: 2, dirLabel: 'docs', currentDir: false, workdir: first },
+        { id: 'h2', name: 'Other folder', lastActive: 1, dirLabel: 'docs', currentDir: false, workdir: second },
+      ],
+    )
+    expect(groups.map((group) => group.workdir)).toEqual([first, second])
+    expect(groups.map((group) => group.history.map((row) => row.id))).toEqual([['h1'], ['h2']])
+  })
+
 })

@@ -180,6 +180,9 @@ pub(super) enum GuiReq {
         /// When true, open a native folder picker before creating the session.
         #[serde(default)]
         folder: bool,
+        /// An existing local folder selected from the session hub.
+        #[serde(default)]
+        workdir: Option<std::path::PathBuf>,
     },
     /// A hub session row's KILL button (a live COOKING row, or the attached session itself).
     /// Forwarded as [`HostCtl::KillSession`]; the host escalates the kill off its control

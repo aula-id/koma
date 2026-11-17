@@ -16,6 +16,7 @@ export type HubCookingEntry = {
   working?: boolean
   foreground?: boolean
   dirLabel?: string
+  workdir?: string
   currentDir?: boolean
 }
 
@@ -24,6 +25,7 @@ export type HubHistoryEntry = {
   name: string
   lastActive: number
   dirLabel: string
+  workdir?: string
   currentDir: boolean
 }
 

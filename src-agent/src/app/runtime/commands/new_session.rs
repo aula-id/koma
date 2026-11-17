@@ -240,6 +240,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         is_foreground: false,
         session_id: None,
         dir_label: String::new(),
+        workdir: None,
         is_current_dir: false,
         remote_host: None,
     });
@@ -264,6 +265,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
             is_foreground: raw_idx == state.rest.foreground,
             session_id: Some(rt.id.clone()),
             dir_label: store::dir_basename(&workdir),
+            workdir: Some(workdir),
             is_current_dir,
             remote_host: None,
         });
@@ -291,6 +293,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 name: m.name,
                 last_active: m.modified,
                 dir_label: store::dir_basename(&m.workdir),
+                workdir: Some(m.workdir),
                 is_current_dir: m.pwd_hash == cur_hash,
                 remote_host: None,
             })
