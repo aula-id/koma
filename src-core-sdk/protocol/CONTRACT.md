@@ -318,7 +318,7 @@ hello may carry four optional keys after the v1 keys:
  "capabilities":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach"],
  "methods":["create","resume","state","submit","enqueue","interrupt","interrupt_and_submit","approve","configure","detach",
             "config.get","config.providers.delete","config.models.delete","config.roles.unassign",
-            "config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
+            "config.skill_roots.set","config.effort.get","config.effort.set","config.limits.get","config.limits.set","sessions.info",
             "sessions.list","sessions.rename","sessions.delete","sessions.stop","usage.query",
             "skills.list","skills.get","skills.read_file","skills.install","skills.remove","skills.create","skills.update"],
  "features":["errors.reason","state.session_info","create.name","config.lock"],
@@ -365,7 +365,7 @@ Methods fall into families:
 |---|---|
 | legacy session | `state`, `submit`, `enqueue`, `interrupt`, `interrupt_and_submit`, `approve` |
 | binders | `create`, `resume` |
-| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}` |
+| host (any binding) | `config.get{view:"global"}`, `config.providers.delete`, `config.models.delete`, `config.roles.unassign{scope:"global"}`, `config.skill_roots.set` |
 | coding-scoped | `sessions.info`, `config.get{view:"session"}`, `config.roles.unassign{scope:"session"}`, `config.effort.get`, `config.effort.set`, `config.limits.get`, `config.limits.set` |
 | other | `configure`, `detach` |
 
@@ -464,8 +464,8 @@ method families; treat an unknown reason by its `code` and `delivery`):
 | `wrong_binding` | `invalid_state` | not_sent | any (E1, E2) | the call is not allowed in this binding |
 | `already_bound` | `invalid_state` | not_sent | binders (E3) | a binding is held |
 | `peer_unsupported` | `invalid_state` | not_sent | calls that need the daemon | the daemon lacks the needed feature |
-| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"` |
-| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `skills.update` | none of the required alternatives was given |
+| `out_of_range` | `invalid_request` | not_sent | any | a value is outside its bounds; a session-scope `config.roles.unassign` of a role other than `main`; a `config.models.delete` `scope` other than `"global"`; a `config.skill_roots.set` root that is not an absolute path to an existing directory, is listed twice, or contains or sits inside a koma skills directory |
+| `missing_params` | `invalid_request` | not_sent | `config.limits.set`, `config.skill_roots.set`, `skills.update` | none of the required alternatives was given |
 | `conflicting_params` | `invalid_request` | not_sent | `config.roles.unassign`, `skills.install` | params that exclude each other were combined (`if_revision` with session scope; both or neither of `data_b64` and `path`) |
 | `bad_cursor` | `invalid_request` | not_sent | `sessions.list`, `skills.list` | the cursor does not decode |
 | `invalid_name` | `invalid_request` | not_sent | `create`, `sessions.rename`, `skills.*` | a name breaks its rule or holds control characters |
@@ -551,7 +551,7 @@ room's start log, scrubbed). `layer_rejected` and `rejected_by_room` carry
 Config writes are made in one of two ways, and a client sees the difference
 only in `propagation` and in the possible errors.
 
-Adapter writes (UNBOUND, and global `config.roles.unassign` in any binding):
+Adapter writes (UNBOUND, and global `config.roles.unassign` and `config.skill_roots.set` in any binding):
 the adapter takes the SDK config lock, loads and validates the config file,
 compares `if_revision`, applies the change, saves through a temporary file and
 rename, and reads the file back. It then rebinds sessions and agents on disk
@@ -731,6 +731,34 @@ Propagation  = {bound?: string, broadcast?: string, rebind?: string, rooms?: str
   `config_unreadable`, `save_failed`, `unverified`; for session scope also
   `daemon_refused` and `partial_apply`.
 * Idempotency: idempotent (`changed:false` on repeat).
+
+### `config.skill_roots.set`
+
+* Binding: any.
+* Params: `{roots: [string(1..4096)] (≤ 64), if_revision?: string}`. `roots` is
+  the whole list of external skill roots (the `extra_skill_roots` that
+  `skills.list` shows as tiers `extra-root:<index>`, index by position), in
+  order. An empty list clears them. A call replaces the list; it never merges.
+  A missing `roots` is `missing_params`.
+* Every root must be an absolute path to an existing directory, listed once,
+  and must not contain or sit inside koma's global skills directory or, in a
+  coding binding, the bound session's project skills directories. Otherwise the
+  call is `out_of_range` and nothing is written. The adapter stores each root
+  as its resolved path, and `roots` in the result are those stored paths.
+* Result: `{changed: bool, roots: [string], config: ConfigView (view "global"),
+  propagation, session_info?}`. `changed` is false, and nothing is written, when
+  the stored list already equals `roots`.
+* Only this key of `config.json` changes. The write is an adapter write in
+  every binding (see Writes and propagation): under the SDK config lock, on a
+  fresh read of the file, so a key that another writer saved meanwhile is kept.
+  A bound daemon is asked to reload the catalogue, which makes it reload the
+  roots. A session's skill catalogue is rebuilt as for any skill change (see
+  `propagation.skills` under Skill methods), and a room reads it when it starts.
+* Errors: `missing_params`, `out_of_range`, `stale`, `lock_timeout`,
+  `config_unreadable`, `save_failed`, `unverified`.
+* Idempotency: idempotent (`changed:false` on repeat).
+* Skill roots are read-only to the agent: the `write`, `edit` and `delete`
+  tools refuse paths under them, loaded or not.
 
 ### `config.effort.get`
 

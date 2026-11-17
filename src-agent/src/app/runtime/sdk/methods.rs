@@ -137,6 +137,12 @@ pub const ROUTES: &[Route] = &[
         config::handle_roles_unassign,
     ),
     route(
+        "config.skill_roots.set",
+        Family::Host,
+        ANY,
+        config::handle_skill_roots_set,
+    ),
+    route(
         "config.effort.get",
         Family::Coding,
         CODING,

@@ -385,6 +385,9 @@ export function validateResult(method: Method, result: unknown, params: Record<s
     bool(result.changed); nullableString(result.previous_model_uuid);
     validateMutation(result, params.scope ?? 'global'); return;
   }
+  if (method === 'config.skill_roots.set') {
+    bool(result.changed); strings(result.roots, true); validateMutation(result, 'global'); return;
+  }
   if (method === 'config.effort.get') {
     string(result.state, true); strings(result.options); string(result.selected, true);
     nullableString(result.note); nullableString(result.main_model_uuid); return;
