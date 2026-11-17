@@ -481,7 +481,7 @@ An off-thread classifier that:
 |---|---|---|---|
 | macOS | Full | Full | WKWebView, muda menus, objc2-app-kit |
 | Linux | Full | Full | webkit2gtk, GTK webview attachment |
-| Windows | Full | Full | WebView2 (bundled with the MSI); security tools and full-internet mode unsupported |
+| Windows | Full | Full | WebView2 (not bundled; install.ps1 installs it when missing); security tools and full-internet mode unsupported |
 
 ### Key Constants
 

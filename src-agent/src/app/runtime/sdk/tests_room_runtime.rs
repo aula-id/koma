@@ -826,7 +826,16 @@ async fn an_older_room_gets_plain_user_frames_and_refuses_attachments_before_wri
     assert_eq!(sent["acked"], false);
     assert_eq!(sent["inserts"], json!([]));
     let path = image(&rig.config_dir);
-    let before = fake.received_tags().len();
+    // Status probes reach the fake on their own schedule, so only frames a
+    // send could write are counted, and only once "hi" has arrived.
+    until("the first send", || !fake.received("user").is_empty()).await;
+    let written = || {
+        fake.received_tags()
+            .into_iter()
+            .filter(|t| t != "Status")
+            .count()
+    };
+    let before = written();
     let refused = rig
         .call(
             "room.send",
@@ -837,7 +846,7 @@ async fn an_older_room_gets_plain_user_frames_and_refuses_attachments_before_wri
     assert_eq!(reason(&refused), Some("peer_unsupported"));
     assert_eq!(refused.delivery, "not_sent");
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(fake.received_tags().len(), before, "nothing was written");
+    assert_eq!(written(), before, "nothing was written");
     assert_eq!(fake.received("user")[0], json!({"user": {"text": "hi"}}));
     let reload = rig
         .adapter
