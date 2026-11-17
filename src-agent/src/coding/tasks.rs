@@ -1,6 +1,7 @@
 //! Explicit project tasks, retained independently of chat and UI selection.
 use super::sync::CheckedMutex;
 use super::WorkspaceRef;
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use process_wrap::std::{ChildWrapper, CommandWrap, CommandWrapper};
 use serde::{Deserialize, Serialize};
@@ -482,9 +483,7 @@ fn start_recipe(
     task.interactive = steps.iter().any(|step| step.interactive);
     for step in &steps {
         super::problems::compile(&step.problem_matchers)?;
-        let cwd = root
-            .join(&step.cwd)
-            .canonicalize()
+        let cwd = winpath::canonical(&root.join(&step.cwd))
             .context("Task working directory is unavailable")?;
         anyhow::ensure!(
             cwd.starts_with(root) && cwd.is_dir(),
@@ -570,7 +569,7 @@ pub(super) fn spawn_command(command: Command) -> std::io::Result<Box<dyn ChildWr
 }
 
 fn launch_step(run: &Arc<Run>, root: &Path, task: &Task) -> Result<()> {
-    let cwd = root.join(&task.cwd).canonicalize()?;
+    let cwd = winpath::canonical(&root.join(&task.cwd))?;
     anyhow::ensure!(
         cwd.starts_with(root),
         "Task working directory moved outside the workspace"
@@ -889,7 +888,7 @@ fn discover(root: &Path, tasks: &mut Vec<Task>) -> Result<()> {
     let package = root.join("package.json");
     if package.is_file()
         && package.metadata()?.len() <= 1024 * 1024
-        && package.canonicalize()?.starts_with(root)
+        && winpath::canonical(&package)?.starts_with(root)
     {
         if let Ok(value) = serde_json::from_slice::<Value>(&std::fs::read(package)?) {
             if let Some(scripts) = value.get("scripts").and_then(Value::as_object) {
@@ -1016,7 +1015,7 @@ mod tests {
         fn new(tasks: Value) -> Self {
             let path = std::env::temp_dir().join(format!("koma-tasks-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(path.join(".koma")).unwrap();
-            let project = Self(path.canonicalize().unwrap());
+            let project = Self(winpath::canonical(&path).unwrap());
             project.write(tasks);
             project
         }

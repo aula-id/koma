@@ -1,4 +1,5 @@
 //! Bounded DAP sessions owned by a workspace, independent of panels and chats.
+use crate::tool::winpath;
 use super::sync::CheckedMutex;
 use super::WorkspaceRef;
 use anyhow::{Context, Result};
@@ -578,7 +579,7 @@ fn start_profile(
     breakpoints: &Value,
 ) -> Result<Value> {
     let file = if let Some(file) = file {
-        let p = root.join(file).canonicalize()?;
+        let p = winpath::canonical(&root.join(file))?;
         anyhow::ensure!(
             p.starts_with(root) && p.is_file(),
             "Debug file is outside workspace"
@@ -694,7 +695,7 @@ fn validate_breakpoints(root: &Path, value: &Value) -> Result<BTreeMap<String, V
         .context("Breakpoints must be a path map")?;
     anyhow::ensure!(object.len() <= 200, "Too many breakpoint files");
     for (path, points) in object {
-        let file = root.join(path).canonicalize()?;
+        let file = winpath::canonical(&root.join(path))?;
         anyhow::ensure!(
             file.starts_with(root) && file.is_file(),
             "Breakpoint source is outside workspace"
@@ -783,12 +784,11 @@ fn setup(
         file.take(65537).read_to_end(&mut bytes)?;
         anyhow::ensure!(bytes.len() <= 65536, "Test artifact record too large");
         let record: Value = serde_json::from_slice(&bytes)?;
-        let program = Path::new(
+        let program = winpath::canonical(Path::new(
             record["program"]
                 .as_str()
                 .context("Missing test executable")?,
-        )
-        .canonicalize()?;
+        ))?;
         anyhow::ensure!(program.is_file(), "Test executable is unavailable");
         configuration["program"] = json!(program);
         configuration["args"] = record["args"].clone();
@@ -1026,7 +1026,7 @@ pub(super) fn request(
     if command == "setBreakpoints" {
         let path = args["path"].as_str().context("Missing source path")?;
         let points = validate_breakpoints(
-            &PathBuf::from(&workspace.root).canonicalize()?,
+            &winpath::canonical(&PathBuf::from(&workspace.root))?,
             &json!({path:args["breakpoints"]}),
         )?;
         let (path, points) = points
@@ -1120,8 +1120,8 @@ fn run_terminal(s: &Session, args: &Value) -> Result<Value> {
             && values.iter().all(|v| v.len() <= 32768 && !v.contains('\0')),
         "Invalid debug terminal arguments"
     );
-    let root = PathBuf::from(&s.workspace.root).canonicalize()?;
-    let cwd = PathBuf::from(args["cwd"].as_str().unwrap_or(&s.workspace.root)).canonicalize()?;
+    let root = winpath::canonical(&PathBuf::from(&s.workspace.root))?;
+    let cwd = winpath::canonical(&PathBuf::from(args["cwd"].as_str().unwrap_or(&s.workspace.root)))?;
     anyhow::ensure!(
         cwd.starts_with(&root) && cwd.is_dir(),
         "Debug terminal cwd must be inside the workspace"

@@ -1,5 +1,6 @@
 use super::{Operation, Request};
 use crate::app::runtime::client::file_ops;
+use crate::tool::winpath;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ use std::path::{Path, PathBuf};
 fn root(request: &Request) -> Result<PathBuf> {
     let path = Path::new(&request.workspace.root);
     anyhow::ensure!(path.is_absolute(), "Workspace root must be absolute");
-    let root = path.canonicalize().context("Workspace is unavailable")?;
+    let root = winpath::canonical(path).context("Workspace is unavailable")?;
     anyhow::ensure!(root.is_dir(), "Workspace root is not a directory");
     Ok(root)
 }
@@ -269,13 +270,13 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             let dir = canonical.join(".koma");
             std::fs::create_dir_all(&dir)?;
             anyhow::ensure!(
-                dir.canonicalize()?.starts_with(&canonical),
+                winpath::canonical(&dir)?.starts_with(&canonical),
                 "Coding directory is outside the workspace"
             );
             let path = dir.join("coding.json");
             if path.exists() {
                 anyhow::ensure!(
-                    path.canonicalize()?.starts_with(&canonical),
+                    winpath::canonical(&path)?.starts_with(&canonical),
                     "Coding configuration is outside the workspace"
                 );
             } else {
@@ -301,13 +302,13 @@ pub(super) fn execute(request: &Request) -> Result<Value> {
             let dir = canonical.join(".koma");
             std::fs::create_dir_all(&dir)?;
             anyhow::ensure!(
-                dir.canonicalize()?.starts_with(&canonical),
+                winpath::canonical(&dir)?.starts_with(&canonical),
                 "Coding directory is outside the workspace"
             );
             let dest = dir.join("coding.json");
             if dest.exists() {
                 anyhow::ensure!(
-                    dest.canonicalize()?.starts_with(&canonical),
+                    winpath::canonical(&dest)?.starts_with(&canonical),
                     "Coding configuration is outside the workspace"
                 );
             }
@@ -384,9 +385,9 @@ pub(super) fn read_config(root: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(json!({"version":1}));
     }
-    let actual = path.canonicalize()?;
+    let actual = winpath::canonical(&path)?;
     anyhow::ensure!(
-        actual.starts_with(root.canonicalize()?),
+        actual.starts_with(winpath::canonical(root)?),
         "Coding configuration is outside the workspace"
     );
     anyhow::ensure!(
@@ -599,6 +600,27 @@ mod tests {
         assert!(fuzzy_score("src/école.ts", "éct").is_some());
         assert!(fuzzy_score("src/main.rs", "mx").is_none());
         assert!(fuzzy_score("src/main.rs", "main") > fuzzy_score("main/other.rs", "main"));
+    }
+    #[test]
+    fn root_is_the_winpath_canonical_form_and_contains_resolved_paths() {
+        let dir = config_dir("root-form");
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let request = Request {
+            client_id: "t".into(),
+            id: "t".into(),
+            workspace: crate::coding::WorkspaceRef {
+                host_id: "h".into(),
+                root: dir.to_string_lossy().into_owned(),
+            },
+            operation: Operation::LspReleaseClient,
+        };
+        let got = root(&request).unwrap();
+        assert_eq!(got, winpath::canonical(&dir).unwrap());
+        let resolved = winpath::canonical(&got.join("a.txt")).unwrap();
+        assert!(resolved.starts_with(&got));
+        let nested = winpath::canonical(&got.join(".koma")).unwrap();
+        assert!(nested.starts_with(&got));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     fn rejects_unknown_config_versions() {

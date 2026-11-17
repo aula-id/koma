@@ -360,7 +360,7 @@ impl Context {
         let workdir = match given {
             Some(path) => Some(canonical_dir(&path)?),
             None => match bound {
-                Some(path) => Some(std::fs::canonicalize(&path).map_err(|e| {
+                Some(path) => Some(crate::tool::winpath::canonical(&path).map_err(|e| {
                     io_error(format!("the session workdir could not be read: {e}"))
                 })?),
                 None => None,
@@ -471,7 +471,7 @@ impl Context {
         if std::fs::symlink_metadata(&root).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(refuse());
         }
-        match std::fs::canonicalize(&root) {
+        match crate::tool::winpath::canonical(&root) {
             Ok(resolved) if !resolved.starts_with(workdir) => Err(refuse()),
             _ => Ok(()),
         }
@@ -724,7 +724,7 @@ fn workdir_param(map: &Map<String, Value>) -> Result<Option<PathBuf>, RpcError> 
 }
 
 fn canonical_dir(path: &Path) -> Result<PathBuf, RpcError> {
-    let canonical = std::fs::canonicalize(path)
+    let canonical = crate::tool::winpath::canonical(path)
         .map_err(|_| out_of_range("workdir must be an absolute existing directory"))?;
     if !canonical.is_dir() {
         return Err(out_of_range("workdir must be an absolute existing directory"));
@@ -1095,9 +1095,9 @@ fn read_file(context: Context, map: Map<String, Value>) -> Result<Value, RpcErro
     if !entry.companion_files.contains(&normalized) {
         return Err(not_found(format!("{normalized} is not a file of this skill")));
     }
-    let root = std::fs::canonicalize(dir)
+    let root = crate::tool::winpath::canonical(dir)
         .map_err(|e| io_error(format!("the skill directory could not be read: {e}")))?;
-    let candidate = std::fs::canonicalize(dir.join(&normalized))
+    let candidate = crate::tool::winpath::canonical(&dir.join(&normalized))
         .map_err(|e| io_error(format!("the file could not be read: {e}")))?;
     if !candidate.starts_with(&root) {
         return Err(out_of_range("path must be a relative path inside the skill directory"));

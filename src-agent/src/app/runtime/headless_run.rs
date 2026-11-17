@@ -487,8 +487,7 @@ fn resolve_workdir(raw: Option<&str>) -> Result<Option<PathBuf>> {
         return Ok(None);
     };
     let path = expand_user(raw);
-    let canon = path
-        .canonicalize()
+    let canon = crate::tool::winpath::canonical(&path)
         .with_context(|| format!("workdir missing: {}", path.display()))?;
     if !canon.is_dir() {
         bail!("workdir not a directory: {}", canon.display());
