@@ -350,12 +350,13 @@ const V1_METHODS: [&str; 10] = [
 ];
 
 /// The config methods and `sessions.info`, in route-table order.
-const CONFIG_METHODS: [&str; 10] = [
+const CONFIG_METHODS: [&str; 11] = [
     "config.get",
     "config.providers.delete",
     "config.models.delete",
     "config.roles.unassign",
     "config.tool_policy.set",
+    "config.skill_roots.set",
     "config.effort.get",
     "config.effort.set",
     "config.limits.get",
@@ -482,7 +483,8 @@ fn expected_gate(
         | "config.providers.delete"
         | "config.models.delete"
         | "config.roles.unassign"
-        | "config.tool_policy.set" => None,
+        | "config.tool_policy.set"
+        | "config.skill_roots.set" => None,
         // Host families run in every binding; team methods refuse
         // `target:"room"` outside a room binding in the handler.
         _ if FAMILY_METHODS.contains(&method) => None,

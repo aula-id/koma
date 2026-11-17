@@ -936,6 +936,44 @@
               "minLength": 1
             },
             "method": {
+              "const": "config.skill_roots.set"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "roots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "maxItems": 64
+                },
+                "if_revision": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{16}|absent)$"
+                }
+              },
+              "required": [
+                "roots"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
               "const": "config.effort.get"
             },
             "params": {
@@ -3676,6 +3714,37 @@
         "propagation"
       ]
     },
+    "skill_roots_result": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 64
+        },
+        "config": {
+          "$ref": "#/$defs/config_view"
+        },
+        "propagation": {
+          "$ref": "#/$defs/propagation"
+        },
+        "session_info": {
+          "$ref": "#/$defs/session_info"
+        }
+      },
+      "required": [
+        "changed",
+        "roots",
+        "config",
+        "propagation"
+      ]
+    },
     "effort_options_result": {
       "type": "object",
       "properties": {
@@ -6218,6 +6287,9 @@
                 },
                 {
                   "$ref": "#/$defs/tool_policy_result"
+                },
+                {
+                  "$ref": "#/$defs/skill_roots_result"
                 },
                 {
                   "$ref": "#/$defs/effort_options_result"
