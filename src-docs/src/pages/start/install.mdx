@@ -25,6 +25,8 @@ Open PowerShell and paste this:
 irm https://koma.run/install.ps1 | iex
 ```
 
+Windows asks for permission once. There are no installer windows, and a failure comes with a plain explanation of what to do next. To remove koma later, run `$env:KOMA_UNINSTALL = '1'` and then the same command.
+
 On Windows, koma cannot run the safety-check panel, and it cannot use full internet browsing. Search and ordinary page lookup still work.
 
 ## Then
