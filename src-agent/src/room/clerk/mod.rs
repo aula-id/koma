@@ -67,6 +67,8 @@ pub struct Clerk {
     last_fingerprint: Option<String>,
     last_pass_ms: Option<u64>,
     in_flight: bool,
+    /// Set when the owner stopped the clerk: the work that was running then.
+    stopped_with: Option<BTreeSet<String>>,
     flag_seq: u64,
 }
 
@@ -127,6 +129,31 @@ impl Clerk {
         self.last_pass_ms = Some(input.now_ms);
         self.in_flight = true;
         Ok(Tick::Run(Pass { new_findings, all_findings: all }))
+    }
+
+    /// Whether a pass may start, given the specialist work lanes running now
+    /// (one key each: its assignment, or its avatar). With none running the
+    /// clerk costs nothing. After [`Clerk::stop`] it stays quiet until a lane
+    /// shows up that was not running when it was stopped.
+    pub fn may_run(&mut self, working: &BTreeSet<String>) -> bool {
+        if working.is_empty() {
+            return false;
+        }
+        match &self.stopped_with {
+            Some(then) if working.is_subset(then) => false,
+            Some(_) => {
+                self.stopped_with = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// The owner stopped the clerk while `working` lanes were running. Any
+    /// pass in flight is over.
+    pub fn stop(&mut self, working: BTreeSet<String>) {
+        self.in_flight = false;
+        self.stopped_with = Some(working);
     }
 
     /// The pass ended (finished, failed or was stopped).

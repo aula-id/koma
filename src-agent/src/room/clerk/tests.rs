@@ -450,3 +450,35 @@ fn two_claims_that_say_the_same_thing_are_noted_as_duplicates() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].key, "duplicate:claims/one:claims/two");
 }
+
+fn keys(items: &[&str]) -> std::collections::BTreeSet<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn no_pass_may_start_while_no_specialist_work_runs() {
+    let mut clerk = Clerk::new();
+    assert!(!clerk.may_run(&keys(&[])));
+    assert!(clerk.may_run(&keys(&["a1"])));
+}
+
+#[test]
+fn a_stopped_clerk_stays_quiet_until_a_new_lane_starts() {
+    let mut clerk = Clerk::new();
+    clerk.stop(keys(&["a1", "a2"]));
+    assert!(!clerk.is_busy());
+    assert!(!clerk.may_run(&keys(&["a1", "a2"])), "the same work is still going");
+    assert!(!clerk.may_run(&keys(&["a2"])), "less work is not new work");
+    assert!(clerk.may_run(&keys(&["a2", "a3"])), "a lane that was not running at the stop is new work");
+    assert!(clerk.may_run(&keys(&["a2"])), "once back it stays back");
+}
+
+#[test]
+fn stopping_clears_a_pass_in_flight() {
+    let env = Env::new();
+    let mut clerk = Clerk::new();
+    run(clerk.tick(&env.input()).expect("tick"));
+    assert!(clerk.is_busy());
+    clerk.stop(keys(&["a1"]));
+    assert!(!clerk.is_busy());
+}
