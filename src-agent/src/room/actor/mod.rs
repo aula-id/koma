@@ -421,8 +421,22 @@ impl RoomActor {
         }
     }
 
-    /// `/stop red` stops that avatar's lanes, chat and work; `/stop all` stops every lane.
+    /// Specialist work lanes that are running, one key each: the assignment, or the avatar.
+    fn working_keys(&self) -> std::collections::BTreeSet<String> {
+        self.lanes
+            .iter()
+            .filter(|(slot, lane)| slot.kind == LaneKind::Work && !lane.ended && !lane.is_chief && slot.avatar != "clerk")
+            .map(|(slot, lane)| lane.assignment_id.clone().unwrap_or_else(|| slot.avatar.clone()))
+            .collect()
+    }
+
+    /// `/stop red` stops that avatar's lanes, chat and work; `/stop all` stops every lane,
+    /// the clerk's pass included. A stopped clerk stays quiet until new work starts.
     fn stop_avatar(&mut self, who: &str) {
+        if who == "all" || who == "clerk" {
+            let working = self.working_keys();
+            self.clerk.lock().unwrap_or_else(|e| e.into_inner()).stop(working);
+        }
         // A lane stopped earlier whose run still reads as running (or a task that died without
         // saying so) is closed too, so no assignment stays stuck on it.
         for (slot, lane) in self.lanes.iter_mut() {
@@ -438,9 +452,13 @@ impl RoomActor {
         let slots: Vec<Slot> = self
             .lanes
             .iter()
-            .filter(|(slot, lane)| !lane.ended && slot.avatar != "clerk" && (who == "all" || slot.avatar == who))
+            .filter(|(slot, lane)| !lane.ended && (who == "all" || slot.avatar == who))
             .map(|(slot, _)| slot.clone())
             .collect();
+        if slots.is_empty() && who == "clerk" {
+            self.emit(RoomEvent::Visible { author: "room".into(), text: "the clerk has no pass running; it stays quiet until new work starts".into(), audience: Audience::User });
+            return;
+        }
         if slots.is_empty() {
             self.emit(RoomEvent::Visible { author: "room".into(), text: format!("{who} has nothing running to stop"), audience: Audience::User });
             return;
@@ -568,6 +586,9 @@ impl RoomActor {
         if let Some(lane) = self.lanes.get_mut(&slot) {
             lane.ended = true;
             lane.run = run;
+        }
+        if avatar == "clerk" {
+            self.clerk.lock().unwrap_or_else(|e| e.into_inner()).finish_pass();
         }
         if kind == LaneKind::Chat {
             self.lanes.remove(&slot);
@@ -824,8 +845,14 @@ impl RoomActor {
         self.apply_effects(outcome.effects);
     }
 
+    /// Start an audit pass when one is due. It needs a specialist work lane running, so a room
+    /// where nothing is working spends no tokens, and it respects `/stop clerk`.
     fn run_clerk(&mut self) {
         let Some(work) = self.coordinator.active_work() else { return };
+        let working = self.working_keys();
+        if !self.clerk.lock().unwrap_or_else(|e| e.into_inner()).may_run(&working) {
+            return;
+        }
         if self.lanes.get(&Slot::new("clerk", LaneKind::Work)).is_some_and(|lane| !lane.ended) {
             return;
         }

@@ -966,3 +966,110 @@ async fn a_specialists_chat_is_the_users_and_its_work_is_the_teams() {
     let events = h.wait_for("red's chat", |e| matches!(e, RoomEvent::LaneChat { avatar, .. } if avatar == "red")).await;
     assert!(!events.iter().any(|e| matches!(e, RoomEvent::Part { author, lane, audience: Audience::Team, .. } if author == "red" && lane == "chat")));
 }
+
+fn delegate_to_red() -> ModelReply {
+    let delegate = call(
+        "group_delegate",
+        json!({ "goal_key": "g1", "goal": "scan", "dispatch_key": "r1",
+                "assignments": [{ "avatar": "red", "kind": "probe", "prompt": "probe" }] }),
+    );
+    tools("Sending Red.", vec![delegate])
+}
+
+async fn stop_text_seen(handle: &mut RoomHandle, needle: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, handle.events.recv()).await {
+            Ok(Some(RoomEvent::Visible { text, .. })) if text.contains(needle) => return,
+            Ok(Some(_)) => {}
+            other => panic!("never saw {needle:?}: {other:?}"),
+        }
+    }
+}
+
+/// A room with Red hanging on its assignment and the clerk's pass hanging after the first tick.
+/// The shelf is shared so a test can publish something new for the clerk to find.
+async fn room_with_a_running_clerk() -> (RoomHandle, Arc<Shelf>) {
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let mut handle = hanging_room_with(coordinator, Arc::clone(&shelf), registry, &["red", "clerk"], vec![(("chief", 0), delegate_to_red())]);
+    handle.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "running").await;
+    handle.to_actor.send(ActorMsg::Tick).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "clerk", "work") == "running").await;
+    (handle, shelf)
+}
+
+/// Publish a claim with no scope record: a finding the clerk has not reported, which starts a
+/// pass at the next tick unless something holds it back.
+fn publish_unreported_finding(shelf: &Shelf, key: &str) {
+    shelf
+        .call("put_claim", &json!({ "key": key, "vulnclass": "cors", "name": "n", "severity": "low",
+            "summary": "s", "host": "app.example", "poc": "curl", "expected_revision": 0 }))
+        .unwrap_or_else(|e| panic!("put_claim: {}", e.0));
+}
+
+/// The avatar's work lane exists and is no longer running.
+fn lane_is_over(status: &StatusSnapshot, avatar: &str) -> bool {
+    matches!(phase_of(status, avatar, "work").as_str(), "stopped" | "done")
+}
+
+/// How many timeline entries the clerk has: each pass it starts opens one.
+fn clerk_passes(status: &StatusSnapshot) -> usize {
+    status.events.iter().filter(|e| e.avatar == "clerk").count()
+}
+
+/// Tick the room a few times and return a status taken after all of them were handled.
+async fn status_after_ticks(handle: &mut RoomHandle) -> StatusSnapshot {
+    for _ in 0..3 {
+        handle.to_actor.send(ActorMsg::Tick).unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    while handle.events.try_recv().is_ok() {}
+    status_where(handle, |_| true).await
+}
+
+#[tokio::test]
+async fn stop_clerk_stops_a_running_pass_and_it_stays_stopped() {
+    let (mut handle, shelf) = room_with_a_running_clerk().await;
+    handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "clerk".into() })).unwrap();
+    let stopped = status_where(&mut handle, |s| lane_is_over(s, "clerk")).await;
+    // Red is still working and the shelf has something new, yet the stopped clerk stays down.
+    publish_unreported_finding(&shelf, "claims/a");
+    let status = status_after_ticks(&mut handle).await;
+    assert!(lane_is_over(&status, "clerk"), "{:?}", status.lanes);
+    assert_eq!(clerk_passes(&status), clerk_passes(&stopped), "the stopped clerk started another pass");
+    assert_eq!(phase_of(&status, "red", "work"), "running");
+}
+
+#[tokio::test]
+async fn stop_clerk_with_no_pass_running_says_so() {
+    let mut handle = hanging_room(&["chief"], vec![]);
+    handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "clerk".into() })).unwrap();
+    stop_text_seen(&mut handle, "no pass running").await;
+}
+
+#[tokio::test]
+async fn stop_all_stops_the_clerk_pass_too() {
+    let (mut handle, _shelf) = room_with_a_running_clerk().await;
+    handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "all".into() })).unwrap();
+    status_where(&mut handle, |s| lane_is_over(s, "clerk") && lane_is_over(s, "red")).await;
+}
+
+#[tokio::test]
+async fn the_clerk_starts_no_pass_when_no_specialist_is_working() {
+    let shelf = Arc::new(Shelf::open_in_memory().expect("shelf"));
+    let registry = Arc::new(RegistryHandle::embedded().expect("registry"));
+    let coordinator = Arc::new(Coordinator::new(WorkStore::open_in_memory().expect("store"), Arc::clone(&shelf), Arc::clone(&registry)));
+    let mut handle = hanging_room_with(coordinator, Arc::clone(&shelf), registry, &["red", "clerk"], vec![(("chief", 0), delegate_to_red())]);
+    handle.to_actor.send(ActorMsg::User("scan".into())).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "running").await;
+    handle.to_actor.send(ActorMsg::Control(crate::room::lane::ControlCommand::Stop { avatar: "red".into() })).unwrap();
+    status_where(&mut handle, |s| phase_of(s, "red", "work") == "stopped").await;
+    // The clerk was never stopped; with nothing working it still starts no pass.
+    publish_unreported_finding(&shelf, "claims/a");
+    let status = status_after_ticks(&mut handle).await;
+    assert_eq!(phase_of(&status, "clerk", "work"), "");
+    assert_eq!(clerk_passes(&status), 0);
+}
