@@ -89,6 +89,9 @@ pub struct ManifestMcpServer {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Contributes {
+    /// A provider that implements the versioned memory extension contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_provider: Option<crate::memory::MemoryProviderDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SubAgentDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

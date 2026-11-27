@@ -53,6 +53,7 @@ pub mod broker;
 pub mod dev_cli;
 pub mod events;
 pub mod install;
+pub(crate) mod memory;
 pub mod register;
 pub(crate) mod screen;
 // Named `ext_store` (not `store`) so this module doesn't collide with the pervasive

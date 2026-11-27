@@ -7,6 +7,15 @@ use serde::{Deserialize, Serialize};
 /// Version of the memory provider contract defined in this module.
 pub const MEMORY_PROTOCOL_VERSION: u32 = 1;
 
+/// The contract and features an extension declares in its manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryProviderDef {
+    pub version: u32,
+    pub display_name: String,
+    #[serde(default)]
+    pub can_store: bool,
+}
+
 /// Identifiers assigned by the host. Each request carries its own scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryScope {
@@ -49,9 +58,79 @@ pub struct StoreResponse {
     pub idempotency_key: String,
 }
 
+/// Methods invoked by the host on a selected provider extension.
+pub const RETRIEVE_METHOD: &str = "memory.retrieve";
+pub const STORE_METHOD: &str = "memory.store";
+
+/// Implement this trait to receive typed memory requests in an extension.
+pub trait MemoryProvider {
+    fn retrieve(&mut self, request: RetrieveRequest) -> Result<RetrieveResponse, String>;
+    fn store(&mut self, request: StoreRequest) -> Result<StoreResponse, String>;
+}
+
+/// Dispatch a memory invocation. Returns `None` for unrelated extension calls.
+pub fn dispatch<P: MemoryProvider>(
+    provider: &mut P,
+    method: &str,
+    params: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let result = match method {
+        RETRIEVE_METHOD => serde_json::from_value(params)
+            .map_err(|error| error.to_string())
+            .and_then(|request| provider.retrieve(request))
+            .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string())),
+        STORE_METHOD => serde_json::from_value(params)
+            .map_err(|error| error.to_string())
+            .and_then(|request| provider.store(request))
+            .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string())),
+        _ => return None,
+    };
+    Some(result.unwrap_or_else(|error| serde_json::json!({ "error": error })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Example;
+    impl MemoryProvider for Example {
+        fn retrieve(&mut self, request: RetrieveRequest) -> Result<RetrieveResponse, String> {
+            Ok(RetrieveResponse {
+                entries: vec![MemoryEntry {
+                    id: request.scope.session_id,
+                    content: request.query,
+                }],
+            })
+        }
+        fn store(&mut self, request: StoreRequest) -> Result<StoreResponse, String> {
+            Ok(StoreResponse {
+                idempotency_key: request.idempotency_key,
+            })
+        }
+    }
+
+    #[test]
+    fn dispatch_validates_and_routes_requests() {
+        let scope = MemoryScope {
+            project_id: "p".into(),
+            session_id: "s".into(),
+        };
+        let params = serde_json::to_value(RetrieveRequest {
+            scope,
+            query: "hello".into(),
+            max_bytes: 100,
+        })
+        .unwrap();
+        let mut provider = Example;
+        let result = dispatch(&mut provider, RETRIEVE_METHOD, params).unwrap();
+        assert_eq!(result["entries"][0]["id"], "s");
+        assert_eq!(result["entries"][0]["content"], "hello");
+        assert!(
+            dispatch(&mut provider, STORE_METHOD, serde_json::json!({})).unwrap()["error"]
+                .is_string()
+        );
+        assert!(dispatch(&mut provider, "other", serde_json::json!({})).is_none());
+    }
 
     #[test]
     fn store_request_round_trips_scope_and_idempotency_key() {
