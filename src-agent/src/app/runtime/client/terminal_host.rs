@@ -388,6 +388,16 @@ impl TerminalManager {
             None => platform_shell(),
         };
 
+        self.create_local_shell(id, cwd, shell, shell_id.is_none())
+    }
+
+    fn create_local_shell(
+        &mut self,
+        id: String,
+        cwd: Option<String>,
+        shell: String,
+        _is_default: bool,
+    ) -> anyhow::Result<()> {
         let mut cmd = CommandBuilder::new(&shell);
         let args = shell_args(&shell);
         #[cfg(windows)]
@@ -409,6 +419,28 @@ impl TerminalManager {
             cmd.cwd(dir);
         }
         let zdot_dir = macos_zsh_zdot(&mut cmd, &shell);
+
+        #[cfg(windows)]
+        if _is_default && winpath::shell_kind(&shell) == ShellKind::Bash {
+            let first_error = match self.spawn_cmd(id.clone(), cmd, None, zdot_dir) {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            };
+            let fallback = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+            let mut cmd = CommandBuilder::new(&fallback);
+            if let Some(dir) = &cwd {
+                cmd.cwd(dir);
+            }
+            self.spawn_cmd(id.clone(), cmd, None, None).map_err(|error| {
+                anyhow::anyhow!("Git Bash failed: {first_error:#}; Command Prompt fallback failed: {error:#}")
+            })?;
+            push_terminal_output(
+                &*self.push,
+                &id,
+                "\r\nGit Bash could not start; using Command Prompt instead.\r\n",
+            );
+            return Ok(());
+        }
 
         self.spawn_cmd(id, cmd, None, zdot_dir)
     }
@@ -673,6 +705,29 @@ mod tests {
         assert!(mgr.create("id".into(), None, Some("missing")).is_err());
         assert!(mgr.create("id".into(), None, Some("unknown")).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_default_bash_falls_back_to_command_prompt() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut manager = TerminalManager::new(move |s| {
+            let _ = tx.send(s);
+        });
+        let missing = std::env::temp_dir()
+            .join(uuid::Uuid::new_v4().to_string())
+            .join("bash.exe");
+        let shell = missing.to_string_lossy().into_owned();
+        assert!(manager
+            .create_local_shell("explicit".into(), None, shell.clone(), false)
+            .is_err());
+        manager
+            .create_local_shell("default".into(), None, shell, true)
+            .unwrap();
+        assert!(manager.sessions.contains_key("default"));
+        let message = rx.try_iter().any(|s| s.contains("Command Prompt instead"));
+        assert!(message, "fallback should be visible to the user");
+        manager.kill("default");
     }
 
     #[cfg(unix)]
